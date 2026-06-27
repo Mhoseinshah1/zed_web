@@ -25,9 +25,21 @@ A production-ready VPN/proxy sales platform built with Laravel, PostgreSQL, Redi
 
 ## One-command installation
 
+Download and run (works on all Ubuntu/VPS environments):
+
 ```bash
-sudo bash <(curl -fsSL https://raw.githubusercontent.com/mhoseinshah1/zed_web/main/install.sh)
+curl -fsSL https://raw.githubusercontent.com/mhoseinshah1/zed_web/main/install.sh -o /tmp/zedproxy-install.sh
+chmod +x /tmp/zedproxy-install.sh
+sudo bash /tmp/zedproxy-install.sh
 ```
+
+Or as a single line:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/mhoseinshah1/zed_web/main/install.sh -o /tmp/zedproxy-install.sh && chmod +x /tmp/zedproxy-install.sh && sudo bash /tmp/zedproxy-install.sh
+```
+
+> **Note:** Do not use `sudo bash <(curl ...)` or `curl ... | sudo bash`. Both formats fail on certain Ubuntu/VPS environments. The download-and-run format above is the only supported method.
 
 The script runs interactively and asks for the following before doing anything:
 
@@ -295,7 +307,7 @@ All production installation and deployment commands must use the **`main`** bran
 
 | Purpose | Command |
 |---------|---------|
-| Install | `sudo bash <(curl -fsSL https://raw.githubusercontent.com/mhoseinshah1/zed_web/main/install.sh)` |
+| Install | `curl -fsSL https://raw.githubusercontent.com/mhoseinshah1/zed_web/main/install.sh -o /tmp/zedproxy-install.sh && chmod +x /tmp/zedproxy-install.sh && sudo bash /tmp/zedproxy-install.sh` |
 | Clone | `git clone -b main https://github.com/mhoseinshah1/zed_web.git` |
 | Update | `git pull origin main` |
 
