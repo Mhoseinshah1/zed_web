@@ -18,14 +18,15 @@
     </div>
 
     {{-- Status banner --}}
-    @if($service->status === 'pending_provision')
+    @if(in_array($service->status, ['pending_provision', 'failed']))
     <div class="bg-yellow-500/10 border border-yellow-500/20 rounded-xl p-5 mb-6">
         <div class="flex gap-3">
             <span class="text-xl">⏳</span>
             <div>
-                <h4 class="text-yellow-300 font-semibold text-sm mb-1">در انتظار آماده‌سازی</h4>
+                <h4 class="text-yellow-300 font-semibold text-sm mb-1">سرویس هنوز آماده نشده است</h4>
                 <p class="text-yellow-200/70 text-sm leading-6">
-                    سرویس شما در انتظار آماده‌سازی است. پس از تایید مدیریت، اطلاعات اتصال اینجا نمایش داده می‌شود.
+                    سرویس شما هنوز آماده نشده است.<br>
+                    در صورت طولانی شدن، با پشتیبانی تماس بگیرید.
                 </p>
             </div>
         </div>
@@ -95,20 +96,22 @@
                     <span class="text-white">{{ $service->provisionStatusLabel() }}</span>
                 </div>
                 @if($service->traffic_total_gb)
-                <div>
-                    <span class="text-gray-400 block mb-1">حجم کل</span>
-                    <span class="text-white">{{ $service->traffic_total_gb }} GB</span>
-                </div>
-                <div>
-                    <span class="text-gray-400 block mb-1">مصرف شده</span>
-                    <span class="text-white">{{ $service->traffic_used_gb ?? 0 }} GB</span>
-                </div>
-                <div>
-                    <span class="text-gray-400 block mb-1">باقی‌مانده</span>
-                    @php $remaining = $service->trafficRemainingGb(); @endphp
-                    <span class="{{ $remaining !== null && $remaining < 5 ? 'text-red-400' : 'text-white' }}">
-                        {{ $remaining ?? '—' }} GB
-                    </span>
+                <div class="col-span-2">
+                    {{-- Traffic bar --}}
+                    @php
+                        $used      = $service->traffic_used_gb ?? 0;
+                        $total     = $service->traffic_total_gb;
+                        $pct       = $total > 0 ? min(100, round($used / $total * 100)) : 0;
+                        $barColor  = $pct >= 90 ? 'bg-red-500' : ($pct >= 70 ? 'bg-yellow-500' : 'bg-green-500');
+                    @endphp
+                    <span class="text-gray-400 block mb-2">مصرف حجم</span>
+                    <div class="w-full bg-gray-800 rounded-full h-2 mb-1">
+                        <div class="{{ $barColor }} h-2 rounded-full transition-all" style="width:{{ $pct }}%"></div>
+                    </div>
+                    <div class="flex justify-between text-xs text-gray-500">
+                        <span>{{ $used }} GB مصرف شده</span>
+                        <span>{{ $total }} GB کل ({{ $pct }}%)</span>
+                    </div>
                 </div>
                 @else
                 <div>
@@ -144,48 +147,58 @@
         </div>
     </div>
 
-    {{-- Config link --}}
+    {{-- Subscription link (Marzban) --}}
+    @if($service->subscription_link)
     <div class="bg-gray-900 border border-gray-800 rounded-xl p-6 mb-4">
-        <h4 class="text-white font-medium text-sm mb-3">لینک کانفیگ</h4>
-        @if($service->config_link)
-        <div class="bg-gray-800 rounded-lg p-3 flex items-center gap-3">
-            <code class="flex-1 text-xs text-gray-300 break-all font-mono leading-5">{{ $service->config_link }}</code>
-            <button onclick="navigator.clipboard.writeText('{{ $service->config_link }}').then(() => this.textContent='✓').catch(() => {})"
+        <h4 class="text-white font-medium text-sm mb-3">لینک اشتراک (Subscription)</h4>
+        <p class="text-gray-500 text-xs mb-3">این لینک را در برنامه‌های V2Ray / Clash / Sing-Box وارد کنید تا کانفیگ‌ها به‌صورت خودکار دریافت شوند.</p>
+        <div class="bg-gray-800 rounded-lg p-3 flex items-center gap-3 mb-4">
+            <code id="sub-link" class="flex-1 text-xs text-indigo-300 break-all font-mono leading-5">{{ $service->subscription_link }}</code>
+            <button onclick="copyText('sub-link', this)"
                     class="shrink-0 text-xs bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-1.5 rounded-lg transition">
                 کپی
             </button>
         </div>
-        @else
-        <p class="text-gray-500 text-sm">لینک کانفیگ هنوز ثبت نشده است.</p>
-        @endif
+        {{-- QR Code --}}
+        <div class="flex justify-center">
+            <div id="sub-qr" class="bg-white p-3 rounded-xl inline-block"></div>
+        </div>
     </div>
+    @endif
 
-    {{-- Subscription link --}}
-    <div class="bg-gray-900 border border-gray-800 rounded-xl p-6 mb-6">
-        <h4 class="text-white font-medium text-sm mb-3">لینک اشتراک</h4>
-        @if($service->subscription_link)
+    {{-- Config link --}}
+    @if($service->config_link)
+    <div class="bg-gray-900 border border-gray-800 rounded-xl p-6 mb-4">
+        <h4 class="text-white font-medium text-sm mb-3">لینک کانفیگ مستقیم</h4>
         <div class="bg-gray-800 rounded-lg p-3 flex items-center gap-3">
-            <code class="flex-1 text-xs text-gray-300 break-all font-mono leading-5">{{ $service->subscription_link }}</code>
-            <button onclick="navigator.clipboard.writeText('{{ $service->subscription_link }}').then(() => this.textContent='✓').catch(() => {})"
+            <code id="cfg-link" class="flex-1 text-xs text-gray-300 break-all font-mono leading-5">{{ $service->config_link }}</code>
+            <button onclick="copyText('cfg-link', this)"
                     class="shrink-0 text-xs bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-1.5 rounded-lg transition">
                 کپی
             </button>
         </div>
-        @else
-        <p class="text-gray-500 text-sm">لینک اشتراک هنوز ثبت نشده است.</p>
+    </div>
+    @endif
+
+    {{-- No connection info yet --}}
+    @if(! $service->subscription_link && ! $service->config_link)
+    <div class="bg-gray-900 border border-gray-800 rounded-xl p-6 mb-4">
+        <h4 class="text-white font-medium text-sm mb-2">اطلاعات اتصال</h4>
+        <p class="text-gray-500 text-sm">لینک کانفیگ هنوز ثبت نشده است.</p>
+        @if($service->status === 'pending_provision')
+        <p class="text-gray-600 text-xs mt-2">پس از فعال‌سازی سرویس توسط پشتیبانی، لینک‌های اتصال اینجا نمایش داده می‌شوند.</p>
         @endif
     </div>
+    @endif
 
     {{-- Placeholder actions --}}
     <div class="bg-gray-900 border border-gray-800 rounded-xl p-6 mb-6">
         <h4 class="text-white font-medium text-sm mb-3">عملیات</h4>
         <div class="flex flex-wrap gap-3">
-            <button disabled
-                    class="opacity-40 cursor-not-allowed text-xs bg-gray-800 text-white px-4 py-2 rounded-lg">
+            <button disabled class="opacity-40 cursor-not-allowed text-xs bg-gray-800 text-white px-4 py-2 rounded-lg">
                 تمدید سرویس (به‌زودی)
             </button>
-            <button disabled
-                    class="opacity-40 cursor-not-allowed text-xs bg-gray-800 text-white px-4 py-2 rounded-lg">
+            <button disabled class="opacity-40 cursor-not-allowed text-xs bg-gray-800 text-white px-4 py-2 rounded-lg">
                 خرید حجم اضافه (به‌زودی)
             </button>
         </div>
@@ -211,3 +224,41 @@
     </a>
 </div>
 @endsection
+
+@push('scripts')
+<script>
+function copyText(elementId, btn) {
+    const text = document.getElementById(elementId)?.textContent?.trim();
+    if (!text) return;
+    navigator.clipboard.writeText(text).then(() => {
+        const orig = btn.textContent;
+        btn.textContent = '✓';
+        setTimeout(() => btn.textContent = orig, 1500);
+    }).catch(() => {});
+}
+
+@if($service->subscription_link)
+(function() {
+    const link = @json($service->subscription_link);
+    const container = document.getElementById('sub-qr');
+    if (!container || !link) return;
+
+    // Draw a simple QR placeholder using a canvas + encoded URL approach
+    // We use the free qrcode.js library loaded from CDN
+    const script = document.createElement('script');
+    script.src = 'https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js';
+    script.onload = function() {
+        const canvas = document.createElement('canvas');
+        container.appendChild(canvas);
+        QRCode.toCanvas(canvas, link, { width: 180, margin: 1 }, function(err) {
+            if (err) container.innerHTML = '<p class="text-gray-500 text-xs p-4">QR code در دسترس نیست</p>';
+        });
+    };
+    script.onerror = function() {
+        container.innerHTML = '';
+    };
+    document.head.appendChild(script);
+})();
+@endif
+</script>
+@endpush

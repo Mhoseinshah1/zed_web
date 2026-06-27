@@ -16,6 +16,7 @@ class VpnPanel extends Model
         'name',
         'type',
         'base_url',
+        'api_docs_url',
         'username',
         'password',
         'token',
@@ -23,12 +24,15 @@ class VpnPanel extends Model
         'is_default',
         'notes',
         'last_checked_at',
+        'last_error',
     ];
 
     protected $casts = [
         'is_active'       => 'boolean',
         'is_default'      => 'boolean',
         'last_checked_at' => 'datetime',
+        'password'        => 'encrypted',
+        'token'           => 'encrypted',
     ];
 
     protected $hidden = ['password', 'token'];

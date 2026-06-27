@@ -513,6 +513,9 @@ Current sections:
 | **Wallet Transactions** | `/zed-admin/wallet-transactions` | Read-only ledger of all wallet credits and debits |
 | **Payment Methods** | `/zed-admin/payment-methods` | Manage payment methods (wallet, crypto, stars, rial) |
 | **System Status** | `/zed-admin/system-status` | Live health checks for DB, Redis, storage, queue |
+| **Services** | `/zed-admin/user-services` | View all user services; activate, disable, cancel, retry Marzban provisioning, sync usage |
+| **VPN Panels** | `/zed-admin/vpn-panels` | Manage Marzban panels — add credentials, test connection, set default, open API docs |
+| **VPN Inbounds** | `/zed-admin/vpn-inbounds` | Manage inbound tags linked to panels |
 
 ### Content that survives updates
 
@@ -539,13 +542,127 @@ Use `site_setting('key', 'default')` anywhere in Blade or PHP to read a site tex
 
 Values are cached for 1 hour and auto-invalidated when the admin saves a change.
 
+## Marzban integration
+
+ZedProxy integrates with [Marzban](https://github.com/Gozargah/Marzban) to automatically create VPN users after payment.
+
+### API docs reference
+
+Marzban exposes Swagger UI at `/docs` and OpenAPI JSON at `/openapi.json` when `DOCS=True` is set.
+
+Example panel used during development:
+- `base_url`: `https://panel.staygreen.top`
+- `api_docs_url`: `https://panel.staygreen.top/docs`
+
+### Endpoints used (confirmed from Marzban source)
+
+| Method | Endpoint | Purpose |
+|--------|----------|---------|
+| `POST` | `/api/admin/token` | OAuth2 login — form data `username`+`password` → `{access_token, token_type}` |
+| `GET`  | `/api/system` | System stats — used to verify connection |
+| `GET`  | `/api/inbounds` | List available inbounds by protocol |
+| `POST` | `/api/user` | Create a new VPN user |
+| `GET`  | `/api/user/{username}` | Get user details and subscription URL |
+| `PUT`  | `/api/user/{username}` | Update user (traffic, expiry, status) |
+| `DELETE` | `/api/user/{username}` | Delete user |
+| `POST` | `/api/user/{username}/reset` | Reset traffic usage to zero |
+| `POST` | `/api/user/{username}/revoke_sub` | Revoke subscription token (generates new URL) |
+
+Auth: `Authorization: Bearer {access_token}` on all endpoints except `/api/admin/token`.
+
+### Setting up a Marzban panel
+
+1. Go to `/zed-admin/vpn-panels` → click **New Panel**
+2. Fill in:
+   - **Name**: e.g. `Main Marzban`
+   - **Type**: `Marzban`
+   - **Base URL**: `https://your-panel-domain:port`
+   - **API Docs URL**: `https://your-panel-domain:port/docs`
+   - **Username**: Marzban admin username
+   - **Password**: Marzban admin password (stored encrypted)
+   - **Active**: toggle on
+   - **Default**: toggle on (services will auto-provision here)
+3. Save, then click **تست اتصال** (Test Connection) in the table actions
+
+### Adding inbounds (optional but recommended)
+
+In `/zed-admin/vpn-inbounds`, add the Marzban inbound tags you want users provisioned with:
+- **Name**: must match the exact inbound tag name in Marzban (e.g. `VLESS-TCP-REALITY`)
+- **Protocol**: `vless`, `vmess`, `trojan`, or `shadowsocks`
+
+If no inbounds are configured, ZedProxy defaults to enabling `vless` on all available inbounds.
+
+### How automatic provisioning works
+
+1. User pays an order (wallet or admin-approved manual payment)
+2. `PaymentService` calls `ServiceProvisioner::createFromOrder()` — idempotent
+3. If a default active Marzban panel exists, `ProvisionMarzbanServiceJob` is dispatched to the queue
+4. The job:
+   - Checks if the Marzban user already exists (idempotent retry)
+   - Creates or updates the Marzban user with username format `zpx_{user_id}_{service_id}_{random5}`
+   - Sets `data_limit` from `traffic_total_gb` (bytes), `expire` from `expires_at` (Unix timestamp)
+   - Saves `subscription_url` from the Marzban response to `user_services.subscription_link`
+   - Sets service `status = active`, `provision_status = provisioned`
+5. If no default panel exists, the service stays `provision_status = manual_required`
+
+### Username format
+
+```
+zpx_{user_id}_{service_id}_{random5}
+```
+
+Examples: `zpx_1_42_ab3cd`, `zpx_7_103_xy9zw`
+
+Rules: lowercase alphanumeric + underscores, max 32 characters, matches Marzban's `^[a-zA-Z0-9@_.+-]+$` validation.
+
+### Subscription link
+
+The Marzban `UserResponse` includes a `subscription_url` field (e.g. `https://panel.example.com/sub/TOKEN/`). ZedProxy saves this directly to `user_services.subscription_link`. It is shown to the user in `/dashboard/services/{service}` with a copy button and QR code.
+
+### What the user sees
+
+- **Active service with subscription link**: QR code + copy button for the subscription URL, plus config link if set
+- **Pending/failed service**: Persian message: "سرویس شما هنوز آماده نشده است. در صورت طولانی شدن، با پشتیبانی تماس بگیرید."
+
+### Admin actions on UserServiceResource
+
+| Action | Description |
+|--------|-------------|
+| **تلاش مجدد Marzban** (Retry Provision) | Runs `ProvisionMarzbanServiceJob` synchronously; creates or updates the Marzban user; visible when provision_status is manual_required, failed, or skipped |
+| **همگام‌سازی از Marzban** (Sync from Marzban) | Calls `GET /api/user/{username}`, updates traffic usage and subscription link; visible when remote_username is set |
+
+### What happens if provisioning fails
+
+- Service `provision_status` is set to `failed`
+- Error message is saved to `admin_notes`
+- A `VpnServiceProvisionLog` entry is created with `status = failed`
+- The order is **not** affected — payment remains approved
+- Admin can click **تلاش مجدد Marzban** from the service table to retry
+
+### Queue worker
+
+Provisioning jobs run via the queue worker (Supervisor). On production:
+
+```bash
+sudo supervisorctl status zedproxy-worker:*
+sudo supervisorctl restart zedproxy-worker:*
+```
+
+### Security notes
+
+- Marzban admin password is stored encrypted using Laravel's `encrypted` cast (`APP_KEY` is the secret)
+- Access tokens are cached in Redis only — never stored in plaintext in the database
+- Token is rotated on 401 response (retry-once logic)
+- Users cannot see panel credentials or admin-only API data
+- The `subscription_url` is the only Marzban data exposed to regular users
+
 Upcoming sections (in future development phases):
 
 - Payment gateway — Rial/crypto integration
-- Marzban API — automatic VPN service creation
 - Telegram bot — admin reports and notifications
 - Ticket system — support tickets
 - Monitoring — live server status
+- Renew / extra traffic — update Marzban user after renewal
 
 ## Updating ZedProxy
 
@@ -723,7 +840,7 @@ Orders, wallet transactions, payment transactions, and payment methods are never
 | Status | Description |
 |--------|-------------|
 | `pending` | Waiting for provisioning to start |
-| `manual_required` | Requires admin action (current default — no automatic API yet) |
+| `manual_required` | Requires admin action (or Marzban panel not configured) |
 | `provisioned` | Successfully linked to a VPN panel |
 | `failed` | Provisioning error |
 | `skipped` | Skipped (no API integration active) |
@@ -796,19 +913,23 @@ User services, provision logs, VPN panels, and VPN inbounds are **never deleted*
 - **Service auto-creation** — `ServiceProvisioner` called automatically on payment approval (idempotent)
 - **User services pages** — `/dashboard/services` list and `/dashboard/services/{service}` detail
 - **Admin UserServiceResource** — activate, disable, cancel actions; full CRUD; provision logs
-- **VpnPanel placeholder** — model, migration, Filament resource (no real API yet)
-- **VpnInbound placeholder** — model, migration, Filament resource linked to panels
+- **VpnPanel** — model, migration, Filament resource with Test Connection, Refresh Token, Mark Default, Open API Docs actions
+- **VpnInbound** — model, migration, Filament resource linked to panels
 - **VpnServiceProvisionLog** — append-only log of all lifecycle events
 - **`services:expire` command** — bulk-marks active services past their expiry date
 - **Dashboard updated** — shows active service count, pending service count, services quick link
 - **Order detail updated** — shows link to related service when it exists
+- **Marzban API client** — `MarzbanClient` with login/testConnection/createUser/getUser/updateUser/resetTraffic/revokeSubscription; token cached in Redis; retry-on-401
+- **`ProvisionMarzbanServiceJob`** — queued job; idempotent (update if user exists, create if not); saves subscription_url from Marzban response
+- **Automatic provisioning** — `ServiceProvisioner::createFromOrder()` dispatches `ProvisionMarzbanServiceJob` when a default active Marzban panel is configured
+- **Retry Provision + Sync actions** in UserServiceResource — admin can retry failed provisioning or sync usage from Marzban
+- **Subscription link display** — user sees subscription URL with copy button and QR code at `/dashboard/services/{service}`
 
 **Next:**
-1. Marzban API integration — auto-create VPN user on Marzban panel after payment, sync traffic/expiry
+1. Renew / extra traffic — extend Marzban user expiry or add data via order
 2. 3x-ui / Sanaei 3x-ui integration — same flow, different panel type
-3. Subscription links — V2Ray subscription URL returned from Marzban/3x-ui
-4. Payment gateway API — NOWPayments, Telegram Stars API, or Rial gateway
-5. Ticket system — support ticket model and panel
-6. Telegram bot — admin reports and notifications
-7. Email — order confirmations, expiry reminders
-8. Docker deployment — containerized installation
+3. Payment gateway API — NOWPayments, Telegram Stars API, or Rial gateway
+4. Ticket system — support ticket model and panel
+5. Telegram bot — admin reports and notifications
+6. Email — order confirmations, expiry reminders
+7. Docker deployment — containerized installation

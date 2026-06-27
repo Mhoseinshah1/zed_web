@@ -1,0 +1,26 @@
+<?php
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+return new class extends Migration
+{
+    /**
+     * Run the migrations.
+     */
+    public function up(): void
+    {
+        Schema::table('vpn_panels', function (Blueprint $table) {
+            $table->string('api_docs_url')->nullable()->after('base_url');
+            $table->text('last_error')->nullable()->after('last_checked_at');
+        });
+    }
+
+    public function down(): void
+    {
+        Schema::table('vpn_panels', function (Blueprint $table) {
+            $table->dropColumn(['api_docs_url', 'last_error']);
+        });
+    }
+};

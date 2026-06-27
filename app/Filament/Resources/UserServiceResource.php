@@ -3,7 +3,10 @@
 namespace App\Filament\Resources;
 
 use App\Filament\Resources\UserServiceResource\Pages;
+use App\Jobs\ProvisionMarzbanServiceJob;
 use App\Models\UserService;
+use App\Models\VpnPanel;
+use App\Services\Marzban\MarzbanClient;
 use App\Services\ServiceProvisioner;
 use Filament\Forms;
 use Filament\Forms\Form;
@@ -11,6 +14,7 @@ use Filament\Notifications\Notification;
 use Filament\Resources\Resource;
 use Filament\Tables;
 use Filament\Tables\Table;
+use Illuminate\Support\Facades\Bus;
 
 class UserServiceResource extends Resource
 {
@@ -278,6 +282,108 @@ class UserServiceResource extends Resource
                     })
                     ->requiresConfirmation()
                     ->modalSubmitActionLabel('لغو کن'),
+
+                Tables\Actions\Action::make('retry_provision')
+                    ->label('تلاش مجدد Marzban')
+                    ->icon('heroicon-o-arrow-path')
+                    ->color('info')
+                    ->visible(fn (UserService $record) => in_array($record->provision_status, [
+                        UserService::PROVISION_MANUAL_REQUIRED,
+                        UserService::PROVISION_FAILED,
+                        UserService::PROVISION_SKIPPED,
+                    ]))
+                    ->requiresConfirmation()
+                    ->modalHeading('تلاش مجدد ساخت سرویس روی Marzban')
+                    ->modalSubmitActionLabel('اجرا کن')
+                    ->action(function (UserService $record): void {
+                        $panel = $record->vpnPanel
+                            ?? VpnPanel::where('type', VpnPanel::TYPE_MARZBAN)
+                                ->where('is_active', true)
+                                ->where('is_default', true)
+                                ->first();
+
+                        if (! $panel) {
+                            Notification::make()
+                                ->title('هیچ پنل Marzban پیش‌فرض فعالی یافت نشد.')
+                                ->danger()
+                                ->send();
+                            return;
+                        }
+
+                        try {
+                            Bus::dispatchSync(new ProvisionMarzbanServiceJob($record->id, $panel->id));
+
+                            Notification::make()
+                                ->title('سرویس با موفقیت روی Marzban ساخته شد.')
+                                ->success()
+                                ->send();
+                        } catch (\Throwable $e) {
+                            Notification::make()
+                                ->title('خطا در ساخت سرویس روی Marzban')
+                                ->body($e->getMessage())
+                                ->danger()
+                                ->send();
+                        }
+                    }),
+
+                Tables\Actions\Action::make('sync_marzban')
+                    ->label('همگام‌سازی از Marzban')
+                    ->icon('heroicon-o-cloud-arrow-down')
+                    ->color('gray')
+                    ->visible(fn (UserService $record) => filled($record->remote_username) && $record->vpnPanel?->type === VpnPanel::TYPE_MARZBAN)
+                    ->action(function (UserService $record): void {
+                        $panel = $record->vpnPanel;
+                        if (! $panel) {
+                            Notification::make()->title('پنل VPN مشخص نشده.')->danger()->send();
+                            return;
+                        }
+
+                        try {
+                            $client      = new MarzbanClient($panel);
+                            $marzbanUser = $client->getUser($record->remote_username);
+                            $normalized  = $client->normalizeUserResponse($marzbanUser);
+                            $subLink     = $client->extractSubscriptionLink($marzbanUser);
+
+                            $record->update([
+                                'traffic_used_gb'  => $normalized['used_traffic_gb'],
+                                'subscription_link' => $subLink ?? $record->subscription_link,
+                                'last_synced_at'   => now(),
+                            ]);
+
+                            \App\Models\VpnServiceProvisionLog::create([
+                                'user_service_id'  => $record->id,
+                                'vpn_panel_id'     => $panel->id,
+                                'action'           => 'marzban_sync_user',
+                                'status'           => 'success',
+                                'message'          => "Synced from Marzban. Status: {$normalized['status']}. Used: {$normalized['used_traffic_gb']} GB.",
+                                'response_payload' => [
+                                    'status'       => $normalized['status'],
+                                    'used_traffic' => $normalized['used_traffic_gb'],
+                                ],
+                            ]);
+
+                            Notification::make()
+                                ->title('همگام‌سازی موفق')
+                                ->body("حجم مصرف‌شده: {$normalized['used_traffic_gb']} GB")
+                                ->success()
+                                ->send();
+
+                        } catch (\Throwable $e) {
+                            \App\Models\VpnServiceProvisionLog::create([
+                                'user_service_id' => $record->id,
+                                'vpn_panel_id'    => $panel->id,
+                                'action'          => 'marzban_sync_user',
+                                'status'          => 'failed',
+                                'message'         => $e->getMessage(),
+                            ]);
+
+                            Notification::make()
+                                ->title('خطا در همگام‌سازی')
+                                ->body($e->getMessage())
+                                ->danger()
+                                ->send();
+                        }
+                    }),
 
                 Tables\Actions\EditAction::make()->label('ویرایش'),
             ])

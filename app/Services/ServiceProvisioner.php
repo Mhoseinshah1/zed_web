@@ -2,8 +2,10 @@
 
 namespace App\Services;
 
+use App\Jobs\ProvisionMarzbanServiceJob;
 use App\Models\Order;
 use App\Models\UserService;
+use App\Models\VpnPanel;
 use App\Models\VpnServiceProvisionLog;
 use Illuminate\Support\Facades\DB;
 
@@ -29,12 +31,30 @@ class ServiceProvisioner
                 'provision_status' => UserService::PROVISION_MANUAL_REQUIRED,
             ]);
 
-            VpnServiceProvisionLog::create([
-                'user_service_id' => $service->id,
-                'action'          => 'create_placeholder_service',
-                'status'          => 'skipped',
-                'message'         => 'VPN API integration is not enabled yet.',
-            ]);
+            // Dispatch Marzban provisioning if a default active panel is configured
+            $panel = VpnPanel::where('type', VpnPanel::TYPE_MARZBAN)
+                ->where('is_active', true)
+                ->where('is_default', true)
+                ->first();
+
+            if ($panel) {
+                VpnServiceProvisionLog::create([
+                    'user_service_id' => $service->id,
+                    'vpn_panel_id'    => $panel->id,
+                    'action'          => 'create_placeholder_service',
+                    'status'          => 'success',
+                    'message'         => "Dispatching Marzban provisioning via panel: {$panel->name}",
+                ]);
+
+                ProvisionMarzbanServiceJob::dispatch($service->id, $panel->id)->afterCommit();
+            } else {
+                VpnServiceProvisionLog::create([
+                    'user_service_id' => $service->id,
+                    'action'          => 'create_placeholder_service',
+                    'status'          => 'skipped',
+                    'message'         => 'No active default Marzban panel found. Manual provisioning required.',
+                ]);
+            }
 
             return $service;
         });
