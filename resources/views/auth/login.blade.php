@@ -23,10 +23,10 @@
             <form method="POST" action="{{ route('login') }}" class="space-y-5">
                 @csrf
                 <div>
-                    <label for="email" class="block text-sm font-medium text-gray-300 mb-1.5">ایمیل</label>
-                    <input type="email" id="email" name="email" value="{{ old('email') }}" required autofocus
+                    <label for="username" class="block text-sm font-medium text-gray-300 mb-1.5">نام کاربری</label>
+                    <input type="text" id="username" name="username" value="{{ old('username') }}" required autofocus autocomplete="username"
                         class="w-full bg-gray-800 border border-gray-700 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 rounded-lg px-4 py-2.5 text-white text-sm outline-none transition"
-                        placeholder="email@example.com">
+                        placeholder="نام کاربری">
                 </div>
                 <div>
                     <div class="flex items-center justify-between mb-1.5">
