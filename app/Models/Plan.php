@@ -28,7 +28,7 @@ class Plan extends Model
         return $this->belongsToMany(Feature::class, 'feature_plan');
     }
 
-    public static function booted(): void
+    protected static function booted(): void
     {
         static::creating(function (Plan $plan) {
             if (empty($plan->slug)) {

@@ -110,7 +110,6 @@ class SiteTextResource extends Resource
                 Tables\Actions\EditAction::make(),
             ])
             ->bulkActions([])
-            ->defaultSort('group')
             ->defaultSort('sort_order');
     }
 
