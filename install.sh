@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # =============================================================================
 # ZedProxy - One-command installation script for Ubuntu 24.04
-# Usage: curl -fsSL https://raw.githubusercontent.com/OWNER/REPO/main/install.sh | sudo bash
+# Usage: curl -fsSL https://raw.githubusercontent.com/OWNER/zed_web/main/install.sh | sudo bash
 # =============================================================================
 
 set -euo pipefail

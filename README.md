@@ -26,13 +26,13 @@ A production-ready VPN/proxy sales platform built with Laravel, PostgreSQL, Redi
 ## One-command installation
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/OWNER/REPO/main/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/OWNER/zed_web/main/install.sh | sudo bash
 ```
 
 Or with custom domain:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/OWNER/REPO/main/install.sh | sudo APP_URL=https://yourdomain.com DOMAIN=yourdomain.com bash
+curl -fsSL https://raw.githubusercontent.com/OWNER/zed_web/main/install.sh | sudo APP_URL=https://yourdomain.com DOMAIN=yourdomain.com bash
 ```
 
 ## Manual installation
@@ -40,7 +40,7 @@ curl -fsSL https://raw.githubusercontent.com/OWNER/REPO/main/install.sh | sudo A
 ### 1. Clone and enter directory
 
 ```bash
-git clone https://github.com/OWNER/REPO.git /var/www/zedproxy
+git clone https://github.com/OWNER/zed_web.git /var/www/zedproxy
 cd /var/www/zedproxy
 ```
 
