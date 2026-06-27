@@ -13,6 +13,9 @@ set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 export NEEDRESTART_MODE=a
 
+# Allow Composer to run as root without interactive confirmation
+export COMPOSER_ALLOW_SUPERUSER=1
+
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -369,7 +372,7 @@ ok "Redis is running"
 # ─── Nginx ───────────────────────────────────────────────────────────────────
 log "Installing Nginx..."
 
-# Stop Apache if it is running — it would hold port 80 and block Nginx
+# Stop Apache if it is running — it holds port 80 and blocks Nginx
 for _apache_svc in apache2 httpd; do
     if systemctl is-active --quiet "$_apache_svc" 2>/dev/null; then
         warn "${_apache_svc} is running and would conflict with Nginx on port 80."
@@ -381,11 +384,14 @@ for _apache_svc in apache2 httpd; do
     fi
 done
 
-# Verify port 80 is free before installing Nginx
-_port80=$(ss -ltnp 2>/dev/null | grep ':80 ' || true)
-if [ -n "$_port80" ]; then
-    _proc=$(echo "$_port80" | grep -oP 'users:\(\("\K[^"]+' 2>/dev/null || echo "unknown")
-    error "Port 80 is still in use by '${_proc}' and cannot be freed automatically.\n\nDetails:\n${_port80}\n\nStop the conflicting service manually, then re-run the installer."
+# Check port 80 for conflicts.
+# nginx on port 80 is expected (this may be a re-run) — skip it.
+# Apache is already handled above.
+# Any other process is a hard stop.
+_port80_other=$(ss -ltnp 2>/dev/null | grep ':80 ' | grep -v '"nginx"' || true)
+if [ -n "$_port80_other" ]; then
+    _proc=$(echo "$_port80_other" | grep -oP 'users:\(\("\K[^"]+' 2>/dev/null || echo "unknown")
+    error "Port 80 is in use by '${_proc}' and cannot be freed automatically.\n\nProcess details:\n${_port80_other}\n\nStop the conflicting service manually, then re-run the installer."
 fi
 
 apt-get install -y -qq \
@@ -566,10 +572,10 @@ ok "PHP-FPM configured (${PHP_FPM_SERVICE})"
 
 # ─── Composer install ────────────────────────────────────────────────────────
 log "Installing PHP dependencies..."
-export COMPOSER_ALLOW_SUPERUSER=1
 
 # Run without --quiet so that any failure prints the real Composer error.
 # With set -euo pipefail, a non-zero exit code propagates immediately.
+# COMPOSER_ALLOW_SUPERUSER is exported at the top of this script.
 composer install \
     --no-dev \
     --prefer-dist \
