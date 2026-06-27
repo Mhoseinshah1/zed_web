@@ -9,6 +9,10 @@
 
 set -euo pipefail
 
+# Prevent all interactive prompts from apt/dpkg during installation
+export DEBIAN_FRONTEND=noninteractive
+export NEEDRESTART_MODE=a
+
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -108,9 +112,13 @@ PHP_VERSION=""
 install_php() {
     log "Attempting PHP installation from official Ubuntu packages..."
 
-    # Install generic (non-version-pinned) packages; Ubuntu picks the default version
+    # Install ONLY cli/fpm and extension packages.
+    # Do NOT install the 'php' meta-package — on Ubuntu 24.04 it pulls in
+    # libapache2-mod-php8.3 which drags in Apache2, conflicting with Nginx.
     apt-get install -y -qq \
-        php php-cli php-fpm \
+        -o Dpkg::Options::="--force-confdef" \
+        -o Dpkg::Options::="--force-confold" \
+        php-cli php-fpm \
         php-pgsql php-redis php-mbstring \
         php-xml php-curl php-zip \
         php-bcmath php-gd php-intl php-opcache 2>/dev/null || true
@@ -136,7 +144,9 @@ install_php() {
 
         local target="8.4"
         apt-get install -y -qq \
-            "php${target}" "php${target}-cli" "php${target}-fpm" \
+            -o Dpkg::Options::="--force-confdef" \
+            -o Dpkg::Options::="--force-confold" \
+            "php${target}-cli" "php${target}-fpm" \
             "php${target}-pgsql" "php${target}-redis" "php${target}-mbstring" \
             "php${target}-xml" "php${target}-curl" "php${target}-zip" \
             "php${target}-bcmath" "php${target}-gd" "php${target}-intl" "php${target}-opcache"
@@ -269,10 +279,14 @@ clean_ondrej_php_sources
 
 # ─── System packages ─────────────────────────────────────────────────────────
 safe_apt_update
-apt-get upgrade -y -qq
+apt-get upgrade -y -qq \
+    -o Dpkg::Options::="--force-confdef" \
+    -o Dpkg::Options::="--force-confold"
 
 log "Installing base packages..."
 apt-get install -y -qq \
+    -o Dpkg::Options::="--force-confdef" \
+    -o Dpkg::Options::="--force-confold" \
     curl wget git unzip zip gnupg2 \
     ca-certificates lsb-release \
     apt-transport-https software-properties-common \
@@ -297,13 +311,19 @@ ok "Composer: $(composer --version --no-ansi)"
 log "Installing Node.js $NODE_VERSION..."
 if ! command -v node &>/dev/null || [[ $(node --version | cut -d'v' -f2 | cut -d'.' -f1) -lt $NODE_VERSION ]]; then
     curl -fsSL https://deb.nodesource.com/setup_${NODE_VERSION}.x | bash -
-    apt-get install -y -qq nodejs
+    apt-get install -y -qq \
+        -o Dpkg::Options::="--force-confdef" \
+        -o Dpkg::Options::="--force-confold" \
+        nodejs
 fi
 ok "Node.js: $(node --version), npm: $(npm --version)"
 
 # ─── PostgreSQL ──────────────────────────────────────────────────────────────
 log "Installing PostgreSQL..."
-apt-get install -y -qq postgresql postgresql-contrib
+apt-get install -y -qq \
+    -o Dpkg::Options::="--force-confdef" \
+    -o Dpkg::Options::="--force-confold" \
+    postgresql postgresql-contrib
 
 systemctl enable postgresql
 systemctl start postgresql
@@ -331,7 +351,10 @@ ok "PostgreSQL database '${DB_NAME}' and user '${DB_USER}' ready"
 
 # ─── Redis ───────────────────────────────────────────────────────────────────
 log "Installing Redis..."
-apt-get install -y -qq redis-server
+apt-get install -y -qq \
+    -o Dpkg::Options::="--force-confdef" \
+    -o Dpkg::Options::="--force-confold" \
+    redis-server
 
 sed -i 's/^bind .*/bind 127.0.0.1/' /etc/redis/redis.conf
 
@@ -343,7 +366,30 @@ ok "Redis is running"
 
 # ─── Nginx ───────────────────────────────────────────────────────────────────
 log "Installing Nginx..."
-apt-get install -y -qq nginx
+
+# Stop Apache if it is running — it would hold port 80 and block Nginx
+for _apache_svc in apache2 httpd; do
+    if systemctl is-active --quiet "$_apache_svc" 2>/dev/null; then
+        warn "${_apache_svc} is running and would conflict with Nginx on port 80."
+        warn "Stopping and disabling ${_apache_svc}..."
+        systemctl stop    "$_apache_svc" || true
+        systemctl disable "$_apache_svc" || true
+        systemctl mask    "$_apache_svc" 2>/dev/null || true
+        ok "${_apache_svc} stopped and masked"
+    fi
+done
+
+# Verify port 80 is free before installing Nginx
+_port80=$(ss -ltnp 2>/dev/null | grep ':80 ' || true)
+if [ -n "$_port80" ]; then
+    _proc=$(echo "$_port80" | grep -oP 'users:\(\("\K[^"]+' 2>/dev/null || echo "unknown")
+    error "Port 80 is still in use by '${_proc}' and cannot be freed automatically.\n\nDetails:\n${_port80}\n\nStop the conflicting service manually, then re-run the installer."
+fi
+
+apt-get install -y -qq \
+    -o Dpkg::Options::="--force-confdef" \
+    -o Dpkg::Options::="--force-confold" \
+    nginx
 
 # ─── Application setup ───────────────────────────────────────────────────────
 if [ -d "$APP_DIR" ]; then
@@ -459,11 +505,16 @@ ok "PHP-FPM configured (${PHP_FPM_SERVICE})"
 
 # ─── Composer install ────────────────────────────────────────────────────────
 log "Installing PHP dependencies..."
-COMPOSER_ALLOW_SUPERUSER=1 composer install \
+export COMPOSER_ALLOW_SUPERUSER=1
+
+# Run without --quiet so that any failure prints the real Composer error.
+# With set -euo pipefail, a non-zero exit code propagates immediately.
+composer install \
     --no-dev \
+    --prefer-dist \
     --optimize-autoloader \
     --no-interaction \
-    --quiet
+    || error "Composer install failed — see the output above for the exact error."
 
 ok "Composer dependencies installed"
 
@@ -559,7 +610,15 @@ ln -sf "$NGINX_CONF" /etc/nginx/sites-enabled/zedproxy
 rm -f /etc/nginx/sites-enabled/default
 nginx -t || error "Nginx config test failed"
 systemctl enable nginx
-systemctl reload nginx
+systemctl restart nginx
+sleep 1
+
+# Confirm Nginx is running and owns port 80
+if ! systemctl is-active --quiet nginx; then
+    journalctl -u nginx --no-pager -n 20 >&2 || true
+    error "Nginx failed to start. See the output above for details."
+fi
+
 ok "Nginx configured for: ${DOMAIN}"
 
 # ─── Queue worker (Supervisor) ───────────────────────────────────────────────
