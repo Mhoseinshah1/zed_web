@@ -4,24 +4,48 @@ A production-ready VPN/proxy sales platform built with Laravel, PostgreSQL, Redi
 
 ## Tech Stack
 
-| Component     | Technology                   |
-|---------------|------------------------------|
-| Backend       | Laravel 11, PHP 8.4          |
-| Database      | PostgreSQL 16+               |
-| Cache/Queue   | Redis                        |
-| Frontend      | Blade + Tailwind CSS (RTL)   |
-| Admin Panel   | Filament v3                  |
-| Web Server    | Nginx + PHP-FPM              |
-| OS            | Ubuntu 24.04                 |
+| Component     | Technology                              |
+|---------------|-----------------------------------------|
+| Backend       | Laravel, PHP 8.2+                       |
+| Database      | PostgreSQL 16+                          |
+| Cache/Queue   | Redis                                   |
+| Frontend      | Blade + Tailwind CSS (RTL)              |
+| Admin Panel   | Filament v3                             |
+| Web Server    | Nginx + PHP-FPM                         |
+| OS            | Ubuntu 22.04, 24.04, 26.04+            |
 
 ## Requirements
 
-- Ubuntu 24.04 (for `install.sh`)
-- PHP 8.4 with extensions: pgsql, redis, mbstring, xml, curl, zip, bcmath, gd, intl, opcache
+- Ubuntu 22.04 (jammy), 24.04 (noble), or 26.04 (resolute) — see [Supported OS](#supported-os)
+- PHP 8.2+ with extensions: pgsql, redis, mbstring, xml, curl, zip, bcmath, gd, intl, opcache
 - PostgreSQL 14+
 - Redis 6+
 - Node.js 22+, npm
 - Composer 2+
+
+## Supported OS
+
+The installer supports Ubuntu releases where official packages or a verified PPA can provide PHP 8.2 or higher.
+
+| Ubuntu Release | Codename  | PHP Source              | Status     |
+|----------------|-----------|-------------------------|------------|
+| 22.04 LTS      | jammy     | ondrej/php PPA          | Supported  |
+| 24.04 LTS      | noble     | Official Ubuntu packages| Supported  |
+| 26.04          | resolute  | Official Ubuntu packages| Supported  |
+
+**How PHP is installed:**
+
+1. The installer always tries official Ubuntu packages first (`apt-get install php php-fpm ...`).
+2. It detects the installed PHP version automatically (`php -r 'echo PHP_VERSION;'`).
+3. If official packages are too old (below PHP 8.2), it checks whether the [ondrej/php PPA](https://launchpad.net/~ondrej/+archive/ubuntu/php) supports the current Ubuntu codename — using a live HTTP check on the PPA Release file.
+4. If the PPA supports the codename, it adds the PPA and installs PHP 8.4.
+5. If neither official packages nor the PPA can provide PHP 8.2+, the installer stops with a clear error and suggests using Docker.
+
+The installer **never blindly adds `ppa:ondrej/php`**. Before any `apt update`, it removes stale ondrej/php source files that would cause `apt update` to fail on unsupported Ubuntu releases (e.g. resolute).
+
+### If the native installer cannot run on your Ubuntu version
+
+If the native installer cannot satisfy the PHP version requirement on your specific Ubuntu release, use Docker-based deployment. Docker support is planned for a future release. See the [What's next](#whats-next) section.
 
 ## One-command installation
 
@@ -278,7 +302,9 @@ php artisan cache:clear
 ### Nginx 502 Bad Gateway
 
 ```bash
-sudo systemctl status php8.4-fpm
+# Detect the installed PHP-FPM service name first
+PHP_VERSION=$(php -r 'echo PHP_MAJOR_VERSION.".".PHP_MINOR_VERSION;')
+sudo systemctl status php${PHP_VERSION}-fpm
 sudo nginx -t
 sudo journalctl -u nginx -n 50
 ```
@@ -299,6 +325,19 @@ php artisan zedproxy:create-admin \
     --email="admin@example.com" \
     --name="Admin" \
     --password="your_password"
+```
+
+## Diagnostics
+
+Run these commands to gather system state before reporting an issue:
+
+```bash
+lsb_release -a
+cat /etc/os-release
+php -v
+nginx -v
+psql --version
+redis-server --version
 ```
 
 ## Branch convention
@@ -369,3 +408,4 @@ Upcoming sections (in future development phases):
 6. Telegram bot - admin reports and notifications
 7. Monitoring - real server status checks
 8. Email - order confirmations, expiry reminders
+9. Docker deployment - containerized installation for environments where the native installer cannot satisfy PHP requirements
