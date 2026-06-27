@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# ZedProxy - One-command installation script for Ubuntu 24.04
+# ZedProxy - One-command installation script for Ubuntu 22.04, 24.04, 26.04+
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/mhoseinshah1/zed_web/main/install.sh -o /tmp/zedproxy-install.sh
 #   chmod +x /tmp/zedproxy-install.sh
@@ -32,6 +32,122 @@ BRANCH="main"
 INSTALL_SUCCESS=false
 trap '[[ "$INSTALL_SUCCESS" != "true" ]] && echo -e "\n${RED}[ERROR] Installation did not complete. Admin credentials were NOT saved.${NC}"' EXIT
 
+# ─── OS Detection ────────────────────────────────────────────────────────────
+OS_ID=""
+OS_VERSION_ID=""
+OS_CODENAME=""
+OS_PRETTY=""
+
+detect_os() {
+    if [ ! -f /etc/os-release ]; then
+        error "Cannot detect OS: /etc/os-release not found."
+    fi
+
+    # Source variables without polluting the environment permanently
+    OS_ID=$(grep -E '^ID=' /etc/os-release | cut -d= -f2 | tr -d '"')
+    OS_VERSION_ID=$(grep -E '^VERSION_ID=' /etc/os-release | cut -d= -f2 | tr -d '"')
+    OS_CODENAME=$(grep -E '^VERSION_CODENAME=' /etc/os-release | cut -d= -f2 | tr -d '"')
+    OS_PRETTY=$(grep -E '^PRETTY_NAME=' /etc/os-release | cut -d= -f2 | tr -d '"')
+
+    if [ "$OS_ID" != "ubuntu" ]; then
+        error "This installer currently supports Ubuntu only.\nDetected: $OS_PRETTY"
+    fi
+
+    ok "Detected OS: $OS_PRETTY (codename: ${OS_CODENAME:-unknown})"
+}
+
+# ─── Remove stale ondrej/php sources that would break apt update ──────────────
+clean_ondrej_php_sources() {
+    local cleaned=false
+    local patterns=(
+        "/etc/apt/sources.list.d/ondrej-ubuntu-php*.list"
+        "/etc/apt/sources.list.d/*ondrej*.list"
+        "/etc/apt/sources.list.d/*ondrej*.sources"
+    )
+    for pattern in "${patterns[@]}"; do
+        for f in $pattern; do
+            [ -f "$f" ] || continue
+            warn "Removing stale ondrej/php repository file: $f"
+            rm -f "$f"
+            cleaned=true
+        done
+    done
+    $cleaned && ok "Cleaned stale ondrej/php repository files" || true
+}
+
+# ─── Safe apt-get update ─────────────────────────────────────────────────────
+safe_apt_update() {
+    log "Running apt update..."
+    local err_file
+    err_file=$(mktemp)
+    if ! apt-get update -qq 2>"$err_file"; then
+        echo -e "${RED}[ERROR]${NC} apt update failed:" >&2
+        cat "$err_file" >&2
+        echo "" >&2
+        echo "Active repository files in /etc/apt/sources.list.d/:" >&2
+        ls /etc/apt/sources.list.d/ 2>/dev/null >&2 || true
+        rm -f "$err_file"
+        error "Fix the broken repositories shown above, then re-run the installer."
+    fi
+    rm -f "$err_file"
+}
+
+# ─── Check if ondrej/php PPA supports a given Ubuntu codename ────────────────
+ondrej_ppa_supports() {
+    local codename="$1"
+    local url="https://ppa.launchpadcontent.net/ondrej/php/ubuntu/dists/${codename}/Release"
+    curl -fsI --max-time 10 "$url" &>/dev/null
+}
+
+# ─── PHP installation ─────────────────────────────────────────────────────────
+# Minimum PHP version required by this Laravel project
+PHP_MIN_VERSION="8.2"
+# Will be set to the detected installed version (e.g. "8.3" or "8.4")
+PHP_VERSION=""
+
+install_php() {
+    log "Attempting PHP installation from official Ubuntu packages..."
+
+    # Install generic (non-version-pinned) packages; Ubuntu picks the default version
+    apt-get install -y -qq \
+        php php-cli php-fpm \
+        php-pgsql php-redis php-mbstring \
+        php-xml php-curl php-zip \
+        php-bcmath php-gd php-intl php-opcache 2>/dev/null || true
+
+    if command -v php &>/dev/null; then
+        PHP_VERSION=$(php -r 'echo PHP_MAJOR_VERSION.".".PHP_MINOR_VERSION;')
+    fi
+
+    # Check if the installed version satisfies our minimum
+    if [[ -n "$PHP_VERSION" ]] && php -r "exit(version_compare('$PHP_VERSION', '$PHP_MIN_VERSION', '>=') ? 0 : 1);"; then
+        ok "PHP $PHP_VERSION installed from official Ubuntu packages"
+        return 0
+    fi
+
+    # Official packages are too old — try ondrej/php as a fallback
+    warn "Official Ubuntu PHP packages provide PHP ${PHP_VERSION:-not found}, which is below the required $PHP_MIN_VERSION."
+    warn "Checking ondrej/php PPA support for Ubuntu ${OS_CODENAME}..."
+
+    if ondrej_ppa_supports "$OS_CODENAME"; then
+        log "ondrej/php PPA supports Ubuntu $OS_CODENAME — adding PPA as fallback..."
+        add-apt-repository -y ppa:ondrej/php
+        safe_apt_update
+
+        local target="8.4"
+        apt-get install -y -qq \
+            "php${target}" "php${target}-cli" "php${target}-fpm" \
+            "php${target}-pgsql" "php${target}-redis" "php${target}-mbstring" \
+            "php${target}-xml" "php${target}-curl" "php${target}-zip" \
+            "php${target}-bcmath" "php${target}-gd" "php${target}-intl" "php${target}-opcache"
+
+        PHP_VERSION=$(php -r 'echo PHP_MAJOR_VERSION.".".PHP_MINOR_VERSION;')
+        ok "PHP $PHP_VERSION installed via ondrej/php PPA"
+    else
+        error "Cannot install a compatible PHP version on Ubuntu ${OS_CODENAME} (${OS_PRETTY}).\n\n  Official Ubuntu PHP : ${PHP_VERSION:-not found} (required: PHP $PHP_MIN_VERSION+)\n  ondrej/php PPA      : does not support Ubuntu ${OS_CODENAME}\n\nOptions:\n  - Use Ubuntu 22.04 (jammy) or 24.04 (noble) where ondrej/php is available\n  - Use Docker-based deployment (see README.md for guidance)\n\nInstallation aborted."
+    fi
+}
+
 # ─── Interactive prompts ──────────────────────────────────────────────────────
 
 _prompt_domain() {
@@ -39,7 +155,6 @@ _prompt_domain() {
         echo -e "\n${BLUE}Enter the domain for this website, without http/https, example: zedproxy.com:${NC}"
         read -r INPUT_DOMAIN </dev/tty
 
-        # Strip all whitespace
         INPUT_DOMAIN="${INPUT_DOMAIN//[[:space:]]/}"
 
         if [[ -z "$INPUT_DOMAIN" ]]; then
@@ -110,6 +225,9 @@ _prompt_admin_password() {
     fi
 }
 
+# ─── Run OS detection first ───────────────────────────────────────────────────
+detect_os
+
 # ─── Run interactive prompts ──────────────────────────────────────────────────
 echo ""
 echo -e "${GREEN}════════════════════════════════════════════════════════════${NC}"
@@ -135,7 +253,6 @@ sleep 3
 
 # ─── Static configuration ─────────────────────────────────────────────────────
 APP_DIR="${APP_DIR:-/var/www/zedproxy}"
-PHP_VERSION="8.4"
 NODE_VERSION="22"
 DB_NAME="zedproxy"
 DB_USER="zedproxy_user"
@@ -143,12 +260,15 @@ DB_PASS=$(openssl rand -base64 32 | tr -dc 'A-Za-z0-9!@#$%^&*' | head -c 32)
 NGINX_CONF="/etc/nginx/sites-available/zedproxy"
 
 log "Starting ZedProxy installation..."
+log "OS: $OS_PRETTY"
 log "App directory: $APP_DIR"
 log "Domain: $DOMAIN"
 
+# ─── Clean any broken ondrej/php sources before first apt update ──────────────
+clean_ondrej_php_sources
+
 # ─── System packages ─────────────────────────────────────────────────────────
-log "Updating system packages..."
-apt-get update -qq
+safe_apt_update
 apt-get upgrade -y -qq
 
 log "Installing base packages..."
@@ -158,26 +278,13 @@ apt-get install -y -qq \
     apt-transport-https software-properties-common \
     supervisor cron
 
-# ─── PHP 8.4 ─────────────────────────────────────────────────────────────────
-log "Installing PHP $PHP_VERSION..."
-add-apt-repository -y ppa:ondrej/php
-apt-get update -qq
-apt-get install -y -qq \
-    php${PHP_VERSION} \
-    php${PHP_VERSION}-fpm \
-    php${PHP_VERSION}-cli \
-    php${PHP_VERSION}-pgsql \
-    php${PHP_VERSION}-redis \
-    php${PHP_VERSION}-mbstring \
-    php${PHP_VERSION}-xml \
-    php${PHP_VERSION}-curl \
-    php${PHP_VERSION}-zip \
-    php${PHP_VERSION}-bcmath \
-    php${PHP_VERSION}-gd \
-    php${PHP_VERSION}-intl \
-    php${PHP_VERSION}-opcache
+# ─── PHP installation ─────────────────────────────────────────────────────────
+install_php
 
-ok "PHP $PHP_VERSION installed: $(php -v | head -1)"
+# PHP_VERSION is now set to the installed version (e.g. "8.3" or "8.4")
+PHP_FPM_SERVICE="php${PHP_VERSION}-fpm"
+
+ok "PHP version: $(php -v | head -1)"
 
 # ─── Composer ────────────────────────────────────────────────────────────────
 log "Installing Composer..."
@@ -226,7 +333,6 @@ ok "PostgreSQL database '${DB_NAME}' and user '${DB_USER}' ready"
 log "Installing Redis..."
 apt-get install -y -qq redis-server
 
-# Bind to localhost only
 sed -i 's/^bind .*/bind 127.0.0.1/' /etc/redis/redis.conf
 
 systemctl enable redis-server
@@ -246,7 +352,6 @@ else
     mkdir -p "$APP_DIR"
 fi
 
-# Copy files if running from a different directory
 if [ "$(pwd)" != "$APP_DIR" ] && [ -f "$(pwd)/artisan" ]; then
     log "Copying application files to $APP_DIR..."
     rsync -a --exclude='.git' --exclude='node_modules' --exclude='vendor' . "$APP_DIR/"
@@ -312,14 +417,16 @@ ENV
 chmod 600 .env
 ok ".env created (APP_URL=${APP_URL})"
 
-# ─── PHP-FPM config ──────────────────────────────────────────────────────────
-log "Configuring PHP-FPM..."
+# ─── PHP-FPM pool config ─────────────────────────────────────────────────────
+log "Configuring PHP-FPM (${PHP_FPM_SERVICE})..."
 PHP_FPM_POOL="/etc/php/${PHP_VERSION}/fpm/pool.d/zedproxy.conf"
+PHP_FPM_SOCK="/run/php/php${PHP_VERSION}-fpm-zedproxy.sock"
+
 cat > "$PHP_FPM_POOL" <<PHPFPM
 [zedproxy]
 user = www-data
 group = www-data
-listen = /run/php/php${PHP_VERSION}-fpm-zedproxy.sock
+listen = ${PHP_FPM_SOCK}
 listen.owner = www-data
 listen.group = www-data
 listen.mode = 0660
@@ -340,8 +447,15 @@ php_value[max_execution_time] = 60
 PHPFPM
 
 mkdir -p /var/log/php
-systemctl restart php${PHP_VERSION}-fpm
-ok "PHP-FPM configured"
+
+if systemctl is-active --quiet "$PHP_FPM_SERVICE" 2>/dev/null || systemctl is-enabled --quiet "$PHP_FPM_SERVICE" 2>/dev/null; then
+    systemctl restart "$PHP_FPM_SERVICE"
+else
+    systemctl enable "$PHP_FPM_SERVICE"
+    systemctl start "$PHP_FPM_SERVICE"
+fi
+
+ok "PHP-FPM configured (${PHP_FPM_SERVICE})"
 
 # ─── Composer install ────────────────────────────────────────────────────────
 log "Installing PHP dependencies..."
@@ -371,7 +485,6 @@ php artisan migrate --force || error "Migration failed. Check database credentia
 
 # ─── Admin user creation ──────────────────────────────────────────────────────
 log "Creating admin user (${ADMIN_EMAIL})..."
-# Pass password via env var to keep it out of the process list
 ZEDPROXY_ADMIN_PASS="$ADMIN_PASS" php artisan zedproxy:create-admin \
     --email="$ADMIN_EMAIL" \
     --name="$ADMIN_NAME" \
@@ -421,7 +534,7 @@ server {
     error_page 404 /index.php;
 
     location ~ \.php$ {
-        fastcgi_pass unix:/run/php/php${PHP_VERSION}-fpm-zedproxy.sock;
+        fastcgi_pass unix:${PHP_FPM_SOCK};
         fastcgi_index index.php;
         fastcgi_param SCRIPT_FILENAME \$realpath_root\$fastcgi_script_name;
         include fastcgi_params;
@@ -507,6 +620,8 @@ if [ "$HEALTH_OK" = "true" ]; then
     echo -e "${GREEN}  ZedProxy installation completed successfully!${NC}"
     echo -e "${GREEN}════════════════════════════════════════════════════════════${NC}"
     echo ""
+    echo -e "  OS:                ${BLUE}${OS_PRETTY}${NC}"
+    echo -e "  PHP version:       ${BLUE}PHP ${PHP_VERSION}${NC}"
     echo -e "  Website URL:       ${BLUE}${APP_URL}${NC}"
     echo -e "  Admin panel URL:   ${BLUE}${APP_URL}/admin${NC}"
     echo -e "  Health check URL:  ${BLUE}${APP_URL}/health${NC}"
@@ -535,6 +650,6 @@ else
     echo -e "  Investigate:"
     echo -e "    ${BLUE}tail -50 ${APP_DIR}/storage/logs/laravel.log${NC}"
     echo -e "    ${BLUE}curl http://localhost/health${NC}"
-    echo -e "    ${BLUE}sudo systemctl status nginx php${PHP_VERSION}-fpm postgresql redis-server${NC}"
+    echo -e "    ${BLUE}sudo systemctl status nginx ${PHP_FPM_SERVICE} postgresql redis-server${NC}"
     echo ""
 fi
