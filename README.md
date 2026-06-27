@@ -167,16 +167,18 @@ sudo chmod 600 .env
 
 ### 7. Create admin user
 
-Use the dedicated Artisan command (safe to re-run — updates the user if the email already exists):
+Use the dedicated Artisan command (safe to re-run — finds user by email or username, then updates):
 
 ```bash
 php artisan zedproxy:create-admin \
     --email="admin@yourdomain.com" \
-    --name="Admin" \
+    --username="myadmin" \
     --password="your_secure_password"
 ```
 
-Then log in at `/admin`.
+Then log in at `/zed-admin`.
+
+**Login uses username, not email.** The email is stored for password resets and system notifications but is not used to log in to the admin panel.
 
 Alternatively, the `install.sh` script creates the admin user automatically during installation using the credentials you enter at the prompts.
 
@@ -363,9 +365,11 @@ Re-run the admin creation command to ensure `is_admin = true` and the password i
 ```bash
 php artisan zedproxy:create-admin \
     --email="admin@example.com" \
-    --name="Admin" \
+    --username="myadmin" \
     --password="your_password"
 ```
+
+The admin panel is at `/zed-admin`, not `/admin`. Login uses **username**, not email.
 
 ## Diagnostics
 
@@ -478,9 +482,21 @@ Do NOT copy `vendor/`, `node_modules/`, or `public/build/` - regenerate these wi
 
 ## Admin panel
 
-Visit `/admin` after creating an admin user. Current sections:
+Visit `/zed-admin` after creating an admin user.
 
-- **Users** - list, create, edit users and admin access
+**Login:** Use your **username** (not email) and password. The login URL is `/zed-admin/login`.
+
+| Field | Value |
+|-------|-------|
+| Admin panel URL | `https://DOMAIN/zed-admin` |
+| Login URL | `https://DOMAIN/zed-admin/login` |
+| Login field | **Username** (not email) |
+
+Email is stored on the user record for password resets and system contact but is **not** entered on the admin login form.
+
+Current sections:
+
+- **Users** - list, create, edit users (username, email, admin access)
 - **System Status** - live checks for DB, Redis, storage, cache, queue
 
 Upcoming sections (in future development phases):

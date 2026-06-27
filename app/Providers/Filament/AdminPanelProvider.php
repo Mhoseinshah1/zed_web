@@ -24,9 +24,9 @@ class AdminPanelProvider extends PanelProvider
     {
         return $panel
             ->default()
-            ->id('admin')
-            ->path('admin')
-            ->login()
+            ->id('zed-admin')
+            ->path('zed-admin')
+            ->login(\App\Filament\Pages\Auth\Login::class)
             ->brandName('ZedProxy Admin')
             ->colors([
                 'primary' => Color::Indigo,

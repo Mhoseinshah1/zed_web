@@ -9,8 +9,9 @@ use Illuminate\Support\Facades\Hash;
 class CreateAdminCommand extends Command
 {
     protected $signature = 'zedproxy:create-admin
-        {--email=    : Admin email address}
-        {--name=     : Admin display name or username}
+        {--email=    : Admin email address (stored; not used for login)}
+        {--username= : Admin username for panel login}
+        {--name=     : Admin display name (defaults to --username when omitted)}
         {--password= : Plain-text password (will be hashed). Falls back to ZEDPROXY_ADMIN_PASS env var.}';
 
     protected $description = 'Create or update the ZedProxy admin user (safe to re-run)';
@@ -18,12 +19,12 @@ class CreateAdminCommand extends Command
     public function handle(): int
     {
         $email    = $this->option('email');
-        $name     = $this->option('name');
-        // Accept password from option OR from env var set by install.sh
+        $username = $this->option('username');
+        $name     = $this->option('name') ?: $username;
         $password = $this->option('password') ?: env('ZEDPROXY_ADMIN_PASS');
 
-        if (empty($email) || empty($name) || empty($password)) {
-            $this->error('--email, --name, and --password (or ZEDPROXY_ADMIN_PASS env var) are all required.');
+        if (empty($email) || empty($username) || empty($password)) {
+            $this->error('--email, --username, and --password (or ZEDPROXY_ADMIN_PASS env var) are all required.');
             return self::FAILURE;
         }
 
@@ -32,20 +33,24 @@ class CreateAdminCommand extends Command
             return self::FAILURE;
         }
 
-        $user = User::updateOrCreate(
-            ['email' => $email],
-            [
-                'name'       => $name,
-                'password'   => Hash::make($password),
-                'is_admin'   => true,
-                'email_verified_at' => now(),
-            ]
-        );
+        // Look up by email OR username to avoid duplicate admin records on re-runs
+        $user = User::where('email', $email)->orWhere('username', $username)->first();
 
-        if ($user->wasRecentlyCreated) {
-            $this->info("Admin user created: {$email}");
+        $attributes = [
+            'username'          => $username,
+            'name'              => $name,
+            'email'             => $email,
+            'password'          => Hash::make($password),
+            'is_admin'          => true,
+            'email_verified_at' => now(),
+        ];
+
+        if ($user) {
+            $user->update($attributes);
+            $this->info("Admin user updated: {$username} <{$email}>");
         } else {
-            $this->info("Admin user updated: {$email}");
+            User::create($attributes);
+            $this->info("Admin user created: {$username} <{$email}>");
         }
 
         return self::SUCCESS;

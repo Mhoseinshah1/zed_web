@@ -25,8 +25,16 @@ class UserResource extends Resource
     {
         return $form->schema([
             Forms\Components\Section::make()->schema([
+                Forms\Components\TextInput::make('username')
+                    ->label('نام کاربری (برای ورود)')
+                    ->required()
+                    ->unique(ignoreRecord: true)
+                    ->maxLength(60)
+                    ->regex('/^[a-zA-Z0-9_]+$/')
+                    ->helperText('فقط حروف انگلیسی، اعداد و خط زیر مجاز است'),
+
                 Forms\Components\TextInput::make('name')
-                    ->label('نام')
+                    ->label('نام نمایشی')
                     ->required()
                     ->maxLength(255),
 
@@ -52,7 +60,8 @@ class UserResource extends Resource
         return $table
             ->columns([
                 Tables\Columns\TextColumn::make('id')->label('#')->sortable(),
-                Tables\Columns\TextColumn::make('name')->label('نام')->searchable()->sortable(),
+                Tables\Columns\TextColumn::make('username')->label('نام کاربری')->searchable()->sortable(),
+                Tables\Columns\TextColumn::make('name')->label('نام نمایشی')->searchable()->sortable(),
                 Tables\Columns\TextColumn::make('email')->label('ایمیل')->searchable()->sortable(),
                 Tables\Columns\IconColumn::make('is_admin')->label('ادمین')->boolean(),
                 Tables\Columns\IconColumn::make('email_verified_at')

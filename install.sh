@@ -426,12 +426,12 @@ _prompt_admin_name() {
     local rand_suffix
     rand_suffix=$(openssl rand -hex 3 2>/dev/null || printf '%06x' $((RANDOM * RANDOM % 16777216)))
     local default_name="zedadmin_${rand_suffix}"
-    echo -e "\n${BLUE}Enter admin name/username:${NC}"
+    echo -e "\n${BLUE}Enter admin username (used to log in to the admin panel):${NC}"
     echo -e "${BLUE}Press Enter to generate automatically: ${YELLOW}${default_name}${NC}"
     read -r INPUT_NAME </dev/tty
 
     ADMIN_NAME="${INPUT_NAME:-$default_name}"
-    ok "Admin name: $ADMIN_NAME"
+    ok "Admin username: $ADMIN_NAME"
 }
 
 _prompt_admin_password() {
@@ -497,7 +497,7 @@ echo ""
 echo -e "${BLUE}────────────────────────────────────────────────────────────${NC}"
 echo -e "  Domain:      ${YELLOW}${DOMAIN}${NC}"
 echo -e "  Admin email: ${YELLOW}${ADMIN_EMAIL}${NC}"
-echo -e "  Admin name:  ${YELLOW}${ADMIN_NAME}${NC}"
+echo -e "  Admin user:  ${YELLOW}${ADMIN_NAME}${NC}"
 echo -e "  Password:    ${YELLOW}(configured — shown in final summary)${NC}"
 if [ "$INSTALL_SSL" = "true" ]; then
     if [ "$SSL_STAGING" = "true" ]; then
@@ -851,12 +851,12 @@ log "Running database migrations..."
 php artisan migrate --force || error "Migration failed. Check database credentials."
 
 # ─── Admin user creation ──────────────────────────────────────────────────────
-log "Creating admin user (${ADMIN_EMAIL})..."
+log "Creating admin user (username: ${ADMIN_NAME}, email: ${ADMIN_EMAIL})..."
 ZEDPROXY_ADMIN_PASS="$ADMIN_PASS" php artisan zedproxy:create-admin \
     --email="$ADMIN_EMAIL" \
-    --name="$ADMIN_NAME" \
+    --username="$ADMIN_NAME" \
     || error "Failed to create admin user. Check: tail -f ${APP_DIR}/storage/logs/laravel.log"
-ok "Admin user ready: $ADMIN_EMAIL"
+ok "Admin user ready: ${ADMIN_NAME} <${ADMIN_EMAIL}>"
 
 log "Optimizing application..."
 php artisan config:cache
@@ -1039,11 +1039,12 @@ if [ "$HEALTH_OK" = "true" ]; then
     fi
 
     echo -e "  Website URL:       ${BLUE}${APP_URL}${NC}"
-    echo -e "  Admin panel URL:   ${BLUE}${APP_URL}/admin${NC}"
+    echo -e "  Admin panel URL:   ${BLUE}${APP_URL}/zed-admin${NC}"
     echo -e "  Health check URL:  ${BLUE}${APP_URL}/health${NC}"
     echo ""
-    echo -e "  Admin email:       ${YELLOW}${ADMIN_EMAIL}${NC}"
+    echo -e "  Admin login URL:   ${YELLOW}${APP_URL}/zed-admin/login${NC}"
     echo -e "  Admin username:    ${YELLOW}${ADMIN_NAME}${NC}"
+    echo -e "  Admin email:       ${YELLOW}${ADMIN_EMAIL}${NC}"
     echo -e "  Admin password:    ${YELLOW}${ADMIN_PASS}${NC}"
     echo ""
     echo -e "  DB name:           ${YELLOW}${DB_NAME}${NC}"
