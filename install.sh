@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 # =============================================================================
 # ZedProxy - One-command installation script for Ubuntu 24.04
-# Usage: sudo bash <(curl -fsSL https://raw.githubusercontent.com/mhoseinshah1/zed_web/main/install.sh)
+# Usage:
+#   curl -fsSL https://raw.githubusercontent.com/mhoseinshah1/zed_web/main/install.sh -o /tmp/zedproxy-install.sh
+#   chmod +x /tmp/zedproxy-install.sh
+#   sudo bash /tmp/zedproxy-install.sh
 # =============================================================================
 
 set -euo pipefail
@@ -18,7 +21,7 @@ warn()  { echo -e "${YELLOW}[WARN]${NC} $*"; }
 error() { echo -e "${RED}[ERROR]${NC} $*" >&2; exit 1; }
 
 # ─── Verify root ─────────────────────────────────────────────────────────────
-[[ $EUID -ne 0 ]] && error "This script must be run as root. Use: sudo bash <(curl -fsSL ...)"
+[[ $EUID -ne 0 ]] && error "This script must be run as root. Download and run with: curl -fsSL https://raw.githubusercontent.com/mhoseinshah1/zed_web/main/install.sh -o /tmp/zedproxy-install.sh && sudo bash /tmp/zedproxy-install.sh"
 
 # ─── Repository ──────────────────────────────────────────────────────────────
 GITHUB_OWNER="mhoseinshah1"
