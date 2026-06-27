@@ -109,6 +109,134 @@ ondrej_ppa_supports() {
     curl -fsI --max-time 10 "$url" &>/dev/null
 }
 
+# ─── DNS validation before certbot ───────────────────────────────────────────
+# Sets DOMAIN_RESOLVES and WWW_RESOLVES (true/false)
+DOMAIN_RESOLVES=false
+WWW_RESOLVES=false
+
+check_domain_dns() {
+    local domain="$1"
+    local server_ip=""
+
+    # Try multiple public IP services in case one is blocked
+    for ip_url in \
+        "https://api.ipify.org" \
+        "https://ifconfig.me" \
+        "https://icanhazip.com"; do
+        server_ip=$(curl -fsSL --max-time 5 "$ip_url" 2>/dev/null | tr -d '[:space:]' || true)
+        [[ "$server_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] && break
+        server_ip=""
+    done
+
+    if [[ -z "$server_ip" ]]; then
+        warn "Could not determine server public IP. Skipping DNS validation."
+        warn "Certbot will attempt SSL anyway — it will fail if DNS is not pointed here."
+        DOMAIN_RESOLVES=true
+        WWW_RESOLVES=false
+        return
+    fi
+
+    log "Server public IP: ${server_ip}"
+
+    local domain_ip
+    domain_ip=$(getent hosts "$domain" 2>/dev/null | awk '{print $1}' | head -1 || true)
+
+    if [[ "$domain_ip" == "$server_ip" ]]; then
+        DOMAIN_RESOLVES=true
+        ok "DNS: ${domain} → ${domain_ip} (matches server IP)"
+    else
+        DOMAIN_RESOLVES=false
+        if [[ -n "$domain_ip" ]]; then
+            warn "DNS: ${domain} → ${domain_ip} (server IP is ${server_ip} — mismatch)"
+        else
+            warn "DNS: ${domain} does not resolve to any IP"
+        fi
+        warn "SSL certificate will likely fail until DNS propagates to this server."
+    fi
+
+    local www_ip
+    www_ip=$(getent hosts "www.${domain}" 2>/dev/null | awk '{print $1}' | head -1 || true)
+
+    if [[ "$www_ip" == "$server_ip" ]]; then
+        WWW_RESOLVES=true
+        ok "DNS: www.${domain} → ${www_ip} (matches server IP)"
+    else
+        WWW_RESOLVES=false
+        if [[ -n "$www_ip" ]]; then
+            warn "DNS: www.${domain} → ${www_ip} (mismatch — www excluded from SSL cert)"
+        else
+            warn "DNS: www.${domain} does not resolve — www excluded from SSL cert"
+        fi
+    fi
+}
+
+# ─── Let's Encrypt SSL setup ─────────────────────────────────────────────────
+SSL_ACTIVE=false
+
+setup_ssl() {
+    log "Installing certbot..."
+    apt-get install -y -qq \
+        -o Dpkg::Options::="--force-confdef" \
+        -o Dpkg::Options::="--force-confold" \
+        certbot python3-certbot-nginx
+
+    log "Validating DNS for ${DOMAIN}..."
+    check_domain_dns "$DOMAIN"
+
+    # Build certbot -d args: always include bare domain; include www only if it resolves here
+    local certbot_domains="-d ${DOMAIN}"
+    if [ "$WWW_RESOLVES" = "true" ]; then
+        certbot_domains="${certbot_domains} -d www.${DOMAIN}"
+        log "Including www.${DOMAIN} in the SSL certificate"
+    else
+        log "www.${DOMAIN} not included (DNS mismatch or not resolving)"
+    fi
+
+    log "Running certbot for ${DOMAIN}..."
+    local certbot_exit=0
+    # shellcheck disable=SC2086
+    certbot --nginx \
+        $certbot_domains \
+        --non-interactive \
+        --agree-tos \
+        --redirect \
+        --no-eff-email \
+        -m "$ADMIN_EMAIL" || certbot_exit=$?
+
+    if [ "$certbot_exit" -eq 0 ]; then
+        SSL_ACTIVE=true
+        ok "SSL certificate issued for ${DOMAIN}"
+
+        # Update APP_URL to https in .env
+        sed -i "s|^APP_URL=.*|APP_URL=https://${DOMAIN}|" "${APP_DIR}/.env"
+        ok "APP_URL updated to https://${DOMAIN}"
+
+        # Rebuild config cache with new APP_URL
+        cd "$APP_DIR"
+        php artisan config:clear
+        php artisan config:cache
+        ok "Application config cache refreshed"
+
+        # Verify HTTPS health endpoint
+        sleep 3
+        local https_health
+        https_health=$(curl -sk -o /dev/null -w "%{http_code}" "https://${DOMAIN}/health" 2>/dev/null || echo "000")
+        if [ "$https_health" = "200" ]; then
+            ok "HTTPS health check PASSED (https://${DOMAIN}/health → HTTP 200)"
+        else
+            warn "HTTPS health check returned HTTP ${https_health}"
+            warn "SSL is installed but HTTPS health endpoint did not return 200."
+            warn "Run manually: curl https://${DOMAIN}/health"
+        fi
+    else
+        SSL_ACTIVE=false
+        warn "Certbot exited with code ${certbot_exit} — SSL was not configured."
+        warn "The HTTP site is still fully working."
+        warn "To install SSL manually after DNS propagates:"
+        warn "  certbot --nginx -d ${DOMAIN} -m ${ADMIN_EMAIL} --non-interactive --agree-tos --redirect --no-eff-email"
+    fi
+}
+
 # ─── PHP installation ─────────────────────────────────────────────────────────
 # Minimum PHP version required by this Laravel project
 PHP_MIN_VERSION="8.2"
@@ -171,18 +299,25 @@ _prompt_domain() {
         echo -e "\n${BLUE}Enter the domain for this website, without http/https, example: zedproxy.com:${NC}"
         read -r INPUT_DOMAIN </dev/tty
 
+        # Strip invisible/control characters, then all whitespace
+        INPUT_DOMAIN=$(printf '%s' "$INPUT_DOMAIN" | LC_ALL=C tr -cd '[:print:]')
         INPUT_DOMAIN="${INPUT_DOMAIN//[[:space:]]/}"
+
+        # Strip http:// or https:// prefix if accidentally included
+        INPUT_DOMAIN="${INPUT_DOMAIN#http://}"
+        INPUT_DOMAIN="${INPUT_DOMAIN#https://}"
+
+        # Strip trailing slash
+        INPUT_DOMAIN="${INPUT_DOMAIN%/}"
 
         if [[ -z "$INPUT_DOMAIN" ]]; then
             warn "Domain cannot be empty. Please try again."
             continue
         fi
-        if [[ "$INPUT_DOMAIN" == http://* || "$INPUT_DOMAIN" == https://* ]]; then
-            warn "Do not include http:// or https://. Enter the bare domain, e.g.: zedproxy.com"
-            continue
-        fi
-        if [[ "$INPUT_DOMAIN" == */ ]]; then
-            warn "Domain must not end with a slash."
+
+        # Basic domain format validation: must contain a dot, only valid chars
+        if ! [[ "$INPUT_DOMAIN" =~ ^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)+$ ]]; then
+            warn "Invalid domain format: '${INPUT_DOMAIN}'. Enter a valid domain, e.g.: zedproxy.com"
             continue
         fi
 
@@ -241,6 +376,21 @@ _prompt_admin_password() {
     fi
 }
 
+_prompt_ssl() {
+    echo -e "\n${BLUE}Install free SSL certificate with Let's Encrypt (certbot)? [Y/n]:${NC}"
+    read -r INPUT_SSL </dev/tty
+    INPUT_SSL="${INPUT_SSL//[[:space:]]/}"
+    INPUT_SSL="${INPUT_SSL,,}"
+
+    if [[ "$INPUT_SSL" == "n" || "$INPUT_SSL" == "no" ]]; then
+        INSTALL_SSL=false
+        ok "SSL: skipped (you can add it later with certbot)"
+    else
+        INSTALL_SSL=true
+        ok "SSL: will be configured automatically after installation"
+    fi
+}
+
 # ─── Run OS detection first ───────────────────────────────────────────────────
 detect_os
 
@@ -255,6 +405,7 @@ _prompt_app_url
 _prompt_admin_email
 _prompt_admin_name
 _prompt_admin_password
+_prompt_ssl
 
 echo ""
 echo -e "${BLUE}────────────────────────────────────────────────────────────${NC}"
@@ -263,6 +414,7 @@ echo -e "  Website URL: ${YELLOW}${APP_URL}${NC}"
 echo -e "  Admin email: ${YELLOW}${ADMIN_EMAIL}${NC}"
 echo -e "  Admin name:  ${YELLOW}${ADMIN_NAME}${NC}"
 echo -e "  Password:    ${YELLOW}(configured — shown in final summary)${NC}"
+echo -e "  SSL:         ${YELLOW}$( [ "$INSTALL_SSL" = "true" ] && echo "yes — Let's Encrypt" || echo "no — HTTP only" )${NC}"
 echo -e "${BLUE}────────────────────────────────────────────────────────────${NC}"
 echo -e "${BLUE}Proceeding with installation in 3 seconds... (Ctrl+C to cancel)${NC}"
 sleep 3
@@ -273,6 +425,8 @@ DB_NAME="zedproxy"
 DB_USER="zedproxy_user"
 DB_PASS=$(openssl rand -base64 32 | tr -dc 'A-Za-z0-9!@#$%^&*' | head -c 32)
 NGINX_CONF="/etc/nginx/sites-available/zedproxy"
+# INSTALL_SSL is set by _prompt_ssl() — default false until prompt runs
+INSTALL_SSL="${INSTALL_SSL:-false}"
 
 log "Starting ZedProxy installation..."
 log "OS: $OS_PRETTY"
@@ -737,10 +891,21 @@ else
     warn "Check logs: tail -f ${APP_DIR}/storage/logs/laravel.log"
 fi
 
+# ─── SSL / Let's Encrypt ──────────────────────────────────────────────────────
+if [ "$HEALTH_OK" = "true" ] && [ "$INSTALL_SSL" = "true" ]; then
+    echo ""
+    setup_ssl
+fi
+
 # ─── Final summary ────────────────────────────────────────────────────────────
 echo ""
 
 if [ "$HEALTH_OK" = "true" ]; then
+    # After SSL, APP_URL may have been updated to https — re-read from .env
+    if [ "$SSL_ACTIVE" = "true" ]; then
+        APP_URL="https://${DOMAIN}"
+    fi
+
     INSTALL_SUCCESS=true
     echo -e "${GREEN}════════════════════════════════════════════════════════════${NC}"
     echo -e "${GREEN}  ZedProxy installation completed successfully!${NC}"
@@ -748,6 +913,7 @@ if [ "$HEALTH_OK" = "true" ]; then
     echo ""
     echo -e "  OS:                ${BLUE}${OS_PRETTY}${NC}"
     echo -e "  PHP version:       ${BLUE}PHP ${PHP_VERSION}${NC}"
+    echo -e "  SSL:               ${BLUE}$( [ "$SSL_ACTIVE" = "true" ] && echo "active (Let's Encrypt)" || ( [ "$INSTALL_SSL" = "true" ] && echo "FAILED — see warnings above" || echo "not installed (HTTP only)" ) )${NC}"
     echo -e "  Website URL:       ${BLUE}${APP_URL}${NC}"
     echo -e "  Admin panel URL:   ${BLUE}${APP_URL}/admin${NC}"
     echo -e "  Health check URL:  ${BLUE}${APP_URL}/health${NC}"
@@ -762,9 +928,11 @@ if [ "$HEALTH_OK" = "true" ]; then
     echo ""
     echo -e "  ${RED}IMPORTANT: Save the passwords above. They will not be shown again.${NC}"
     echo ""
-    echo -e "  Next step — add SSL:"
-    echo -e "    ${BLUE}sudo certbot --nginx -d ${DOMAIN} -d www.${DOMAIN}${NC}"
-    echo ""
+    if [ "$INSTALL_SSL" = "true" ] && [ "$SSL_ACTIVE" = "false" ]; then
+        echo -e "  ${YELLOW}SSL was requested but failed. Add SSL manually once DNS is ready:${NC}"
+        echo -e "    ${BLUE}certbot --nginx -d ${DOMAIN} -m ${ADMIN_EMAIL} --non-interactive --agree-tos --redirect --no-eff-email${NC}"
+        echo ""
+    fi
 else
     echo -e "${RED}════════════════════════════════════════════════════════════${NC}"
     echo -e "${RED}  ZedProxy installation did not complete cleanly.${NC}"

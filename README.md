@@ -74,10 +74,13 @@ The script runs interactively and asks for the following before doing anything:
 | Admin email | `admin@DOMAIN` |
 | Admin name/username | `zedadmin_RANDOM` (e.g. `zedadmin_a83f21`) |
 | Admin password | Strong 24-char random password |
+| Install SSL with Let's Encrypt? | `Y` (yes) |
 
 After all questions are answered, a 3-second countdown lets you cancel with Ctrl+C before anything is installed.
 
-The admin user is created automatically. **Credentials are only shown once at the end of a successful installation.**  If installation fails at any step, the admin password is not printed.
+The admin user is created automatically. **Credentials are only shown once at the end of a successful installation.** If installation fails at any step, the admin password is not printed.
+
+SSL is configured automatically at the end of installation (after Nginx and the HTTP health check pass). If SSL fails, the HTTP site remains fully functional and a manual certbot command is printed.
 
 ## Manual installation
 
@@ -356,11 +359,30 @@ Do not deploy from `master`, `develop`, `staging`, or any other branch without e
 
 ### SSL (HTTPS)
 
-After installation, add SSL with Certbot:
+The installer prompts you to install a free SSL certificate with Let's Encrypt during setup. The default answer is **yes**.
+
+**What the installer does automatically:**
+
+1. Asks: `Install free SSL certificate with Let's Encrypt? [Y/n]` — press Enter to accept.
+2. Installs `certbot` and `python3-certbot-nginx` (non-interactive).
+3. Checks DNS before running certbot — compares the domain's A record with the server's public IP.
+4. Includes `www.DOMAIN` in the certificate only if it also resolves to this server.
+5. Runs certbot after Nginx is configured and the HTTP health check passes.
+6. On success: updates `APP_URL` in `.env` to `https://DOMAIN`, clears and rebuilds config cache, verifies HTTPS health.
+7. On failure: does not remove the working HTTP site. Prints a manual certbot command to run once DNS is ready.
+
+**DNS must point to this server before SSL can be issued.** If DNS is not ready at install time, choose `n` at the SSL prompt and run certbot manually later:
 
 ```bash
-sudo apt install certbot python3-certbot-nginx
-sudo certbot --nginx -d yourdomain.com -d www.yourdomain.com
+certbot --nginx -d yourdomain.com -m admin@yourdomain.com \
+    --non-interactive --agree-tos --redirect --no-eff-email
+```
+
+To add `www` to an existing certificate:
+
+```bash
+certbot --nginx -d yourdomain.com -d www.yourdomain.com \
+    -m admin@yourdomain.com --non-interactive --agree-tos --redirect --no-eff-email
 ```
 
 ### After code update
