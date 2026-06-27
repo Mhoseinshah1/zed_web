@@ -48,7 +48,7 @@ The admin user is created automatically. **Credentials are only shown once at th
 ### 1. Clone and enter directory
 
 ```bash
-git clone https://github.com/mhoseinshah1/zed_web.git /var/www/zedproxy
+git clone -b main https://github.com/mhoseinshah1/zed_web.git /var/www/zedproxy
 cd /var/www/zedproxy
 ```
 
@@ -288,6 +288,18 @@ php artisan zedproxy:create-admin \
     --name="Admin" \
     --password="your_password"
 ```
+
+## Branch convention
+
+All production installation and deployment commands must use the **`main`** branch.
+
+| Purpose | Command |
+|---------|---------|
+| Install | `sudo bash <(curl -fsSL https://raw.githubusercontent.com/mhoseinshah1/zed_web/main/install.sh)` |
+| Clone | `git clone -b main https://github.com/mhoseinshah1/zed_web.git` |
+| Update | `git pull origin main` |
+
+Do not deploy from `master`, `develop`, `staging`, or any other branch without explicit testing.
 
 ## Deployment notes
 

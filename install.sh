@@ -23,6 +23,7 @@ error() { echo -e "${RED}[ERROR]${NC} $*" >&2; exit 1; }
 # ─── Repository ──────────────────────────────────────────────────────────────
 GITHUB_OWNER="mhoseinshah1"
 REPO_NAME="zed_web"
+BRANCH="main"
 
 # ─── Fail-safe: never print admin credentials on unexpected exit ──────────────
 INSTALL_SUCCESS=false
