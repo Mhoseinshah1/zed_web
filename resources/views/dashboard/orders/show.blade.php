@@ -92,19 +92,41 @@
         </div>
     </div>
 
-    {{-- Payment placeholder --}}
+    {{-- Payment action --}}
+    @if(in_array($order->payment_status, ['unpaid', 'pending']) && ! in_array($order->status, ['cancelled', 'failed', 'completed']))
+    <div class="bg-indigo-500/10 border border-indigo-500/20 rounded-xl p-6 mb-6">
+        <div class="flex items-center justify-between gap-4">
+            <div>
+                <h4 class="text-indigo-300 font-semibold mb-1">پرداخت سفارش</h4>
+                <p class="text-indigo-200/70 text-sm">برای فعال‌سازی سرویس، سفارش خود را پرداخت کنید.</p>
+            </div>
+            <a href="{{ route('dashboard.orders.pay', $order) }}"
+               class="shrink-0 bg-indigo-600 hover:bg-indigo-500 text-white font-semibold px-6 py-2.5 rounded-xl transition text-sm">
+                پرداخت
+            </a>
+        </div>
+    </div>
+    @elseif($order->payment_status === 'paid')
+    <div class="bg-green-500/10 border border-green-500/20 rounded-xl p-6 mb-6">
+        <div class="flex gap-3">
+            <span class="text-2xl">✅</span>
+            <div>
+                <h4 class="text-green-300 font-semibold mb-1">پرداخت تایید شده</h4>
+                <p class="text-green-200/70 text-sm">پرداخت این سفارش با موفقیت انجام شده است.</p>
+            </div>
+        </div>
+    </div>
+    @elseif($order->payment_status === 'pending')
     <div class="bg-yellow-500/10 border border-yellow-500/20 rounded-xl p-6 mb-6">
         <div class="flex gap-3">
             <span class="text-2xl">⏳</span>
             <div>
-                <h4 class="text-yellow-300 font-semibold mb-1">پرداخت در دسترس نیست</h4>
-                <p class="text-yellow-200/70 text-sm leading-6">
-                    پرداخت این سفارش در مرحله بعد فعال می‌شود.<br>
-                    فعلاً این سفارش فقط برای آماده‌سازی سیستم خرید ثبت شده است.
-                </p>
+                <h4 class="text-yellow-300 font-semibold mb-1">در انتظار تایید پرداخت</h4>
+                <p class="text-yellow-200/70 text-sm">اطلاعات پرداخت شما ارسال شده و منتظر بررسی توسط پشتیبانی است.</p>
             </div>
         </div>
     </div>
+    @endif
 
     {{-- Notes --}}
     @if($order->notes)

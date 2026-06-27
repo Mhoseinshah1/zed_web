@@ -6,6 +6,7 @@ use App\Filament\Resources\OrderResource\Pages;
 use App\Models\Order;
 use Filament\Forms;
 use Filament\Forms\Form;
+use Filament\Notifications\Notification;
 use Filament\Resources\Resource;
 use Filament\Tables;
 use Filament\Tables\Table;
@@ -145,6 +146,61 @@ class OrderResource extends Resource
                     ->options(Order::allPaymentStatuses()),
             ])
             ->actions([
+                Tables\Actions\Action::make('mark_processing')
+                    ->label('در حال پردازش')
+                    ->icon('heroicon-o-cog-6-tooth')
+                    ->color('info')
+                    ->visible(fn (Order $record) => $record->status === Order::STATUS_PAID)
+                    ->action(function (Order $record) {
+                        $record->update(['status' => Order::STATUS_PROCESSING]);
+                        Notification::make()->title('سفارش به حالت در حال پردازش تغییر یافت.')->info()->send();
+                    })
+                    ->requiresConfirmation()
+                    ->modalHeading('تغییر وضعیت به در حال پردازش')
+                    ->modalSubmitActionLabel('تایید'),
+
+                Tables\Actions\Action::make('mark_completed')
+                    ->label('تکمیل شده')
+                    ->icon('heroicon-o-check-circle')
+                    ->color('success')
+                    ->visible(fn (Order $record) => $record->status === Order::STATUS_PROCESSING)
+                    ->action(function (Order $record) {
+                        $record->update([
+                            'status'       => Order::STATUS_COMPLETED,
+                            'completed_at' => now(),
+                        ]);
+                        Notification::make()->title('سفارش تکمیل شد.')->success()->send();
+                    })
+                    ->requiresConfirmation()
+                    ->modalHeading('تکمیل سفارش')
+                    ->modalSubmitActionLabel('تایید'),
+
+                Tables\Actions\Action::make('cancel_order')
+                    ->label('لغو')
+                    ->icon('heroicon-o-x-circle')
+                    ->color('danger')
+                    ->visible(fn (Order $record) => ! in_array($record->status, [
+                        Order::STATUS_COMPLETED,
+                        Order::STATUS_CANCELLED,
+                        Order::STATUS_FAILED,
+                    ]))
+                    ->form([
+                        Forms\Components\Textarea::make('admin_notes')
+                            ->label('دلیل لغو (اختیاری)')
+                            ->rows(3),
+                    ])
+                    ->action(function (Order $record, array $data) {
+                        $record->update([
+                            'status'       => Order::STATUS_CANCELLED,
+                            'cancelled_at' => now(),
+                            'admin_notes'  => $data['admin_notes'] ?? $record->admin_notes,
+                        ]);
+                        Notification::make()->title('سفارش لغو شد.')->warning()->send();
+                    })
+                    ->requiresConfirmation()
+                    ->modalHeading('لغو سفارش')
+                    ->modalSubmitActionLabel('بله، لغو کن'),
+
                 Tables\Actions\EditAction::make()->label('ویرایش'),
             ])
             ->bulkActions([])

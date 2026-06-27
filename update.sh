@@ -193,6 +193,8 @@ log "Seeding default locations..."
 php artisan db:seed --class=LocationSeeder --force
 log "Seeding default plans..."
 php artisan db:seed --class=PlanSeeder --force
+log "Seeding default payment methods..."
+php artisan db:seed --class=PaymentMethodSeeder --force
 ok "Default data seeded (existing admin-edited values preserved)"
 
 # ─── Storage link ─────────────────────────────────────────────────────────────

@@ -8,9 +8,11 @@ use App\Http\Controllers\FaqController;
 use App\Http\Controllers\HealthController;
 use App\Http\Controllers\HomeController;
 use App\Http\Controllers\OrderController;
+use App\Http\Controllers\PaymentController;
 use App\Http\Controllers\PlansController;
 use App\Http\Controllers\StatusController;
 use App\Http\Controllers\TutorialsController;
+use App\Http\Controllers\WalletController;
 use Illuminate\Support\Facades\Route;
 
 // Health check (unauthenticated)
@@ -45,8 +47,11 @@ Route::middleware('auth')->prefix('dashboard')->name('dashboard.')->group(functi
     Route::get('/', [DashboardController::class, 'index'])->name('index');
     Route::get('/orders', [OrderController::class, 'index'])->name('orders');
     Route::get('/orders/{order}', [OrderController::class, 'show'])->name('orders.show');
+    Route::get('/orders/{order}/pay', [PaymentController::class, 'show'])->name('orders.pay');
+    Route::post('/orders/{order}/pay', [PaymentController::class, 'submit'])->name('orders.pay.submit');
     Route::get('/services', fn () => view('dashboard.services'))->name('services');
     Route::get('/profile', fn () => view('dashboard.profile', ['user' => auth()->user()]))->name('profile');
+    Route::get('/wallet', [WalletController::class, 'index'])->name('wallet');
 });
 
 // Legacy /panel redirects → /dashboard

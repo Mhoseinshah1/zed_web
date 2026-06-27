@@ -8,14 +8,16 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 class PaymentTransaction extends Model
 {
     const STATUS_PENDING   = 'pending';
-    const STATUS_PAID      = 'paid';
+    const STATUS_SUBMITTED = 'submitted';
+    const STATUS_APPROVED  = 'approved';
+    const STATUS_REJECTED  = 'rejected';
     const STATUS_FAILED    = 'failed';
-    const STATUS_REFUNDED  = 'refunded';
     const STATUS_CANCELLED = 'cancelled';
 
     protected $fillable = [
         'order_id',
         'user_id',
+        'payment_method_id',
         'provider',
         'method',
         'status',
@@ -25,12 +27,21 @@ class PaymentTransaction extends Model
         'external_id',
         'payload',
         'paid_at',
+        'proof_path',
+        'transaction_reference',
+        'user_note',
+        'admin_note',
+        'reviewed_by',
+        'reviewed_at',
+        'rejected_at',
     ];
 
     protected $casts = [
         'amount_toman' => 'integer',
         'payload'      => 'array',
         'paid_at'      => 'datetime',
+        'reviewed_at'  => 'datetime',
+        'rejected_at'  => 'datetime',
     ];
 
     public function order(): BelongsTo
@@ -43,15 +54,43 @@ class PaymentTransaction extends Model
         return $this->belongsTo(User::class);
     }
 
+    public function paymentMethod(): BelongsTo
+    {
+        return $this->belongsTo(PaymentMethod::class);
+    }
+
+    public function reviewer(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'reviewed_by');
+    }
+
     public function statusLabel(): string
     {
         return match($this->status) {
             self::STATUS_PENDING   => 'در انتظار',
-            self::STATUS_PAID      => 'پرداخت شده',
+            self::STATUS_SUBMITTED => 'ارسال شده',
+            self::STATUS_APPROVED  => 'تایید شده',
+            self::STATUS_REJECTED  => 'رد شده',
             self::STATUS_FAILED    => 'ناموفق',
-            self::STATUS_REFUNDED  => 'برگشت داده شده',
             self::STATUS_CANCELLED => 'لغو شده',
             default                => $this->status,
         };
+    }
+
+    public static function allStatuses(): array
+    {
+        return [
+            self::STATUS_PENDING   => 'در انتظار',
+            self::STATUS_SUBMITTED => 'ارسال شده',
+            self::STATUS_APPROVED  => 'تایید شده',
+            self::STATUS_REJECTED  => 'رد شده',
+            self::STATUS_FAILED    => 'ناموفق',
+            self::STATUS_CANCELLED => 'لغو شده',
+        ];
+    }
+
+    public function isPending(): bool
+    {
+        return in_array($this->status, [self::STATUS_PENDING, self::STATUS_SUBMITTED]);
     }
 }

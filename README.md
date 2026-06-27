@@ -503,13 +503,15 @@ Current sections:
 
 | Section | URL | Description |
 |---------|-----|-------------|
-| **Users** | `/zed-admin/users` | Manage admin and regular users |
+| **Users** | `/zed-admin/users` | Manage users, view wallet balance, manually credit/debit wallet |
 | **Plans** | `/zed-admin/plans` | Create/edit VPN plans with price, traffic, duration, features |
 | **Features** | `/zed-admin/features` | Manage plan features (e.g. "بدون محدودیت سرعت") |
 | **Locations** | `/zed-admin/locations` | Manage server locations with flag emoji |
 | **Site Texts** | `/zed-admin/site-texts` | Edit all homepage/footer/legal texts stored in DB |
-| **Orders** | `/zed-admin/orders` | View and manage all user orders, edit status/payment_status, write admin notes |
-| **Transactions** | `/zed-admin/payment-transactions` | View payment transactions placeholder (real gateway integration is a future step) |
+| **Orders** | `/zed-admin/orders` | View and manage orders; quick actions: mark processing, mark completed, cancel |
+| **Transactions** | `/zed-admin/payment-transactions` | Approve or reject submitted manual payments with admin note |
+| **Wallet Transactions** | `/zed-admin/wallet-transactions` | Read-only ledger of all wallet credits and debits |
+| **Payment Methods** | `/zed-admin/payment-methods` | Manage payment methods (wallet, crypto, stars, rial) |
 | **System Status** | `/zed-admin/system-status` | Live health checks for DB, Redis, storage, queue |
 
 ### Content that survives updates
@@ -523,6 +525,7 @@ All site content lives in the database — `update.sh` seeds only **missing** de
 | Plan feature titles | `features` | `/zed-admin/features` |
 | Server location names | `locations` | `/zed-admin/locations` |
 | Footer text, legal pages | `site_texts` | `/zed-admin/site-texts` |
+| Payment method titles, instructions, accounts | `payment_methods` | `/zed-admin/payment-methods` |
 
 > **Note:** `update.sh` never resets admin passwords, site texts, plans, features, or locations.
 
@@ -572,7 +575,7 @@ zedproxy-update
 5. `composer install --no-interaction --prefer-dist --optimize-autoloader`
 6. `npm ci` (falls back to `npm install`), then `npm run build`
 7. `php artisan migrate --force`
-8. `php artisan db:seed --class=SiteTextSeeder` — inserts **only missing** site text defaults (never overwrites admin-edited values)
+8. Seeds missing defaults: `SiteTextSeeder`, `FeatureSeeder`, `LocationSeeder`, `PlanSeeder`, `PaymentMethodSeeder` — all use `firstOrCreate` (never overwrites admin-edited values)
 9. `php artisan storage:link`
 10. `php artisan optimize:clear` + `config:cache` + `route:cache` + `view:cache`
 11. **Disables maintenance mode** (`php artisan up`) — also runs on error
@@ -628,9 +631,12 @@ sudo tail -n 120 /var/log/zedproxy-update.log
 
 | Route | Name | Description |
 |-------|------|-------------|
-| `GET /dashboard` | `dashboard.index` | User dashboard (auth required) |
+| `GET /dashboard` | `dashboard.index` | User dashboard — shows wallet balance, pending payments, recent orders |
 | `GET /dashboard/orders` | `dashboard.orders` | All user orders |
-| `GET /dashboard/orders/{order}` | `dashboard.orders.show` | Single order detail |
+| `GET /dashboard/orders/{order}` | `dashboard.orders.show` | Single order detail with Pay button |
+| `GET /dashboard/orders/{order}/pay` | `dashboard.orders.pay` | Choose payment method and submit payment |
+| `POST /dashboard/orders/{order}/pay` | `dashboard.orders.pay.submit` | Submit payment (wallet debit or manual submission) |
+| `GET /dashboard/wallet` | `dashboard.wallet` | Wallet balance and transaction ledger |
 | `GET /dashboard/services` | `dashboard.services` | Services placeholder |
 | `GET /dashboard/profile` | `dashboard.profile` | User profile (read-only) |
 | `POST /plans/{plan}/buy` | `plans.buy` | Create order for a plan (auth required) |
@@ -644,7 +650,20 @@ Legacy `/panel/*` routes redirect to `/dashboard/*` (301 permanent).
 3. If logged in: buy button is a POST form → `POST /plans/{plan}/buy`
 4. Server validates plan is active, creates an `Order` with a snapshot of plan data at purchase time
 5. Redirects to `/dashboard/orders/{order}`
-6. Order detail page shows status, price, plan name, traffic, duration, and a **payment placeholder** (پرداخت در مرحله بعد فعال می‌شود)
+6. Order detail page shows a **Pay** button when the order is unpaid
+
+### Payment flow
+
+**Wallet payment:**
+1. User selects "کیف پول" method on the pay page
+2. If wallet balance ≥ order price: atomic debit + immediate approval, order becomes `paid`
+3. If balance insufficient: error shown, no transaction created
+
+**Manual payment (crypto / Telegram Stars / Rial transfer):**
+1. User selects a manual method, sees instructions and account details
+2. User enters TXID / transaction reference and optional note
+3. Submits form → `PaymentTransaction` created with status `submitted`, order becomes `awaiting_payment`
+4. Admin reviews in Filament → approve (marks order paid) or reject (reverts order to pending)
 
 ### Order data model
 
@@ -654,21 +673,36 @@ Orders store a **snapshot** of plan data at purchase time — plan name, slug, t
 
 **Payment statuses:** `unpaid`, `pending`, `paid`, `failed`, `refunded`
 
-### Payment transactions (placeholder)
+### Wallet / ledger
 
-`payment_transactions` table is created and ready for future gateway integration (crypto, Telegram Stars, Rial gateway). No real provider is connected yet.
+Every change to a user's wallet balance creates a `WalletTransaction` record (append-only). Wallet balance is only modified via `WalletService::credit()` / `debit()`, which use `lockForUpdate()` to prevent race conditions.
+
+**Transaction types:** `manual_credit`, `manual_debit`, `order_payment`, `refund`, `adjustment`
+
+### Payment methods (seeded defaults)
+
+| Slug | Type | Description |
+|------|------|-------------|
+| `wallet` | `wallet` | Internal wallet balance |
+| `manual-crypto` | `manual_crypto` | USDT / TRC20 manual transfer |
+| `manual-stars` | `manual_stars` | Telegram Stars via bot |
+
+Admin can create additional methods and edit titles, instructions, and account values without code changes.
 
 ### Admin order management
 
 | Admin route | Description |
 |-------------|-------------|
 | `/zed-admin/orders` | List all orders, filter by status/payment_status |
+| `/zed-admin/orders` | Quick actions: mark processing, mark completed, cancel with note |
 | `/zed-admin/orders/{id}/edit` | Edit order status, payment status, timestamps, admin notes |
-| `/zed-admin/payment-transactions` | View and manually edit placeholder transactions |
+| `/zed-admin/payment-transactions` | Approve or reject submitted payments with admin note |
+| `/zed-admin/wallet-transactions` | Read-only ledger of all wallet debits and credits |
+| `/zed-admin/users` | Credit or debit any user's wallet with a reason |
 
 ### What is preserved through updates
 
-Orders, transactions, and their data are never deleted by `update.sh` or seeders. The `--force` migrate only runs forward migrations.
+Orders, wallet transactions, payment transactions, and payment methods are never deleted by `update.sh` or seeders. The `--force` migrate only runs forward migrations. `PaymentMethodSeeder` uses `firstOrCreate` — admin-edited method titles, instructions, and account values are never overwritten.
 
 ## What's next
 
@@ -678,13 +712,20 @@ Orders, transactions, and their data are never deleted by `update.sh` or seeders
 - Public plans page at `/plans` — active plans with buy buttons
 - Update-safe seeders (`firstOrCreate` — never overwrites admin edits)
 - User login/register with username auth
-- User dashboard at `/dashboard`
+- User dashboard at `/dashboard` — wallet balance, pending payments, recent orders
 - Order system with plan snapshot storage
-- Payment transaction placeholder model
-- Admin order and transaction management in Filament
+- Payment methods model with seeded defaults (wallet, crypto, stars)
+- Wallet system — atomic balance management via `WalletService` with pessimistic locking
+- Wallet payment — immediate debit + order approval if balance sufficient
+- Manual payment submission — user submits TXID/reference, admin approves/rejects in Filament
+- Admin approve/reject with admin note — `PaymentService` handles idempotent approval
+- Admin wallet management — credit/debit any user's wallet from UserResource
+- Wallet ledger — `WalletTransaction` append-only ledger, visible to user and admin
+- User wallet page at `/dashboard/wallet`
+- Admin payment method management at `/zed-admin/payment-methods`
 
 **Next:**
-1. Payment gateway — Rial/crypto integration (NOWPayments, Telegram Stars, or Rial gateway)
+1. Payment gateway API — NOWPayments, Telegram Stars API, or Rial gateway (do not add yet)
 2. Marzban integration — API client, auto VPN service creation after payment confirmed
 3. Ticket system — support ticket model and panel
 4. Subscription links — V2Ray subscription URL generation

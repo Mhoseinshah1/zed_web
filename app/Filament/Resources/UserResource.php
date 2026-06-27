@@ -4,8 +4,11 @@ namespace App\Filament\Resources;
 
 use App\Filament\Resources\UserResource\Pages;
 use App\Models\User;
+use App\Models\WalletTransaction;
+use App\Services\WalletService;
 use Filament\Forms;
 use Filament\Forms\Form;
+use Filament\Notifications\Notification;
 use Filament\Resources\Resource;
 use Filament\Tables;
 use Filament\Tables\Table;
@@ -63,6 +66,11 @@ class UserResource extends Resource
                 Tables\Columns\TextColumn::make('username')->label('نام کاربری')->searchable()->sortable(),
                 Tables\Columns\TextColumn::make('name')->label('نام نمایشی')->searchable()->sortable(),
                 Tables\Columns\TextColumn::make('email')->label('ایمیل')->searchable()->sortable(),
+                Tables\Columns\TextColumn::make('wallet_balance_toman')
+                    ->label('موجودی کیف پول (تومان)')
+                    ->numeric()
+                    ->formatStateUsing(fn ($state) => number_format($state))
+                    ->sortable(),
                 Tables\Columns\IconColumn::make('is_admin')->label('ادمین')->boolean(),
                 Tables\Columns\IconColumn::make('email_verified_at')
                     ->label('تایید ایمیل')
@@ -79,6 +87,86 @@ class UserResource extends Resource
                     ->query(fn ($query) => $query->whereNotNull('email_verified_at')),
             ])
             ->actions([
+                Tables\Actions\Action::make('credit_wallet')
+                    ->label('شارژ کیف پول')
+                    ->icon('heroicon-o-plus-circle')
+                    ->color('success')
+                    ->form([
+                        Forms\Components\TextInput::make('amount_toman')
+                            ->label('مبلغ (تومان)')
+                            ->required()
+                            ->numeric()
+                            ->minValue(1),
+                        Forms\Components\Textarea::make('description')
+                            ->label('دلیل / توضیح')
+                            ->required()
+                            ->rows(2),
+                    ])
+                    ->action(function (User $record, array $data) {
+                        try {
+                            app(WalletService::class)->credit(
+                                $record,
+                                (int) $data['amount_toman'],
+                                WalletTransaction::TYPE_MANUAL_CREDIT,
+                                [
+                                    'description' => $data['description'],
+                                    'admin_id'    => auth()->id(),
+                                ]
+                            );
+                            Notification::make()
+                                ->title('کیف پول با موفقیت شارژ شد.')
+                                ->success()
+                                ->send();
+                        } catch (\Exception $e) {
+                            Notification::make()
+                                ->title('خطا: ' . $e->getMessage())
+                                ->danger()
+                                ->send();
+                        }
+                    })
+                    ->modalHeading('شارژ کیف پول')
+                    ->modalSubmitActionLabel('شارژ کن'),
+
+                Tables\Actions\Action::make('debit_wallet')
+                    ->label('برداشت از کیف پول')
+                    ->icon('heroicon-o-minus-circle')
+                    ->color('warning')
+                    ->form([
+                        Forms\Components\TextInput::make('amount_toman')
+                            ->label('مبلغ (تومان)')
+                            ->required()
+                            ->numeric()
+                            ->minValue(1),
+                        Forms\Components\Textarea::make('description')
+                            ->label('دلیل / توضیح')
+                            ->required()
+                            ->rows(2),
+                    ])
+                    ->action(function (User $record, array $data) {
+                        try {
+                            app(WalletService::class)->debit(
+                                $record,
+                                (int) $data['amount_toman'],
+                                WalletTransaction::TYPE_MANUAL_DEBIT,
+                                [
+                                    'description' => $data['description'],
+                                    'admin_id'    => auth()->id(),
+                                ]
+                            );
+                            Notification::make()
+                                ->title('برداشت از کیف پول با موفقیت انجام شد.')
+                                ->success()
+                                ->send();
+                        } catch (\RuntimeException $e) {
+                            Notification::make()
+                                ->title($e->getMessage())
+                                ->danger()
+                                ->send();
+                        }
+                    })
+                    ->modalHeading('برداشت از کیف پول')
+                    ->modalSubmitActionLabel('برداشت کن'),
+
                 Tables\Actions\EditAction::make(),
                 Tables\Actions\DeleteAction::make(),
             ])

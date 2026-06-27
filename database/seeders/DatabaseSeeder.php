@@ -13,6 +13,7 @@ class DatabaseSeeder extends Seeder
             FeatureSeeder::class,
             LocationSeeder::class,
             PlanSeeder::class,
+            PaymentMethodSeeder::class,
         ]);
     }
 }

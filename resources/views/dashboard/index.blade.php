@@ -23,22 +23,22 @@
             <span class="text-3xl">🔌</span>
         </div>
     </div>
-    <div class="bg-gray-900 border border-gray-800 rounded-xl p-5">
+    <a href="{{ route('dashboard.wallet') }}" class="bg-gray-900 border border-gray-800 hover:border-indigo-500/50 rounded-xl p-5 transition">
         <div class="flex items-center justify-between">
             <div>
                 <p class="text-gray-400 text-sm">موجودی کیف پول</p>
-                <p class="text-2xl font-bold text-white mt-1">۰ تومان</p>
+                <p class="text-2xl font-bold text-white mt-1">{{ number_format($user->wallet_balance_toman) }} <span class="text-sm font-normal text-gray-400">تومان</span></p>
             </div>
             <span class="text-3xl">💰</span>
         </div>
-    </div>
+    </a>
     <div class="bg-gray-900 border border-gray-800 rounded-xl p-5">
         <div class="flex items-center justify-between">
             <div>
-                <p class="text-gray-400 text-sm">حجم مصرفی</p>
-                <p class="text-2xl font-bold text-white mt-1">۰ GB</p>
+                <p class="text-gray-400 text-sm">پرداخت در انتظار بررسی</p>
+                <p class="text-2xl font-bold {{ $pendingPayments > 0 ? 'text-yellow-400' : 'text-white' }} mt-1">{{ $pendingPayments }}</p>
             </div>
-            <span class="text-3xl">📊</span>
+            <span class="text-3xl">⏳</span>
         </div>
     </div>
 </div>
@@ -60,6 +60,10 @@
     <a href="{{ route('dashboard.profile') }}" class="bg-gray-900 border border-gray-800 hover:border-gray-700 text-white rounded-xl p-4 text-center transition">
         <div class="text-2xl mb-2">👤</div>
         <div class="text-sm font-medium">پروفایل</div>
+    </a>
+    <a href="{{ route('dashboard.wallet') }}" class="bg-gray-900 border border-gray-800 hover:border-gray-700 text-white rounded-xl p-4 text-center transition">
+        <div class="text-2xl mb-2">💰</div>
+        <div class="text-sm font-medium">کیف پول</div>
     </a>
 </div>
 

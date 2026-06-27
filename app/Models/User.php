@@ -21,6 +21,7 @@ class User extends Authenticatable implements FilamentUser
         'email',
         'password',
         'is_admin',
+        'wallet_balance_toman',
     ];
 
     protected $hidden = [
@@ -31,9 +32,10 @@ class User extends Authenticatable implements FilamentUser
     protected function casts(): array
     {
         return [
-            'email_verified_at' => 'datetime',
-            'password'          => 'hashed',
-            'is_admin'          => 'boolean',
+            'email_verified_at'    => 'datetime',
+            'password'             => 'hashed',
+            'is_admin'             => 'boolean',
+            'wallet_balance_toman' => 'integer',
         ];
     }
 
@@ -50,5 +52,10 @@ class User extends Authenticatable implements FilamentUser
     public function paymentTransactions(): HasMany
     {
         return $this->hasMany(PaymentTransaction::class);
+    }
+
+    public function walletTransactions(): HasMany
+    {
+        return $this->hasMany(WalletTransaction::class);
     }
 }
