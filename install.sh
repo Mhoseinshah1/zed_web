@@ -28,9 +28,12 @@ error() { echo -e "${RED}[ERROR]${NC} $*" >&2; exit 1; }
 [[ $EUID -ne 0 ]] && error "This script must be run as root. Download and run with: curl -fsSL https://raw.githubusercontent.com/mhoseinshah1/zed_web/main/install.sh -o /tmp/zedproxy-install.sh && sudo bash /tmp/zedproxy-install.sh"
 
 # ─── Repository ──────────────────────────────────────────────────────────────
+APP_NAME="ZedProxy"
 GITHUB_OWNER="mhoseinshah1"
 REPO_NAME="zed_web"
 BRANCH="main"
+APP_DIR="${APP_DIR:-/var/www/zedproxy}"
+REPO_URL="https://github.com/${GITHUB_OWNER}/${REPO_NAME}.git"
 
 # ─── Fail-safe: never print admin credentials on unexpected exit ──────────────
 INSTALL_SUCCESS=false
@@ -262,7 +265,6 @@ echo -e "${BLUE}Proceeding with installation in 3 seconds... (Ctrl+C to cancel)$
 sleep 3
 
 # ─── Static configuration ─────────────────────────────────────────────────────
-APP_DIR="${APP_DIR:-/var/www/zedproxy}"
 NODE_VERSION="22"
 DB_NAME="zedproxy"
 DB_USER="zedproxy_user"
@@ -392,8 +394,6 @@ apt-get install -y -qq \
     nginx
 
 # ─── Project directory preparation ───────────────────────────────────────────
-REPO_URL="https://github.com/${GITHUB_OWNER}/${REPO_NAME}.git"
-
 prepare_project_directory() {
     if [ ! -d "$APP_DIR" ]; then
         log "Cloning ${REPO_URL} (branch: ${BRANCH}) into ${APP_DIR}..."
@@ -404,6 +404,7 @@ prepare_project_directory() {
         log "${APP_DIR} already contains a git repository — updating to origin/${BRANCH}..."
         git -C "$APP_DIR" fetch origin "$BRANCH"
         git -C "$APP_DIR" reset --hard "origin/${BRANCH}"
+        git -C "$APP_DIR" clean -fd
         ok "Repository updated to origin/${BRANCH}"
 
     else
@@ -445,13 +446,15 @@ verify_laravel_project() {
     done
 
     if [ ${#missing[@]} -gt 0 ]; then
-        echo -e "${RED}[ERROR]${NC} Laravel project was not found in ${APP_DIR}." >&2
-        echo -e "${RED}[ERROR]${NC} The following required paths are missing:" >&2
+        echo -e "${RED}[ERROR]${NC} The Laravel project was not cloned correctly." >&2
+        echo -e "${RED}[ERROR]${NC} The following required files/folders are missing from ${APP_DIR}:" >&2
         for m in "${missing[@]}"; do
             echo -e "         - ${m}" >&2
         done
         echo "" >&2
-        echo "Check that ${REPO_URL} (branch: ${BRANCH}) contains a complete Laravel project." >&2
+        echo -e "${RED}[ERROR]${NC} Check that the main branch contains the Laravel project." >&2
+        echo "         Repository: ${REPO_URL}" >&2
+        echo "         Branch:     ${BRANCH}" >&2
         exit 1
     fi
 
