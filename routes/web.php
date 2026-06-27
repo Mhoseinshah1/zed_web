@@ -10,6 +10,7 @@ use App\Http\Controllers\HomeController;
 use App\Http\Controllers\OrderController;
 use App\Http\Controllers\PaymentController;
 use App\Http\Controllers\PlansController;
+use App\Http\Controllers\ServiceController;
 use App\Http\Controllers\StatusController;
 use App\Http\Controllers\TutorialsController;
 use App\Http\Controllers\WalletController;
@@ -49,7 +50,8 @@ Route::middleware('auth')->prefix('dashboard')->name('dashboard.')->group(functi
     Route::get('/orders/{order}', [OrderController::class, 'show'])->name('orders.show');
     Route::get('/orders/{order}/pay', [PaymentController::class, 'show'])->name('orders.pay');
     Route::post('/orders/{order}/pay', [PaymentController::class, 'submit'])->name('orders.pay.submit');
-    Route::get('/services', fn () => view('dashboard.services'))->name('services');
+    Route::get('/services', [ServiceController::class, 'index'])->name('services');
+    Route::get('/services/{service}', [ServiceController::class, 'show'])->name('services.show');
     Route::get('/profile', fn () => view('dashboard.profile', ['user' => auth()->user()]))->name('profile');
     Route::get('/wallet', [WalletController::class, 'index'])->name('wallet');
 });

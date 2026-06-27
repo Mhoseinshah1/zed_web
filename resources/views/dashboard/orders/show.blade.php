@@ -128,6 +128,37 @@
     </div>
     @endif
 
+    {{-- Service link --}}
+    @if($order->service)
+    <div class="bg-indigo-500/10 border border-indigo-500/20 rounded-xl p-5 mb-6">
+        <div class="flex items-center justify-between gap-4">
+            <div>
+                <h4 class="text-indigo-300 font-semibold text-sm mb-1">سرویس مرتبط</h4>
+                <p class="text-indigo-200/70 text-sm">
+                    {{ $order->service->statusLabel() }}
+                    @if($order->service->status === 'pending_provision')
+                        — سرویس شما در حال آماده‌سازی است.
+                    @endif
+                </p>
+            </div>
+            <a href="{{ route('dashboard.services.show', $order->service) }}"
+               class="shrink-0 text-xs bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2 rounded-lg transition">
+                مشاهده سرویس
+            </a>
+        </div>
+    </div>
+    @elseif($order->payment_status === 'paid')
+    <div class="bg-blue-500/10 border border-blue-500/20 rounded-xl p-5 mb-6">
+        <div class="flex gap-3">
+            <span class="text-xl">🔄</span>
+            <div>
+                <h4 class="text-blue-300 font-semibold text-sm mb-1">سرویس در حال آماده‌سازی</h4>
+                <p class="text-blue-200/70 text-sm">پرداخت تایید شده است. سرویس شما به‌زودی آماده می‌شود.</p>
+            </div>
+        </div>
+    </div>
+    @endif
+
     {{-- Notes --}}
     @if($order->notes)
     <div class="bg-gray-900 border border-gray-800 rounded-xl p-5 mb-6">

@@ -4,6 +4,7 @@ namespace App\Filament\Resources;
 
 use App\Filament\Resources\OrderResource\Pages;
 use App\Models\Order;
+use App\Services\ServiceProvisioner;
 use Filament\Forms;
 use Filament\Forms\Form;
 use Filament\Notifications\Notification;
@@ -200,6 +201,28 @@ class OrderResource extends Resource
                     ->requiresConfirmation()
                     ->modalHeading('لغو سفارش')
                     ->modalSubmitActionLabel('بله، لغو کن'),
+
+                Tables\Actions\Action::make('create_service')
+                    ->label('ایجاد سرویس')
+                    ->icon('heroicon-o-plus-circle')
+                    ->color('info')
+                    ->visible(fn (Order $record) => in_array($record->status, [
+                        Order::STATUS_PAID,
+                        Order::STATUS_PROCESSING,
+                        Order::STATUS_COMPLETED,
+                    ]) && $record->service === null)
+                    ->action(function (Order $record) {
+                        try {
+                            app(ServiceProvisioner::class)->createFromOrder($record);
+                            Notification::make()->title('سرویس با موفقیت ایجاد شد.')->success()->send();
+                        } catch (\Exception $e) {
+                            Notification::make()->title($e->getMessage())->danger()->send();
+                        }
+                    })
+                    ->requiresConfirmation()
+                    ->modalHeading('ایجاد سرویس برای این سفارش')
+                    ->modalDescription('آیا می‌خواهید یک سرویس جدید برای این سفارش ایجاد کنید؟')
+                    ->modalSubmitActionLabel('بله، ایجاد کن'),
 
                 Tables\Actions\EditAction::make()->label('ویرایش'),
             ])

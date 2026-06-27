@@ -12,7 +12,10 @@ use RuntimeException;
 
 class PaymentService
 {
-    public function __construct(private WalletService $wallet) {}
+    public function __construct(
+        private WalletService      $wallet,
+        private ServiceProvisioner $provisioner,
+    ) {}
 
     public function payWithWallet(Order $order, User $user): PaymentTransaction
     {
@@ -25,22 +28,21 @@ class PaymentService
                 ->where('is_active', true)
                 ->first();
 
-            // Debit wallet (also locks user row inside its own transaction)
             $this->wallet->debit($user, $order->final_price_toman, WalletTransaction::TYPE_ORDER_PAYMENT, [
                 'order_id'    => $order->id,
                 'description' => "پرداخت سفارش {$order->order_number}",
             ]);
 
             $tx = PaymentTransaction::create([
-                'order_id'           => $order->id,
-                'user_id'            => $user->id,
-                'payment_method_id'  => $method?->id,
-                'provider'           => 'wallet',
-                'method'             => 'wallet',
-                'status'             => PaymentTransaction::STATUS_APPROVED,
-                'amount_toman'       => $order->final_price_toman,
-                'reviewed_at'        => now(),
-                'paid_at'            => now(),
+                'order_id'          => $order->id,
+                'user_id'           => $user->id,
+                'payment_method_id' => $method?->id,
+                'provider'          => 'wallet',
+                'method'            => 'wallet',
+                'status'            => PaymentTransaction::STATUS_APPROVED,
+                'amount_toman'      => $order->final_price_toman,
+                'reviewed_at'       => now(),
+                'paid_at'           => now(),
             ]);
 
             $order->update([
@@ -48,6 +50,8 @@ class PaymentService
                 'status'         => Order::STATUS_PAID,
                 'paid_at'        => now(),
             ]);
+
+            $this->provisioner->createFromOrder($order);
 
             return $tx;
         });
@@ -80,6 +84,8 @@ class PaymentService
                     'paid_at'        => now(),
                 ]);
             }
+
+            $this->provisioner->createFromOrder($order);
         });
     }
 
@@ -104,7 +110,6 @@ class PaymentService
 
             $order = $tx->order;
 
-            // Only revert order status if no other approved payment exists
             $hasApproved = $order->paymentTransactions()
                 ->where('id', '!=', $tx->id)
                 ->where('status', PaymentTransaction::STATUS_APPROVED)

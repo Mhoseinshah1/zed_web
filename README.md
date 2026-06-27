@@ -637,7 +637,8 @@ sudo tail -n 120 /var/log/zedproxy-update.log
 | `GET /dashboard/orders/{order}/pay` | `dashboard.orders.pay` | Choose payment method and submit payment |
 | `POST /dashboard/orders/{order}/pay` | `dashboard.orders.pay.submit` | Submit payment (wallet debit or manual submission) |
 | `GET /dashboard/wallet` | `dashboard.wallet` | Wallet balance and transaction ledger |
-| `GET /dashboard/services` | `dashboard.services` | Services placeholder |
+| `GET /dashboard/services` | `dashboard.services` | User services list — status, traffic, expiry |
+| `GET /dashboard/services/{service}` | `dashboard.services.show` | Service detail — config link, traffic bar, expiry, related order |
 | `GET /dashboard/profile` | `dashboard.profile` | User profile (read-only) |
 | `POST /plans/{plan}/buy` | `plans.buy` | Create order for a plan (auth required) |
 
@@ -694,7 +695,7 @@ Admin can create additional methods and edit titles, instructions, and account v
 | Admin route | Description |
 |-------------|-------------|
 | `/zed-admin/orders` | List all orders, filter by status/payment_status |
-| `/zed-admin/orders` | Quick actions: mark processing, mark completed, cancel with note |
+| `/zed-admin/orders` | Quick actions: mark processing, mark completed, cancel with note, **create service** (paid orders without a service) |
 | `/zed-admin/orders/{id}/edit` | Edit order status, payment status, timestamps, admin notes |
 | `/zed-admin/payment-transactions` | Approve or reject submitted payments with admin note |
 | `/zed-admin/wallet-transactions` | Read-only ledger of all wallet debits and credits |
@@ -704,6 +705,74 @@ Admin can create additional methods and edit titles, instructions, and account v
 
 Orders, wallet transactions, payment transactions, and payment methods are never deleted by `update.sh` or seeders. The `--force` migrate only runs forward migrations. `PaymentMethodSeeder` uses `firstOrCreate` — admin-edited method titles, instructions, and account values are never overwritten.
 
+## Service lifecycle
+
+### Service statuses
+
+| Status | Description |
+|--------|-------------|
+| `pending_provision` | Service created but not yet provisioned on a VPN panel |
+| `active` | Provisioned and in use |
+| `disabled` | Temporarily suspended by admin |
+| `expired` | Past the `expires_at` date |
+| `cancelled` | Cancelled before activation |
+| `failed` | Provisioning failed |
+
+### Provision statuses
+
+| Status | Description |
+|--------|-------------|
+| `pending` | Waiting for provisioning to start |
+| `manual_required` | Requires admin action (current default — no automatic API yet) |
+| `provisioned` | Successfully linked to a VPN panel |
+| `failed` | Provisioning error |
+| `skipped` | Skipped (no API integration active) |
+
+### Service creation flow
+
+1. User pays an order (wallet or approved manual payment)
+2. `PaymentService` calls `ServiceProvisioner::createFromOrder()` — idempotent, safe to call twice
+3. A `UserService` record is created with `status=pending_provision`, `provision_status=manual_required`
+4. A `VpnServiceProvisionLog` entry is written: `action=create_placeholder_service`, `status=skipped`
+5. Admin activates the service manually in the admin panel → dates computed, status set to `active`
+
+### Admin service management
+
+| Admin route | Description |
+|-------------|-------------|
+| `/zed-admin/user-services` | List all services with status, traffic, expiry |
+| `/zed-admin/user-services/{id}/edit` | Edit service: status, config link, subscription link, VPN panel assignment, admin notes |
+| Quick action: Activate | Sets status to `active`, computes `starts_at` / `expires_at`, logs `manual_activate` |
+| Quick action: Disable | Sets status to `disabled`, logs `manual_disable` |
+| Quick action: Cancel | Sets status to `cancelled`, logs `manual_cancel` |
+
+### Artisan commands
+
+```bash
+# Mark expired services (run daily via cron or Supervisor)
+php artisan services:expire
+```
+
+Add to cron for daily expiry checks:
+
+```bash
+echo "0 1 * * * www-data php /var/www/zedproxy/artisan services:expire >> /var/log/zedproxy-expire.log 2>&1" \
+    | sudo tee /etc/cron.d/zedproxy-expire
+```
+
+### VPN panel placeholders
+
+`VpnPanel` and `VpnInbound` models and migrations are in place for future Marzban / 3x-ui integration. Admin resources exist at:
+
+- `/zed-admin/vpn-panels` — add VPN panel connection details (name, type, URL, credentials)
+- `/zed-admin/vpn-inbounds` — add inbounds linked to a panel (protocol, port, network, security)
+
+> **No real VPN API connection is active.** Panels and inbounds can be configured in the admin but ZedProxy does not yet call any external VPN API. Automatic service provisioning via Marzban or 3x-ui is planned for a future phase.
+
+### Service data preserved through updates
+
+User services, provision logs, VPN panels, and VPN inbounds are **never deleted** by `update.sh` or seeders. Admin-edited config links, admin notes, and activation dates survive all updates.
+
 ## What's next
 
 **Completed:**
@@ -712,7 +781,7 @@ Orders, wallet transactions, payment transactions, and payment methods are never
 - Public plans page at `/plans` — active plans with buy buttons
 - Update-safe seeders (`firstOrCreate` — never overwrites admin edits)
 - User login/register with username auth
-- User dashboard at `/dashboard` — wallet balance, pending payments, recent orders
+- User dashboard at `/dashboard` — active services, pending services, wallet balance, recent orders
 - Order system with plan snapshot storage
 - Payment methods model with seeded defaults (wallet, crypto, stars)
 - Wallet system — atomic balance management via `WalletService` with pessimistic locking
@@ -723,12 +792,23 @@ Orders, wallet transactions, payment transactions, and payment methods are never
 - Wallet ledger — `WalletTransaction` append-only ledger, visible to user and admin
 - User wallet page at `/dashboard/wallet`
 - Admin payment method management at `/zed-admin/payment-methods`
+- **UserService model** — full service lifecycle (pending_provision → active → disabled/expired/cancelled)
+- **Service auto-creation** — `ServiceProvisioner` called automatically on payment approval (idempotent)
+- **User services pages** — `/dashboard/services` list and `/dashboard/services/{service}` detail
+- **Admin UserServiceResource** — activate, disable, cancel actions; full CRUD; provision logs
+- **VpnPanel placeholder** — model, migration, Filament resource (no real API yet)
+- **VpnInbound placeholder** — model, migration, Filament resource linked to panels
+- **VpnServiceProvisionLog** — append-only log of all lifecycle events
+- **`services:expire` command** — bulk-marks active services past their expiry date
+- **Dashboard updated** — shows active service count, pending service count, services quick link
+- **Order detail updated** — shows link to related service when it exists
 
 **Next:**
-1. Payment gateway API — NOWPayments, Telegram Stars API, or Rial gateway (do not add yet)
-2. Marzban integration — API client, auto VPN service creation after payment confirmed
-3. Ticket system — support ticket model and panel
-4. Subscription links — V2Ray subscription URL generation
-5. Telegram bot — admin reports and notifications
-6. Email — order confirmations, expiry reminders
-7. Docker deployment — containerized installation
+1. Marzban API integration — auto-create VPN user on Marzban panel after payment, sync traffic/expiry
+2. 3x-ui / Sanaei 3x-ui integration — same flow, different panel type
+3. Subscription links — V2Ray subscription URL returned from Marzban/3x-ui
+4. Payment gateway API — NOWPayments, Telegram Stars API, or Rial gateway
+5. Ticket system — support ticket model and panel
+6. Telegram bot — admin reports and notifications
+7. Email — order confirmations, expiry reminders
+8. Docker deployment — containerized installation

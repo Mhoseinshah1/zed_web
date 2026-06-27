@@ -1,0 +1,71 @@
+<?php
+
+namespace App\Models;
+
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\HasMany;
+
+class VpnPanel extends Model
+{
+    const TYPE_MARZBAN    = 'marzban';
+    const TYPE_XUI        = 'xui';
+    const TYPE_SANAEI_XUI = 'sanaei_3xui';
+    const TYPE_OTHER      = 'other';
+
+    protected $fillable = [
+        'name',
+        'type',
+        'base_url',
+        'username',
+        'password',
+        'token',
+        'is_active',
+        'is_default',
+        'notes',
+        'last_checked_at',
+    ];
+
+    protected $casts = [
+        'is_active'       => 'boolean',
+        'is_default'      => 'boolean',
+        'last_checked_at' => 'datetime',
+    ];
+
+    protected $hidden = ['password', 'token'];
+
+    public function inbounds(): HasMany
+    {
+        return $this->hasMany(VpnInbound::class);
+    }
+
+    public function services(): HasMany
+    {
+        return $this->hasMany(UserService::class);
+    }
+
+    public function provisionLogs(): HasMany
+    {
+        return $this->hasMany(VpnServiceProvisionLog::class);
+    }
+
+    public function typeLabel(): string
+    {
+        return match($this->type) {
+            self::TYPE_MARZBAN    => 'Marzban',
+            self::TYPE_XUI        => 'X-UI',
+            self::TYPE_SANAEI_XUI => '3X-UI (Sanaei)',
+            self::TYPE_OTHER      => 'سایر',
+            default               => $this->type,
+        };
+    }
+
+    public static function allTypes(): array
+    {
+        return [
+            self::TYPE_MARZBAN    => 'Marzban',
+            self::TYPE_XUI        => 'X-UI',
+            self::TYPE_SANAEI_XUI => '3X-UI (Sanaei)',
+            self::TYPE_OTHER      => 'سایر',
+        ];
+    }
+}

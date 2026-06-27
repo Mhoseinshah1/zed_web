@@ -34,6 +34,11 @@ class Plan extends Model
         return $this->hasMany(Order::class);
     }
 
+    public function services(): HasMany
+    {
+        return $this->hasMany(UserService::class);
+    }
+
     protected static function booted(): void
     {
         static::creating(function (Plan $plan) {

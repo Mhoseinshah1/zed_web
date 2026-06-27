@@ -90,6 +90,11 @@ class Order extends Model
         return $this->hasMany(PaymentTransaction::class);
     }
 
+    public function service(): \Illuminate\Database\Eloquent\Relations\HasOne
+    {
+        return $this->hasOne(UserService::class);
+    }
+
     public function statusLabel(): string
     {
         return match($this->status) {

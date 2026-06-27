@@ -1,0 +1,296 @@
+<?php
+
+namespace App\Filament\Resources;
+
+use App\Filament\Resources\UserServiceResource\Pages;
+use App\Models\UserService;
+use App\Services\ServiceProvisioner;
+use Filament\Forms;
+use Filament\Forms\Form;
+use Filament\Notifications\Notification;
+use Filament\Resources\Resource;
+use Filament\Tables;
+use Filament\Tables\Table;
+
+class UserServiceResource extends Resource
+{
+    protected static ?string $model = UserService::class;
+
+    protected static ?string $navigationIcon   = 'heroicon-o-signal';
+    protected static ?string $navigationGroup  = 'کاربران و سفارش‌ها';
+    protected static ?string $navigationLabel  = 'سرویس‌ها';
+    protected static ?string $modelLabel       = 'سرویس';
+    protected static ?string $pluralModelLabel = 'سرویس‌ها';
+    protected static ?int    $navigationSort   = 2;
+
+    public static function form(Form $form): Form
+    {
+        return $form->schema([
+            Forms\Components\Section::make('اطلاعات کاربر و سفارش')->schema([
+                Forms\Components\Select::make('user_id')
+                    ->label('کاربر')
+                    ->relationship('user', 'username')
+                    ->searchable()
+                    ->required(),
+
+                Forms\Components\Select::make('order_id')
+                    ->label('سفارش')
+                    ->relationship('order', 'order_number')
+                    ->searchable()
+                    ->nullable(),
+
+                Forms\Components\Select::make('plan_id')
+                    ->label('پلن')
+                    ->relationship('plan', 'name')
+                    ->searchable()
+                    ->nullable(),
+
+                Forms\Components\TextInput::make('service_number')
+                    ->label('شماره سرویس')
+                    ->disabled()
+                    ->placeholder('خودکار تولید می‌شود'),
+            ])->columns(2),
+
+            Forms\Components\Section::make('وضعیت سرویس')->schema([
+                Forms\Components\TextInput::make('name')
+                    ->label('نام سرویس')
+                    ->nullable(),
+
+                Forms\Components\Select::make('status')
+                    ->label('وضعیت سرویس')
+                    ->options(UserService::allStatuses())
+                    ->required(),
+
+                Forms\Components\Select::make('provision_status')
+                    ->label('وضعیت ساخت')
+                    ->options(UserService::allProvisionStatuses())
+                    ->required(),
+
+                Forms\Components\TextInput::make('plan_name')
+                    ->label('نام پلن (اسنپشات)')
+                    ->nullable(),
+            ])->columns(2),
+
+            Forms\Components\Section::make('حجم و مدت')->schema([
+                Forms\Components\TextInput::make('traffic_total_gb')
+                    ->label('حجم کل (GB)')
+                    ->numeric()
+                    ->nullable(),
+
+                Forms\Components\TextInput::make('traffic_used_gb')
+                    ->label('حجم مصرف‌شده (GB)')
+                    ->numeric()
+                    ->default(0),
+
+                Forms\Components\TextInput::make('duration_days')
+                    ->label('مدت (روز)')
+                    ->numeric()
+                    ->nullable(),
+            ])->columns(3),
+
+            Forms\Components\Section::make('تاریخ‌ها')->schema([
+                Forms\Components\DateTimePicker::make('starts_at')
+                    ->label('تاریخ شروع'),
+
+                Forms\Components\DateTimePicker::make('expires_at')
+                    ->label('تاریخ انقضا'),
+
+                Forms\Components\DateTimePicker::make('activated_at')
+                    ->label('تاریخ فعال‌سازی'),
+
+                Forms\Components\DateTimePicker::make('disabled_at')
+                    ->label('تاریخ غیرفعال‌سازی'),
+            ])->columns(2)->collapsible(),
+
+            Forms\Components\Section::make('لینک‌های اتصال')->schema([
+                Forms\Components\Textarea::make('config_link')
+                    ->label('لینک کانفیگ')
+                    ->rows(3)
+                    ->nullable()
+                    ->columnSpanFull(),
+
+                Forms\Components\Textarea::make('subscription_link')
+                    ->label('لینک اشتراک')
+                    ->rows(2)
+                    ->nullable()
+                    ->columnSpanFull(),
+            ]),
+
+            Forms\Components\Section::make('پنل VPN')->schema([
+                Forms\Components\Select::make('vpn_panel_id')
+                    ->label('پنل VPN')
+                    ->relationship('vpnPanel', 'name')
+                    ->nullable(),
+
+                Forms\Components\Select::make('vpn_inbound_id')
+                    ->label('اینباند')
+                    ->relationship('vpnInbound', 'name')
+                    ->nullable(),
+
+                Forms\Components\TextInput::make('remote_client_id')
+                    ->label('Remote Client ID')
+                    ->nullable(),
+
+                Forms\Components\TextInput::make('remote_username')
+                    ->label('Remote Username')
+                    ->nullable(),
+            ])->columns(2)->collapsible()->collapsed(),
+
+            Forms\Components\Section::make('یادداشت‌ها')->schema([
+                Forms\Components\Textarea::make('admin_notes')
+                    ->label('یادداشت ادمین')
+                    ->rows(3)
+                    ->nullable()
+                    ->columnSpanFull(),
+            ]),
+        ]);
+    }
+
+    public static function table(Table $table): Table
+    {
+        return $table
+            ->columns([
+                Tables\Columns\TextColumn::make('service_number')
+                    ->label('شماره سرویس')
+                    ->searchable()
+                    ->sortable()
+                    ->fontFamily('mono')
+                    ->copyable(),
+
+                Tables\Columns\TextColumn::make('user.username')
+                    ->label('کاربر')
+                    ->searchable()
+                    ->sortable(),
+
+                Tables\Columns\TextColumn::make('order.order_number')
+                    ->label('سفارش')
+                    ->searchable()
+                    ->fontFamily('mono')
+                    ->default('—'),
+
+                Tables\Columns\TextColumn::make('plan_name')
+                    ->label('پلن')
+                    ->searchable()
+                    ->default('—'),
+
+                Tables\Columns\BadgeColumn::make('status')
+                    ->label('وضعیت')
+                    ->formatStateUsing(fn ($state) => UserService::allStatuses()[$state] ?? $state)
+                    ->colors([
+                        'success' => ['active'],
+                        'warning' => ['pending_provision'],
+                        'info'    => ['disabled'],
+                        'gray'    => ['expired'],
+                        'danger'  => ['cancelled', 'failed'],
+                    ]),
+
+                Tables\Columns\BadgeColumn::make('provision_status')
+                    ->label('وضعیت ساخت')
+                    ->formatStateUsing(fn ($state) => UserService::allProvisionStatuses()[$state] ?? $state)
+                    ->colors([
+                        'warning' => ['pending', 'manual_required'],
+                        'success' => ['provisioned'],
+                        'danger'  => ['failed'],
+                        'gray'    => ['skipped'],
+                    ]),
+
+                Tables\Columns\TextColumn::make('traffic_total_gb')
+                    ->label('حجم کل (GB)')
+                    ->default('نامحدود'),
+
+                Tables\Columns\TextColumn::make('traffic_used_gb')
+                    ->label('مصرف (GB)')
+                    ->default(0),
+
+                Tables\Columns\TextColumn::make('expires_at')
+                    ->label('تاریخ انقضا')
+                    ->dateTime('Y/m/d')
+                    ->sortable()
+                    ->default('—'),
+
+                Tables\Columns\TextColumn::make('created_at')
+                    ->label('تاریخ ایجاد')
+                    ->dateTime()
+                    ->sortable()
+                    ->toggleable(isToggledHiddenByDefault: true),
+            ])
+            ->filters([
+                Tables\Filters\SelectFilter::make('status')
+                    ->label('وضعیت سرویس')
+                    ->options(UserService::allStatuses()),
+
+                Tables\Filters\SelectFilter::make('provision_status')
+                    ->label('وضعیت ساخت')
+                    ->options(UserService::allProvisionStatuses()),
+
+                Tables\Filters\Filter::make('expired')
+                    ->label('منقضی شده')
+                    ->query(fn ($query) => $query->where('expires_at', '<', now())->whereNotNull('expires_at')),
+
+                Tables\Filters\Filter::make('active')
+                    ->label('فعال')
+                    ->query(fn ($query) => $query->where('status', UserService::STATUS_ACTIVE)),
+            ])
+            ->actions([
+                Tables\Actions\Action::make('activate')
+                    ->label('فعال‌سازی')
+                    ->icon('heroicon-o-check-circle')
+                    ->color('success')
+                    ->visible(fn (UserService $record) => ! in_array($record->status, [
+                        UserService::STATUS_ACTIVE,
+                        UserService::STATUS_CANCELLED,
+                    ]))
+                    ->action(function (UserService $record) {
+                        try {
+                            app(ServiceProvisioner::class)->activateManually($record);
+                            Notification::make()->title('سرویس فعال شد.')->success()->send();
+                        } catch (\Exception $e) {
+                            Notification::make()->title($e->getMessage())->danger()->send();
+                        }
+                    })
+                    ->requiresConfirmation()
+                    ->modalHeading('فعال‌سازی سرویس')
+                    ->modalSubmitActionLabel('فعال کن'),
+
+                Tables\Actions\Action::make('disable')
+                    ->label('غیرفعال')
+                    ->icon('heroicon-o-pause-circle')
+                    ->color('warning')
+                    ->visible(fn (UserService $record) => $record->status === UserService::STATUS_ACTIVE)
+                    ->action(function (UserService $record) {
+                        app(ServiceProvisioner::class)->disableManually($record);
+                        Notification::make()->title('سرویس غیرفعال شد.')->warning()->send();
+                    })
+                    ->requiresConfirmation()
+                    ->modalSubmitActionLabel('غیرفعال کن'),
+
+                Tables\Actions\Action::make('cancel')
+                    ->label('لغو')
+                    ->icon('heroicon-o-x-circle')
+                    ->color('danger')
+                    ->visible(fn (UserService $record) => ! in_array($record->status, [
+                        UserService::STATUS_CANCELLED,
+                        UserService::STATUS_FAILED,
+                    ]))
+                    ->action(function (UserService $record) {
+                        app(ServiceProvisioner::class)->cancelManually($record);
+                        Notification::make()->title('سرویس لغو شد.')->warning()->send();
+                    })
+                    ->requiresConfirmation()
+                    ->modalSubmitActionLabel('لغو کن'),
+
+                Tables\Actions\EditAction::make()->label('ویرایش'),
+            ])
+            ->bulkActions([])
+            ->defaultSort('created_at', 'desc');
+    }
+
+    public static function getPages(): array
+    {
+        return [
+            'index'  => Pages\ListUserServices::route('/'),
+            'create' => Pages\CreateUserService::route('/create'),
+            'edit'   => Pages\EditUserService::route('/{record}/edit'),
+        ];
+    }
+}
