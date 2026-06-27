@@ -501,15 +501,47 @@ Email is stored on the user record for password resets and system contact but is
 
 Current sections:
 
-- **Users** - list, create, edit users (username, email, admin access)
-- **System Status** - live checks for DB, Redis, storage, cache, queue
-- **Site Texts** - edit homepage and UI texts stored in the database (survive updates)
+| Section | URL | Description |
+|---------|-----|-------------|
+| **Users** | `/zed-admin/users` | Manage admin and regular users |
+| **Plans** | `/zed-admin/plans` | Create/edit VPN plans with price, traffic, duration, features |
+| **Features** | `/zed-admin/features` | Manage plan features (e.g. "بدون محدودیت سرعت") |
+| **Locations** | `/zed-admin/locations` | Manage server locations with flag emoji |
+| **Site Texts** | `/zed-admin/site-texts` | Edit all homepage/footer/legal texts stored in DB |
+| **System Status** | `/zed-admin/system-status` | Live health checks for DB, Redis, storage, queue |
+
+### Content that survives updates
+
+All site content lives in the database — `update.sh` seeds only **missing** defaults and **never overwrites** admin-edited values:
+
+| Content | Table | Admin URL |
+|---------|-------|-----------|
+| Homepage hero, features section, CTA | `site_texts` | `/zed-admin/site-texts` |
+| VPN plan names, prices, descriptions | `plans` | `/zed-admin/plans` |
+| Plan feature titles | `features` | `/zed-admin/features` |
+| Server location names | `locations` | `/zed-admin/locations` |
+| Footer text, legal pages | `site_texts` | `/zed-admin/site-texts` |
+
+> **Note:** `update.sh` never resets admin passwords, site texts, plans, features, or locations.
+
+### `site_setting()` helper
+
+Use `site_setting('key', 'default')` anywhere in Blade or PHP to read a site text:
+
+```php
+{{ site_setting('homepage.hero.title', 'Default title') }}
+```
+
+Values are cached for 1 hour and auto-invalidated when the admin saves a change.
 
 Upcoming sections (in future development phases):
 
-- Orders, Plans, Services, Payments, Tickets, Settings
-- Marzban Settings, Telegram Settings, Email Settings
-- Logs, Backups, System Monitoring
+- Payment gateway — Rial/crypto integration
+- Marzban API — automatic VPN service creation
+- Telegram bot — admin reports and notifications
+- Ticket system — support tickets
+- User dashboard — order history, active services
+- Monitoring — live server status
 
 ## Updating ZedProxy
 
@@ -556,6 +588,9 @@ zedproxy-update
 | `public/storage` symlink | Re-created with `storage:link` (idempotent) |
 | PostgreSQL database | Only migrated forward — never dropped or reset |
 | Admin-edited site texts | `SiteTextSeeder` uses `firstOrCreate` — never updates existing values |
+| Admin-edited plans | `PlanSeeder` uses `firstOrCreate` by slug — never overwrites |
+| Admin-edited features | `FeatureSeeder` uses `firstOrCreate` by slug — never overwrites |
+| Admin-edited locations | `LocationSeeder` uses `firstOrCreate` by `country_code` — never overwrites |
 | SSL/Nginx config | Not touched by `update.sh` |
 
 ### Rollback
@@ -588,12 +623,18 @@ sudo tail -n 120 /var/log/zedproxy-update.log
 
 ## What's next
 
-1. Plans & Orders - plan model, order flow, admin CRUD
-2. Marzban integration - API client, auto VPN service creation
-3. Payment gateway - Rial/crypto payment integration
-4. Ticket system - support ticket model and panel
-5. Subscription links - V2Ray subscription URL generation
-6. Telegram bot - admin reports and notifications
-7. Monitoring - real server status checks
-8. Email - order confirmations, expiry reminders
-9. Docker deployment - containerized installation for environments where the native installer cannot satisfy PHP requirements
+**Completed:**
+- Plans, Features, Locations admin CRUD — fully DB-backed
+- Site texts system with `site_setting()` helper
+- Public plans page at `/plans` — shows active plans, features, locations
+- Update-safe seeders (`firstOrCreate` — never overwrites admin edits)
+
+**Next:**
+1. Payment gateway — Rial/crypto integration
+2. Marzban integration — API client, auto VPN service creation
+3. Order flow — checkout, invoicing
+4. Ticket system — support ticket model and panel
+5. Subscription links — V2Ray subscription URL generation
+6. Telegram bot — admin reports and notifications
+7. Email — order confirmations, expiry reminders
+8. Docker deployment — containerized installation

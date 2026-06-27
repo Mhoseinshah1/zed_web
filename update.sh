@@ -184,10 +184,16 @@ log "Running database migrations..."
 php artisan migrate --force
 ok "Migrations done"
 
-# ─── Seed missing site_texts defaults (idempotent) ────────────────────────────
-log "Seeding default site texts (firstOrCreate — existing values preserved)..."
+# ─── Seed missing defaults (idempotent — firstOrCreate, never overwrites) ─────
+log "Seeding default site texts..."
 php artisan db:seed --class=SiteTextSeeder --force
-ok "Site texts seeded"
+log "Seeding default features..."
+php artisan db:seed --class=FeatureSeeder --force
+log "Seeding default locations..."
+php artisan db:seed --class=LocationSeeder --force
+log "Seeding default plans..."
+php artisan db:seed --class=PlanSeeder --force
+ok "Default data seeded (existing admin-edited values preserved)"
 
 # ─── Storage link ─────────────────────────────────────────────────────────────
 log "Ensuring storage symlink..."

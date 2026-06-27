@@ -10,50 +10,50 @@ class SiteTextSeeder extends Seeder
     public function run(): void
     {
         $defaults = [
-            // Hero section
-            ['key' => 'homepage.status.badge',    'value' => 'سرویس در حال اجراست',                                                                                        'description' => 'وضعیت سرویس — نمایش در نوار بالای صفحه اصلی'],
-            ['key' => 'homepage.hero.title',       'value' => "اینترنت آزاد\nبدون محدودیت",                                                                                  'description' => 'تیتر اصلی صفحه اصلی'],
-            ['key' => 'homepage.hero.subtitle',    'value' => "با ZedProxy از هر نقطه‌ای در جهان به اینترنت آزاد دسترسی داشته باشید.\n    سرعت بالا، امنیت کامل و پشتیبانی ۲۴ ساعته.", 'description' => 'زیرتیتر صفحه اصلی'],
+            // ── Homepage: Hero ──────────────────────────────────────────────
+            ['key' => 'homepage.hero.title',                'group' => 'homepage', 'label' => 'تیتر اصلی صفحه',         'value' => "اینترنت آزاد\nبدون محدودیت",                                                                              'type' => 'textarea', 'sort_order' => 1],
+            ['key' => 'homepage.hero.subtitle',             'group' => 'homepage', 'label' => 'زیرتیتر صفحه',           'value' => "با ZedProxy از هر نقطه‌ای در جهان به اینترنت آزاد دسترسی داشته باشید.\nسرعت بالا، امنیت کامل و پشتیبانی ۲۴ ساعته.", 'type' => 'textarea', 'sort_order' => 2],
+            ['key' => 'homepage.hero.button_text',          'group' => 'homepage', 'label' => 'متن دکمه اصلی',          'value' => 'مشاهده پلن‌ها',                                                                                              'type' => 'text',     'sort_order' => 3],
+            ['key' => 'homepage.hero.secondary_button_text','group' => 'homepage', 'label' => 'متن دکمه دوم',           'value' => 'آموزش اتصال',                                                                                                'type' => 'text',     'sort_order' => 4],
+            ['key' => 'homepage.status.badge',              'group' => 'homepage', 'label' => 'متن نوار وضعیت',          'value' => 'سرویس در حال اجراست',                                                                                       'type' => 'text',     'sort_order' => 5],
 
-            // Features section
-            ['key' => 'homepage.features.title',    'value' => 'چرا ZedProxy؟',                             'description' => 'عنوان بخش ویژگی‌ها'],
-            ['key' => 'homepage.features.subtitle',  'value' => 'بهترین انتخاب برای اتصال امن و سریع',     'description' => 'زیرعنوان بخش ویژگی‌ها'],
+            // ── Homepage: Features section ──────────────────────────────────
+            ['key' => 'homepage.features.title',    'group' => 'homepage', 'label' => 'عنوان بخش ویژگی‌ها',       'value' => 'چرا ZedProxy؟',                      'type' => 'text', 'sort_order' => 10],
+            ['key' => 'homepage.features.subtitle', 'group' => 'homepage', 'label' => 'زیرعنوان بخش ویژگی‌ها',    'value' => 'بهترین انتخاب برای اتصال امن و سریع', 'type' => 'text', 'sort_order' => 11],
 
-            // Feature cards
-            ['key' => 'homepage.feature.1.icon',  'value' => '⚡',                                                                      'description' => 'آیکون ویژگی ۱'],
-            ['key' => 'homepage.feature.1.title', 'value' => 'سرعت فوق‌العاده',                                                          'description' => 'عنوان ویژگی ۱'],
-            ['key' => 'homepage.feature.1.desc',  'value' => 'سرورهای پرسرعت در چندین کشور با پینگ پایین و پهنای باند نامحدود',         'description' => 'توضیح ویژگی ۱'],
+            // ── Homepage: Plans section ─────────────────────────────────────
+            ['key' => 'homepage.plans.title',    'group' => 'homepage', 'label' => 'عنوان بخش پلن‌ها در صفحه اصلی',    'value' => 'انتخاب پلن مناسب',                       'type' => 'text', 'sort_order' => 20],
+            ['key' => 'homepage.plans.subtitle', 'group' => 'homepage', 'label' => 'زیرعنوان بخش پلن‌ها در صفحه اصلی', 'value' => 'قیمت‌های مناسب برای همه نیازها',          'type' => 'text', 'sort_order' => 21],
 
-            ['key' => 'homepage.feature.2.icon',  'value' => '🔒',                                                                      'description' => 'آیکون ویژگی ۲'],
-            ['key' => 'homepage.feature.2.title', 'value' => 'امنیت کامل',                                                               'description' => 'عنوان ویژگی ۲'],
-            ['key' => 'homepage.feature.2.desc',  'value' => 'رمزگذاری پیشرفته و حریم خصوصی کامل برای تمام ترافیک شما',               'description' => 'توضیح ویژگی ۲'],
+            // ── Homepage: CTA ───────────────────────────────────────────────
+            ['key' => 'homepage.cta.title',    'group' => 'homepage', 'label' => 'عنوان دکمه دعوت به اقدام',    'value' => 'همین الان شروع کنید',                     'type' => 'text', 'sort_order' => 30],
+            ['key' => 'homepage.cta.subtitle', 'group' => 'homepage', 'label' => 'زیرعنوان دکمه دعوت به اقدام', 'value' => 'ثبت‌نام رایگان، خرید آسان و اتصال فوری', 'type' => 'text', 'sort_order' => 31],
 
-            ['key' => 'homepage.feature.3.icon',  'value' => '🌍',                                                                      'description' => 'آیکون ویژگی ۳'],
-            ['key' => 'homepage.feature.3.title', 'value' => 'سرورهای جهانی',                                                            'description' => 'عنوان ویژگی ۳'],
-            ['key' => 'homepage.feature.3.desc',  'value' => 'دسترسی به سرورهای متعدد در اروپا، آمریکا و آسیا',                       'description' => 'توضیح ویژگی ۳'],
+            // ── Plans page ──────────────────────────────────────────────────
+            ['key' => 'plans.title',    'group' => 'plans', 'label' => 'عنوان صفحه پلن‌ها',    'value' => 'انتخاب پلن',                                     'type' => 'text', 'sort_order' => 1],
+            ['key' => 'plans.subtitle', 'group' => 'plans', 'label' => 'زیرعنوان صفحه پلن‌ها', 'value' => 'یک پلن مناسب انتخاب کنید و همین الان شروع کنید', 'type' => 'text', 'sort_order' => 2],
+            ['key' => 'plans.buy_soon_text', 'group' => 'plans', 'label' => 'متن دکمه خرید (موقت)', 'value' => 'خرید به‌زودی فعال می‌شود', 'type' => 'text', 'sort_order' => 3],
 
-            ['key' => 'homepage.feature.4.icon',  'value' => '📱',                                                                      'description' => 'آیکون ویژگی ۴'],
-            ['key' => 'homepage.feature.4.title', 'value' => 'همه دستگاه‌ها',                                                            'description' => 'عنوان ویژگی ۴'],
-            ['key' => 'homepage.feature.4.desc',  'value' => 'پشتیبانی از اندروید، iOS، ویندوز، مک و لینوکس',                         'description' => 'توضیح ویژگی ۴'],
+            // ── Footer ──────────────────────────────────────────────────────
+            ['key' => 'footer.description',   'group' => 'footer', 'label' => 'توضیح فوتر',       'value' => 'ارائه‌دهنده خدمات VPN و پروکسی با کیفیت بالا، سرعت فوق‌العاده و پشتیبانی ۲۴ ساعته.', 'type' => 'textarea', 'sort_order' => 1],
+            ['key' => 'footer.support_text',  'group' => 'footer', 'label' => 'متن پشتیبانی فوتر', 'value' => 'پشتیبانی ۲۴ ساعته — ۷ روز هفته',                                                    'type' => 'text',     'sort_order' => 2],
 
-            ['key' => 'homepage.feature.5.icon',  'value' => '🔄',                                                                      'description' => 'آیکون ویژگی ۵'],
-            ['key' => 'homepage.feature.5.title', 'value' => 'اتصال خودکار',                                                             'description' => 'عنوان ویژگی ۵'],
-            ['key' => 'homepage.feature.5.desc',  'value' => 'لینک اشتراک V2Ray با به‌روزرسانی خودکار سرور',                           'description' => 'توضیح ویژگی ۵'],
-
-            ['key' => 'homepage.feature.6.icon',  'value' => '🎧',                                                                      'description' => 'آیکون ویژگی ۶'],
-            ['key' => 'homepage.feature.6.title', 'value' => 'پشتیبانی ۲۴/۷',                                                           'description' => 'عنوان ویژگی ۶'],
-            ['key' => 'homepage.feature.6.desc',  'value' => 'تیم پشتیبانی آماده پاسخگویی در تمام ساعات شبانه‌روز',                   'description' => 'توضیح ویژگی ۶'],
-
-            // CTA section
-            ['key' => 'homepage.cta.title',    'value' => 'همین الان شروع کنید',                     'description' => 'عنوان بخش دعوت به اقدام'],
-            ['key' => 'homepage.cta.subtitle', 'value' => 'ثبت‌نام رایگان، خرید آسان و اتصال فوری', 'description' => 'زیرعنوان بخش دعوت به اقدام'],
+            // ── Legal ───────────────────────────────────────────────────────
+            ['key' => 'legal.terms',   'group' => 'legal', 'label' => 'متن شرایط استفاده', 'value' => 'شرایط استفاده از سرویس ZedProxy در اینجا درج خواهد شد.', 'type' => 'textarea', 'sort_order' => 1, 'is_public' => true],
+            ['key' => 'legal.privacy', 'group' => 'legal', 'label' => 'متن حریم خصوصی',    'value' => 'سیاست حریم خصوصی ZedProxy در اینجا درج خواهد شد.',       'type' => 'textarea', 'sort_order' => 2, 'is_public' => true],
         ];
 
         foreach ($defaults as $item) {
-            // Only insert if the key does not exist — never overwrite admin-edited values
             SiteText::firstOrCreate(
                 ['key' => $item['key']],
-                ['value' => $item['value'], 'description' => $item['description']]
+                [
+                    'group'       => $item['group'] ?? null,
+                    'label'       => $item['label'] ?? null,
+                    'value'       => $item['value'],
+                    'type'        => $item['type'] ?? 'text',
+                    'is_public'   => $item['is_public'] ?? true,
+                    'sort_order'  => $item['sort_order'] ?? 0,
+                ]
             );
         }
     }

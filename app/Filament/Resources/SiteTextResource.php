@@ -17,32 +17,59 @@ class SiteTextResource extends Resource
     protected static ?string $navigationIcon  = 'heroicon-o-document-text';
     protected static ?string $navigationGroup = 'تنظیمات سایت';
     protected static ?string $navigationLabel = 'متن‌های سایت';
-    protected static ?string $modelLabel      = 'متن';
+    protected static ?string $modelLabel      = 'متن سایت';
     protected static ?string $pluralModelLabel = 'متن‌های سایت';
     protected static ?int $navigationSort     = 10;
 
     public static function form(Form $form): Form
     {
         return $form->schema([
-            Forms\Components\Section::make()->schema([
+            Forms\Components\Section::make('شناسه')->schema([
                 Forms\Components\TextInput::make('key')
-                    ->label('کلید')
+                    ->label('کلید (key)')
                     ->required()
                     ->unique(ignoreRecord: true)
                     ->maxLength(191)
-                    ->helperText('مثال: homepage.hero.title'),
+                    ->helperText('مثال: homepage.hero.title — این را تغییر ندهید مگر در صورت ضرورت'),
 
-                Forms\Components\TextInput::make('description')
-                    ->label('توضیح')
-                    ->maxLength(255)
-                    ->helperText('توضیح مختصر برای ادمین'),
+                Forms\Components\TextInput::make('group')
+                    ->label('گروه')
+                    ->maxLength(100)
+                    ->helperText('مثال: homepage، footer، legal'),
 
+                Forms\Components\TextInput::make('label')
+                    ->label('برچسب (نام نمایشی)')
+                    ->maxLength(255),
+
+                Forms\Components\Select::make('type')
+                    ->label('نوع')
+                    ->options([
+                        'text'     => 'متن کوتاه',
+                        'textarea' => 'متن بلند',
+                        'html'     => 'HTML',
+                        'image'    => 'آدرس تصویر',
+                        'boolean'  => 'بله/خیر',
+                        'number'   => 'عدد',
+                    ])
+                    ->default('text')
+                    ->required(),
+
+                Forms\Components\Toggle::make('is_public')
+                    ->label('عمومی (نمایش در سایت)')
+                    ->default(true),
+
+                Forms\Components\TextInput::make('sort_order')
+                    ->label('ترتیب نمایش')
+                    ->numeric()
+                    ->default(0),
+            ])->columns(2),
+
+            Forms\Components\Section::make('مقدار')->schema([
                 Forms\Components\Textarea::make('value')
                     ->label('مقدار')
-                    ->required()
-                    ->rows(4)
+                    ->rows(5)
                     ->columnSpanFull(),
-            ])->columns(2),
+            ]),
         ]);
     }
 
@@ -50,29 +77,41 @@ class SiteTextResource extends Resource
     {
         return $table
             ->columns([
+                Tables\Columns\TextColumn::make('group')
+                    ->label('گروه')
+                    ->badge()
+                    ->searchable()
+                    ->sortable(),
+                Tables\Columns\TextColumn::make('label')
+                    ->label('برچسب')
+                    ->searchable()
+                    ->placeholder('—'),
                 Tables\Columns\TextColumn::make('key')
                     ->label('کلید')
                     ->searchable()
                     ->sortable()
-                    ->fontFamily('mono'),
-                Tables\Columns\TextColumn::make('description')
-                    ->label('توضیح')
-                    ->searchable()
-                    ->placeholder('—'),
+                    ->fontFamily('mono')
+                    ->size('sm'),
                 Tables\Columns\TextColumn::make('value')
                     ->label('مقدار')
-                    ->limit(80)
+                    ->limit(60)
                     ->searchable(),
                 Tables\Columns\TextColumn::make('updated_at')
                     ->label('آخرین ویرایش')
                     ->dateTime()
                     ->sortable(),
             ])
+            ->filters([
+                Tables\Filters\SelectFilter::make('group')
+                    ->label('گروه')
+                    ->options(fn () => SiteText::select('group')->whereNotNull('group')->distinct()->pluck('group', 'group')),
+            ])
             ->actions([
                 Tables\Actions\EditAction::make(),
             ])
             ->bulkActions([])
-            ->defaultSort('key');
+            ->defaultSort('group')
+            ->defaultSort('sort_order');
     }
 
     public static function getPages(): array
