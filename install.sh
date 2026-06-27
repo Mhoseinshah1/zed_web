@@ -304,11 +304,13 @@ setup_ssl() {
         sed -i "s|^APP_URL=.*|APP_URL=https://${DOMAIN}|" "${APP_DIR}/.env"
         ok "APP_URL updated to https://${DOMAIN}"
 
-        # Rebuild config cache with new APP_URL
+        # Rebuild all caches with new APP_URL (route/view caches may embed URLs)
         cd "$APP_DIR"
-        php artisan config:clear
+        php artisan optimize:clear
         php artisan config:cache
-        ok "Application config cache refreshed"
+        php artisan route:cache
+        php artisan view:cache
+        ok "Application caches refreshed (APP_URL → https)"
 
         # Verify HTTPS health endpoint
         sleep 3
@@ -921,6 +923,14 @@ server {
 
     location ~ /\.(?!well-known).* {
         deny all;
+    }
+
+    # Livewire routes (livewire.js, /update, /upload-file, etc.) must reach PHP.
+    # Without this, the \.js$ regex below would intercept livewire.js as a static
+    # file, return 404, and Livewire's JS would never load — causing wire:submit to
+    # not bind and the login form to fall back to a native POST → 405.
+    location ^~ /livewire/ {
+        try_files \$uri \$uri/ /index.php?\$query_string;
     }
 
     location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot)$ {

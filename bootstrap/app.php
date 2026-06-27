@@ -12,7 +12,12 @@ return Application::configure(basePath: dirname(__DIR__))
         health: '/up',
     )
     ->withMiddleware(function (Middleware $middleware): void {
-        //
+        // Trust all reverse proxies (Nginx, Cloudflare, load balancers, etc.) so that
+        // Laravel generates correct https:// URLs. Without this, Livewire's update URI
+        // resolves to http:// while the page is served over https://, causing the browser
+        // to block the mixed-content XHR — the form then falls back to a native POST
+        // to /zed-admin/login (GET-only) and the server returns 405.
+        $middleware->trustProxies(at: '*');
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         $exceptions->shouldRenderJsonWhen(

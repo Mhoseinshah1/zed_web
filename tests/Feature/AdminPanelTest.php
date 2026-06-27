@@ -58,6 +58,36 @@ class AdminPanelTest extends TestCase
         $response->assertDontSee('type="email"', false);
     }
 
+    public function test_direct_post_to_login_url_returns_405(): void
+    {
+        // Filament uses Livewire — login submits via POST /livewire/update, not via
+        // a direct POST to /zed-admin/login. A direct POST here MUST return 405 so
+        // that if Livewire's wire:submit fails to bind (e.g. JS not loaded), the
+        // browser gets a clear 405 rather than silently proceeding.
+        $response = $this->post('/zed-admin/login', [
+            'username' => 'admin',
+            'password' => 'secret',
+        ]);
+
+        $response->assertStatus(405);
+    }
+
+    public function test_livewire_update_endpoint_accepts_post(): void
+    {
+        // The Livewire XHR update endpoint must always accept POST.
+        // If this returns 405, Livewire's wire:submit handler fails and the
+        // login form shows "405 Method Not Allowed" in the error dialog.
+        $response = $this->post('/livewire/update', [], [
+            'X-Livewire' => 'true',
+            'Content-Type' => 'application/json',
+        ]);
+
+        // Livewire may return 422/500 for an invalid payload but never 405
+        $this->assertNotEquals(405, $response->getStatusCode(),
+            '/livewire/update must not return 405 — only POST is registered on this route'
+        );
+    }
+
     // ── Authentication ───────────────────────────────────────────────────────
 
     public function test_admin_can_login_with_username_and_password(): void
