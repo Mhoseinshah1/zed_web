@@ -1,16 +1,19 @@
 <?php
 
 use App\Http\Controllers\Auth\AuthController;
+use App\Http\Controllers\CheckoutController;
 use App\Http\Controllers\ContactController;
+use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\FaqController;
 use App\Http\Controllers\HealthController;
 use App\Http\Controllers\HomeController;
+use App\Http\Controllers\OrderController;
 use App\Http\Controllers\PlansController;
 use App\Http\Controllers\StatusController;
 use App\Http\Controllers\TutorialsController;
 use Illuminate\Support\Facades\Route;
 
-// Health check (unauthenticated, before any middleware groups)
+// Health check (unauthenticated)
 Route::get('/health', [HealthController::class, 'check'])->name('health');
 
 // Public pages
@@ -21,7 +24,7 @@ Route::get('/tutorials', [TutorialsController::class, 'index'])->name('tutorials
 Route::get('/status', [StatusController::class, 'index'])->name('status');
 Route::get('/contact', [ContactController::class, 'index'])->name('contact');
 
-// Authentication — guest-only (redirect to panel if already logged in)
+// Authentication — guest-only
 Route::middleware('guest')->group(function () {
     Route::get('/login', [AuthController::class, 'showLogin'])->name('login');
     Route::post('/login', [AuthController::class, 'login']);
@@ -32,11 +35,25 @@ Route::middleware('guest')->group(function () {
 // Logout (any authenticated user)
 Route::post('/logout', [AuthController::class, 'logout'])->middleware('auth')->name('logout');
 
-// User panel (requires authentication)
-Route::middleware('auth')->prefix('panel')->name('panel.')->group(function () {
-    Route::get('/', fn () => view('panel.dashboard'))->name('dashboard');
-    Route::get('/profile', fn () => view('panel.profile'))->name('profile');
-    Route::get('/orders', fn () => view('panel.orders'))->name('orders');
-    Route::get('/services', fn () => view('panel.services'))->name('services');
-    Route::get('/tickets', fn () => view('panel.tickets'))->name('tickets');
+// Buy flow — POST to prevent accidental double-submit on page reload
+Route::post('/plans/{plan}/buy', [CheckoutController::class, 'buy'])
+    ->middleware('auth')
+    ->name('plans.buy');
+
+// User dashboard (prefix: /dashboard, name: dashboard.*)
+Route::middleware('auth')->prefix('dashboard')->name('dashboard.')->group(function () {
+    Route::get('/', [DashboardController::class, 'index'])->name('index');
+    Route::get('/orders', [OrderController::class, 'index'])->name('orders');
+    Route::get('/orders/{order}', [OrderController::class, 'show'])->name('orders.show');
+    Route::get('/services', fn () => view('dashboard.services'))->name('services');
+    Route::get('/profile', fn () => view('dashboard.profile', ['user' => auth()->user()]))->name('profile');
+});
+
+// Legacy /panel redirects → /dashboard
+Route::middleware('auth')->prefix('panel')->group(function () {
+    Route::redirect('/', '/dashboard', 301);
+    Route::redirect('/orders', '/dashboard/orders', 301);
+    Route::redirect('/services', '/dashboard/services', 301);
+    Route::redirect('/profile', '/dashboard/profile', 301);
+    Route::redirect('/tickets', '/dashboard', 301);
 });

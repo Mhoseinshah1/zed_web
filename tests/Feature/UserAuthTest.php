@@ -80,7 +80,7 @@ class UserAuthTest extends TestCase
             'password_confirmation' => 'password123',
         ]);
 
-        $response->assertRedirect(route('panel.dashboard'));
+        $response->assertRedirect(route('dashboard.index'));
         $this->assertAuthenticated();
         $this->assertDatabaseHas('users', ['username' => 'newuser', 'email' => 'newuser@example.com']);
     }
@@ -131,7 +131,7 @@ class UserAuthTest extends TestCase
             'password' => 'mypassword',
         ]);
 
-        $response->assertRedirect(route('panel.dashboard'));
+        $response->assertRedirect(route('dashboard.index'));
         $this->assertAuthenticatedAs($user);
     }
 
@@ -178,18 +178,18 @@ class UserAuthTest extends TestCase
 
     // ── Panel access ─────────────────────────────────────────────────────────
 
-    public function test_unauthenticated_user_is_redirected_from_panel(): void
+    public function test_unauthenticated_user_is_redirected_from_dashboard(): void
     {
-        $response = $this->get('/panel');
+        $response = $this->get('/dashboard');
 
         $response->assertRedirectContains('/login');
     }
 
-    public function test_authenticated_user_can_access_panel(): void
+    public function test_authenticated_user_can_access_dashboard(): void
     {
         $user = User::factory()->create(['username' => 'paneluser']);
 
-        $response = $this->actingAs($user)->get('/panel');
+        $response = $this->actingAs($user)->get('/dashboard');
 
         $response->assertOk();
     }

@@ -43,7 +43,7 @@
                 <!-- Auth buttons -->
                 <div class="flex items-center gap-3">
                     @auth
-                        <a href="{{ route('panel.dashboard') }}" class="text-sm text-indigo-400 hover:text-indigo-300 transition">پنل کاربری</a>
+                        <a href="{{ route('dashboard.index') }}" class="text-sm text-indigo-400 hover:text-indigo-300 transition">پنل کاربری</a>
                     @else
                         <a href="{{ route('login') }}" class="text-sm text-gray-300 hover:text-white transition">ورود</a>
                         <a href="{{ route('register') }}" class="bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium px-4 py-2 rounded-lg transition">ثبت‌نام</a>
@@ -100,7 +100,7 @@
                     <h3 class="text-sm font-semibold text-white mb-4">پشتیبانی</h3>
                     <ul class="space-y-2 text-sm text-gray-400">
                         <li><a href="{{ route('contact') }}" class="hover:text-white transition">تماس با ما</a></li>
-                        <li><a href="{{ route('panel.tickets') }}" class="hover:text-white transition">تیکت پشتیبانی</a></li>
+                        <li><a href="{{ route('contact') }}" class="hover:text-white transition">تیکت پشتیبانی</a></li>
                     </ul>
                 </div>
             </div>

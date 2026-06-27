@@ -10,9 +10,8 @@
     $liClass     = $isFeatured ? 'text-indigo-100' : 'text-gray-300';
     $checkClass  = $isFeatured ? 'text-yellow-300' : 'text-green-400';
     $btnClass    = $isFeatured
-        ? 'mt-8 block text-center bg-white hover:bg-gray-100 text-indigo-700 font-bold py-3 rounded-xl transition'
-        : 'mt-8 block text-center bg-gray-800 hover:bg-gray-700 text-white font-semibold py-3 rounded-xl transition border border-gray-700';
-    $buySoonText = site_setting('plans.buy_soon_text', 'خرید به‌زودی فعال می‌شود');
+        ? 'mt-8 w-full text-center bg-white hover:bg-gray-100 text-indigo-700 font-bold py-3 rounded-xl transition cursor-pointer'
+        : 'mt-8 w-full text-center bg-gray-800 hover:bg-gray-700 text-white font-semibold py-3 rounded-xl transition border border-gray-700 cursor-pointer';
 @endphp
 
 <div class="{{ $cardClass }}">
@@ -50,9 +49,17 @@
         @endforeach
     </ul>
 
-    <a href="#" title="{{ $buySoonText }}"
-       class="{{ $btnClass }} cursor-not-allowed opacity-80"
-       onclick="return false;">
-        {{ $buySoonText }}
-    </a>
+    @auth
+        <form method="POST" action="{{ route('plans.buy', $plan) }}" class="mt-8">
+            @csrf
+            <button type="submit" class="{{ str_replace('mt-8 ', '', $btnClass) }} w-full py-3">
+                خرید این پلن
+            </button>
+        </form>
+    @else
+        <a href="{{ route('login') }}"
+           class="{{ $btnClass }}">
+            ورود برای خرید
+        </a>
+    @endauth
 </div>

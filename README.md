@@ -508,6 +508,8 @@ Current sections:
 | **Features** | `/zed-admin/features` | Manage plan features (e.g. "بدون محدودیت سرعت") |
 | **Locations** | `/zed-admin/locations` | Manage server locations with flag emoji |
 | **Site Texts** | `/zed-admin/site-texts` | Edit all homepage/footer/legal texts stored in DB |
+| **Orders** | `/zed-admin/orders` | View and manage all user orders, edit status/payment_status, write admin notes |
+| **Transactions** | `/zed-admin/payment-transactions` | View payment transactions placeholder (real gateway integration is a future step) |
 | **System Status** | `/zed-admin/system-status` | Live health checks for DB, Redis, storage, queue |
 
 ### Content that survives updates
@@ -540,7 +542,6 @@ Upcoming sections (in future development phases):
 - Marzban API — automatic VPN service creation
 - Telegram bot — admin reports and notifications
 - Ticket system — support tickets
-- User dashboard — order history, active services
 - Monitoring — live server status
 
 ## Updating ZedProxy
@@ -621,20 +622,72 @@ php artisan up
 sudo tail -n 120 /var/log/zedproxy-update.log
 ```
 
+## User dashboard and order system
+
+### User routes
+
+| Route | Name | Description |
+|-------|------|-------------|
+| `GET /dashboard` | `dashboard.index` | User dashboard (auth required) |
+| `GET /dashboard/orders` | `dashboard.orders` | All user orders |
+| `GET /dashboard/orders/{order}` | `dashboard.orders.show` | Single order detail |
+| `GET /dashboard/services` | `dashboard.services` | Services placeholder |
+| `GET /dashboard/profile` | `dashboard.profile` | User profile (read-only) |
+| `POST /plans/{plan}/buy` | `plans.buy` | Create order for a plan (auth required) |
+
+Legacy `/panel/*` routes redirect to `/dashboard/*` (301 permanent).
+
+### Buy flow
+
+1. User visits `/plans`
+2. If not logged in: buy button says "ورود برای خرید" and links to `/login`
+3. If logged in: buy button is a POST form → `POST /plans/{plan}/buy`
+4. Server validates plan is active, creates an `Order` with a snapshot of plan data at purchase time
+5. Redirects to `/dashboard/orders/{order}`
+6. Order detail page shows status, price, plan name, traffic, duration, and a **payment placeholder** (پرداخت در مرحله بعد فعال می‌شود)
+
+### Order data model
+
+Orders store a **snapshot** of plan data at purchase time — plan name, slug, traffic, duration, and price. Changing the plan in the admin panel does **not** affect existing orders.
+
+**Order statuses:** `pending` → `awaiting_payment` → `paid` → `processing` → `completed` (or `cancelled`/`failed`)
+
+**Payment statuses:** `unpaid`, `pending`, `paid`, `failed`, `refunded`
+
+### Payment transactions (placeholder)
+
+`payment_transactions` table is created and ready for future gateway integration (crypto, Telegram Stars, Rial gateway). No real provider is connected yet.
+
+### Admin order management
+
+| Admin route | Description |
+|-------------|-------------|
+| `/zed-admin/orders` | List all orders, filter by status/payment_status |
+| `/zed-admin/orders/{id}/edit` | Edit order status, payment status, timestamps, admin notes |
+| `/zed-admin/payment-transactions` | View and manually edit placeholder transactions |
+
+### What is preserved through updates
+
+Orders, transactions, and their data are never deleted by `update.sh` or seeders. The `--force` migrate only runs forward migrations.
+
 ## What's next
 
 **Completed:**
 - Plans, Features, Locations admin CRUD — fully DB-backed
 - Site texts system with `site_setting()` helper
-- Public plans page at `/plans` — shows active plans, features, locations
+- Public plans page at `/plans` — active plans with buy buttons
 - Update-safe seeders (`firstOrCreate` — never overwrites admin edits)
+- User login/register with username auth
+- User dashboard at `/dashboard`
+- Order system with plan snapshot storage
+- Payment transaction placeholder model
+- Admin order and transaction management in Filament
 
 **Next:**
-1. Payment gateway — Rial/crypto integration
-2. Marzban integration — API client, auto VPN service creation
-3. Order flow — checkout, invoicing
-4. Ticket system — support ticket model and panel
-5. Subscription links — V2Ray subscription URL generation
-6. Telegram bot — admin reports and notifications
-7. Email — order confirmations, expiry reminders
-8. Docker deployment — containerized installation
+1. Payment gateway — Rial/crypto integration (NOWPayments, Telegram Stars, or Rial gateway)
+2. Marzban integration — API client, auto VPN service creation after payment confirmed
+3. Ticket system — support ticket model and panel
+4. Subscription links — V2Ray subscription URL generation
+5. Telegram bot — admin reports and notifications
+6. Email — order confirmations, expiry reminders
+7. Docker deployment — containerized installation

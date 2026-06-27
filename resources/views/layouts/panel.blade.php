@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="csrf-token" content="{{ csrf_token() }}">
-    <title>@yield('title', 'پنل کاربری') | ZedProxy</title>
+    <title>@yield('title', 'داشبورد') | ZedProxy</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     @vite(['resources/css/app.css', 'resources/js/app.js'])
@@ -23,28 +23,23 @@
         </div>
 
         <nav class="flex-1 p-4 space-y-1 text-sm">
-            <a href="{{ route('panel.dashboard') }}"
-               class="flex items-center gap-3 px-3 py-2 rounded-lg {{ request()->routeIs('panel.dashboard') ? 'bg-indigo-600 text-white' : 'text-gray-400 hover:text-white hover:bg-gray-800' }} transition">
+            <a href="{{ route('dashboard.index') }}"
+               class="flex items-center gap-3 px-3 py-2 rounded-lg {{ request()->routeIs('dashboard.index') ? 'bg-indigo-600 text-white' : 'text-gray-400 hover:text-white hover:bg-gray-800' }} transition">
                 <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7h18M3 12h18M3 17h18"/></svg>
                 داشبورد
             </a>
-            <a href="{{ route('panel.services') }}"
-               class="flex items-center gap-3 px-3 py-2 rounded-lg {{ request()->routeIs('panel.services') ? 'bg-indigo-600 text-white' : 'text-gray-400 hover:text-white hover:bg-gray-800' }} transition">
+            <a href="{{ route('dashboard.services') }}"
+               class="flex items-center gap-3 px-3 py-2 rounded-lg {{ request()->routeIs('dashboard.services') ? 'bg-indigo-600 text-white' : 'text-gray-400 hover:text-white hover:bg-gray-800' }} transition">
                 <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M12 5l7 7-7 7"/></svg>
                 سرویس‌های من
             </a>
-            <a href="{{ route('panel.orders') }}"
-               class="flex items-center gap-3 px-3 py-2 rounded-lg {{ request()->routeIs('panel.orders') ? 'bg-indigo-600 text-white' : 'text-gray-400 hover:text-white hover:bg-gray-800' }} transition">
+            <a href="{{ route('dashboard.orders') }}"
+               class="flex items-center gap-3 px-3 py-2 rounded-lg {{ request()->routeIs('dashboard.orders*') ? 'bg-indigo-600 text-white' : 'text-gray-400 hover:text-white hover:bg-gray-800' }} transition">
                 <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2"/></svg>
-                سفارش‌ها
+                سفارش‌های من
             </a>
-            <a href="{{ route('panel.tickets') }}"
-               class="flex items-center gap-3 px-3 py-2 rounded-lg {{ request()->routeIs('panel.tickets') ? 'bg-indigo-600 text-white' : 'text-gray-400 hover:text-white hover:bg-gray-800' }} transition">
-                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z"/></svg>
-                تیکت‌ها
-            </a>
-            <a href="{{ route('panel.profile') }}"
-               class="flex items-center gap-3 px-3 py-2 rounded-lg {{ request()->routeIs('panel.profile') ? 'bg-indigo-600 text-white' : 'text-gray-400 hover:text-white hover:bg-gray-800' }} transition">
+            <a href="{{ route('dashboard.profile') }}"
+               class="flex items-center gap-3 px-3 py-2 rounded-lg {{ request()->routeIs('dashboard.profile') ? 'bg-indigo-600 text-white' : 'text-gray-400 hover:text-white hover:bg-gray-800' }} transition">
                 <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/></svg>
                 پروفایل
             </a>
@@ -70,6 +65,16 @@
             </div>
         </header>
         <main class="flex-1 p-6">
+            @if(session('success'))
+                <div class="mb-6 bg-green-500/10 border border-green-500/30 rounded-lg p-4 text-sm text-green-300">
+                    {{ session('success') }}
+                </div>
+            @endif
+            @if(session('error'))
+                <div class="mb-6 bg-red-500/10 border border-red-500/30 rounded-lg p-4 text-sm text-red-300">
+                    {{ session('error') }}
+                </div>
+            @endif
             @yield('content')
         </main>
     </div>
