@@ -8,7 +8,7 @@
     "require": {
         "php": "^8.3",
         "filament/filament": "^3.2",
-        "laravel/framework": "^13.8",
+        "laravel/framework": "^12.0",
         "laravel/tinker": "^3.0",
         "predis/predis": "^3.5"
     },
@@ -79,6 +79,9 @@
         "optimize-autoloader": true,
         "preferred-install": "dist",
         "sort-packages": true,
+        "platform": {
+            "php": "8.3.0"
+        },
         "allow-plugins": {
             "pestphp/pest-plugin": true,
             "php-http/discovery": true

@@ -6,7 +6,7 @@ A production-ready VPN/proxy sales platform built with Laravel, PostgreSQL, Redi
 
 | Component     | Technology                              |
 |---------------|-----------------------------------------|
-| Backend       | Laravel, PHP 8.2+                       |
+| Backend       | Laravel 12, PHP 8.3+                    |
 | Database      | PostgreSQL 16+                          |
 | Cache/Queue   | Redis                                   |
 | Frontend      | Blade + Tailwind CSS (RTL)              |
@@ -17,7 +17,7 @@ A production-ready VPN/proxy sales platform built with Laravel, PostgreSQL, Redi
 ## Requirements
 
 - Ubuntu 22.04 (jammy), 24.04 (noble), or 26.04 (resolute) — see [Supported OS](#supported-os)
-- PHP 8.2+ with extensions: pgsql, redis, mbstring, xml, curl, zip, bcmath, gd, intl, opcache
+- **PHP 8.3 or higher**, compatible with Ubuntu 24.04 official packages — extensions: pgsql, redis, mbstring, xml, curl, zip, bcmath, gd, intl, opcache
 - PostgreSQL 14+
 - Redis 6+
 - Node.js 22+, npm
@@ -25,7 +25,7 @@ A production-ready VPN/proxy sales platform built with Laravel, PostgreSQL, Redi
 
 ## Supported OS
 
-The installer supports Ubuntu releases where official packages or a verified PPA can provide PHP 8.2 or higher.
+The installer supports Ubuntu releases where official packages or a verified PPA can provide PHP 8.3 or higher.
 
 | Ubuntu Release | Codename  | PHP Source              | Status     |
 |----------------|-----------|-------------------------|------------|
