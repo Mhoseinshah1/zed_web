@@ -7,7 +7,9 @@
 #   sudo bash /tmp/zedproxy-install.sh
 # =============================================================================
 
-set -euo pipefail
+# -E: ERR trap inherited by functions/subshells
+# -e: exit on error, -u: unset variable = error, -o pipefail: pipe failure = error
+set -Eeuo pipefail
 
 # Prevent all interactive prompts from apt/dpkg during installation
 export DEBIAN_FRONTEND=noninteractive
@@ -30,6 +32,15 @@ error() { echo -e "${RED}[ERROR]${NC} $*" >&2; exit 1; }
 # ─── Verify root ─────────────────────────────────────────────────────────────
 [[ $EUID -ne 0 ]] && error "This script must be run as root. Download and run with: curl -fsSL https://raw.githubusercontent.com/mhoseinshah1/zed_web/main/install.sh -o /tmp/zedproxy-install.sh && sudo bash /tmp/zedproxy-install.sh"
 
+# ─── Install log ─────────────────────────────────────────────────────────────
+LOG_FILE="/var/log/zedproxy-install.log"
+touch "$LOG_FILE"
+chmod 600 "$LOG_FILE"
+# Tee all installer output (stdout + stderr) to log file.
+# NOTE: The log file (root-only, mode 600) will contain admin credentials shown in the final summary.
+exec > >(tee -a "$LOG_FILE") 2>&1
+echo "=== ZedProxy install started $(date -u '+%Y-%m-%d %H:%M:%S UTC') ===" >> "$LOG_FILE"
+
 # ─── Repository ──────────────────────────────────────────────────────────────
 APP_NAME="ZedProxy"
 GITHUB_OWNER="mhoseinshah1"
@@ -38,9 +49,27 @@ BRANCH="main"
 APP_DIR="${APP_DIR:-/var/www/zedproxy}"
 REPO_URL="https://github.com/${GITHUB_OWNER}/${REPO_NAME}.git"
 
-# ─── Fail-safe: never print admin credentials on unexpected exit ──────────────
+# ─── Fail-safe traps ─────────────────────────────────────────────────────────
 INSTALL_SUCCESS=false
-trap '[[ "$INSTALL_SUCCESS" != "true" ]] && echo -e "\n${RED}[ERROR] Installation did not complete. Admin credentials were NOT saved.${NC}"' EXIT
+
+_on_exit() {
+    if [[ "$INSTALL_SUCCESS" != "true" ]]; then
+        echo -e "\n${RED}[ERROR] Installation did not complete. Admin credentials were NOT saved.${NC}"
+        echo -e "${RED}[ERROR] See full log: sudo tail -n 120 ${LOG_FILE}${NC}"
+    fi
+}
+
+_on_err() {
+    local exit_code=$?
+    local line_no=${BASH_LINENO[0]}
+    local cmd="${BASH_COMMAND}"
+    echo -e "\n${RED}[ERROR] Command failed (exit ${exit_code}) at line ${line_no}:${NC}" >&2
+    echo -e "${RED}[ERROR]   ${cmd}${NC}" >&2
+    echo -e "${RED}[ERROR] See full log: sudo tail -n 120 ${LOG_FILE}${NC}" >&2
+}
+
+trap '_on_exit' EXIT
+trap '_on_err' ERR
 
 # ─── OS Detection ────────────────────────────────────────────────────────────
 OS_ID=""
@@ -53,7 +82,6 @@ detect_os() {
         error "Cannot detect OS: /etc/os-release not found."
     fi
 
-    # Source variables without polluting the environment permanently
     OS_ID=$(grep -E '^ID=' /etc/os-release | cut -d= -f2 | tr -d '"')
     OS_VERSION_ID=$(grep -E '^VERSION_ID=' /etc/os-release | cut -d= -f2 | tr -d '"')
     OS_CODENAME=$(grep -E '^VERSION_CODENAME=' /etc/os-release | cut -d= -f2 | tr -d '"')
@@ -172,6 +200,8 @@ check_domain_dns() {
 
 # ─── Let's Encrypt SSL setup ─────────────────────────────────────────────────
 SSL_ACTIVE=false
+SSL_STAGING=false
+SSL_FAIL_REASON=""
 
 setup_ssl() {
     log "Installing certbot..."
@@ -180,34 +210,97 @@ setup_ssl() {
         -o Dpkg::Options::="--force-confold" \
         certbot python3-certbot-nginx
 
-    log "Validating DNS for ${DOMAIN}..."
-    check_domain_dns "$DOMAIN"
-
-    # Build certbot -d args: always include bare domain; include www only if it resolves here
-    local certbot_domains="-d ${DOMAIN}"
-    if [ "$WWW_RESOLVES" = "true" ]; then
-        certbot_domains="${certbot_domains} -d www.${DOMAIN}"
-        log "Including www.${DOMAIN} in the SSL certificate"
-    else
-        log "www.${DOMAIN} not included (DNS mismatch or not resolving)"
+    # Check whether a valid cert already exists — reuse it to avoid rate limits
+    local cert_file="/etc/letsencrypt/live/${DOMAIN}/fullchain.pem"
+    if [ -f "$cert_file" ]; then
+        if openssl x509 -checkend 86400 -noout -in "$cert_file" 2>/dev/null; then
+            ok "Found existing valid Let's Encrypt certificate for ${DOMAIN} — reusing it."
+            # Run certbot --reinstall to wire up Nginx without requesting a new cert
+            local reinstall_exit=0
+            certbot --nginx \
+                -d "$DOMAIN" \
+                --non-interactive \
+                --agree-tos \
+                --no-eff-email \
+                -m "$ADMIN_EMAIL" \
+                --reinstall \
+                --redirect 2>&1 || reinstall_exit=$?
+            if [ "$reinstall_exit" -eq 0 ]; then
+                SSL_ACTIVE=true
+                ok "Existing SSL certificate reinstalled for ${DOMAIN}"
+            else
+                warn "Could not reinstall existing certificate (exit ${reinstall_exit}). Requesting new one..."
+            fi
+        else
+            warn "Existing certificate for ${DOMAIN} is expired or nearly expired — requesting new one."
+        fi
     fi
 
-    log "Running certbot for ${DOMAIN}..."
-    local certbot_exit=0
-    # shellcheck disable=SC2086
-    certbot --nginx \
-        $certbot_domains \
-        --non-interactive \
-        --agree-tos \
-        --redirect \
-        --no-eff-email \
-        -m "$ADMIN_EMAIL" || certbot_exit=$?
+    if [ "$SSL_ACTIVE" = "false" ]; then
+        log "Validating DNS for ${DOMAIN}..."
+        check_domain_dns "$DOMAIN"
 
-    if [ "$certbot_exit" -eq 0 ]; then
-        SSL_ACTIVE=true
-        ok "SSL certificate issued for ${DOMAIN}"
+        # Build certbot -d args: always include bare domain; include www only if it resolves here
+        local certbot_domains="-d ${DOMAIN}"
+        if [ "$WWW_RESOLVES" = "true" ]; then
+            certbot_domains="${certbot_domains} -d www.${DOMAIN}"
+            log "Including www.${DOMAIN} in the SSL certificate"
+        else
+            log "www.${DOMAIN} not included (DNS mismatch or not resolving)"
+        fi
 
-        # Update APP_URL to https in .env
+        local staging_flag=""
+        if [ "$SSL_STAGING" = "true" ]; then
+            staging_flag="--staging"
+            warn "Using Let's Encrypt STAGING — certificate will NOT be trusted by browsers"
+        fi
+
+        log "Running certbot for ${DOMAIN}..."
+        local certbot_exit=0
+        local certbot_output
+        # shellcheck disable=SC2086
+        certbot_output=$(certbot --nginx \
+            $certbot_domains \
+            $staging_flag \
+            --non-interactive \
+            --agree-tos \
+            --redirect \
+            --no-eff-email \
+            -m "$ADMIN_EMAIL" 2>&1) || certbot_exit=$?
+
+        echo "$certbot_output"
+
+        if [ "$certbot_exit" -eq 0 ]; then
+            SSL_ACTIVE=true
+            ok "SSL certificate issued for ${DOMAIN}"
+        else
+            # Detect specific failure reasons from certbot output
+            if echo "$certbot_output" | grep -qiE "too many certificates|rate limit|too many failed"; then
+                SSL_FAIL_REASON="rate_limit"
+                warn "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                warn "SSL FAILED: Let's Encrypt rate limit reached."
+                warn "Too many certificates have been issued for this domain"
+                warn "in the past 168 hours (7 days)."
+                warn ""
+                warn "Wait until the retry-after time shown by Certbot above,"
+                warn "or use a different subdomain to avoid the limit."
+                warn "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            elif echo "$certbot_output" | grep -qiE "dns|not resolve|NXDOMAIN|no valid"; then
+                SSL_FAIL_REASON="dns"
+                warn "SSL FAILED: DNS did not resolve correctly for ${DOMAIN}."
+                warn "Point your domain's A record to this server IP, then retry certbot."
+            else
+                SSL_FAIL_REASON="other"
+                warn "Certbot exited with code ${certbot_exit} — SSL was not configured."
+            fi
+            warn "The HTTP site is still fully working."
+            warn "To install SSL manually once the issue is resolved:"
+            warn "  certbot --nginx -d ${DOMAIN} -m ${ADMIN_EMAIL} --non-interactive --agree-tos --redirect --no-eff-email"
+        fi
+    fi
+
+    if [ "$SSL_ACTIVE" = "true" ]; then
+        # Update APP_URL in .env to https
         sed -i "s|^APP_URL=.*|APP_URL=https://${DOMAIN}|" "${APP_DIR}/.env"
         ok "APP_URL updated to https://${DOMAIN}"
 
@@ -224,23 +317,14 @@ setup_ssl() {
         if [ "$https_health" = "200" ]; then
             ok "HTTPS health check PASSED (https://${DOMAIN}/health → HTTP 200)"
         else
-            warn "HTTPS health check returned HTTP ${https_health}"
-            warn "SSL is installed but HTTPS health endpoint did not return 200."
+            warn "HTTPS health check returned HTTP ${https_health} — site may still be starting."
             warn "Run manually: curl https://${DOMAIN}/health"
         fi
-    else
-        SSL_ACTIVE=false
-        warn "Certbot exited with code ${certbot_exit} — SSL was not configured."
-        warn "The HTTP site is still fully working."
-        warn "To install SSL manually after DNS propagates:"
-        warn "  certbot --nginx -d ${DOMAIN} -m ${ADMIN_EMAIL} --non-interactive --agree-tos --redirect --no-eff-email"
     fi
 }
 
 # ─── PHP installation ─────────────────────────────────────────────────────────
-# Minimum PHP version required by this Laravel project
 PHP_MIN_VERSION="8.2"
-# Will be set to the detected installed version (e.g. "8.3" or "8.4")
 PHP_VERSION=""
 
 install_php() {
@@ -255,7 +339,7 @@ install_php() {
         php-cli php-fpm \
         php-pgsql php-redis php-mbstring \
         php-xml php-curl php-zip \
-        php-bcmath php-gd php-intl php-opcache 2>/dev/null || true
+        php-bcmath php-gd php-intl php-opcache || true
 
     if command -v php &>/dev/null; then
         PHP_VERSION=$(php -r 'echo PHP_MAJOR_VERSION.".".PHP_MINOR_VERSION;')
@@ -327,17 +411,6 @@ _prompt_domain() {
     done
 }
 
-_prompt_app_url() {
-    local default_url="https://${DOMAIN}"
-    echo -e "\n${BLUE}Enter the final website URL, example: https://zedproxy.com${NC}"
-    echo -e "${BLUE}Press Enter to use: ${YELLOW}${default_url}${NC}"
-    read -r INPUT_URL </dev/tty
-
-    INPUT_URL="${INPUT_URL//[[:space:]]/}"
-    APP_URL="${INPUT_URL:-$default_url}"
-    ok "Website URL: $APP_URL"
-}
-
 _prompt_admin_email() {
     local default_email="admin@${DOMAIN}"
     echo -e "\n${BLUE}Enter admin email:${NC}"
@@ -384,10 +457,24 @@ _prompt_ssl() {
 
     if [[ "$INPUT_SSL" == "n" || "$INPUT_SSL" == "no" ]]; then
         INSTALL_SSL=false
+        SSL_STAGING=false
         ok "SSL: skipped (you can add it later with certbot)"
+        return
+    fi
+
+    INSTALL_SSL=true
+
+    echo -e "\n${BLUE}Use Let's Encrypt STAGING mode? (testing only — not trusted by browsers) [y/N]:${NC}"
+    read -r INPUT_STAGING </dev/tty
+    INPUT_STAGING="${INPUT_STAGING//[[:space:]]/}"
+    INPUT_STAGING="${INPUT_STAGING,,}"
+
+    if [[ "$INPUT_STAGING" == "y" || "$INPUT_STAGING" == "yes" ]]; then
+        SSL_STAGING=true
+        ok "SSL: staging mode (test cert — not browser-trusted)"
     else
-        INSTALL_SSL=true
-        ok "SSL: will be configured automatically after installation"
+        SSL_STAGING=false
+        ok "SSL: will use production Let's Encrypt certificate"
     fi
 }
 
@@ -401,7 +488,6 @@ echo -e "${GREEN}  ZedProxy Interactive Setup${NC}"
 echo -e "${GREEN}════════════════════════════════════════════════════════════${NC}"
 
 _prompt_domain
-_prompt_app_url
 _prompt_admin_email
 _prompt_admin_name
 _prompt_admin_password
@@ -410,11 +496,18 @@ _prompt_ssl
 echo ""
 echo -e "${BLUE}────────────────────────────────────────────────────────────${NC}"
 echo -e "  Domain:      ${YELLOW}${DOMAIN}${NC}"
-echo -e "  Website URL: ${YELLOW}${APP_URL}${NC}"
 echo -e "  Admin email: ${YELLOW}${ADMIN_EMAIL}${NC}"
 echo -e "  Admin name:  ${YELLOW}${ADMIN_NAME}${NC}"
 echo -e "  Password:    ${YELLOW}(configured — shown in final summary)${NC}"
-echo -e "  SSL:         ${YELLOW}$( [ "$INSTALL_SSL" = "true" ] && echo "yes — Let's Encrypt" || echo "no — HTTP only" )${NC}"
+if [ "$INSTALL_SSL" = "true" ]; then
+    if [ "$SSL_STAGING" = "true" ]; then
+        echo -e "  SSL:         ${YELLOW}yes — Let's Encrypt STAGING (test only)${NC}"
+    else
+        echo -e "  SSL:         ${YELLOW}yes — Let's Encrypt (production)${NC}"
+    fi
+else
+    echo -e "  SSL:         ${YELLOW}no — HTTP only${NC}"
+fi
 echo -e "${BLUE}────────────────────────────────────────────────────────────${NC}"
 echo -e "${BLUE}Proceeding with installation in 3 seconds... (Ctrl+C to cancel)${NC}"
 sleep 3
@@ -425,13 +518,15 @@ DB_NAME="zedproxy"
 DB_USER="zedproxy_user"
 DB_PASS=$(openssl rand -base64 32 | tr -dc 'A-Za-z0-9!@#$%^&*' | head -c 32)
 NGINX_CONF="/etc/nginx/sites-available/zedproxy"
-# INSTALL_SSL is set by _prompt_ssl() — default false until prompt runs
-INSTALL_SSL="${INSTALL_SSL:-false}"
+
+# APP_URL starts as HTTP — setup_ssl() upgrades it to HTTPS on success
+APP_URL="http://${DOMAIN}"
 
 log "Starting ZedProxy installation..."
 log "OS: $OS_PRETTY"
 log "App directory: $APP_DIR"
 log "Domain: $DOMAIN"
+log "Log file: $LOG_FILE"
 
 # ─── Clean any broken ondrej/php sources before first apt update ──────────────
 clean_ondrej_php_sources
@@ -469,7 +564,7 @@ ok "Composer: $(composer --version --no-ansi)"
 # ─── Node.js ─────────────────────────────────────────────────────────────────
 log "Installing Node.js $NODE_VERSION..."
 if ! command -v node &>/dev/null || [[ $(node --version | cut -d'v' -f2 | cut -d'.' -f1) -lt $NODE_VERSION ]]; then
-    curl -fsSL https://deb.nodesource.com/setup_${NODE_VERSION}.x | bash -
+    curl -fsSL "https://deb.nodesource.com/setup_${NODE_VERSION}.x" | bash -
     apt-get install -y -qq \
         -o Dpkg::Options::="--force-confdef" \
         -o Dpkg::Options::="--force-confold" \
@@ -540,8 +635,7 @@ done
 
 # Check port 80 for conflicts.
 # nginx on port 80 is expected (this may be a re-run) — skip it.
-# Apache is already handled above.
-# Any other process is a hard stop.
+# Apache is already handled above. Any other process is a hard stop.
 _port80_other=$(ss -ltnp 2>/dev/null | grep ':80 ' | grep -v '"nginx"' || true)
 if [ -n "$_port80_other" ]; then
     _proc=$(echo "$_port80_other" | grep -oP 'users:\(\("\K[^"]+' 2>/dev/null || echo "unknown")
@@ -555,6 +649,9 @@ apt-get install -y -qq \
 
 # ─── Project directory preparation ───────────────────────────────────────────
 prepare_project_directory() {
+    # Allow git to operate on APP_DIR when owned by www-data (re-run scenario)
+    git config --global --add safe.directory "$APP_DIR" 2>/dev/null || true
+
     if [ ! -d "$APP_DIR" ]; then
         log "Cloning ${REPO_URL} (branch: ${BRANCH}) into ${APP_DIR}..."
         git clone -b "$BRANCH" "$REPO_URL" "$APP_DIR"
@@ -570,7 +667,6 @@ prepare_project_directory() {
     else
         # Directory exists but is not a git repo
         if [ -z "$(ls -A "$APP_DIR" 2>/dev/null)" ]; then
-            # Empty directory — just clone into it
             log "${APP_DIR} is empty — cloning repository..."
             rmdir "$APP_DIR"
             git clone -b "$BRANCH" "$REPO_URL" "$APP_DIR"
@@ -728,7 +824,6 @@ ok "PHP-FPM configured (${PHP_FPM_SERVICE})"
 log "Installing PHP dependencies..."
 
 # Run without --quiet so that any failure prints the real Composer error.
-# With set -euo pipefail, a non-zero exit code propagates immediately.
 # COMPOSER_ALLOW_SUPERUSER is exported at the top of this script.
 composer install \
     --no-dev \
@@ -741,7 +836,7 @@ ok "Composer dependencies installed"
 
 # ─── Node / build ────────────────────────────────────────────────────────────
 log "Installing Node.js dependencies..."
-npm ci --silent
+npm ci
 
 log "Building frontend assets..."
 npm run build
@@ -783,7 +878,18 @@ ok "Permissions set"
 
 # ─── Nginx configuration ─────────────────────────────────────────────────────
 log "Configuring Nginx for domain: ${DOMAIN}..."
-cat > "$NGINX_CONF" <<NGINX
+
+# Only write a clean HTTP-only Nginx config if no SSL-managed config already exists.
+# Certbot may have already added HTTPS blocks on a previous run — preserve them.
+NGINX_HAS_SSL=false
+if [ -f "$NGINX_CONF" ] && grep -q "ssl_certificate" "$NGINX_CONF" 2>/dev/null; then
+    NGINX_HAS_SSL=true
+    warn "Existing Nginx config at ${NGINX_CONF} already has SSL blocks — preserving certbot-managed config."
+    warn "Only updating PHP-FPM socket path if needed."
+    # Update socket path in case PHP version changed
+    sed -i "s|fastcgi_pass unix:/run/php/php[0-9.]*-fpm-zedproxy.sock|fastcgi_pass unix:${PHP_FPM_SOCK}|g" "$NGINX_CONF"
+else
+    cat > "$NGINX_CONF" <<NGINX
 server {
     listen 80;
     server_name ${DOMAIN} www.${DOMAIN};
@@ -826,6 +932,7 @@ server {
     client_max_body_size 20M;
 }
 NGINX
+fi
 
 ln -sf "$NGINX_CONF" /etc/nginx/sites-enabled/zedproxy
 rm -f /etc/nginx/sites-enabled/default
@@ -834,7 +941,6 @@ systemctl enable nginx
 systemctl restart nginx
 sleep 1
 
-# Confirm Nginx is running and owns port 80
 if ! systemctl is-active --quiet nginx; then
     journalctl -u nginx --no-pager -n 20 >&2 || true
     error "Nginx failed to start. See the output above for details."
@@ -873,8 +979,8 @@ echo "$CRON_JOB" > "$CRON_FILE"
 chmod 0644 "$CRON_FILE"
 ok "Daily backup scheduled at 3:00 AM"
 
-# ─── Health check ────────────────────────────────────────────────────────────
-log "Running health check..."
+# ─── HTTP health check (must pass before SSL) ─────────────────────────────────
+log "Running HTTP health check..."
 sleep 2
 
 HEALTH_RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost/health 2>/dev/null || echo "000")
@@ -891,21 +997,24 @@ else
     warn "Check logs: tail -f ${APP_DIR}/storage/logs/laravel.log"
 fi
 
-# ─── SSL / Let's Encrypt ──────────────────────────────────────────────────────
+# ─── SSL / Let's Encrypt (only after HTTP health check passes) ────────────────
 if [ "$HEALTH_OK" = "true" ] && [ "$INSTALL_SSL" = "true" ]; then
     echo ""
     setup_ssl
+fi
+
+# ─── Compute final effective URL ──────────────────────────────────────────────
+# Always derive from SSL result — never from user input prompt.
+if [ "$SSL_ACTIVE" = "true" ]; then
+    APP_URL="https://${DOMAIN}"
+else
+    APP_URL="http://${DOMAIN}"
 fi
 
 # ─── Final summary ────────────────────────────────────────────────────────────
 echo ""
 
 if [ "$HEALTH_OK" = "true" ]; then
-    # After SSL, APP_URL may have been updated to https — re-read from .env
-    if [ "$SSL_ACTIVE" = "true" ]; then
-        APP_URL="https://${DOMAIN}"
-    fi
-
     INSTALL_SUCCESS=true
     echo -e "${GREEN}════════════════════════════════════════════════════════════${NC}"
     echo -e "${GREEN}  ZedProxy installation completed successfully!${NC}"
@@ -913,7 +1022,22 @@ if [ "$HEALTH_OK" = "true" ]; then
     echo ""
     echo -e "  OS:                ${BLUE}${OS_PRETTY}${NC}"
     echo -e "  PHP version:       ${BLUE}PHP ${PHP_VERSION}${NC}"
-    echo -e "  SSL:               ${BLUE}$( [ "$SSL_ACTIVE" = "true" ] && echo "active (Let's Encrypt)" || ( [ "$INSTALL_SSL" = "true" ] && echo "FAILED — see warnings above" || echo "not installed (HTTP only)" ) )${NC}"
+
+    # SSL status line
+    if [ "$INSTALL_SSL" = "false" ]; then
+        echo -e "  SSL:               ${BLUE}not installed (HTTP only)${NC}"
+    elif [ "$SSL_ACTIVE" = "true" ] && [ "$SSL_STAGING" = "true" ]; then
+        echo -e "  SSL:               ${YELLOW}STAGING — test cert (not browser-trusted)${NC}"
+    elif [ "$SSL_ACTIVE" = "true" ]; then
+        echo -e "  SSL:               ${GREEN}active (Let's Encrypt)${NC}"
+    elif [ "$SSL_FAIL_REASON" = "rate_limit" ]; then
+        echo -e "  SSL:               ${RED}FAILED — Let's Encrypt rate limit${NC}"
+    elif [ "$SSL_FAIL_REASON" = "dns" ]; then
+        echo -e "  SSL:               ${RED}FAILED — DNS did not resolve${NC}"
+    else
+        echo -e "  SSL:               ${RED}FAILED — see warnings above${NC}"
+    fi
+
     echo -e "  Website URL:       ${BLUE}${APP_URL}${NC}"
     echo -e "  Admin panel URL:   ${BLUE}${APP_URL}/admin${NC}"
     echo -e "  Health check URL:  ${BLUE}${APP_URL}/health${NC}"
@@ -926,10 +1050,12 @@ if [ "$HEALTH_OK" = "true" ]; then
     echo -e "  DB user:           ${YELLOW}${DB_USER}${NC}"
     echo -e "  DB password:       ${YELLOW}${DB_PASS}${NC}"
     echo ""
+    echo -e "  Install log:       ${BLUE}${LOG_FILE}${NC}"
     echo -e "  ${RED}IMPORTANT: Save the passwords above. They will not be shown again.${NC}"
+    echo -e "  ${YELLOW}NOTE: The install log (${LOG_FILE}) also contains these credentials.${NC}"
     echo ""
     if [ "$INSTALL_SSL" = "true" ] && [ "$SSL_ACTIVE" = "false" ]; then
-        echo -e "  ${YELLOW}SSL was requested but failed. Add SSL manually once DNS is ready:${NC}"
+        echo -e "  ${YELLOW}To install SSL manually after the issue is resolved:${NC}"
         echo -e "    ${BLUE}certbot --nginx -d ${DOMAIN} -m ${ADMIN_EMAIL} --non-interactive --agree-tos --redirect --no-eff-email${NC}"
         echo ""
     fi
@@ -942,6 +1068,7 @@ else
     echo -e "  Admin credentials are NOT shown in a failed state."
     echo ""
     echo -e "  Investigate:"
+    echo -e "    ${BLUE}sudo tail -n 120 ${LOG_FILE}${NC}"
     echo -e "    ${BLUE}tail -50 ${APP_DIR}/storage/logs/laravel.log${NC}"
     echo -e "    ${BLUE}curl http://localhost/health${NC}"
     echo -e "    ${BLUE}sudo systemctl status nginx ${PHP_FPM_SERVICE} postgresql redis-server${NC}"

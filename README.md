@@ -70,17 +70,23 @@ The script runs interactively and asks for the following before doing anything:
 | Prompt | Default if you press Enter |
 |--------|---------------------------|
 | Domain (without http/https) | *(required — no default)* |
-| Final website URL | `https://DOMAIN` |
 | Admin email | `admin@DOMAIN` |
 | Admin name/username | `zedadmin_RANDOM` (e.g. `zedadmin_a83f21`) |
 | Admin password | Strong 24-char random password |
 | Install SSL with Let's Encrypt? | `Y` (yes) |
+| Use STAGING mode? (if SSL=yes) | `N` (production) |
 
 After all questions are answered, a 3-second countdown lets you cancel with Ctrl+C before anything is installed.
 
 The admin user is created automatically. **Credentials are only shown once at the end of a successful installation.** If installation fails at any step, the admin password is not printed.
 
-SSL is configured automatically at the end of installation (after Nginx and the HTTP health check pass). If SSL fails, the HTTP site remains fully functional and a manual certbot command is printed.
+All installer output is logged to `/var/log/zedproxy-install.log` (root-only, mode 600). The log includes credentials shown in the final summary. If anything goes wrong, check the log first:
+
+```bash
+sudo tail -n 120 /var/log/zedproxy-install.log
+```
+
+**Website URL in the final summary is always accurate:** it shows `http://DOMAIN` when SSL is not active and `https://DOMAIN` only when SSL succeeded — never a false https URL.
 
 ## Manual installation
 
@@ -280,6 +286,37 @@ sudo supervisorctl stop zedproxy-worker:*
 
 ## Troubleshooting
 
+### Installation log
+
+Every installer run writes to `/var/log/zedproxy-install.log` (root-only, 600):
+
+```bash
+sudo tail -n 120 /var/log/zedproxy-install.log
+```
+
+If a command fails, the log shows the exact line number and command.
+
+### Re-running the installer
+
+The installer is safe to re-run:
+
+- Existing git repository at `/var/www/zedproxy` is updated (`git fetch; git reset --hard origin/main`)
+- Non-git directories are backed up to `/var/www/zedproxy_backup_YYYYMMDD_HHMMSS` before a fresh clone
+- PostgreSQL user and database are created if missing; password is rotated on re-run
+- Nginx config is only rewritten if no certbot-managed SSL blocks exist — existing SSL config is preserved
+- A valid existing Let's Encrypt certificate is reused; certbot does not request a new one
+
+### Let's Encrypt rate limit
+
+```bash
+# Check rate limit status in the install log
+sudo grep -i "rate limit\|too many" /var/log/zedproxy-install.log
+
+# After 168 hours (7 days), run manually:
+certbot --nginx -d yourdomain.com -m admin@yourdomain.com \
+    --non-interactive --agree-tos --redirect --no-eff-email
+```
+
 ### Database connection refused
 
 ```bash
@@ -364,14 +401,39 @@ The installer prompts you to install a free SSL certificate with Let's Encrypt d
 **What the installer does automatically:**
 
 1. Asks: `Install free SSL certificate with Let's Encrypt? [Y/n]` — press Enter to accept.
-2. Installs `certbot` and `python3-certbot-nginx` (non-interactive).
-3. Checks DNS before running certbot — compares the domain's A record with the server's public IP.
-4. Includes `www.DOMAIN` in the certificate only if it also resolves to this server.
-5. Runs certbot after Nginx is configured and the HTTP health check passes.
-6. On success: updates `APP_URL` in `.env` to `https://DOMAIN`, clears and rebuilds config cache, verifies HTTPS health.
-7. On failure: does not remove the working HTTP site. Prints a manual certbot command to run once DNS is ready.
+2. Asks: `Use Let's Encrypt STAGING mode? [y/N]` — press Enter for production (recommended).
+3. Installs `certbot` and `python3-certbot-nginx` (non-interactive).
+4. **Checks for an existing valid certificate** — if one exists for the domain, reuses it and skips requesting a new one (avoids rate limits on re-runs).
+5. Checks DNS before running certbot — compares the domain's A record with the server's public IP.
+6. Includes `www.DOMAIN` in the certificate only if `www.DOMAIN` also resolves to this server.
+7. Runs certbot after Nginx is configured and the HTTP health check passes.
+8. On success: updates `APP_URL` in `.env` to `https://DOMAIN`, rebuilds config cache, verifies HTTPS health.
+9. On failure: does not remove the working HTTP site. Prints a manual certbot command. The final summary shows `http://DOMAIN`.
 
-**DNS must point to this server before SSL can be issued.** If DNS is not ready at install time, choose `n` at the SSL prompt and run certbot manually later:
+**The final summary always shows the correct URL.** If SSL failed or was skipped, the summary shows `http://DOMAIN`. It never shows `https://` when SSL is not active.
+
+#### Let's Encrypt rate limits
+
+If certbot fails with "too many certificates" or "rate limit", the installer:
+- Does **not** retry automatically
+- Does **not** fail the website installation
+- Shows a clear warning with the reason
+- Keeps HTTP working
+
+Once the rate limit window (168 hours / 7 days) has passed, run certbot manually:
+
+```bash
+certbot --nginx -d yourdomain.com -m admin@yourdomain.com \
+    --non-interactive --agree-tos --redirect --no-eff-email
+```
+
+#### Staging mode (for testing)
+
+If you need to test the SSL flow without using production rate limits, choose `y` at the staging prompt. The certificate will not be trusted by browsers but the full certbot flow runs. **Always use production for real installs.**
+
+#### DNS must point to this server before SSL can be issued
+
+If DNS is not ready at install time, choose `n` at the SSL prompt and run certbot manually once DNS propagates:
 
 ```bash
 certbot --nginx -d yourdomain.com -m admin@yourdomain.com \
@@ -383,6 +445,13 @@ To add `www` to an existing certificate:
 ```bash
 certbot --nginx -d yourdomain.com -d www.yourdomain.com \
     -m admin@yourdomain.com --non-interactive --agree-tos --redirect --no-eff-email
+```
+
+#### Verify SSL after installation
+
+```bash
+curl -I https://yourdomain.com/health
+# Expected: HTTP/2 200
 ```
 
 ### After code update
