@@ -29,11 +29,19 @@ A production-ready VPN/proxy sales platform built with Laravel, PostgreSQL, Redi
 sudo bash <(curl -fsSL https://raw.githubusercontent.com/mhoseinshah1/zed_web/main/install.sh)
 ```
 
-Or with custom domain:
+The script runs interactively and asks for the following before doing anything:
 
-```bash
-sudo APP_URL=https://yourdomain.com DOMAIN=yourdomain.com bash <(curl -fsSL https://raw.githubusercontent.com/mhoseinshah1/zed_web/main/install.sh)
-```
+| Prompt | Default if you press Enter |
+|--------|---------------------------|
+| Domain (without http/https) | *(required — no default)* |
+| Final website URL | `https://DOMAIN` |
+| Admin email | `admin@DOMAIN` |
+| Admin name/username | `zedadmin_RANDOM` (e.g. `zedadmin_a83f21`) |
+| Admin password | Strong 24-char random password |
+
+After all questions are answered, a 3-second countdown lets you cancel with Ctrl+C before anything is installed.
+
+The admin user is created automatically. **Credentials are only shown once at the end of a successful installation.**  If installation fails at any step, the admin password is not printed.
 
 ## Manual installation
 
@@ -114,20 +122,18 @@ sudo chmod 600 .env
 
 ### 7. Create admin user
 
-```bash
-php artisan tinker
-```
+Use the dedicated Artisan command (safe to re-run — updates the user if the email already exists):
 
-```php
-App\Models\User::create([
-    'name'     => 'Admin',
-    'email'    => 'admin@yourdomain.com',
-    'password' => Hash::make('your_secure_password'),
-    'is_admin' => true,
-]);
+```bash
+php artisan zedproxy:create-admin \
+    --email="admin@yourdomain.com" \
+    --name="Admin" \
+    --password="your_secure_password"
 ```
 
 Then log in at `/admin`.
+
+Alternatively, the `install.sh` script creates the admin user automatically during installation using the credentials you enter at the prompts.
 
 ## Database backup
 
@@ -274,11 +280,13 @@ sudo chmod -R 775 storage bootstrap/cache
 
 ### Admin panel not loading
 
-Make sure your user has `is_admin = true`:
+Re-run the admin creation command to ensure `is_admin = true` and the password is correctly hashed:
 
 ```bash
-php artisan tinker
->>> App\Models\User::where('email','admin@example.com')->update(['is_admin'=>true]);
+php artisan zedproxy:create-admin \
+    --email="admin@example.com" \
+    --name="Admin" \
+    --password="your_password"
 ```
 
 ## Deployment notes

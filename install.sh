@@ -18,16 +18,119 @@ warn()  { echo -e "${YELLOW}[WARN]${NC} $*"; }
 error() { echo -e "${RED}[ERROR]${NC} $*" >&2; exit 1; }
 
 # ─── Verify root ─────────────────────────────────────────────────────────────
-[[ $EUID -ne 0 ]] && error "This script must be run as root: sudo bash install.sh"
+[[ $EUID -ne 0 ]] && error "This script must be run as root. Use: sudo bash <(curl -fsSL ...)"
 
 # ─── Repository ──────────────────────────────────────────────────────────────
 GITHUB_OWNER="mhoseinshah1"
 REPO_NAME="zed_web"
 
-# ─── Configuration ───────────────────────────────────────────────────────────
+# ─── Fail-safe: never print admin credentials on unexpected exit ──────────────
+INSTALL_SUCCESS=false
+trap '[[ "$INSTALL_SUCCESS" != "true" ]] && echo -e "\n${RED}[ERROR] Installation did not complete. Admin credentials were NOT saved.${NC}"' EXIT
+
+# ─── Interactive prompts ──────────────────────────────────────────────────────
+
+_prompt_domain() {
+    while true; do
+        echo -e "\n${BLUE}Enter the domain for this website, without http/https, example: zedproxy.com:${NC}"
+        read -r INPUT_DOMAIN </dev/tty
+
+        # Strip all whitespace
+        INPUT_DOMAIN="${INPUT_DOMAIN//[[:space:]]/}"
+
+        if [[ -z "$INPUT_DOMAIN" ]]; then
+            warn "Domain cannot be empty. Please try again."
+            continue
+        fi
+        if [[ "$INPUT_DOMAIN" == http://* || "$INPUT_DOMAIN" == https://* ]]; then
+            warn "Do not include http:// or https://. Enter the bare domain, e.g.: zedproxy.com"
+            continue
+        fi
+        if [[ "$INPUT_DOMAIN" == */ ]]; then
+            warn "Domain must not end with a slash."
+            continue
+        fi
+
+        DOMAIN="$INPUT_DOMAIN"
+        ok "Domain: $DOMAIN"
+        break
+    done
+}
+
+_prompt_app_url() {
+    local default_url="https://${DOMAIN}"
+    echo -e "\n${BLUE}Enter the final website URL, example: https://zedproxy.com${NC}"
+    echo -e "${BLUE}Press Enter to use: ${YELLOW}${default_url}${NC}"
+    read -r INPUT_URL </dev/tty
+
+    INPUT_URL="${INPUT_URL//[[:space:]]/}"
+    APP_URL="${INPUT_URL:-$default_url}"
+    ok "Website URL: $APP_URL"
+}
+
+_prompt_admin_email() {
+    local default_email="admin@${DOMAIN}"
+    echo -e "\n${BLUE}Enter admin email:${NC}"
+    echo -e "${BLUE}Press Enter to use default: ${YELLOW}${default_email}${NC}"
+    read -r INPUT_EMAIL </dev/tty
+
+    INPUT_EMAIL="${INPUT_EMAIL//[[:space:]]/}"
+    ADMIN_EMAIL="${INPUT_EMAIL:-$default_email}"
+    ok "Admin email: $ADMIN_EMAIL"
+}
+
+_prompt_admin_name() {
+    local rand_suffix
+    rand_suffix=$(openssl rand -hex 3 2>/dev/null || printf '%06x' $((RANDOM * RANDOM % 16777216)))
+    local default_name="zedadmin_${rand_suffix}"
+    echo -e "\n${BLUE}Enter admin name/username:${NC}"
+    echo -e "${BLUE}Press Enter to generate automatically: ${YELLOW}${default_name}${NC}"
+    read -r INPUT_NAME </dev/tty
+
+    ADMIN_NAME="${INPUT_NAME:-$default_name}"
+    ok "Admin name: $ADMIN_NAME"
+}
+
+_prompt_admin_password() {
+    echo -e "\n${BLUE}Enter admin password (input hidden):${NC}"
+    echo -e "${BLUE}Press Enter to generate a strong random password automatically:${NC}"
+    read -rs INPUT_PASS </dev/tty
+    echo ""  # newline after hidden input
+
+    if [[ -z "$INPUT_PASS" ]]; then
+        ADMIN_PASS=$(openssl rand -base64 32 | tr -dc 'A-Za-z0-9!@#$%^&*' | head -c 24)
+        ok "Admin password: (generated — shown in final summary)"
+    else
+        ADMIN_PASS="$INPUT_PASS"
+        ok "Admin password: (provided — shown in final summary)"
+    fi
+}
+
+# ─── Run interactive prompts ──────────────────────────────────────────────────
+echo ""
+echo -e "${GREEN}════════════════════════════════════════════════════════════${NC}"
+echo -e "${GREEN}  ZedProxy Interactive Setup${NC}"
+echo -e "${GREEN}════════════════════════════════════════════════════════════${NC}"
+
+_prompt_domain
+_prompt_app_url
+_prompt_admin_email
+_prompt_admin_name
+_prompt_admin_password
+
+echo ""
+echo -e "${BLUE}────────────────────────────────────────────────────────────${NC}"
+echo -e "  Domain:      ${YELLOW}${DOMAIN}${NC}"
+echo -e "  Website URL: ${YELLOW}${APP_URL}${NC}"
+echo -e "  Admin email: ${YELLOW}${ADMIN_EMAIL}${NC}"
+echo -e "  Admin name:  ${YELLOW}${ADMIN_NAME}${NC}"
+echo -e "  Password:    ${YELLOW}(configured — shown in final summary)${NC}"
+echo -e "${BLUE}────────────────────────────────────────────────────────────${NC}"
+echo -e "${BLUE}Proceeding with installation in 3 seconds... (Ctrl+C to cancel)${NC}"
+sleep 3
+
+# ─── Static configuration ─────────────────────────────────────────────────────
 APP_DIR="${APP_DIR:-/var/www/zedproxy}"
-APP_URL="${APP_URL:-http://localhost}"
-DOMAIN="${DOMAIN:-localhost}"
 PHP_VERSION="8.4"
 NODE_VERSION="22"
 DB_NAME="zedproxy"
@@ -149,11 +252,7 @@ cd "$APP_DIR"
 
 # ─── .env ────────────────────────────────────────────────────────────────────
 log "Creating .env file..."
-if [ ! -f .env ]; then
-    cp .env.example .env
-fi
 
-# Write secure values
 cat > .env <<ENV
 APP_NAME=ZedProxy
 APP_ENV=production
@@ -207,7 +306,7 @@ VITE_APP_NAME="ZedProxy"
 ENV
 
 chmod 600 .env
-ok ".env created with secure credentials"
+ok ".env created (APP_URL=${APP_URL})"
 
 # ─── PHP-FPM config ──────────────────────────────────────────────────────────
 log "Configuring PHP-FPM..."
@@ -266,6 +365,15 @@ php artisan key:generate --force
 log "Running database migrations..."
 php artisan migrate --force || error "Migration failed. Check database credentials."
 
+# ─── Admin user creation ──────────────────────────────────────────────────────
+log "Creating admin user (${ADMIN_EMAIL})..."
+# Pass password via env var to keep it out of the process list
+ZEDPROXY_ADMIN_PASS="$ADMIN_PASS" php artisan zedproxy:create-admin \
+    --email="$ADMIN_EMAIL" \
+    --name="$ADMIN_NAME" \
+    || error "Failed to create admin user. Check: tail -f ${APP_DIR}/storage/logs/laravel.log"
+ok "Admin user ready: $ADMIN_EMAIL"
+
 log "Optimizing application..."
 php artisan config:cache
 php artisan route:cache
@@ -285,7 +393,7 @@ chmod +x scripts/backup.sh
 ok "Permissions set"
 
 # ─── Nginx configuration ─────────────────────────────────────────────────────
-log "Configuring Nginx..."
+log "Configuring Nginx for domain: ${DOMAIN}..."
 cat > "$NGINX_CONF" <<NGINX
 server {
     listen 80;
@@ -335,7 +443,7 @@ rm -f /etc/nginx/sites-enabled/default
 nginx -t || error "Nginx config test failed"
 systemctl enable nginx
 systemctl reload nginx
-ok "Nginx configured"
+ok "Nginx configured for: ${DOMAIN}"
 
 # ─── Queue worker (Supervisor) ───────────────────────────────────────────────
 log "Configuring queue worker..."
@@ -373,38 +481,56 @@ log "Running health check..."
 sleep 2
 
 HEALTH_RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost/health 2>/dev/null || echo "000")
+HEALTH_OK=false
 
 if [ "$HEALTH_RESPONSE" = "200" ]; then
     ok "Health check PASSED (HTTP 200)"
-    HEALTH_BODY=$(curl -s http://localhost/health)
-    echo "$HEALTH_BODY"
+    curl -s http://localhost/health
+    echo ""
+    HEALTH_OK=true
 else
     warn "Health check returned HTTP $HEALTH_RESPONSE"
-    warn "The app may still be warming up. Check: curl http://localhost/health"
-    warn "And check logs: tail -f ${APP_DIR}/storage/logs/laravel.log"
+    warn "The app may still be warming up. Run: curl http://localhost/health"
+    warn "Check logs: tail -f ${APP_DIR}/storage/logs/laravel.log"
 fi
 
-# ─── Summary ─────────────────────────────────────────────────────────────────
+# ─── Final summary ────────────────────────────────────────────────────────────
 echo ""
-echo -e "${GREEN}═══════════════════════════════════════════════════════════${NC}"
-echo -e "${GREEN}  ZedProxy installation complete!${NC}"
-echo -e "${GREEN}═══════════════════════════════════════════════════════════${NC}"
-echo ""
-echo -e "  App URL:      ${BLUE}${APP_URL}${NC}"
-echo -e "  Admin panel:  ${BLUE}${APP_URL}/admin${NC}"
-echo -e "  Health:       ${BLUE}${APP_URL}/health${NC}"
-echo ""
-echo -e "  DB name:      ${YELLOW}${DB_NAME}${NC}"
-echo -e "  DB user:      ${YELLOW}${DB_USER}${NC}"
-echo -e "  DB password:  ${YELLOW}${DB_PASS}${NC}"
-echo ""
-echo -e "  ${YELLOW}IMPORTANT: Save the database password above. It is also stored in .env${NC}"
-echo ""
-echo -e "  Create admin user:"
-echo -e "    ${BLUE}cd ${APP_DIR} && php artisan tinker${NC}"
-echo -e '    >>> App\Models\User::create(["name"=>"Admin","email"=>"admin@example.com","password"=>Hash::make("CHANGE_ME"),"is_admin"=>true])'
-echo ""
-if [ "$HEALTH_RESPONSE" != "200" ]; then
-    echo -e "  ${RED}Health check did not pass. Investigate before considering this complete.${NC}"
+
+if [ "$HEALTH_OK" = "true" ]; then
+    INSTALL_SUCCESS=true
+    echo -e "${GREEN}════════════════════════════════════════════════════════════${NC}"
+    echo -e "${GREEN}  ZedProxy installation completed successfully!${NC}"
+    echo -e "${GREEN}════════════════════════════════════════════════════════════${NC}"
+    echo ""
+    echo -e "  Website URL:       ${BLUE}${APP_URL}${NC}"
+    echo -e "  Admin panel URL:   ${BLUE}${APP_URL}/admin${NC}"
+    echo -e "  Health check URL:  ${BLUE}${APP_URL}/health${NC}"
+    echo ""
+    echo -e "  Admin email:       ${YELLOW}${ADMIN_EMAIL}${NC}"
+    echo -e "  Admin username:    ${YELLOW}${ADMIN_NAME}${NC}"
+    echo -e "  Admin password:    ${YELLOW}${ADMIN_PASS}${NC}"
+    echo ""
+    echo -e "  DB name:           ${YELLOW}${DB_NAME}${NC}"
+    echo -e "  DB user:           ${YELLOW}${DB_USER}${NC}"
+    echo -e "  DB password:       ${YELLOW}${DB_PASS}${NC}"
+    echo ""
+    echo -e "  ${RED}IMPORTANT: Save the passwords above. They will not be shown again.${NC}"
+    echo ""
+    echo -e "  Next step — add SSL:"
+    echo -e "    ${BLUE}sudo certbot --nginx -d ${DOMAIN} -d www.${DOMAIN}${NC}"
+    echo ""
+else
+    echo -e "${RED}════════════════════════════════════════════════════════════${NC}"
+    echo -e "${RED}  ZedProxy installation did not complete cleanly.${NC}"
+    echo -e "${RED}════════════════════════════════════════════════════════════${NC}"
+    echo ""
+    echo -e "  Health check failed (HTTP ${HEALTH_RESPONSE})."
+    echo -e "  Admin credentials are NOT shown in a failed state."
+    echo ""
+    echo -e "  Investigate:"
+    echo -e "    ${BLUE}tail -50 ${APP_DIR}/storage/logs/laravel.log${NC}"
+    echo -e "    ${BLUE}curl http://localhost/health${NC}"
+    echo -e "    ${BLUE}sudo systemctl status nginx php${PHP_VERSION}-fpm postgresql redis-server${NC}"
+    echo ""
 fi
-echo ""
