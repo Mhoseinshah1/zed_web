@@ -391,17 +391,75 @@ apt-get install -y -qq \
     -o Dpkg::Options::="--force-confold" \
     nginx
 
-# ─── Application setup ───────────────────────────────────────────────────────
-if [ -d "$APP_DIR" ]; then
-    warn "Directory $APP_DIR already exists. Updating in place."
-else
-    mkdir -p "$APP_DIR"
-fi
+# ─── Project directory preparation ───────────────────────────────────────────
+REPO_URL="https://github.com/${GITHUB_OWNER}/${REPO_NAME}.git"
 
-if [ "$(pwd)" != "$APP_DIR" ] && [ -f "$(pwd)/artisan" ]; then
-    log "Copying application files to $APP_DIR..."
-    rsync -a --exclude='.git' --exclude='node_modules' --exclude='vendor' . "$APP_DIR/"
-fi
+prepare_project_directory() {
+    if [ ! -d "$APP_DIR" ]; then
+        log "Cloning ${REPO_URL} (branch: ${BRANCH}) into ${APP_DIR}..."
+        git clone -b "$BRANCH" "$REPO_URL" "$APP_DIR"
+        ok "Repository cloned to ${APP_DIR}"
+
+    elif [ -d "${APP_DIR}/.git" ]; then
+        log "${APP_DIR} already contains a git repository — updating to origin/${BRANCH}..."
+        git -C "$APP_DIR" fetch origin "$BRANCH"
+        git -C "$APP_DIR" reset --hard "origin/${BRANCH}"
+        ok "Repository updated to origin/${BRANCH}"
+
+    else
+        # Directory exists but is not a git repo
+        if [ -z "$(ls -A "$APP_DIR" 2>/dev/null)" ]; then
+            # Empty directory — just clone into it
+            log "${APP_DIR} is empty — cloning repository..."
+            rmdir "$APP_DIR"
+            git clone -b "$BRANCH" "$REPO_URL" "$APP_DIR"
+            ok "Repository cloned to ${APP_DIR}"
+        else
+            # Non-empty, non-git directory — back it up then clone fresh
+            local backup_dir="/var/www/zedproxy_backup_$(date +%Y%m%d_%H%M%S)"
+            warn "${APP_DIR} exists but is not a git repository."
+            warn "Backing it up to ${backup_dir} and cloning fresh..."
+            mv "$APP_DIR" "$backup_dir"
+            git clone -b "$BRANCH" "$REPO_URL" "$APP_DIR"
+            ok "Backup saved to ${backup_dir}"
+            ok "Repository cloned to ${APP_DIR}"
+        fi
+    fi
+}
+
+# ─── Verify the Laravel project structure is present ─────────────────────────
+verify_laravel_project() {
+    local missing=()
+    local required_paths=(
+        "composer.json"
+        "artisan"
+        "package.json"
+        "app"
+        "bootstrap"
+        "config"
+        "routes"
+    )
+
+    for path in "${required_paths[@]}"; do
+        [ -e "${APP_DIR}/${path}" ] || missing+=("$path")
+    done
+
+    if [ ${#missing[@]} -gt 0 ]; then
+        echo -e "${RED}[ERROR]${NC} Laravel project was not found in ${APP_DIR}." >&2
+        echo -e "${RED}[ERROR]${NC} The following required paths are missing:" >&2
+        for m in "${missing[@]}"; do
+            echo -e "         - ${m}" >&2
+        done
+        echo "" >&2
+        echo "Check that ${REPO_URL} (branch: ${BRANCH}) contains a complete Laravel project." >&2
+        exit 1
+    fi
+
+    ok "Laravel project structure verified in ${APP_DIR}"
+}
+
+prepare_project_directory
+verify_laravel_project
 
 cd "$APP_DIR"
 
