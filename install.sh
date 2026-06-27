@@ -971,6 +971,17 @@ supervisorctl reread
 supervisorctl update
 ok "Queue workers configured"
 
+# ─── Update shortcut ─────────────────────────────────────────────────────────
+log "Installing zedproxy-update shortcut..."
+cat > /usr/local/bin/zedproxy-update <<'UPDATESCRIPT'
+#!/usr/bin/env bash
+curl -fsSL https://raw.githubusercontent.com/mhoseinshah1/zed_web/main/update.sh -o /tmp/zedproxy-update.sh \
+    && chmod +x /tmp/zedproxy-update.sh \
+    && sudo bash /tmp/zedproxy-update.sh
+UPDATESCRIPT
+chmod +x /usr/local/bin/zedproxy-update
+ok "Shortcut installed: run 'zedproxy-update' to update"
+
 # ─── Cron for backup ─────────────────────────────────────────────────────────
 log "Scheduling daily backup cron..."
 CRON_JOB="0 3 * * * www-data bash ${APP_DIR}/scripts/backup.sh >> /var/log/zedproxy-backup.log 2>&1"
@@ -1054,6 +1065,10 @@ if [ "$HEALTH_OK" = "true" ]; then
     echo -e "  Install log:       ${BLUE}${LOG_FILE}${NC}"
     echo -e "  ${RED}IMPORTANT: Save the passwords above. They will not be shown again.${NC}"
     echo -e "  ${YELLOW}NOTE: The install log (${LOG_FILE}) also contains these credentials.${NC}"
+    echo ""
+    echo -e "  To update ZedProxy in the future:"
+    echo -e "    ${GREEN}zedproxy-update${NC}  (shortcut installed at /usr/local/bin/zedproxy-update)"
+    echo -e "    or: ${BLUE}curl -fsSL https://raw.githubusercontent.com/mhoseinshah1/zed_web/main/update.sh -o /tmp/zedproxy-update.sh && chmod +x /tmp/zedproxy-update.sh && sudo bash /tmp/zedproxy-update.sh${NC}"
     echo ""
     if [ "$INSTALL_SSL" = "true" ] && [ "$SSL_ACTIVE" = "false" ]; then
         echo -e "  ${YELLOW}To install SSL manually after the issue is resolved:${NC}"

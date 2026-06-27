@@ -460,14 +460,19 @@ curl -I https://yourdomain.com/health
 
 ### After code update
 
+Use the dedicated update script — it handles backups, maintenance mode, migrations, and service restarts safely:
+
 ```bash
-git pull origin main
-composer install --no-dev --optimize-autoloader
-npm ci && npm run build
-php artisan migrate --force
-php artisan optimize
-sudo supervisorctl restart zedproxy-worker:*
+zedproxy-update
 ```
+
+Or download and run the latest version directly:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/mhoseinshah1/zed_web/main/update.sh -o /tmp/zedproxy-update.sh && chmod +x /tmp/zedproxy-update.sh && sudo bash /tmp/zedproxy-update.sh
+```
+
+The update script is logged to `/var/log/zedproxy-update.log`.
 
 ### Files to preserve when moving to another server
 
@@ -498,12 +503,88 @@ Current sections:
 
 - **Users** - list, create, edit users (username, email, admin access)
 - **System Status** - live checks for DB, Redis, storage, cache, queue
+- **Site Texts** - edit homepage and UI texts stored in the database (survive updates)
 
 Upcoming sections (in future development phases):
 
 - Orders, Plans, Services, Payments, Tickets, Settings
 - Marzban Settings, Telegram Settings, Email Settings
 - Logs, Backups, System Monitoring
+
+## Updating ZedProxy
+
+The `update.sh` script performs a safe, zero-data-loss update of a running ZedProxy installation.
+
+### One-command update
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/mhoseinshah1/zed_web/main/update.sh -o /tmp/zedproxy-update.sh && chmod +x /tmp/zedproxy-update.sh && sudo bash /tmp/zedproxy-update.sh
+```
+
+Or use the shortcut installed automatically by the installer:
+
+```bash
+zedproxy-update
+```
+
+### What the update script does
+
+1. **Verifies** the project exists at `/var/www/zedproxy` before touching anything
+2. **Creates a backup** in `/var/backups/zedproxy/updates/YYYYMMDD_HHMMSS/`:
+   - Current commit hash
+   - `.env` copy (permissions 600)
+   - PostgreSQL full dump (`pg_dump -Fc`) — update is aborted if this fails
+3. **Enables maintenance mode** (`php artisan down --render="errors::503"`)
+4. **Pulls latest code** (`git fetch + reset --hard origin/main + clean -fd`)
+5. `composer install --no-interaction --prefer-dist --optimize-autoloader`
+6. `npm ci` (falls back to `npm install`), then `npm run build`
+7. `php artisan migrate --force`
+8. `php artisan db:seed --class=SiteTextSeeder` — inserts **only missing** site text defaults (never overwrites admin-edited values)
+9. `php artisan storage:link`
+10. `php artisan optimize:clear` + `config:cache` + `route:cache` + `view:cache`
+11. **Disables maintenance mode** (`php artisan up`) — also runs on error
+12. Restarts PHP-FPM, Supervisor workers, reloads Nginx
+13. **Health check** (HTTP + HTTPS if SSL is active)
+14. Prunes update backups older than 30 most recent
+
+### What is preserved through updates
+
+| What | How |
+|------|-----|
+| `.env` (secrets, DB credentials, APP_URL) | `git reset --hard` never touches `.env` — it is in `.gitignore` |
+| `storage/` (uploads, backups, logs) | Never deleted or reset by git |
+| `public/storage` symlink | Re-created with `storage:link` (idempotent) |
+| PostgreSQL database | Only migrated forward — never dropped or reset |
+| Admin-edited site texts | `SiteTextSeeder` uses `firstOrCreate` — never updates existing values |
+| SSL/Nginx config | Not touched by `update.sh` |
+
+### Rollback
+
+If an update goes wrong, the final summary prints the rollback commands:
+
+```bash
+# Revert to previous code
+cd /var/www/zedproxy
+git reset --hard <previous-commit-hash>
+composer install --no-dev --optimize-autoloader
+npm ci && npm run build
+php artisan optimize:clear
+
+# Restore DB if migrations ran (replace placeholders with values from backup dir)
+PGPASSWORD=<db_password> pg_restore \
+    -h 127.0.0.1 -p 5432 \
+    -U <db_user> -d <db_name> \
+    --clean --if-exists \
+    /var/backups/zedproxy/updates/<TIMESTAMP>/<db_name>_<TIMESTAMP>.dump
+
+php artisan up
+```
+
+### Update log
+
+```bash
+sudo tail -n 120 /var/log/zedproxy-update.log
+```
 
 ## What's next
 
