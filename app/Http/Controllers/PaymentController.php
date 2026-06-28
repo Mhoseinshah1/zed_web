@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Models\Order;
 use App\Models\PaymentMethod;
 use App\Models\PaymentTransaction;
+use App\Models\SiteText;
 use App\Services\PaymentService;
 use Illuminate\Http\Request;
 
@@ -79,6 +80,13 @@ class PaymentController extends Controller
 
         // Wallet payment — immediate approval
         if ($method->type === PaymentMethod::TYPE_WALLET) {
+            $walletEnabled        = SiteText::get('wallet_enabled', '0') === '1';
+            $walletPaymentEnabled = SiteText::get('wallet_payment_enabled', '0') === '1';
+
+            if (! $walletEnabled || ! $walletPaymentEnabled) {
+                return back()->withErrors(['payment_method_id' => 'پرداخت از کیف پول در حال حاضر غیرفعال است.']);
+            }
+
             $user = auth()->user();
 
             if ($user->wallet_balance_toman < $order->final_price_toman) {

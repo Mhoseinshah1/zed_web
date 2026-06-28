@@ -83,6 +83,8 @@ Route::middleware('auth')->prefix('dashboard')->name('dashboard.')->group(functi
 
     Route::get('/profile', fn () => view('dashboard.profile', ['user' => auth()->user()]))->name('profile');
     Route::get('/wallet', [WalletController::class, 'index'])->name('wallet');
+    Route::get('/wallet/topup', [WalletController::class, 'topupForm'])->name('wallet.topup');
+    Route::post('/wallet/topup', [WalletController::class, 'processTopup'])->name('wallet.topup.submit');
 });
 
 // Legacy /panel redirects → /dashboard

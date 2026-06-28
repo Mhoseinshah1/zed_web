@@ -3,6 +3,7 @@
 namespace App\Filament\Resources;
 
 use App\Filament\Resources\UserResource\Pages;
+use App\Models\SiteText;
 use App\Models\User;
 use App\Models\WalletTransaction;
 use App\Services\WalletService;
@@ -99,7 +100,7 @@ class UserResource extends Resource
                             ->minValue(1),
                         Forms\Components\Textarea::make('description')
                             ->label('دلیل / توضیح')
-                            ->required()
+                            ->required(fn () => SiteText::get('wallet_admin_adjustment_requires_note', '1') === '1')
                             ->rows(2),
                     ])
                     ->action(function (User $record, array $data) {
@@ -139,7 +140,7 @@ class UserResource extends Resource
                             ->minValue(1),
                         Forms\Components\Textarea::make('description')
                             ->label('دلیل / توضیح')
-                            ->required()
+                            ->required(fn () => SiteText::get('wallet_admin_adjustment_requires_note', '1') === '1')
                             ->rows(2),
                     ])
                     ->action(function (User $record, array $data) {
