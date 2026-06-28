@@ -6,6 +6,7 @@ use App\Models\Order;
 use App\Models\PaymentMethod;
 use App\Models\PaymentTransaction;
 use App\Models\Plan;
+use App\Models\SiteText;
 use App\Models\User;
 use App\Models\WalletTransaction;
 use App\Services\PaymentService;
@@ -151,10 +152,17 @@ class PaymentTest extends TestCase
         $this->assertEquals(Order::STATUS_AWAITING_PAYMENT, $order->status);
     }
 
+    private function enableWalletPayment(): void
+    {
+        SiteText::firstOrCreate(['key' => 'wallet_enabled'], ['value' => '1', 'group' => 'wallet']);
+        SiteText::firstOrCreate(['key' => 'wallet_payment_enabled'], ['value' => '1', 'group' => 'wallet']);
+    }
+
     // ── Wallet payment ────────────────────────────────────────────────────────
 
     public function test_wallet_payment_succeeds_when_balance_sufficient(): void
     {
+        $this->enableWalletPayment();
         $user   = $this->makeUser(['wallet_balance_toman' => 100000]);
         $plan   = $this->makePlan(50000);
         $order  = $this->makeOrder($user, $plan);

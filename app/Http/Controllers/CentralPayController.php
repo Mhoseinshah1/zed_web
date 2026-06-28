@@ -5,20 +5,22 @@ namespace App\Http\Controllers;
 use App\Models\Order;
 use App\Models\PaymentMethod;
 use App\Models\PaymentTransaction;
+use App\Models\User;
 use App\Services\Orders\MarkOrderAsPaidService;
 use App\Services\Payments\CentralPay\CentralPayClient;
+use App\Services\WalletService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
 
 class CentralPayController extends Controller
 {
-    public function __construct(private readonly MarkOrderAsPaidService $markPaidService) {}
+    public function __construct(
+        private readonly MarkOrderAsPaidService $markPaidService,
+        private readonly WalletService $walletService,
+    ) {}
 
     /**
      * Initiate a CentralPay payment. Called from PaymentController::submit.
-     *
-     * Creates a PaymentTransaction, calls CentralPay getLink, and redirects
-     * the user to the hosted payment page.
      */
     public function initiate(Request $request, Order $order)
     {
@@ -32,7 +34,6 @@ class CentralPayController extends Controller
         $method = PaymentMethod::findOrFail($request->payment_method_id);
         abort_if(! $method->isCentralPay() || ! $method->is_active, 422);
 
-        // Resolve client — throws RuntimeException if api_key is not configured
         try {
             $client = new CentralPayClient($method);
         } catch (\RuntimeException $e) {
@@ -54,14 +55,13 @@ class CentralPayController extends Controller
 
         $amount = $client->toCentralPayTomanAmount($order);
 
-        // Create the transaction record FIRST so we have an ID for the returnUrl and CentralPay orderId.
-        // Using transaction->id as CentralPay orderId prevents duplicate_orderId on retries.
         $tx = PaymentTransaction::create([
             'order_id'          => $order->id,
             'user_id'           => auth()->id(),
             'payment_method_id' => $method->id,
             'provider'          => 'centralpay',
             'method'            => 'centralpay',
+            'payment_purpose'   => 'order_payment',
             'status'            => PaymentTransaction::STATUS_PENDING,
             'amount_toman'      => $order->final_price_toman,
             'gateway_amount'    => $amount,
@@ -86,7 +86,6 @@ class CentralPayController extends Controller
             return back()->withErrors(['payment' => 'اتصال به درگاه پرداخت ناموفق بود. لطفاً دوباره تلاش کنید.']);
         }
 
-        // Store sanitized request/response (never log api_key)
         $safePayload = $client->sanitizePayload([
             'type'      => $client->getType(),
             'amount'    => $amount,
@@ -146,10 +145,104 @@ class CentralPayController extends Controller
     }
 
     /**
+     * Initiate a CentralPay wallet top-up. Called from WalletController::processTopup.
+     */
+    public function initiateTopup(User $user, int $amountToman, PaymentMethod $method)
+    {
+        try {
+            $client = new CentralPayClient($method);
+        } catch (\RuntimeException $e) {
+            Log::warning('CentralPay initiateTopup: api_key not configured', ['method_id' => $method->id]);
+            return back()->withErrors(['payment' => 'درگاه پرداخت ریالی در حال حاضر پیکربندی نشده است. لطفاً با پشتیبانی تماس بگیرید.']);
+        }
+
+        $tx = PaymentTransaction::create([
+            'order_id'          => null,
+            'user_id'           => $user->id,
+            'payment_method_id' => $method->id,
+            'provider'          => 'centralpay',
+            'method'            => 'centralpay',
+            'payment_purpose'   => 'wallet_topup',
+            'status'            => PaymentTransaction::STATUS_PENDING,
+            'amount_toman'      => $amountToman,
+            'gateway_amount'    => $amountToman,
+            'gateway_currency'  => 'TOMAN',
+            'gateway_status'    => 'created',
+        ]);
+
+        try {
+            $response = $client->createPaymentLinkForTopup($user, $amountToman, $tx);
+        } catch (\RuntimeException $e) {
+            $tx->update([
+                'gateway_status' => 'failed',
+                'failure_reason' => $e->getMessage(),
+                'status'         => PaymentTransaction::STATUS_FAILED,
+                'failed_at'      => now(),
+            ]);
+            Log::error('CentralPay topup getLink HTTP error', [
+                'user_id' => $user->id,
+                'tx_id'   => $tx->id,
+                'error'   => $e->getMessage(),
+            ]);
+            return back()->withErrors(['payment' => 'اتصال به درگاه پرداخت ناموفق بود. لطفاً دوباره تلاش کنید.']);
+        }
+
+        $safePayload = $client->sanitizePayload([
+            'type'      => $client->getType(),
+            'amount'    => $amountToman,
+            'userId'    => $user->id,
+            'orderId'   => $tx->id,
+            'returnUrl' => $client->buildReturnUrl($tx->id),
+        ]);
+        $tx->update([
+            'request_payload'  => $safePayload,
+            'response_payload' => $response,
+        ]);
+
+        if (! ($response['success'] ?? false)) {
+            $reason = $client->normalizeError($response);
+            $tx->update([
+                'gateway_status' => 'failed',
+                'failure_reason' => $reason,
+                'status'         => PaymentTransaction::STATUS_FAILED,
+                'failed_at'      => now(),
+            ]);
+            Log::warning('CentralPay topup getLink failed', [
+                'user_id' => $user->id,
+                'tx_id'   => $tx->id,
+                'reason'  => $reason,
+            ]);
+            return back()->withErrors(['payment' => 'اتصال به درگاه پرداخت ناموفق بود. لطفاً دوباره تلاش کنید.']);
+        }
+
+        $redirectUrl = $response['data']['redirectUrl'] ?? null;
+
+        if (! $redirectUrl) {
+            $tx->update([
+                'gateway_status' => 'failed',
+                'failure_reason' => 'no_redirect_url',
+                'status'         => PaymentTransaction::STATUS_FAILED,
+                'failed_at'      => now(),
+            ]);
+            Log::warning('CentralPay topup: no redirectUrl in response', [
+                'user_id' => $user->id,
+                'tx_id'   => $tx->id,
+            ]);
+            return back()->withErrors(['payment' => 'اتصال به درگاه پرداخت ناموفق بود. لطفاً دوباره تلاش کنید.']);
+        }
+
+        $tx->update([
+            'gateway_url'    => $redirectUrl,
+            'gateway_status' => 'created',
+            'status'         => PaymentTransaction::STATUS_WAITING,
+        ]);
+
+        return redirect()->away($redirectUrl);
+    }
+
+    /**
      * Callback from CentralPay after user completes or cancels payment.
-     *
-     * CentralPay redirects via GET with ?orderId={transaction_id}.
-     * We verify server-to-server before trusting any payment outcome.
+     * Branches by payment_purpose: order_payment or wallet_topup.
      */
     public function callback(Request $request)
     {
@@ -160,7 +253,6 @@ class CentralPayController extends Controller
                 ->with('error', 'اطلاعات بازگشت از درگاه ناقص است. وضعیت سفارش خود را بررسی کنید.');
         }
 
-        // orderId sent to CentralPay = payment_transactions.id
         $tx = PaymentTransaction::where('id', (int) $txId)
             ->where('provider', 'centralpay')
             ->first();
@@ -171,7 +263,23 @@ class CentralPayController extends Controller
                 ->with('error', 'تراکنش پرداخت یافت نشد.');
         }
 
+        // Branch by payment_purpose
+        if ($tx->payment_purpose === 'wallet_topup') {
+            return $this->handleTopupCallback($tx);
+        }
+
+        return $this->handleOrderCallback($tx);
+    }
+
+    private function handleOrderCallback(PaymentTransaction $tx)
+    {
         $order = $tx->order;
+
+        if (! $order) {
+            Log::error('CentralPay callback: order not found for order_payment tx', ['tx_id' => $tx->id]);
+            return redirect()->route('dashboard.orders')
+                ->with('error', 'سفارش مربوطه یافت نشد.');
+        }
 
         // Idempotency: already paid
         if ($order->payment_status === Order::PAYMENT_PAID) {
@@ -179,7 +287,6 @@ class CentralPayController extends Controller
                 ->with('success', 'پرداخت قبلاً تایید شده است.');
         }
 
-        // Resolve CentralPay method for client config (api_key, base_url, etc.)
         $method = $tx->paymentMethod
             ?? PaymentMethod::where('type', PaymentMethod::TYPE_CENTRALPAY)->first();
 
@@ -189,7 +296,6 @@ class CentralPayController extends Controller
                 ->with('error', 'درگاه پرداخت ریالی تنظیم نشده است. با پشتیبانی تماس بگیرید.');
         }
 
-        // Verify server-to-server — never trust GET callback alone
         try {
             $client = new CentralPayClient($method);
         } catch (\RuntimeException $e) {
@@ -222,10 +328,7 @@ class CentralPayController extends Controller
                 'status'         => PaymentTransaction::STATUS_FAILED,
                 'failed_at'      => now(),
             ]);
-            Log::warning('CentralPay verify failed', [
-                'tx_id'  => $tx->id,
-                'reason' => $reason,
-            ]);
+            Log::warning('CentralPay verify failed', ['tx_id' => $tx->id, 'reason' => $reason]);
             return redirect()->route('dashboard.orders.show', $order)
                 ->with('error', 'پرداخت تایید نشد. اگر مبلغ از حساب شما کسر شده، با پشتیبانی تماس بگیرید.');
         }
@@ -236,7 +339,6 @@ class CentralPayController extends Controller
         $referenceId    = $data['referenceId'] ?? null;
         $cardNumber     = (string) ($data['userCardNumber'] ?? '');
 
-        // Amount mismatch — do not mark order paid
         if ($verifiedAmount !== (int) $tx->gateway_amount) {
             $tx->update([
                 'gateway_status' => 'amount_mismatch',
@@ -253,7 +355,6 @@ class CentralPayController extends Controller
                 ->with('error', 'مبلغ تاییدشده با مبلغ سفارش مطابقت ندارد. لطفاً با پشتیبانی تماس بگیرید.');
         }
 
-        // userId mismatch — do not mark order paid
         if ($verifiedUserId && $verifiedUserId !== (int) $order->user_id) {
             $tx->update([
                 'gateway_status' => 'user_mismatch',
@@ -270,7 +371,6 @@ class CentralPayController extends Controller
                 ->with('error', 'مبلغ تاییدشده با مبلغ سفارش مطابقت ندارد. لطفاً با پشتیبانی تماس بگیرید.');
         }
 
-        // Success — store masked card, mark paid, provision
         $maskedCard = self::maskCardNumber($cardNumber);
 
         $tx->update([
@@ -295,9 +395,136 @@ class CentralPayController extends Controller
             ->with('success', 'پرداخت شما با موفقیت تایید شد و سرویس در حال فعال‌سازی است.');
     }
 
+    private function handleTopupCallback(PaymentTransaction $tx)
+    {
+        $user = $tx->user;
+
+        if (! $user) {
+            Log::error('CentralPay topup callback: user not found', ['tx_id' => $tx->id]);
+            return redirect()->route('dashboard.wallet')
+                ->with('error', 'خطا در پردازش شارژ کیف پول. با پشتیبانی تماس بگیرید.');
+        }
+
+        // Idempotency: wallet already credited for this tx
+        if ($tx->status === PaymentTransaction::STATUS_APPROVED) {
+            return redirect()->route('dashboard.wallet')
+                ->with('success', 'شارژ کیف پول قبلاً تایید شده است.');
+        }
+
+        $method = $tx->paymentMethod
+            ?? PaymentMethod::where('type', PaymentMethod::TYPE_CENTRALPAY)->first();
+
+        if (! $method) {
+            Log::error('CentralPay topup callback: no payment method found', ['tx_id' => $tx->id]);
+            return redirect()->route('dashboard.wallet')
+                ->with('error', 'درگاه پرداخت ریالی تنظیم نشده است. با پشتیبانی تماس بگیرید.');
+        }
+
+        try {
+            $client = new CentralPayClient($method);
+        } catch (\RuntimeException $e) {
+            Log::error('CentralPay topup callback: api_key not configured', ['tx_id' => $tx->id]);
+            return redirect()->route('dashboard.wallet')
+                ->with('error', 'درگاه پرداخت ریالی در حال حاضر پیکربندی نشده است. با پشتیبانی تماس بگیرید.');
+        }
+
+        try {
+            $verify = $client->verifyPayment($tx->id);
+        } catch (\RuntimeException $e) {
+            Log::error('CentralPay topup verify HTTP error', [
+                'tx_id' => $tx->id,
+                'error' => $e->getMessage(),
+            ]);
+            return redirect()->route('dashboard.wallet')
+                ->with('error', 'پرداخت تایید نشد. اگر مبلغ از حساب شما کسر شده، با پشتیبانی تماس بگیرید.');
+        }
+
+        $tx->update([
+            'callback_payload'     => $verify,
+            'callback_received_at' => now(),
+        ]);
+
+        if (! ($verify['success'] ?? false)) {
+            $reason = $client->normalizeError($verify);
+            $tx->update([
+                'gateway_status' => 'failed',
+                'failure_reason' => $reason,
+                'status'         => PaymentTransaction::STATUS_FAILED,
+                'failed_at'      => now(),
+            ]);
+            Log::warning('CentralPay topup verify failed', ['tx_id' => $tx->id, 'reason' => $reason]);
+            return redirect()->route('dashboard.wallet')
+                ->with('error', 'پرداخت تایید نشد. اگر مبلغ از حساب شما کسر شده، با پشتیبانی تماس بگیرید.');
+        }
+
+        $data           = $verify['data'] ?? [];
+        $verifiedAmount = (int) ($data['amount'] ?? 0);
+        $verifiedUserId = (int) ($data['userId'] ?? 0);
+        $referenceId    = $data['referenceId'] ?? null;
+        $cardNumber     = (string) ($data['userCardNumber'] ?? '');
+
+        if ($verifiedAmount !== (int) $tx->gateway_amount) {
+            $tx->update([
+                'gateway_status' => 'amount_mismatch',
+                'failure_reason' => "amount_mismatch: expected {$tx->gateway_amount}, got {$verifiedAmount}",
+                'status'         => PaymentTransaction::STATUS_FAILED,
+                'failed_at'      => now(),
+            ]);
+            Log::warning('CentralPay topup amount mismatch', [
+                'tx_id'    => $tx->id,
+                'expected' => $tx->gateway_amount,
+                'got'      => $verifiedAmount,
+            ]);
+            return redirect()->route('dashboard.wallet')
+                ->with('error', 'مبلغ تاییدشده با مبلغ پرداختی مطابقت ندارد. لطفاً با پشتیبانی تماس بگیرید.');
+        }
+
+        if ($verifiedUserId && $verifiedUserId !== (int) $user->id) {
+            $tx->update([
+                'gateway_status' => 'user_mismatch',
+                'failure_reason' => "user_mismatch: expected {$user->id}, got {$verifiedUserId}",
+                'status'         => PaymentTransaction::STATUS_FAILED,
+                'failed_at'      => now(),
+            ]);
+            Log::warning('CentralPay topup userId mismatch', [
+                'tx_id'    => $tx->id,
+                'expected' => $user->id,
+                'got'      => $verifiedUserId,
+            ]);
+            return redirect()->route('dashboard.wallet')
+                ->with('error', 'مبلغ تاییدشده با اطلاعات حساب مطابقت ندارد. لطفاً با پشتیبانی تماس بگیرید.');
+        }
+
+        $maskedCard = self::maskCardNumber($cardNumber);
+
+        $tx->update([
+            'gateway_status'     => 'verified',
+            'provider_reference' => (string) $referenceId,
+            'verified_at'        => now(),
+            'status'             => PaymentTransaction::STATUS_APPROVED,
+            'paid_at'            => now(),
+            'response_payload'   => array_merge($tx->response_payload ?? [], [
+                'referenceId'        => $referenceId,
+                'masked_card_number' => $maskedCard,
+            ]),
+        ]);
+
+        // Credit wallet — idempotent inside WalletService
+        $this->walletService->creditFromPaymentTransaction($user, $tx);
+
+        Log::info('CentralPay wallet topup verified and credited', [
+            'user_id'      => $user->id,
+            'tx_id'        => $tx->id,
+            'amount_toman' => $tx->amount_toman,
+            'reference_id' => $referenceId,
+        ]);
+
+        return redirect()->route('dashboard.wallet')
+            ->with('success', 'کیف پول شما با موفقیت شارژ شد.');
+    }
+
     /**
      * Admin action: re-verify a CentralPay transaction.
-     * Called from PaymentTransactionResource Filament action.
      *
      * @throws \RuntimeException  on any failure (shown as admin notification)
      */
@@ -305,8 +532,13 @@ class CentralPayController extends Controller
     {
         $order = $tx->order;
 
-        if ($order->payment_status === Order::PAYMENT_PAID) {
-            throw new \RuntimeException('سفارش قبلاً پرداخت شده است.');
+        if ($tx->payment_purpose !== 'wallet_topup') {
+            if (! $order) {
+                throw new \RuntimeException('سفارش مربوطه یافت نشد.');
+            }
+            if ($order->payment_status === Order::PAYMENT_PAID) {
+                throw new \RuntimeException('سفارش قبلاً پرداخت شده است.');
+            }
         }
 
         $method = $tx->paymentMethod
@@ -357,6 +589,41 @@ class CentralPayController extends Controller
             throw new \RuntimeException('مبلغ تاییدشده با مبلغ سفارش مطابقت ندارد.');
         }
 
+        $maskedCard = self::maskCardNumber($cardNumber);
+
+        if ($tx->payment_purpose === 'wallet_topup') {
+            $txUser = $tx->user;
+            if (! $txUser) {
+                throw new \RuntimeException('کاربر مربوطه یافت نشد.');
+            }
+
+            if ($verifiedUserId && $verifiedUserId !== (int) $txUser->id) {
+                $tx->update([
+                    'gateway_status' => 'user_mismatch',
+                    'failure_reason' => "user_mismatch: expected {$txUser->id}, got {$verifiedUserId}",
+                    'status'         => PaymentTransaction::STATUS_FAILED,
+                    'failed_at'      => now(),
+                ]);
+                throw new \RuntimeException('شناسه کاربر با اطلاعات سفارش مطابقت ندارد.');
+            }
+
+            $tx->update([
+                'gateway_status'     => 'verified',
+                'provider_reference' => (string) $referenceId,
+                'verified_at'        => now(),
+                'status'             => PaymentTransaction::STATUS_APPROVED,
+                'paid_at'            => now(),
+                'response_payload'   => array_merge($tx->response_payload ?? [], [
+                    'referenceId'        => $referenceId,
+                    'masked_card_number' => $maskedCard,
+                ]),
+            ]);
+
+            app(WalletService::class)->creditFromPaymentTransaction($txUser, $tx);
+            return;
+        }
+
+        // order_payment path
         if ($verifiedUserId && $verifiedUserId !== (int) $order->user_id) {
             $tx->update([
                 'gateway_status' => 'user_mismatch',
@@ -366,8 +633,6 @@ class CentralPayController extends Controller
             ]);
             throw new \RuntimeException('شناسه کاربر با اطلاعات سفارش مطابقت ندارد.');
         }
-
-        $maskedCard = self::maskCardNumber($cardNumber);
 
         $tx->update([
             'gateway_status'     => 'verified',
@@ -383,8 +648,7 @@ class CentralPayController extends Controller
     }
 
     /**
-     * Mask a card number: keep first 6 and last 4 digits, replace middle with ******.
-     * Example: 1111222233334444 → 111122******4444
+     * Mask a card number: keep first 6 and last 4 digits.
      */
     public static function maskCardNumber(string $cardNumber): string
     {

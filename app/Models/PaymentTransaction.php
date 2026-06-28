@@ -62,6 +62,8 @@ class PaymentTransaction extends Model
         'verified_at',
         'failed_at',
         'failure_reason',
+        // Purpose: 'order_payment' (default) or 'wallet_topup'
+        'payment_purpose',
     ];
 
     protected $casts = [

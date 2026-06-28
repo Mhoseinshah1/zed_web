@@ -3,6 +3,19 @@
 @section('title', 'کیف پول')
 
 @section('content')
+
+@if(session('success'))
+<div class="mb-5 p-4 rounded-xl bg-green-900/40 border border-green-700 text-green-300 text-sm">
+    {{ session('success') }}
+</div>
+@endif
+
+@if(session('error'))
+<div class="mb-5 p-4 rounded-xl bg-red-900/40 border border-red-700 text-red-300 text-sm">
+    {{ session('error') }}
+</div>
+@endif
+
 {{-- Balance card --}}
 <div class="grid grid-cols-1 md:grid-cols-3 gap-5 mb-8">
     <div class="md:col-span-1 bg-indigo-600 rounded-xl p-6 flex flex-col justify-between">
@@ -16,15 +29,24 @@
         </a>
     </div>
     <div class="md:col-span-2 bg-gray-900 border border-gray-800 rounded-xl p-6 flex items-center">
-        <div>
+        <div class="w-full">
             <h3 class="text-white font-semibold mb-2">شارژ کیف پول</h3>
-            <p class="text-gray-400 text-sm leading-6">
-                شارژ کیف پول در مرحله بعدی به پرداخت آنلاین متصل می‌شود.<br>
-                فعلاً شارژ کیف پول توسط مدیریت قابل انجام است.
-            </p>
-            <a href="{{ route('contact') }}" class="inline-block mt-4 text-indigo-400 hover:text-indigo-300 text-sm transition">
-                تماس با پشتیبانی برای شارژ ←
-            </a>
+            @if($topupEnabled)
+                <p class="text-gray-400 text-sm leading-6 mb-4">
+                    برای شارژ کیف پول خود از طریق درگاه‌های آنلاین اقدام کنید.
+                </p>
+                <a href="{{ route('dashboard.wallet.topup') }}" class="inline-block bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium px-5 py-2.5 rounded-lg transition">
+                    شارژ کیف پول
+                </a>
+            @else
+                <p class="text-gray-400 text-sm leading-6">
+                    شارژ کیف پول در حال حاضر از طریق درگاه آنلاین در دسترس نیست.<br>
+                    برای شارژ با پشتیبانی تماس بگیرید.
+                </p>
+                <a href="{{ route('contact') }}" class="inline-block mt-4 text-indigo-400 hover:text-indigo-300 text-sm transition">
+                    تماس با پشتیبانی ←
+                </a>
+            @endif
         </div>
     </div>
 </div>

@@ -5,6 +5,7 @@ namespace App\Services\Payments\CentralPay;
 use App\Models\Order;
 use App\Models\PaymentMethod;
 use App\Models\PaymentTransaction;
+use App\Models\User;
 use Illuminate\Support\Facades\Http;
 
 class CentralPayClient
@@ -53,6 +54,33 @@ class CentralPayClient
             'type'      => $this->type,
             'amount'    => $amount,
             'userId'    => $order->user_id,
+            'orderId'   => $transaction->id,
+            'returnUrl' => $returnUrl,
+        ];
+
+        $response = Http::timeout(20)
+            ->acceptJson()
+            ->post($this->baseUrl . '/getLink.php', $payload);
+
+        if (! $response->successful()) {
+            throw new \RuntimeException('CentralPay HTTP error: ' . $response->status());
+        }
+
+        return $response->json() ?? [];
+    }
+
+    /**
+     * Create a payment link for a wallet top-up (no order involved).
+     */
+    public function createPaymentLinkForTopup(User $user, int $amountToman, PaymentTransaction $transaction): array
+    {
+        $returnUrl = $this->buildReturnUrl($transaction->id);
+
+        $payload = [
+            'api_key'   => $this->apiKey,
+            'type'      => $this->type,
+            'amount'    => $amountToman,
+            'userId'    => $user->id,
             'orderId'   => $transaction->id,
             'returnUrl' => $returnUrl,
         ];

@@ -10,6 +10,7 @@ class WalletTransaction extends Model
     const TYPE_MANUAL_CREDIT = 'manual_credit';
     const TYPE_MANUAL_DEBIT  = 'manual_debit';
     const TYPE_ORDER_PAYMENT = 'order_payment';
+    const TYPE_TOPUP         = 'topup';
     const TYPE_REFUND        = 'refund';
     const TYPE_ADJUSTMENT    = 'adjustment';
 
@@ -23,6 +24,7 @@ class WalletTransaction extends Model
     protected $fillable = [
         'user_id',
         'order_id',
+        'payment_transaction_id',
         'type',
         'direction',
         'amount_toman',
@@ -51,6 +53,11 @@ class WalletTransaction extends Model
         return $this->belongsTo(Order::class);
     }
 
+    public function paymentTransaction(): BelongsTo
+    {
+        return $this->belongsTo(PaymentTransaction::class);
+    }
+
     public function admin(): BelongsTo
     {
         return $this->belongsTo(User::class, 'admin_id');
@@ -62,6 +69,7 @@ class WalletTransaction extends Model
             self::TYPE_MANUAL_CREDIT => 'شارژ دستی',
             self::TYPE_MANUAL_DEBIT  => 'برداشت دستی',
             self::TYPE_ORDER_PAYMENT => 'پرداخت سفارش',
+            self::TYPE_TOPUP         => 'شارژ کیف پول',
             self::TYPE_REFUND        => 'برگشت وجه',
             self::TYPE_ADJUSTMENT    => 'تعدیل',
             default                  => $this->type,
@@ -74,6 +82,7 @@ class WalletTransaction extends Model
             self::TYPE_MANUAL_CREDIT => 'شارژ دستی',
             self::TYPE_MANUAL_DEBIT  => 'برداشت دستی',
             self::TYPE_ORDER_PAYMENT => 'پرداخت سفارش',
+            self::TYPE_TOPUP         => 'شارژ کیف پول',
             self::TYPE_REFUND        => 'برگشت وجه',
             self::TYPE_ADJUSTMENT    => 'تعدیل',
         ];

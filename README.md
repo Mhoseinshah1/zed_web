@@ -823,6 +823,8 @@ sudo tail -n 120 /var/log/zedproxy-update.log
 | `GET /dashboard/orders/{order}/pay` | `dashboard.orders.pay` | Choose payment method and submit payment |
 | `POST /dashboard/orders/{order}/pay` | `dashboard.orders.pay.submit` | Submit payment (wallet debit or manual submission) |
 | `GET /dashboard/wallet` | `dashboard.wallet` | Wallet balance and transaction ledger |
+| `GET /dashboard/wallet/topup` | `dashboard.wallet.topup` | Wallet top-up form (preset amounts + payment method) |
+| `POST /dashboard/wallet/topup` | `dashboard.wallet.topup.submit` | Submit top-up → redirect to NOWPayments/CentralPay |
 | `GET /dashboard/services` | `dashboard.services` | User services list — status, traffic, expiry |
 | `GET /dashboard/services/{service}` | `dashboard.services.show` | Service detail — config link, traffic bar, expiry, related order |
 | `GET /dashboard/profile` | `dashboard.profile` | User profile (read-only) |
@@ -864,7 +866,34 @@ Orders store a **snapshot** of plan data at purchase time — plan name, slug, t
 
 Every change to a user's wallet balance creates a `WalletTransaction` record (append-only). Wallet balance is only modified via `WalletService::credit()` / `debit()`, which use `lockForUpdate()` to prevent race conditions.
 
-**Transaction types:** `manual_credit`, `manual_debit`, `order_payment`, `refund`, `adjustment`
+**Transaction types:** `manual_credit`, `manual_debit`, `order_payment`, `topup`, `refund`, `adjustment`
+
+### Wallet settings (admin-controlled, no .env edit required)
+
+All wallet behaviour is toggled from `/zed-admin/site-texts` (group: `wallet`):
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `wallet_enabled` | `0` | Master switch — hides wallet UI when off |
+| `wallet_payment_enabled` | `0` | Allow users to pay orders from wallet balance |
+| `wallet_topup_enabled` | `0` | Show the top-up form at `/dashboard/wallet/topup` |
+| `wallet_topup_nowpayments_enabled` | `0` | Enable NOWPayments top-up method |
+| `wallet_topup_centralpay_enabled` | `0` | Enable CentralPay top-up method (off by default while IP whitelist is pending) |
+| `wallet_min_topup_amount` | `10000` | Minimum top-up amount in Toman |
+| `wallet_max_topup_amount` | `10000000` | Maximum top-up amount in Toman |
+| `wallet_currency` | `IRT` | Wallet currency code |
+| `wallet_topup_preset_amounts` | `50000,100000,200000,500000` | Comma-separated preset amounts shown on top-up form |
+| `wallet_admin_adjustment_requires_note` | `1` | Require a reason when admin manually credits/debits |
+
+### Wallet top-up via NOWPayments
+
+1. Admin enables `wallet_topup_enabled` and `wallet_topup_nowpayments_enabled`
+2. User visits `/dashboard/wallet` → clicks "شارژ کیف پول"
+3. User selects amount (preset or custom) and payment method → submitted to `/dashboard/wallet/topup`
+4. Server creates a `PaymentTransaction` with `payment_purpose=wallet_topup` (no `order_id`) and sends user to the NOWPayments invoice page
+5. NOWPayments sends an IPN to `/webhooks/nowpayments` with `payment_status=finished`
+6. Server credits the wallet via `WalletService::creditFromPaymentTransaction()` — idempotent, duplicate IPNs cannot double-credit
+7. No `UserService` is created for wallet top-ups
 
 ### Payment methods (seeded defaults)
 
