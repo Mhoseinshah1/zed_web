@@ -210,7 +210,7 @@ class UserServiceResource extends Resource
                     ->label('تاریخ انقضا')
                     ->dateTime('Y/m/d')
                     ->sortable()
-                    ->default('—'),
+                    ->placeholder('—'),
 
                 Tables\Columns\TextColumn::make('created_at')
                     ->label('تاریخ ایجاد')

@@ -133,7 +133,7 @@ class VpnPanelResource extends Resource
                     ->label('آخرین تست')
                     ->dateTime()
                     ->sortable()
-                    ->default('—'),
+                    ->placeholder('—'),
 
                 Tables\Columns\TextColumn::make('last_error')
                     ->label('آخرین خطا')
