@@ -184,7 +184,7 @@ class ServiceTest extends TestCase
         $this->actingAs($user)
             ->get(route('dashboard.services.show', $service))
             ->assertOk()
-            ->assertSee('لینک کانفیگ هنوز ثبت نشده است');
+            ->assertSee('لینک اشتراک هنوز آماده نشده است');
     }
 
     // ── Admin manual activation ───────────────────────────────────────────────

@@ -6,8 +6,10 @@ use App\Filament\Resources\UserServiceResource\Pages;
 use App\Jobs\ProvisionMarzbanServiceJob;
 use App\Models\UserService;
 use App\Models\VpnPanel;
+use App\Models\VpnServiceProvisionLog;
 use App\Services\Marzban\MarzbanClient;
 use App\Services\ServiceProvisioner;
+use Carbon\Carbon;
 use Filament\Forms;
 use Filament\Forms\Form;
 use Filament\Notifications\Notification;
@@ -206,6 +208,27 @@ class UserServiceResource extends Resource
                     ->label('مصرف (GB)')
                     ->default(0),
 
+                Tables\Columns\TextColumn::make('remote_username')
+                    ->label('نام کاربری Marzban')
+                    ->fontFamily('mono')
+                    ->placeholder('—')
+                    ->copyable()
+                    ->toggleable(isToggledHiddenByDefault: true),
+
+                Tables\Columns\TextColumn::make('subscription_link')
+                    ->label('لینک اشتراک')
+                    ->placeholder('—')
+                    ->limit(40)
+                    ->copyable()
+                    ->toggleable(isToggledHiddenByDefault: true),
+
+                Tables\Columns\TextColumn::make('config_link')
+                    ->label('لینک کانفیگ')
+                    ->placeholder('—')
+                    ->limit(40)
+                    ->copyable()
+                    ->toggleable(isToggledHiddenByDefault: true),
+
                 Tables\Columns\TextColumn::make('expires_at')
                     ->label('تاریخ انقضا')
                     ->dateTime('Y/m/d')
@@ -397,6 +420,9 @@ class UserServiceResource extends Resource
                     ->icon('heroicon-o-arrow-path')
                     ->color('warning')
                     ->requiresConfirmation()
+                    ->modalHeading('ریست مصرف ترافیک')
+                    ->modalDescription('آیا از ریست کردن مصرف ترافیک این سرویس مطمئن هستید؟')
+                    ->modalSubmitActionLabel('بله، ریست کن')
                     ->visible(fn (UserService $record) => filled($record->remote_username) && $record->vpnPanel?->type === VpnPanel::TYPE_MARZBAN)
                     ->action(function (UserService $record): void {
                         $panel = $record->vpnPanel;
@@ -426,10 +452,13 @@ class UserServiceResource extends Resource
                     }),
 
                 Tables\Actions\Action::make('revoke_sub_marzban')
-                    ->label('لغو اشتراک')
+                    ->label('تغییر لینک اشتراک')
                     ->icon('heroicon-o-key')
                     ->color('danger')
                     ->requiresConfirmation()
+                    ->modalHeading('تغییر لینک اشتراک')
+                    ->modalDescription('با این کار لینک اشتراک قبلی کاربر باطل می‌شود و لینک جدید ساخته می‌شود. ادامه می‌دهید؟')
+                    ->modalSubmitActionLabel('بله، لینک را تغییر بده')
                     ->visible(fn (UserService $record) => filled($record->remote_username) && $record->vpnPanel?->type === VpnPanel::TYPE_MARZBAN)
                     ->action(function (UserService $record): void {
                         $panel = $record->vpnPanel;
@@ -528,6 +557,141 @@ class UserServiceResource extends Resource
                             Notification::make()->title('خطا در فعال کردن')->body($e->getMessage())->danger()->send();
                         }
                     }),
+
+                Tables\Actions\Action::make('delete_marzban')
+                    ->label('حذف از مرزبان')
+                    ->icon('heroicon-o-trash')
+                    ->color('danger')
+                    ->requiresConfirmation()
+                    ->modalHeading('حذف کاربر از مرزبان')
+                    ->modalDescription('این کار کاربر را از پنل مرزبان حذف می‌کند اما سفارش و سرویس در سایت باقی می‌ماند. ادامه می‌دهید؟')
+                    ->modalSubmitActionLabel('بله، از مرزبان حذف کن')
+                    ->visible(fn (UserService $record) => filled($record->remote_username) && $record->vpnPanel?->type === VpnPanel::TYPE_MARZBAN)
+                    ->action(function (UserService $record): void {
+                        $panel = $record->vpnPanel;
+                        if (! $panel) {
+                            Notification::make()->title('پنل VPN مشخص نشده.')->danger()->send();
+                            return;
+                        }
+
+                        try {
+                            $client = new MarzbanClient($panel);
+                            $client->deleteUser($record->remote_username);
+
+                            $record->update([
+                                'status'            => UserService::STATUS_CANCELLED,
+                                'provision_status'  => UserService::PROVISION_FAILED,
+                                'subscription_link' => null,
+                                'config_link'       => null,
+                                'last_synced_at'    => now(),
+                                'admin_notes'       => trim(($record->admin_notes ?? '') . "\nRemote Marzban user deleted on " . now()->toDateTimeString()),
+                            ]);
+
+                            VpnServiceProvisionLog::create([
+                                'user_service_id' => $record->id,
+                                'vpn_panel_id'    => $panel->id,
+                                'action'          => 'marzban_delete_user',
+                                'status'          => 'success',
+                                'message'         => "Remote Marzban user '{$record->remote_username}' deleted from panel '{$panel->name}'.",
+                            ]);
+
+                            Notification::make()->title('کاربر از مرزبان حذف شد.')->success()->send();
+                        } catch (\Throwable $e) {
+                            VpnServiceProvisionLog::create([
+                                'user_service_id' => $record->id,
+                                'vpn_panel_id'    => $panel->id,
+                                'action'          => 'marzban_delete_user',
+                                'status'          => 'failed',
+                                'message'         => $e->getMessage(),
+                            ]);
+                            Notification::make()->title('خطا در حذف از مرزبان')->body($e->getMessage())->danger()->send();
+                        }
+                    }),
+
+                Tables\Actions\Action::make('recreate_marzban')
+                    ->label('ساخت دوباره در مرزبان')
+                    ->icon('heroicon-o-plus-circle')
+                    ->color('info')
+                    ->requiresConfirmation()
+                    ->modalHeading('ساخت دوباره کاربر در مرزبان')
+                    ->modalDescription('اگر کاربر در مرزبان وجود داشته باشد، همگام‌سازی انجام می‌شود. در غیر این صورت، کاربر جدید ساخته می‌شود.')
+                    ->modalSubmitActionLabel('اجرا کن')
+                    ->visible(fn (UserService $record) => in_array($record->provision_status, [
+                        UserService::PROVISION_FAILED,
+                        UserService::PROVISION_MANUAL_REQUIRED,
+                        UserService::PROVISION_SKIPPED,
+                    ]) || (filled($record->remote_username) && $record->provision_status === UserService::PROVISION_FAILED))
+                    ->action(function (UserService $record): void {
+                        $panel = $record->vpnPanel
+                            ?? VpnPanel::where('type', VpnPanel::TYPE_MARZBAN)
+                                ->where('is_active', true)
+                                ->where('is_default', true)
+                                ->first();
+
+                        if (! $panel) {
+                            Notification::make()->title('هیچ پنل Marzban پیش‌فرض فعالی یافت نشد.')->danger()->send();
+                            return;
+                        }
+
+                        try {
+                            Bus::dispatchSync(new ProvisionMarzbanServiceJob($record->id, $panel->id));
+
+                            VpnServiceProvisionLog::create([
+                                'user_service_id' => $record->id,
+                                'vpn_panel_id'    => $panel->id,
+                                'action'          => 'marzban_recreate_user',
+                                'status'          => 'success',
+                                'message'         => "Service recreated on panel '{$panel->name}'.",
+                            ]);
+
+                            Notification::make()->title('سرویس با موفقیت در مرزبان ساخته شد.')->success()->send();
+                        } catch (\Throwable $e) {
+                            VpnServiceProvisionLog::create([
+                                'user_service_id' => $record->id,
+                                'vpn_panel_id'    => $panel->id,
+                                'action'          => 'marzban_recreate_user',
+                                'status'          => 'failed',
+                                'message'         => $e->getMessage(),
+                            ]);
+                            Notification::make()->title('خطا در ساخت سرویس')->body($e->getMessage())->danger()->send();
+                        }
+                    }),
+
+                Tables\Actions\Action::make('clear_local_links')
+                    ->label('پاک کردن لینک‌های محلی')
+                    ->icon('heroicon-o-x-mark')
+                    ->color('gray')
+                    ->requiresConfirmation()
+                    ->modalHeading('پاک کردن لینک‌های محلی')
+                    ->modalDescription('لینک اشتراک و لینک کانفیگ از پایگاه داده محلی پاک می‌شوند. این عمل روی مرزبان تأثیری ندارد.')
+                    ->modalSubmitActionLabel('پاک کن')
+                    ->visible(fn (UserService $record) => filled($record->subscription_link) || filled($record->config_link))
+                    ->action(function (UserService $record): void {
+                        $record->update([
+                            'subscription_link' => null,
+                            'config_link'       => null,
+                        ]);
+
+                        VpnServiceProvisionLog::create([
+                            'user_service_id' => $record->id,
+                            'vpn_panel_id'    => $record->vpn_panel_id,
+                            'action'          => 'clear_local_links',
+                            'status'          => 'success',
+                            'message'         => 'Local subscription_link and config_link cleared by admin.',
+                        ]);
+
+                        Notification::make()->title('لینک‌های محلی پاک شدند.')->success()->send();
+                    }),
+
+                Tables\Actions\Action::make('show_subscription_qr')
+                    ->label('مشاهده بارکد لینک اشتراک')
+                    ->icon('heroicon-o-qr-code')
+                    ->color('gray')
+                    ->modalHeading('بارکد لینک اشتراک')
+                    ->modalContent(fn (UserService $record) => view('filament.user-services.subscription-qr', ['service' => $record]))
+                    ->modalSubmitAction(false)
+                    ->modalCancelActionLabel('بستن')
+                    ->visible(fn (UserService $record) => filled($record->subscription_link)),
 
                 Tables\Actions\EditAction::make()->label('ویرایش'),
             ])

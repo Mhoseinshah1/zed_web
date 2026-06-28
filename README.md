@@ -615,23 +615,40 @@ Rules: lowercase alphanumeric + underscores, max 32 characters, matches Marzban'
 
 ### Subscription link
 
-The Marzban `UserResponse` includes a `subscription_url` field (e.g. `https://panel.example.com/sub/TOKEN/`). ZedProxy saves this directly to `user_services.subscription_link`. It is shown to the user in `/dashboard/services/{service}` with a copy button and QR code.
+The Marzban `UserResponse` includes a `subscription_url` field (e.g. `https://panel.example.com/sub/TOKEN/`). ZedProxy saves this directly to `user_services.subscription_link`. It is shown to the user in `/dashboard/services/{service}` with a copy button and an inline SVG QR code (server-side, no CDN dependency).
+
+The first link from `links[]` is saved as `config_link` (direct VLESS/VMess config). The user also sees this on their service detail page with its own QR code.
+
+### QR code generation
+
+ZedProxy uses [`simplesoftwareio/simple-qrcode`](https://www.simplesoftwareio.com/simple-qrcode) to generate inline SVG QR codes on the server. No JavaScript QR library or CDN is required. The QR code updates automatically when an admin uses **تغییر لینک اشتراک** (Revoke Subscription) — the new URL is saved to the database and the next page load shows the updated QR.
+
+- **User-facing**: `/dashboard/services/{service}` — subscription link QR + config link QR (if set)
+- **Admin-facing**: **مشاهده بارکد لینک اشتراک** action in UserServiceResource table — opens a Filament modal with subscription QR and optional config QR
 
 ### What the user sees
 
-- **Active service with subscription link**: QR code + copy button for the subscription URL, plus config link if set
+- **Active service with subscription link**: QR code + copy button for the subscription URL, plus config link QR if set
 - **Pending/failed service**: Persian message: "سرویس شما هنوز آماده نشده است. در صورت طولانی شدن، با پشتیبانی تماس بگیرید."
+- **No subscription link yet**: "لینک اشتراک هنوز آماده نشده است." message
+
+Users can only see their **own** service pages. Accessing another user's service detail returns 403.
 
 ### Admin actions on UserServiceResource
 
+All Marzban actions are admin-only. Users do not see revoke/reset/disable buttons.
+
 | Action | Description |
 |--------|-------------|
-| **تلاش مجدد Marzban** (Retry Provision) | Runs `ProvisionMarzbanServiceJob` synchronously; creates or updates the Marzban user; visible when provision_status is manual_required, failed, or skipped |
-| **همگام‌سازی از Marzban** (Sync from Marzban) | Calls `GET /api/user/{username}`, updates traffic, subscription link, config link, and expiry; visible when remote_username is set |
-| **ریست ترافیک** (Reset Traffic) | Calls `POST /api/user/{username}/reset`; resets used traffic on panel and locally; visible when remote_username is set |
-| **لغو اشتراک** (Revoke Subscription) | Calls `POST /api/user/{username}/revoke_sub`; generates a new subscription token and saves the new URL; visible when remote_username is set |
-| **غیرفعال کردن** (Disable) | Calls `PUT /api/user/{username}` with `{status: disabled}`; sets service status to disabled; visible when service is active |
-| **فعال کردن** (Enable) | Calls `PUT /api/user/{username}` with `{status: active}`; sets service status to active; visible when service is disabled |
+| **ساخت دوباره در مرزبان** (Recreate) | Runs `ProvisionMarzbanServiceJob` synchronously; creates or updates the Marzban user; visible when provision_status is failed, manual_required, or skipped |
+| **همگام‌سازی از Marzban** (Sync) | Calls `GET /api/user/{username}`, updates traffic, subscription link, config link, and expiry; visible when remote_username is set |
+| **ریست ترافیک** (Reset Traffic) | Calls `POST /api/user/{username}/reset`; resets used traffic on panel and locally to 0; visible when remote_username is set |
+| **تغییر لینک اشتراک** (Revoke Subscription) | Calls `POST /api/user/{username}/revoke_sub`; Marzban generates a new subscription token; saves new URL locally; QR updates on next page load |
+| **غیرفعال کردن** (Disable) | Calls `PUT /api/user/{username}` with `{status: disabled}`; sets local status to disabled; visible when service is active |
+| **فعال کردن** (Enable) | Calls `PUT /api/user/{username}` with `{status: active}`; sets local status to active; visible when service is disabled |
+| **حذف از مرزبان** (Delete Remote) | Calls `DELETE /api/user/{username}`; removes user from Marzban panel; nulls subscription_link and config_link; sets status to cancelled; local service record is kept |
+| **پاک کردن لینک‌های محلی** (Clear Local Links) | Nulls subscription_link and config_link in local DB only; no Marzban API call; useful after manual panel changes |
+| **مشاهده بارکد لینک اشتراک** (View QR) | Opens a Filament modal with the subscription QR code (220px SVG) and optional config QR; visible when subscription_link is set |
 
 ### What happens if provisioning fails
 
@@ -921,11 +938,12 @@ User services, provision logs, VPN panels, and VPN inbounds are **never deleted*
 - **`services:expire` command** — bulk-marks active services past their expiry date
 - **Dashboard updated** — shows active service count, pending service count, services quick link
 - **Order detail updated** — shows link to related service when it exists
-- **Marzban API client** — `MarzbanClient` with login/testConnection/createUser/getUser/updateUser/resetTraffic/revokeSubscription; token cached in Redis; retry-on-401
-- **`ProvisionMarzbanServiceJob`** — queued job; idempotent (update if user exists, create if not); saves subscription_url from Marzban response
+- **Marzban API client** — `MarzbanClient` with login/testConnection/createUser/getUser/updateUser/deleteUser/resetTraffic/revokeSubscription; token cached in Redis; retry-on-401; never logs tokens or passwords
+- **`ProvisionMarzbanServiceJob`** — queued job; idempotent (update if user exists, create if not); 409-conflict handled (get+update); saves subscription_url and config_link from Marzban response
 - **Automatic provisioning** — `ServiceProvisioner::createFromOrder()` dispatches `ProvisionMarzbanServiceJob` when a default active Marzban panel is configured
-- **Retry Provision + Sync actions** in UserServiceResource — admin can retry failed provisioning or sync usage from Marzban
-- **Subscription link display** — user sees subscription URL with copy button and QR code at `/dashboard/services/{service}`
+- **Full admin action set** in UserServiceResource — Recreate, Sync, Reset Traffic, Revoke Subscription (تغییر لینک اشتراک), Disable, Enable, Delete Remote, Clear Local Links, View Subscription QR
+- **Server-side QR codes** — `simplesoftwareio/simple-qrcode` generates inline SVG QR for subscription and config links; no CDN or JavaScript dependency; QR updates automatically after revoke subscription
+- **Subscription + config link display** — user sees subscription URL with copy button and QR code, plus config link QR at `/dashboard/services/{service}`; admin sees QR in modal via **مشاهده بارکد لینک اشتراک**
 
 **Next:**
 1. Renew / extra traffic — extend Marzban user expiry or add data via order
