@@ -113,6 +113,16 @@ class PaymentMethodResource extends Resource
                         ->helperText('برای تایید امضای IPN webhook. رمزگذاری شده ذخیره می‌شود.')
                         ->maxLength(500),
 
+                    Forms\Components\Select::make('config.nowpayments_mode')
+                        ->label('حالت پرداخت NOWPayments')
+                        ->options([
+                            'invoice' => 'فاکتور میزبانی‌شده؛ انتخاب ارز توسط مشتری',
+                            'direct'  => 'پرداخت مستقیم؛ ارز از قبل مشخص می‌شود',
+                        ])
+                        ->default('invoice')
+                        ->helperText('در حالت فاکتور، مشتری ارز را داخل NOWPayments انتخاب می‌کند.')
+                        ->live(),
+
                     Forms\Components\Toggle::make('config.sandbox')
                         ->label('حالت آزمایشی (Sandbox)')
                         ->helperText('برای تست از api-sandbox.nowpayments.io استفاده می‌شود')
@@ -124,22 +134,6 @@ class PaymentMethodResource extends Resource
                         ->helperText('فقط در صورت نیاز به override کردن آدرس API پر کنید')
                         ->url()
                         ->maxLength(500),
-
-                    Forms\Components\TextInput::make('config.price_currency')
-                        ->label('ارز قیمت‌گذاری')
-                        ->placeholder('usd')
-                        ->default('usd')
-                        ->helperText('ارزی که قیمت‌ها در آن محاسبه می‌شود (معمولاً usd)'),
-
-                    Forms\Components\TextInput::make('config.default_pay_currency')
-                        ->label('ارز پیش‌فرض پرداخت')
-                        ->placeholder('usdttrc20')
-                        ->helperText('ارز پیش‌فرض کریپتو برای پرداخت'),
-
-                    Forms\Components\TextInput::make('config.allowed_pay_currencies')
-                        ->label('ارزهای مجاز (با کاما جدا کنید)')
-                        ->placeholder('btc,eth,usdttrc20,ltc')
-                        ->helperText('خالی بگذارید تا همه ارزها مجاز باشند'),
 
                     Forms\Components\TextInput::make('config.site_currency')
                         ->label('ارز سایت')
@@ -153,21 +147,42 @@ class PaymentMethodResource extends Resource
                         ->minValue(0)
                         ->helperText('تعداد تومان برابر با ۱ دلار آمریکا. مثال: 75000'),
 
+                    Forms\Components\TextInput::make('config.price_currency')
+                        ->label('ارز قیمت‌گذاری')
+                        ->placeholder('usd')
+                        ->default('usd')
+                        ->helperText('ارزی که قیمت‌ها در آن محاسبه می‌شود (معمولاً usd)'),
+
                     Forms\Components\TextInput::make('config.ipn_callback_url')
-                        ->label('IPN Callback URL')
-                        ->helperText('آدرس webhook که به NOWPayments داده می‌شود. خالی = پیش‌فرض سایت')
+                        ->label('IPN Callback URL (اختیاری)')
+                        ->helperText('خالی = آدرس خودکار سایت (/webhooks/nowpayments)')
                         ->url()
                         ->maxLength(500),
 
                     Forms\Components\TextInput::make('config.success_url')
                         ->label('Success URL (اختیاری)')
+                        ->helperText('خالی = صفحه سفارش کاربر')
                         ->url()
                         ->maxLength(500),
 
                     Forms\Components\TextInput::make('config.cancel_url')
                         ->label('Cancel URL (اختیاری)')
+                        ->helperText('خالی = صفحه پرداخت سفارش کاربر')
                         ->url()
                         ->maxLength(500),
+
+                    // Direct mode only fields
+                    Forms\Components\TextInput::make('config.default_pay_currency')
+                        ->label('ارز پیش‌فرض پرداخت (فقط حالت مستقیم)')
+                        ->placeholder('usdttrc20')
+                        ->helperText('در حالت فاکتور میزبانی‌شده، مشتری ارز پرداخت را داخل NOWPayments انتخاب می‌کند.')
+                        ->visible(fn (Get $get) => ($get('config.nowpayments_mode') ?? 'invoice') === 'direct'),
+
+                    Forms\Components\TextInput::make('config.allowed_pay_currencies')
+                        ->label('ارزهای مجاز (فقط حالت مستقیم)')
+                        ->placeholder('btc,eth,usdttrc20,ltc')
+                        ->helperText('در حالت فاکتور میزبانی‌شده، مشتری ارز پرداخت را داخل NOWPayments انتخاب می‌کند.')
+                        ->visible(fn (Get $get) => ($get('config.nowpayments_mode') ?? 'invoice') === 'direct'),
                 ])
                 ->columns(2)
                 ->collapsible(),

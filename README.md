@@ -1000,7 +1000,7 @@ User services, provision logs, VPN panels, and VPN inbounds are **never deleted*
 - **Provision logs for user actions** — every user action creates a `VpnServiceProvisionLog` with action prefix `user_marzban_*`; no tokens or credentials logged
 - **Per-VPN-panel user self-service toggles** — 10 boolean columns on `vpn_panels` control which actions users can perform per panel (sync, revoke, reset-traffic, disable, enable, view QR, copy links); defaults match previous global settings
 - **Auto-sync on service detail view** — `/dashboard/services/{service}` syncs from Marzban if never synced or last sync >30s ago; graceful failure with warning banner
-- **NOWPayments crypto payment gateway** — full integration with `POST /v1/invoice` (hosted checkout), IPN webhook at `POST /webhooks/nowpayments`, HMAC-SHA512 signature verification, manual status check, auto-provisioning on `finished`; currency conversion IRT→USD via admin-configured exchange rate; `api_key` and `ipn_secret` stored encrypted; QR code on payment detail page; 36 automated tests
+- **NOWPayments crypto payment gateway** — hosted invoice mode (default, customer chooses currency on NOWPayments) and direct mode; IPN webhook at `POST /webhooks/nowpayments` with HMAC-SHA512 signature verification; IPN matching by invoice_id → provider_reference; manual status check; auto-provisioning on `finished`; currency conversion IRT→USD via admin-configured exchange rate; `api_key` and `ipn_secret` stored encrypted; QR code on payment detail page; 48 automated tests
 
 **Next:**
 1. Renew / extra traffic — extend Marzban user expiry or add data via order
@@ -1014,17 +1014,35 @@ User services, provision logs, VPN panels, and VPN inbounds are **never deleted*
 
 ZedProxy integrates with [NOWPayments](https://nowpayments.io) to accept cryptocurrency payments automatically. The gateway handles invoice creation, IPN webhook verification, and auto-provisioning on confirmed payment.
 
-### How it works
+### Payment modes
 
-1. Admin enables the NOWPayments payment method in `/zed-admin/payment-methods`
-2. User selects "پرداخت کریپتو (NOWPayments)" at checkout
-3. User optionally selects the crypto currency (if `allowed_pay_currencies` is set)
-4. ZedProxy calls NOWPayments `POST /v1/invoice` to create a hosted invoice
-5. If an `invoice_url` is returned, user is redirected to the hosted NOWPayments checkout page
-6. If no invoice URL (direct payment), user sees the pay address, amount, QR code, and status on `/dashboard/orders/{order}/nowpayments`
-7. NOWPayments calls the IPN webhook when status changes
+There are two modes, configurable per payment method:
+
+| Mode | How it works |
+|------|-------------|
+| **Invoice (default)** | ZedProxy creates a hosted invoice via `POST /v1/invoice`. Customer is redirected to the NOWPayments checkout page and **chooses the crypto currency there**. ZedProxy does not need to know the currency in advance. |
+| **Direct** | ZedProxy creates a payment via `POST /v1/payment` with a specific `pay_currency`. Customer pays to the wallet address displayed directly on ZedProxy. |
+
+**Invoice mode is recommended.** It requires no currency config on ZedProxy and lets customers choose from all currencies NOWPayments supports.
+
+### How it works (invoice mode)
+
+1. Admin enables the NOWPayments payment method, sets mode to **Invoice** (default)
+2. User selects "پرداخت کریپتو (NOWPayments)" at checkout and clicks "تایید و پرداخت"
+3. ZedProxy calls `POST /v1/invoice` — **no crypto currency needed at this point**
+4. User is redirected to the hosted NOWPayments checkout page (`invoice_url`)
+5. User chooses currency and network on NOWPayments, completes the payment
+6. NOWPayments sends an IPN webhook when the payment status changes
+7. The IPN delivers both `invoice_id` and `payment_id` — ZedProxy matches by `invoice_id` and stores `payment_id` in `external_id`
 8. When status is `finished`, ZedProxy marks the order paid and provisions the VPN service automatically
-9. User can also click "بررسی وضعیت پرداخت" to manually poll the status
+9. User can also click "بررسی وضعیت پرداخت" to manually poll — only works after the customer has started paying (i.e., after the first IPN with a `payment_id`)
+
+### How it works (direct mode)
+
+1. Admin sets mode to **Direct**, sets `default_pay_currency` (e.g. `usdttrc20`)
+2. User selects the payment method; ZedProxy calls `POST /v1/payment` with the configured currency
+3. User sees the wallet address, exact amount, QR code, and expiry on `/dashboard/orders/{order}/nowpayments`
+4. User pays; IPN webhook updates status; `finished` provisions the service
 
 ### Setup (admin)
 
@@ -1036,14 +1054,16 @@ ZedProxy integrates with [NOWPayments](https://nowpayments.io) to accept cryptoc
 |-------|-------------|
 | **API Key** | From [NOWPayments dashboard](https://nowpayments.io) → API Keys. Stored encrypted. |
 | **IPN Secret** | From NOWPayments dashboard → API Keys → IPN Secret. Stored encrypted. |
+| **Payment mode** | `Invoice` (recommended) — customer chooses currency on NOWPayments; `Direct` — currency fixed in advance |
 | **Sandbox mode** | Enable for testing — uses `api-sandbox.nowpayments.io`. Disable for production. |
 | **Site currency** | `IRT` (Toman) or `IRR` (Rial) — the currency your order prices are in |
 | **Exchange rate (Toman/USD)** | Manual exchange rate. Example: `75000` means 75,000 Toman = 1 USD |
-| **Default pay currency** | Default crypto for payment, e.g. `usdttrc20`, `btc`, `eth` |
-| **Allowed pay currencies** | Comma-separated list, e.g. `btc,eth,usdttrc20,ltc`. Leave empty for any. |
+| **Price currency** | `usd` (default) — the currency NOWPayments converts to when creating the invoice |
+| **Default pay currency** | *(Direct mode only)* Crypto to pay with, e.g. `usdttrc20`, `btc`, `eth` |
+| **Allowed pay currencies** | *(Direct mode only)* Comma-separated list shown to user, e.g. `btc,eth,usdttrc20,ltc` |
 | **IPN Callback URL** | Leave empty — ZedProxy auto-fills with `/webhooks/nowpayments` |
-| **Success URL** | Optional redirect after successful payment |
-| **Cancel URL** | Optional redirect on cancelled payment |
+| **Success URL** | Optional redirect after successful payment (defaults to order detail page) |
+| **Cancel URL** | Optional redirect on cancelled payment (defaults to payment selection page) |
 | **Base URL** | Leave empty for auto-detection by sandbox toggle |
 
 4. Set **Active** to enabled
@@ -1070,6 +1090,16 @@ order.final_price_toman ÷ 75,000 = USD price sent to NOWPayments
 ```
 
 Update the exchange rate regularly from the admin panel to keep prices accurate.
+
+### IPN matching (invoice mode)
+
+In invoice mode, NOWPayments sends an `invoice_id` alongside the `payment_id` in each IPN. ZedProxy matches transactions in this priority:
+
+1. `invoice_id` → `provider_reference` (the invoice id stored when the invoice was created)
+2. `payment_id` → `provider_reference` or `external_id` (for direct mode or subsequent IPNs)
+3. `order_id` → `order_id` column (last resort)
+
+The `payment_id` is stored in `external_id` the first time it appears in an IPN. This allows "بررسی وضعیت پرداخت" to call `GET /v1/payment/{payment_id}` for live status.
 
 ### Supported NOWPayments statuses
 
@@ -1108,6 +1138,8 @@ Users and admins can manually check payment status without waiting for an IPN:
 
 Both call `GET /v1/payment/{payment_id}` on the NOWPayments API and update the transaction in real time.
 
+> **Invoice mode note**: The manual status check requires a `payment_id` (stored in `external_id`). This is only available after the customer has chosen a currency and started paying on the NOWPayments page. Before that, the check returns "پرداخت هنوز توسط کاربر انتخاب/شروع نشده است" and the user should complete payment on NOWPayments first.
+
 ### Security
 
 - `api_key` and `ipn_secret` are stored with Laravel's `encrypted` cast — encrypted at rest using `APP_KEY`
@@ -1130,6 +1162,15 @@ Enable sandbox in the admin config field. Disable it when going live.
 
 **"نرخ تبدیل دلار تنظیم نشده است"**
 → Set `exchange_rate_usd` in the payment method config to a positive value.
+
+**"ساخت فاکتور NOWPayments انجام نشد"**
+→ The NOWPayments API returned a response without an `invoice_url`. Check your API key, ensure the method is not in Direct mode when you expect a hosted invoice, and verify the NOWPayments account is active.
+
+**"مبلغ سفارش برای پرداخت با NOWPayments کمتر از حداقل مجاز"**
+→ The order total converted to USD is below NOWPayments' minimum allowed amount. Increase the order price or switch to a crypto with a lower minimum amount.
+
+**"پرداخت هنوز توسط کاربر انتخاب/شروع نشده است"**
+→ In invoice mode, the manual status check only works after the customer has chosen a currency on the NOWPayments page. Tell the customer to complete the payment first, then check status.
 
 **IPN not received**
 → Ensure the webhook URL `https://yourdomain.com/webhooks/nowpayments` is reachable from the internet. Check that your firewall or Cloudflare does not block `POST` requests to that path.

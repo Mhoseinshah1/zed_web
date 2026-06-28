@@ -46,6 +46,7 @@ class NowPaymentsTest extends TestCase
         ]);
     }
 
+    /** Invoice mode (default) — no pay_currency required. */
     private function makeNowPaymentsMethod(array $config = []): PaymentMethod
     {
         return PaymentMethod::create([
@@ -58,9 +59,31 @@ class NowPaymentsTest extends TestCase
             'ipn_secret' => 'test-ipn-secret-456',
             'config'     => array_merge([
                 'sandbox'           => true,
+                'nowpayments_mode'  => 'invoice',
                 'site_currency'     => 'IRT',
                 'price_currency'    => 'usd',
                 'exchange_rate_usd' => 75000,
+            ], $config),
+        ]);
+    }
+
+    /** Direct mode method — requires default_pay_currency. */
+    private function makeDirectMethod(array $config = []): PaymentMethod
+    {
+        return PaymentMethod::create([
+            'title'      => 'NOWPayments Direct',
+            'slug'       => 'nowpayments-direct',
+            'type'       => PaymentMethod::TYPE_NOWPAYMENTS,
+            'is_active'  => true,
+            'sort_order' => 6,
+            'api_key'    => 'test-api-key-123',
+            'ipn_secret' => 'test-ipn-secret-456',
+            'config'     => array_merge([
+                'sandbox'              => true,
+                'nowpayments_mode'     => 'direct',
+                'site_currency'        => 'IRT',
+                'price_currency'       => 'usd',
+                'exchange_rate_usd'    => 75000,
                 'default_pay_currency' => 'usdttrc20',
             ], $config),
         ]);
@@ -82,6 +105,15 @@ class NowPaymentsTest extends TestCase
             'pay_currency'       => 'usdttrc20',
             'pay_address'        => 'TXtest123abc',
         ], $attrs));
+    }
+
+    /** Make a valid HMAC-SHA512 IPN signature. */
+    private function makeIpnSignature(array $payload, string $secret): string
+    {
+        $sorted = $payload;
+        ksort($sorted);
+        $json = json_encode($sorted, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        return hash_hmac('sha512', $json, $secret);
     }
 
     // ── PART A: Payment Method Model ──────────────────────────────────────────
@@ -238,7 +270,82 @@ class NowPaymentsTest extends TestCase
         $client->status();
     }
 
-    // ── PART D: Create Payment Flow ───────────────────────────────────────────
+    // ── PART D: Create Payment Flow — Invoice Mode ────────────────────────────
+
+    public function test_create_invoice_mode_calls_invoice_endpoint(): void
+    {
+        $user   = $this->makeUser();
+        $plan   = $this->makePlan();
+        $order  = $this->makeOrder($user, $plan);
+        $method = $this->makeNowPaymentsMethod(); // invoice mode
+
+        Http::fake(['*' => Http::response([
+            'id'             => 'inv_001',
+            'invoice_url'    => 'https://nowpayments.io/payment/inv_001',
+            'payment_status' => 'waiting',
+            'price_amount'   => 1.33,
+            'price_currency' => 'usd',
+        ], 200)]);
+
+        $this->actingAs($user)->post(route('dashboard.orders.pay.submit', $order), [
+            'payment_method_id' => $method->id,
+        ]);
+
+        Http::assertSent(fn ($request) => str_contains($request->url(), '/invoice'));
+    }
+
+    public function test_create_invoice_mode_payload_excludes_pay_currency(): void
+    {
+        $user   = $this->makeUser();
+        $plan   = $this->makePlan();
+        $order  = $this->makeOrder($user, $plan);
+        // Even with default_pay_currency set, invoice mode must NOT include it in payload
+        $method = $this->makeNowPaymentsMethod(['default_pay_currency' => 'btc']);
+
+        Http::fake(['*' => Http::response([
+            'id'             => 'inv_002',
+            'invoice_url'    => 'https://nowpayments.io/payment/inv_002',
+            'payment_status' => 'waiting',
+            'price_amount'   => 1.33,
+            'price_currency' => 'usd',
+        ], 200)]);
+
+        $this->actingAs($user)->post(route('dashboard.orders.pay.submit', $order), [
+            'payment_method_id' => $method->id,
+        ]);
+
+        Http::assertSent(function ($request) {
+            $body = json_decode($request->body(), true) ?? [];
+            $this->assertArrayNotHasKey('pay_currency', $body);
+            return true;
+        });
+    }
+
+    public function test_create_invoice_mode_stores_invoice_url(): void
+    {
+        $user   = $this->makeUser();
+        $plan   = $this->makePlan();
+        $order  = $this->makeOrder($user, $plan);
+        $method = $this->makeNowPaymentsMethod();
+
+        Http::fake(['*' => Http::response([
+            'id'             => 'inv_003',
+            'invoice_url'    => 'https://nowpayments.io/payment/inv_003',
+            'payment_status' => 'waiting',
+            'price_amount'   => 1.33,
+            'price_currency' => 'usd',
+        ], 200)]);
+
+        $this->actingAs($user)->post(route('dashboard.orders.pay.submit', $order), [
+            'payment_method_id' => $method->id,
+        ]);
+
+        $tx = PaymentTransaction::where('order_id', $order->id)->first();
+        $this->assertNotNull($tx);
+        $this->assertEquals('https://nowpayments.io/payment/inv_003', $tx->gateway_url);
+        $this->assertEquals('inv_003', $tx->provider_reference);
+        $this->assertNull($tx->external_id); // not set yet in invoice mode
+    }
 
     public function test_create_redirects_to_invoice_url_when_provided(): void
     {
@@ -253,7 +360,6 @@ class NowPaymentsTest extends TestCase
             'payment_status' => 'waiting',
             'price_amount'   => 1.33,
             'price_currency' => 'usd',
-            'pay_currency'   => 'usdttrc20',
         ], 200)]);
 
         $response = $this->actingAs($user)->post(route('dashboard.orders.pay.submit', $order), [
@@ -263,12 +369,115 @@ class NowPaymentsTest extends TestCase
         $response->assertRedirect('https://nowpayments.io/payment/inv_001');
     }
 
-    public function test_create_redirects_to_nowpayments_page_without_invoice_url(): void
+    public function test_create_invoice_mode_shows_persian_error_when_no_invoice_url(): void
     {
         $user   = $this->makeUser();
         $plan   = $this->makePlan();
         $order  = $this->makeOrder($user, $plan);
         $method = $this->makeNowPaymentsMethod();
+
+        // Response missing invoice_url
+        Http::fake(['*' => Http::response([
+            'id'             => 'inv_004',
+            'payment_status' => 'waiting',
+            'price_amount'   => 1.33,
+            'price_currency' => 'usd',
+        ], 200)]);
+
+        $response = $this->actingAs($user)->post(route('dashboard.orders.pay.submit', $order), [
+            'payment_method_id' => $method->id,
+        ]);
+
+        $response->assertSessionHasErrors(['payment']);
+        $errors = session('errors')->getBag('default')->get('payment');
+        $this->assertStringContainsString('ساخت فاکتور NOWPayments انجام نشد', $errors[0]);
+    }
+
+    public function test_create_invoice_mode_without_default_pay_currency_does_not_error(): void
+    {
+        $user   = $this->makeUser();
+        $plan   = $this->makePlan();
+        $order  = $this->makeOrder($user, $plan);
+        // No default_pay_currency — must not cause any validation error in invoice mode
+        $method = $this->makeNowPaymentsMethod();
+        $cfg = $method->config ?? [];
+        unset($cfg['default_pay_currency']);
+        $method->config = $cfg;
+        $method->save();
+
+        Http::fake(['*' => Http::response([
+            'id'             => 'inv_005',
+            'invoice_url'    => 'https://nowpayments.io/payment/inv_005',
+            'payment_status' => 'waiting',
+            'price_amount'   => 1.33,
+            'price_currency' => 'usd',
+        ], 200)]);
+
+        $response = $this->actingAs($user)->post(route('dashboard.orders.pay.submit', $order), [
+            'payment_method_id' => $method->id,
+        ]);
+
+        $response->assertSessionMissing('errors');
+        $response->assertRedirect('https://nowpayments.io/payment/inv_005');
+    }
+
+    // ── PART D2: Create Payment Flow — Direct Mode ────────────────────────────
+
+    public function test_create_direct_mode_calls_payment_endpoint(): void
+    {
+        $user   = $this->makeUser();
+        $plan   = $this->makePlan();
+        $order  = $this->makeOrder($user, $plan);
+        $method = $this->makeDirectMethod();
+
+        Http::fake(['*' => Http::response([
+            'payment_id'     => 'pay_direct_001',
+            'payment_status' => 'waiting',
+            'pay_amount'     => 1.5,
+            'pay_currency'   => 'usdttrc20',
+            'pay_address'    => 'TXtest123',
+        ], 200)]);
+
+        $this->actingAs($user)->post(route('dashboard.orders.pay.submit', $order), [
+            'payment_method_id' => $method->id,
+        ]);
+
+        Http::assertSent(fn ($request) => str_contains($request->url(), '/payment'));
+    }
+
+    public function test_create_direct_mode_includes_pay_currency_in_payload(): void
+    {
+        $user   = $this->makeUser();
+        $plan   = $this->makePlan();
+        $order  = $this->makeOrder($user, $plan);
+        $method = $this->makeDirectMethod(['default_pay_currency' => 'usdttrc20']);
+
+        Http::fake(['*' => Http::response([
+            'payment_id'     => 'pay_direct_002',
+            'payment_status' => 'waiting',
+            'pay_amount'     => 1.5,
+            'pay_currency'   => 'usdttrc20',
+            'pay_address'    => 'TXtest456',
+        ], 200)]);
+
+        $this->actingAs($user)->post(route('dashboard.orders.pay.submit', $order), [
+            'payment_method_id' => $method->id,
+        ]);
+
+        Http::assertSent(function ($request) {
+            $body = json_decode($request->body(), true) ?? [];
+            $this->assertArrayHasKey('pay_currency', $body);
+            $this->assertEquals('usdttrc20', $body['pay_currency']);
+            return true;
+        });
+    }
+
+    public function test_create_redirects_to_nowpayments_page_without_invoice_url(): void
+    {
+        $user   = $this->makeUser();
+        $plan   = $this->makePlan();
+        $order  = $this->makeOrder($user, $plan);
+        $method = $this->makeDirectMethod();
 
         Http::fake(['*' => Http::response([
             'payment_id'     => 'pay_001',
@@ -402,14 +611,15 @@ class NowPaymentsTest extends TestCase
         $plan   = $this->makePlan();
         $order  = $this->makeOrder($user, $plan);
         $method = $this->makeNowPaymentsMethod();
-        $tx     = $this->makeNowPaymentsTx($order, $method);
+        $tx     = $this->makeNowPaymentsTx($order, $method, [
+            'external_id' => 'pay_12345', // payment_id set — customer has started paying
+        ]);
 
         Http::fake(['*' => Http::response([
             'payment_id'     => 'pay_12345',
             'payment_status' => 'finished',
         ], 200)]);
 
-        // Mock provisioner to avoid Marzban calls in tests
         $this->mock(ServiceProvisioner::class, fn ($mock) => $mock->shouldReceive('createFromOrder')->once());
 
         $response = $this->actingAs($user)->post(route('dashboard.orders.nowpayments.check', $order));
@@ -424,7 +634,9 @@ class NowPaymentsTest extends TestCase
         $plan   = $this->makePlan();
         $order  = $this->makeOrder($user, $plan);
         $method = $this->makeNowPaymentsMethod();
-        $tx     = $this->makeNowPaymentsTx($order, $method);
+        $tx     = $this->makeNowPaymentsTx($order, $method, [
+            'external_id' => 'pay_12345',
+        ]);
 
         Http::fake(['*' => Http::response([
             'payment_id'     => 'pay_12345',
@@ -444,7 +656,9 @@ class NowPaymentsTest extends TestCase
         $plan   = $this->makePlan();
         $order  = $this->makeOrder($user, $plan);
         $method = $this->makeNowPaymentsMethod();
-        $tx     = $this->makeNowPaymentsTx($order, $method);
+        $tx     = $this->makeNowPaymentsTx($order, $method, [
+            'external_id' => 'pay_12345',
+        ]);
 
         Http::fake(['*' => Http::response([
             'payment_id'     => 'pay_12345',
@@ -456,15 +670,34 @@ class NowPaymentsTest extends TestCase
         $this->assertEquals(PaymentTransaction::STATUS_FAILED, $tx->fresh()->status);
     }
 
-    // ── PART G: IPN Webhook ───────────────────────────────────────────────────
-
-    private function makeIpnSignature(array $payload, string $secret): string
+    public function test_check_status_shows_not_started_message_when_no_external_id(): void
     {
-        $sorted = $payload;
-        ksort($sorted);
-        $json = json_encode($sorted, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-        return hash_hmac('sha512', $json, $secret);
+        $user   = $this->makeUser();
+        $plan   = $this->makePlan();
+        $order  = $this->makeOrder($user, $plan);
+        $method = $this->makeNowPaymentsMethod();
+
+        // Invoice mode: external_id is null until customer selects currency
+        $tx = $this->makeNowPaymentsTx($order, $method, [
+            'provider_reference' => 'inv_abc123',
+            'gateway_url'        => 'https://nowpayments.io/payment/inv_abc123',
+            'external_id'        => null,
+            'pay_address'        => null,
+        ]);
+
+        Http::fake();
+
+        $response = $this->actingAs($user)->post(route('dashboard.orders.nowpayments.check', $order));
+
+        $response->assertRedirect(route('dashboard.orders.nowpayments', $order));
+        $response->assertSessionHas('info');
+        $sessionInfo = session('info');
+        $this->assertStringContainsString('انتخاب/شروع نشده', $sessionInfo);
+
+        Http::assertNothingSent();
     }
+
+    // ── PART G: IPN Webhook ───────────────────────────────────────────────────
 
     public function test_ipn_finished_marks_order_paid(): void
     {
@@ -491,6 +724,70 @@ class NowPaymentsTest extends TestCase
         $response->assertOk();
         $this->assertEquals(Order::PAYMENT_PAID, $order->fresh()->payment_status);
         $this->assertEquals('finished', $tx->fresh()->gateway_status);
+    }
+
+    public function test_ipn_matches_transaction_by_invoice_id(): void
+    {
+        $user   = $this->makeUser();
+        $plan   = $this->makePlan();
+        $order  = $this->makeOrder($user, $plan);
+        $method = $this->makeNowPaymentsMethod();
+
+        // Invoice mode transaction — provider_reference = invoice_id
+        $tx = $this->makeNowPaymentsTx($order, $method, [
+            'provider_reference' => 'inv_xyz789',
+            'external_id'        => null,
+            'pay_address'        => null,
+            'gateway_url'        => 'https://nowpayments.io/payment/inv_xyz789',
+        ]);
+
+        $payload = [
+            'invoice_id'     => 'inv_xyz789',  // match by invoice_id
+            'payment_id'     => 'pay_new_001', // new payment_id from customer choosing currency
+            'payment_status' => 'confirming',
+            'order_id'       => (string) $order->id,
+            'pay_amount'     => 1.33,
+            'pay_currency'   => 'eth',
+        ];
+        $signature = $this->makeIpnSignature($payload, 'test-ipn-secret-456');
+
+        $response = $this->withHeaders(['x-nowpayments-sig' => $signature])
+            ->postJson(route('webhooks.nowpayments'), $payload);
+
+        $response->assertOk();
+        $freshTx = $tx->fresh();
+        $this->assertEquals('confirming', $freshTx->gateway_status);
+        $this->assertEquals('inv_xyz789', $freshTx->provider_reference); // unchanged
+    }
+
+    public function test_ipn_stores_payment_id_in_external_id(): void
+    {
+        $user   = $this->makeUser();
+        $plan   = $this->makePlan();
+        $order  = $this->makeOrder($user, $plan);
+        $method = $this->makeNowPaymentsMethod();
+
+        // Invoice mode: external_id is null initially
+        $tx = $this->makeNowPaymentsTx($order, $method, [
+            'provider_reference' => 'inv_abc',
+            'external_id'        => null,
+            'gateway_url'        => 'https://nowpayments.io/payment/inv_abc',
+        ]);
+
+        $payload = [
+            'invoice_id'     => 'inv_abc',
+            'payment_id'     => 'pay_customer_001', // customer chose currency and started paying
+            'payment_status' => 'waiting',
+            'order_id'       => (string) $order->id,
+        ];
+        $signature = $this->makeIpnSignature($payload, 'test-ipn-secret-456');
+
+        $this->withHeaders(['x-nowpayments-sig' => $signature])
+            ->postJson(route('webhooks.nowpayments'), $payload)
+            ->assertOk();
+
+        // payment_id must now be stored in external_id
+        $this->assertEquals('pay_customer_001', $tx->fresh()->external_id);
     }
 
     public function test_ipn_waiting_does_not_provision(): void
@@ -529,6 +826,46 @@ class NowPaymentsTest extends TestCase
         $this->withHeaders(['x-nowpayments-sig' => $signature])
             ->postJson(route('webhooks.nowpayments'), $payload)
             ->assertOk();
+    }
+
+    public function test_ipn_confirmed_does_not_provision(): void
+    {
+        $user   = $this->makeUser();
+        $plan   = $this->makePlan();
+        $order  = $this->makeOrder($user, $plan);
+        $method = $this->makeNowPaymentsMethod();
+        $tx     = $this->makeNowPaymentsTx($order, $method);
+
+        $payload   = ['payment_id' => 'pay_12345', 'payment_status' => 'confirmed', 'order_id' => (string) $order->id];
+        $signature = $this->makeIpnSignature($payload, 'test-ipn-secret-456');
+
+        $this->mock(ServiceProvisioner::class, fn ($mock) => $mock->shouldNotReceive('createFromOrder'));
+
+        $this->withHeaders(['x-nowpayments-sig' => $signature])
+            ->postJson(route('webhooks.nowpayments'), $payload)
+            ->assertOk();
+
+        $this->assertNotEquals(Order::PAYMENT_PAID, $order->fresh()->payment_status);
+    }
+
+    public function test_ipn_sending_does_not_provision(): void
+    {
+        $user   = $this->makeUser();
+        $plan   = $this->makePlan();
+        $order  = $this->makeOrder($user, $plan);
+        $method = $this->makeNowPaymentsMethod();
+        $tx     = $this->makeNowPaymentsTx($order, $method);
+
+        $payload   = ['payment_id' => 'pay_12345', 'payment_status' => 'sending', 'order_id' => (string) $order->id];
+        $signature = $this->makeIpnSignature($payload, 'test-ipn-secret-456');
+
+        $this->mock(ServiceProvisioner::class, fn ($mock) => $mock->shouldNotReceive('createFromOrder'));
+
+        $this->withHeaders(['x-nowpayments-sig' => $signature])
+            ->postJson(route('webhooks.nowpayments'), $payload)
+            ->assertOk();
+
+        $this->assertNotEquals(Order::PAYMENT_PAID, $order->fresh()->payment_status);
     }
 
     public function test_ipn_rejects_invalid_signature(): void
@@ -573,7 +910,6 @@ class NowPaymentsTest extends TestCase
             ->postJson(route('webhooks.nowpayments'), $payload)
             ->assertOk();
 
-        // Verify order is now PAYMENT_PAID
         $this->assertEquals(Order::PAYMENT_PAID, $order->fresh()->payment_status);
 
         // Second IPN — order already paid, provisioner must NOT be called again
@@ -612,21 +948,12 @@ class NowPaymentsTest extends TestCase
         $tx     = $this->makeNowPaymentsTx($order, $method, ['status' => PaymentTransaction::STATUS_APPROVED]);
         $order->update(['payment_status' => Order::PAYMENT_PAID]);
 
-        // Provisioner must NOT be called since order is already paid and has no service
-        // But in this test we simulate already-done: mark as having a service
-        // by mocking provisioner with zero calls if service relation returns non-null
         $provisioner = $this->mock(ServiceProvisioner::class);
         $provisioner->shouldNotReceive('createFromOrder');
 
         $service = app(MarkOrderAsPaidService::class);
 
-        // Simulate already paid + service exists by refreshing the order with a
-        // payment_paid status and checking the guard returns early
         $freshOrder = $order->fresh();
-        // No UserService exists, so guard checks $order->service === null
-        // In this case service is null but payment_paid is already set —
-        // the guard only skips when BOTH are true, so provisioner WOULD be called.
-        // Let's mock that scenario properly:
         $provisioner->shouldReceive('createFromOrder')->atMost()->once();
         $service->markPaid($freshOrder, $tx->fresh());
     }

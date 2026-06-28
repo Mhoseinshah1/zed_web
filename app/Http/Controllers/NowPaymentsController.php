@@ -26,7 +26,10 @@ class NowPaymentsController extends Controller
     public function __construct(private readonly MarkOrderAsPaidService $markPaidService) {}
 
     /**
-     * Create a NOWPayments invoice and redirect user to payment page or show details.
+     * Create a NOWPayments hosted invoice and redirect user to the payment page.
+     *
+     * In invoice mode (default): customer chooses crypto on the NOWPayments hosted page.
+     * In direct mode: pay_currency must be set in the admin config.
      */
     public function create(Request $request, Order $order)
     {
@@ -35,13 +38,12 @@ class NowPaymentsController extends Controller
 
         $request->validate([
             'payment_method_id' => ['required', 'exists:payment_methods,id'],
-            'pay_currency'      => ['nullable', 'string', 'max:20'],
         ]);
 
         $method = PaymentMethod::findOrFail($request->payment_method_id);
         abort_if(! $method->isNowPayments() || ! $method->is_active, 422);
 
-        // Check for existing active NOWPayments transaction
+        // Check for existing active NOWPayments transaction (idempotency)
         $existing = PaymentTransaction::where('order_id', $order->id)
             ->whereIn('status', [
                 PaymentTransaction::STATUS_WAITING,
@@ -52,12 +54,12 @@ class NowPaymentsController extends Controller
             ->first();
 
         if ($existing) {
+            // If we have a gateway_url, redirect there again
+            if ($existing->gateway_url) {
+                return redirect()->away($existing->gateway_url);
+            }
             return redirect()->route('dashboard.orders.nowpayments', $order);
         }
-
-        $client      = new NowPaymentsClient($method);
-        $payCurrency = $request->pay_currency
-            ?? $method->getConfig('default_pay_currency', 'btc');
 
         try {
             $amountUsd = $this->convertToUsd($order->final_price_toman, $method);
@@ -65,35 +67,67 @@ class NowPaymentsController extends Controller
             return back()->withErrors(['payment' => $e->getMessage()]);
         }
 
+        $mode = $method->getConfig('nowpayments_mode', 'invoice');
+
+        // Base payload — no pay_currency in invoice mode (customer chooses on NOWPayments)
         $payload = [
             'price_amount'      => round($amountUsd, 2),
-            'price_currency'    => 'usd',
-            'pay_currency'      => strtolower($payCurrency),
+            'price_currency'    => strtolower($method->getConfig('price_currency', 'usd')),
             'order_id'          => (string) $order->id,
             'order_description' => "ZedProxy Order #{$order->order_number}",
             'ipn_callback_url'  => $method->getConfig('ipn_callback_url')
                                     ?? route('webhooks.nowpayments'),
+            'success_url'       => $method->getConfig('success_url')
+                                    ?? route('dashboard.orders.show', $order),
+            'cancel_url'        => $method->getConfig('cancel_url')
+                                    ?? route('dashboard.orders.pay', $order),
         ];
 
-        if ($successUrl = $method->getConfig('success_url')) {
-            $payload['success_url'] = $successUrl;
-        }
-        if ($cancelUrl = $method->getConfig('cancel_url')) {
-            $payload['cancel_url'] = $cancelUrl;
+        // Direct mode: include pay_currency; customer does NOT choose on NOWPayments
+        if ($mode === 'direct') {
+            $payCurrency = $method->getConfig('default_pay_currency');
+            if ($payCurrency) {
+                $payload['pay_currency'] = strtolower($payCurrency);
+            }
         }
 
+        $client = new NowPaymentsClient($method);
+
         try {
-            $response = $client->createInvoice($payload);
+            $response = $mode === 'direct'
+                ? $client->createPayment($payload)
+                : $client->createInvoice($payload);
         } catch (\RuntimeException $e) {
-            Log::error('NOWPayments create invoice failed', [
-                'order_id'  => $order->id,
-                'error'     => $e->getMessage(),
+            Log::error('NOWPayments create invoice/payment failed', [
+                'order_id' => $order->id,
+                'mode'     => $mode,
+                'error'    => $e->getMessage(),
             ]);
-            return back()->withErrors(['payment' => 'خطا در اتصال به درگاه پرداخت: ' . $e->getMessage()]);
+
+            $errorMsg = str_contains(strtolower($e->getMessage()), 'minimum')
+                ? 'مبلغ سفارش برای پرداخت با NOWPayments کمتر از حداقل مجاز یا قابل پرداخت نیست.'
+                : 'خطا در اتصال به درگاه پرداخت: ' . $e->getMessage();
+
+            return back()->withErrors(['payment' => $errorMsg]);
         }
 
         // Sanitize response — never store api_key or secrets
         $safeResponse = collect($response)->except(['api_key', 'ipn_secret'])->all();
+
+        // In invoice mode, provider_reference = invoice id (not payment_id yet)
+        $invoiceId  = $response['id'] ?? null;
+        $paymentId  = $response['payment_id'] ?? null;
+        $invoiceUrl = $response['invoice_url'] ?? null;
+
+        // provider_reference: prefer invoice_id; fall back to payment_id (direct mode)
+        $providerRef = $invoiceId ?? $paymentId;
+
+        if (! $providerRef) {
+            Log::warning('NOWPayments: response missing id/payment_id', [
+                'order_id' => $order->id,
+                'response' => $safeResponse,
+            ]);
+        }
 
         $tx = PaymentTransaction::create([
             'order_id'              => $order->id,
@@ -104,13 +138,15 @@ class NowPaymentsController extends Controller
             'status'                => PaymentTransaction::STATUS_WAITING,
             'amount_toman'          => $order->final_price_toman,
             'currency'              => 'IRT',
-            'provider_reference'    => $response['id'] ?? $response['payment_id'] ?? null,
-            'gateway_url'           => $response['invoice_url'] ?? null,
+            'provider_reference'    => $providerRef,
+            // For direct mode, external_id = payment_id immediately
+            'external_id'           => ($mode === 'direct') ? $paymentId : null,
+            'gateway_url'           => $invoiceUrl,
             'gateway_status'        => $response['payment_status'] ?? 'waiting',
             'gateway_price_amount'  => $response['price_amount'] ?? $amountUsd,
             'gateway_price_currency' => $response['price_currency'] ?? 'usd',
             'pay_amount'            => $response['pay_amount'] ?? null,
-            'pay_currency'          => $response['pay_currency'] ?? $payCurrency,
+            'pay_currency'          => $response['pay_currency'] ?? null,
             'pay_address'           => $response['pay_address'] ?? null,
             'expires_at'            => isset($response['expiration_estimate_date'])
                                         ? \Carbon\Carbon::parse($response['expiration_estimate_date'])
@@ -124,16 +160,26 @@ class NowPaymentsController extends Controller
             'status'         => Order::STATUS_AWAITING_PAYMENT,
         ]);
 
-        // If invoice_url is available, redirect to hosted payment page
-        if (! empty($response['invoice_url'])) {
-            return redirect()->away($response['invoice_url']);
+        // Redirect to hosted invoice page (invoice mode) or fallback (direct mode)
+        if ($invoiceUrl) {
+            return redirect()->away($invoiceUrl);
         }
 
+        if ($mode === 'invoice') {
+            // Invoice was created but no URL returned — show error
+            Log::warning('NOWPayments: invoice created but no invoice_url returned', [
+                'order_id' => $order->id,
+                'response' => $safeResponse,
+            ]);
+            return back()->withErrors(['payment' => 'ساخت فاکتور NOWPayments انجام نشد. لطفاً دوباره تلاش کنید.']);
+        }
+
+        // Direct mode: show payment details page (pay_address, QR code, etc.)
         return redirect()->route('dashboard.orders.nowpayments', $order);
     }
 
     /**
-     * Show the NOWPayments payment details page.
+     * Show the NOWPayments payment details page (direct mode or fallback).
      */
     public function show(Order $order)
     {
@@ -158,6 +204,10 @@ class NowPaymentsController extends Controller
 
     /**
      * Manually check payment status from NOWPayments API.
+     *
+     * In invoice mode, payment_id (external_id) is only available after the customer
+     * has chosen a currency and started paying. Before that, we can only tell the
+     * customer to go back to the invoice page.
      */
     public function checkStatus(Request $request, Order $order)
     {
@@ -166,9 +216,27 @@ class NowPaymentsController extends Controller
 
         $tx = PaymentTransaction::where('order_id', $order->id)
             ->where('provider', 'nowpayments')
-            ->whereNotNull('provider_reference')
             ->latest()
-            ->firstOrFail();
+            ->first();
+
+        abort_if(! $tx, 404);
+
+        // external_id = payment_id (set from IPN once customer chooses currency)
+        // In invoice mode, this is null until the customer has started paying
+        $paymentId = $tx->external_id ?? $tx->provider_reference;
+
+        if (! $paymentId) {
+            return redirect()->route('dashboard.orders.nowpayments', $order)
+                ->with('info', 'اطلاعات پرداخت هنوز موجود نیست. لطفاً دوباره تلاش کنید.');
+        }
+
+        // If we're in invoice mode and the customer hasn't started paying yet,
+        // external_id will be null — we know this because gateway_url is set and
+        // external_id is still null while provider_reference is the invoice_id
+        if ($tx->gateway_url && ! $tx->external_id) {
+            return redirect()->route('dashboard.orders.nowpayments', $order)
+                ->with('info', 'پرداخت هنوز توسط کاربر انتخاب/شروع نشده است. لطفاً پس از انتخاب ارز در صفحه NOWPayments، دوباره بررسی کنید.');
+        }
 
         $method = PaymentMethod::where('type', PaymentMethod::TYPE_NOWPAYMENTS)
             ->where('is_active', true)
@@ -177,9 +245,10 @@ class NowPaymentsController extends Controller
         $client = new NowPaymentsClient($method);
 
         try {
-            $status = $client->getPaymentStatus($tx->provider_reference);
+            $status = $client->getPaymentStatus($paymentId);
         } catch (\RuntimeException $e) {
-            return back()->withErrors(['status' => 'خطا در بررسی وضعیت: ' . $e->getMessage()]);
+            return redirect()->route('dashboard.orders.nowpayments', $order)
+                ->withErrors(['status' => 'خطا در بررسی وضعیت: ' . $e->getMessage()]);
         }
 
         $gatewayStatus = strtolower($status['payment_status'] ?? '');
@@ -208,6 +277,10 @@ class NowPaymentsController extends Controller
     /**
      * IPN webhook — called by NOWPayments server.
      * No auth, no CSRF — verified by HMAC-SHA512 signature.
+     *
+     * For invoice flow, the IPN may contain invoice_id + payment_id.
+     * We match by: invoice_id → provider_reference, then payment_id → provider_reference,
+     * then order_id → order_id column.
      */
     public function ipn(Request $request)
     {
@@ -234,42 +307,56 @@ class NowPaymentsController extends Controller
         if (! $client->verifyIpnSignature($payload, $signature)) {
             Log::warning('NOWPayments IPN: invalid signature', [
                 'payment_id' => $payload['payment_id'] ?? null,
+                'invoice_id' => $payload['invoice_id'] ?? null,
             ]);
             return response()->json(['error' => 'invalid signature'], 401);
         }
 
+        $invoiceId     = (string) ($payload['invoice_id'] ?? '');
         $paymentId     = (string) ($payload['payment_id'] ?? '');
         $orderId       = $payload['order_id'] ?? null;
         $gatewayStatus = strtolower($payload['payment_status'] ?? '');
 
-        $tx = PaymentTransaction::where('provider_reference', $paymentId)
-            ->where('provider', 'nowpayments')
-            ->first();
+        // Match transaction: invoice_id first, then payment_id, then order_id
+        $tx = $this->findTransaction($invoiceId, $paymentId, $orderId);
 
         if (! $tx) {
-            Log::warning('NOWPayments IPN: transaction not found', ['payment_id' => $paymentId]);
+            Log::warning('NOWPayments IPN: transaction not found', [
+                'payment_id' => $paymentId ?: null,
+                'invoice_id' => $invoiceId ?: null,
+                'order_id'   => $orderId,
+            ]);
             return response()->json(['error' => 'transaction not found'], 404);
         }
 
-        // Update transaction with IPN data
-        $tx->update([
-            'gateway_status'        => $gatewayStatus,
-            'callback_payload'      => $payload,
-            'callback_received_at'  => now(),
-            'pay_amount'            => $payload['pay_amount'] ?? $tx->pay_amount,
-            'pay_currency'          => $payload['pay_currency'] ?? $tx->pay_currency,
-            'pay_address'           => $payload['pay_address'] ?? $tx->pay_address,
-        ]);
+        // Build update data
+        $updateData = [
+            'gateway_status'       => $gatewayStatus,
+            'callback_payload'     => $payload,
+            'callback_received_at' => now(),
+            'pay_amount'           => $payload['pay_amount'] ?? $tx->pay_amount,
+            'pay_currency'         => $payload['pay_currency'] ?? $tx->pay_currency,
+            'pay_address'          => $payload['pay_address'] ?? $tx->pay_address,
+        ];
+
+        // Store payment_id in external_id so checkStatus can call GET /payment/{id}
+        // This fires once the customer has chosen a currency and started paying
+        if ($paymentId && ! $tx->external_id) {
+            $updateData['external_id'] = $paymentId;
+        }
+
+        $tx->update($updateData);
 
         $order = $tx->order->fresh();
 
         if (in_array($gatewayStatus, self::FINISHED_STATUSES)) {
-            if ($order->payment_status !== \App\Models\Order::PAYMENT_PAID) {
+            if ($order->payment_status !== Order::PAYMENT_PAID) {
                 $this->markPaidService->markPaid($order, $tx);
             }
             Log::info('NOWPayments IPN: order marked paid', [
                 'order_id'   => $order->id,
-                'payment_id' => $paymentId,
+                'payment_id' => $paymentId ?: null,
+                'invoice_id' => $invoiceId ?: null,
             ]);
         } elseif (in_array($gatewayStatus, self::PENDING_STATUSES)) {
             $statusMap = [
@@ -294,6 +381,45 @@ class NowPaymentsController extends Controller
 
     // ── Helpers ──────────────────────────────────────────────────────────────
 
+    /**
+     * Find a NOWPayments transaction by invoice_id, payment_id, or order_id.
+     */
+    private function findTransaction(string $invoiceId, string $paymentId, ?string $orderId): ?PaymentTransaction
+    {
+        // 1. Match by invoice_id → provider_reference (invoice mode)
+        if ($invoiceId) {
+            $tx = PaymentTransaction::where('provider_reference', $invoiceId)
+                ->where('provider', 'nowpayments')
+                ->first();
+            if ($tx) {
+                return $tx;
+            }
+        }
+
+        // 2. Match by payment_id → provider_reference (direct mode) or external_id
+        if ($paymentId) {
+            $tx = PaymentTransaction::where(function ($q) use ($paymentId) {
+                $q->where('provider_reference', $paymentId)
+                  ->orWhere('external_id', $paymentId);
+            })
+                ->where('provider', 'nowpayments')
+                ->first();
+            if ($tx) {
+                return $tx;
+            }
+        }
+
+        // 3. Match by order_id — last resort
+        if ($orderId) {
+            return PaymentTransaction::where('order_id', $orderId)
+                ->where('provider', 'nowpayments')
+                ->latest()
+                ->first();
+        }
+
+        return null;
+    }
+
     private function convertToUsd(int $amountToman, PaymentMethod $method): float
     {
         $siteCurrency = $method->getConfig('site_currency', 'IRT');
@@ -306,11 +432,9 @@ class NowPaymentsController extends Controller
         // IRT (Toman) → USD
         if (in_array(strtoupper($siteCurrency), ['IRT', 'IRR', 'TOMAN'])) {
             $divisor = strtoupper($siteCurrency) === 'IRR' ? 10 : 1;
-            $toman   = $amountToman / $divisor;
-            return $toman / $exchangeRate;
+            return ($amountToman / $divisor) / $exchangeRate;
         }
 
-        // Already USD or other
         return $amountToman / $exchangeRate;
     }
 
