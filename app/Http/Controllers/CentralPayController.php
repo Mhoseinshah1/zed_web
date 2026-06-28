@@ -32,8 +32,12 @@ class CentralPayController extends Controller
         $method = PaymentMethod::findOrFail($request->payment_method_id);
         abort_if(! $method->isCentralPay() || ! $method->is_active, 422);
 
-        if (! config('services.centralpay.enabled', false)) {
-            return back()->withErrors(['payment' => 'درگاه پرداخت ریالی در حال حاضر فعال نیست. لطفاً با پشتیبانی تماس بگیرید.']);
+        // Resolve client — throws RuntimeException if api_key is not configured
+        try {
+            $client = new CentralPayClient($method);
+        } catch (\RuntimeException $e) {
+            Log::warning('CentralPay initiate: api_key not configured', ['method_id' => $method->id]);
+            return back()->withErrors(['payment' => 'درگاه پرداخت ریالی در حال حاضر پیکربندی نشده است. لطفاً با پشتیبانی تماس بگیرید.']);
         }
 
         // Idempotency: reuse existing active CentralPay transaction
@@ -48,7 +52,6 @@ class CentralPayController extends Controller
             return redirect()->away($existing->gateway_url);
         }
 
-        $client = new CentralPayClient();
         $amount = $client->toCentralPayTomanAmount($order);
 
         // Create the transaction record FIRST so we have an ID for the returnUrl and CentralPay orderId.
@@ -85,11 +88,11 @@ class CentralPayController extends Controller
 
         // Store sanitized request/response (never log api_key)
         $safePayload = $client->sanitizePayload([
-            'type'      => config('services.centralpay.type', 'deposit'),
+            'type'      => $client->getType(),
             'amount'    => $amount,
             'userId'    => $order->user_id,
             'orderId'   => $tx->id,
-            'returnUrl' => route('payments.centralpay.callback', ['orderId' => $tx->id]),
+            'returnUrl' => $client->buildReturnUrl($tx->id),
         ]);
         $tx->update([
             'request_payload'  => $safePayload,
@@ -176,8 +179,24 @@ class CentralPayController extends Controller
                 ->with('success', 'پرداخت قبلاً تایید شده است.');
         }
 
+        // Resolve CentralPay method for client config (api_key, base_url, etc.)
+        $method = $tx->paymentMethod
+            ?? PaymentMethod::where('type', PaymentMethod::TYPE_CENTRALPAY)->first();
+
+        if (! $method) {
+            Log::error('CentralPay callback: no payment method found', ['tx_id' => $tx->id]);
+            return redirect()->route('dashboard.orders.show', $order)
+                ->with('error', 'درگاه پرداخت ریالی تنظیم نشده است. با پشتیبانی تماس بگیرید.');
+        }
+
         // Verify server-to-server — never trust GET callback alone
-        $client = new CentralPayClient();
+        try {
+            $client = new CentralPayClient($method);
+        } catch (\RuntimeException $e) {
+            Log::error('CentralPay callback: api_key not configured', ['tx_id' => $tx->id]);
+            return redirect()->route('dashboard.orders.show', $order)
+                ->with('error', 'درگاه پرداخت ریالی در حال حاضر پیکربندی نشده است. با پشتیبانی تماس بگیرید.');
+        }
 
         try {
             $verify = $client->verifyPayment($tx->id);
@@ -290,7 +309,18 @@ class CentralPayController extends Controller
             throw new \RuntimeException('سفارش قبلاً پرداخت شده است.');
         }
 
-        $client = new CentralPayClient();
+        $method = $tx->paymentMethod
+            ?? PaymentMethod::where('type', PaymentMethod::TYPE_CENTRALPAY)->first();
+
+        if (! $method) {
+            throw new \RuntimeException('روش پرداخت CentralPay یافت نشد.');
+        }
+
+        try {
+            $client = new CentralPayClient($method);
+        } catch (\RuntimeException $e) {
+            throw new \RuntimeException('کلید API CentralPay ثبت نشده است. لطفاً از پانل ادمین تنظیم کنید.');
+        }
 
         try {
             $verify = $client->verifyPayment($tx->id);

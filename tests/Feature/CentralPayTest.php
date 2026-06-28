@@ -10,8 +10,8 @@ use App\Models\Plan;
 use App\Models\User;
 use App\Services\Orders\MarkOrderAsPaidService;
 use App\Services\ServiceProvisioner;
+use Database\Seeders\PaymentMethodSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
-use Illuminate\Support\Facades\Config;
 use Illuminate\Support\Facades\Http;
 use Tests\TestCase;
 
@@ -44,23 +44,28 @@ class CentralPayTest extends TestCase
         ]);
     }
 
-    private function makeCentralPayMethod(): PaymentMethod
+    private function makeCentralPayMethod(array $attrs = []): PaymentMethod
     {
-        return PaymentMethod::create([
+        return PaymentMethod::create(array_merge([
             'title'      => 'پرداخت ریالی',
             'slug'       => 'centralpay',
             'type'       => PaymentMethod::TYPE_CENTRALPAY,
             'is_active'  => true,
             'sort_order' => 3,
-        ]);
+            'api_key'    => 'test-api-key-cp',
+            'config'     => [
+                'base_url'      => 'https://centralapi.org/webservice/basic',
+                'type'          => 'deposit',
+                'amount_unit'   => 'TOMAN',
+                'callback_path' => '/payments/centralpay/callback',
+            ],
+        ], $attrs));
     }
 
     private function enableCentralPay(): void
     {
-        Config::set('services.centralpay.enabled', true);
-        Config::set('services.centralpay.api_key', 'test-api-key-cp');
-        Config::set('services.centralpay.base_url', 'https://centralapi.org/webservice/basic');
-        Config::set('services.centralpay.type', 'deposit');
+        // No-op: config is now read from PaymentMethod model, not from .env / config().
+        // Tests pass api_key and config through makeCentralPayMethod().
     }
 
     private function makeTx(Order $order, PaymentMethod $method, array $attrs = []): PaymentTransaction
@@ -99,9 +104,9 @@ class CentralPayTest extends TestCase
         $this->assertFalse($method->isNowPayments());
     }
 
-    public function test_api_key_is_not_in_payment_method_model(): void
+    public function test_api_key_is_not_visible_in_model_json(): void
     {
-        // CentralPay uses config, not model api_key; test model has no api_key set
+        // api_key is in $hidden — must never appear in toArray() / JSON serialization
         $method = $this->makeCentralPayMethod();
         $json   = $method->toArray();
         $this->assertArrayNotHasKey('api_key', $json);
@@ -308,13 +313,12 @@ class CentralPayTest extends TestCase
         $this->assertNotEquals(Order::PAYMENT_PAID, $order->fresh()->payment_status);
     }
 
-    public function test_centralpay_disabled_shows_error(): void
+    public function test_centralpay_inactive_method_returns_422(): void
     {
-        Config::set('services.centralpay.enabled', false);
         $user   = $this->makeUser();
         $plan   = $this->makePlan();
         $order  = $this->makeOrder($user, $plan);
-        $method = $this->makeCentralPayMethod();
+        $method = $this->makeCentralPayMethod(['is_active' => false]);
 
         Http::fake();
 
@@ -322,7 +326,7 @@ class CentralPayTest extends TestCase
             'payment_method_id' => $method->id,
         ]);
 
-        $response->assertSessionHasErrors(['payment']);
+        $response->assertStatus(422);
         Http::assertNothingSent();
     }
 
@@ -839,5 +843,190 @@ class CentralPayTest extends TestCase
         $this->assertNotNull($tx);
         $this->assertEquals(500000, $tx->gateway_amount);
         $this->assertEquals('TOMAN', $tx->gateway_currency);
+    }
+
+    // ── PART M: Admin-config tests ────────────────────────────────────────────
+
+    public function test_client_reads_api_key_from_payment_method_not_env(): void
+    {
+        $user   = $this->makeUser();
+        $plan   = $this->makePlan();
+        $order  = $this->makeOrder($user, $plan);
+        $method = $this->makeCentralPayMethod(['api_key' => 'model-api-key-xyz']);
+
+        Http::fake(['*' => Http::response([
+            'success' => true,
+            'data'    => ['redirectUrl' => 'https://gateway.centralapi.org/#/m'],
+        ], 200)]);
+
+        $this->actingAs($user)->post(route('dashboard.orders.pay.submit', $order), [
+            'payment_method_id' => $method->id,
+        ]);
+
+        Http::assertSent(function ($request) {
+            $body = json_decode($request->body(), true) ?? [];
+            return ($body['api_key'] ?? '') === 'model-api-key-xyz';
+        });
+    }
+
+    public function test_client_reads_base_url_from_payment_method_config(): void
+    {
+        $user   = $this->makeUser();
+        $plan   = $this->makePlan();
+        $order  = $this->makeOrder($user, $plan);
+        $method = $this->makeCentralPayMethod([
+            'config' => [
+                'base_url'      => 'https://custom-central.example.com/api',
+                'type'          => 'deposit',
+                'amount_unit'   => 'TOMAN',
+                'callback_path' => '/payments/centralpay/callback',
+            ],
+        ]);
+
+        Http::fake(['https://custom-central.example.com/*' => Http::response([
+            'success' => true,
+            'data'    => ['redirectUrl' => 'https://gateway.centralapi.org/#/cu'],
+        ], 200)]);
+
+        $this->actingAs($user)->post(route('dashboard.orders.pay.submit', $order), [
+            'payment_method_id' => $method->id,
+        ]);
+
+        Http::assertSent(fn ($r) => str_contains($r->url(), 'custom-central.example.com'));
+    }
+
+    public function test_missing_api_key_shows_persian_safe_error(): void
+    {
+        $user   = $this->makeUser();
+        $plan   = $this->makePlan();
+        $order  = $this->makeOrder($user, $plan);
+        $method = $this->makeCentralPayMethod(['api_key' => null]);
+
+        Http::fake();
+
+        $response = $this->actingAs($user)->post(route('dashboard.orders.pay.submit', $order), [
+            'payment_method_id' => $method->id,
+        ]);
+
+        $response->assertSessionHasErrors(['payment']);
+        $errors = session('errors')->get('payment');
+        $error  = implode(' ', $errors);
+        $this->assertStringNotContainsString('validation.required', $error);
+        $this->assertStringContainsString('پشتیبانی', $error);
+        Http::assertNothingSent();
+    }
+
+    public function test_return_url_uses_callback_path_from_admin_config(): void
+    {
+        $user   = $this->makeUser();
+        $plan   = $this->makePlan();
+        $order  = $this->makeOrder($user, $plan);
+        $method = $this->makeCentralPayMethod();
+
+        Http::fake(['*' => Http::response([
+            'success' => true,
+            'data'    => ['redirectUrl' => 'https://gateway.centralapi.org/#/ru'],
+        ], 200)]);
+
+        $this->actingAs($user)->post(route('dashboard.orders.pay.submit', $order), [
+            'payment_method_id' => $method->id,
+        ]);
+
+        Http::assertSent(function ($request) {
+            $body = json_decode($request->body(), true) ?? [];
+            return str_contains($body['returnUrl'] ?? '', '/payments/centralpay/callback');
+        });
+    }
+
+    public function test_removing_env_values_does_not_break_centralpay(): void
+    {
+        // Simulate env with no CentralPay keys at all
+        $user   = $this->makeUser();
+        $plan   = $this->makePlan();
+        $order  = $this->makeOrder($user, $plan);
+        $method = $this->makeCentralPayMethod();
+
+        Http::fake(['*' => Http::response([
+            'success' => true,
+            'data'    => ['redirectUrl' => 'https://gateway.centralapi.org/#/nenv'],
+        ], 200)]);
+
+        $response = $this->actingAs($user)->post(route('dashboard.orders.pay.submit', $order), [
+            'payment_method_id' => $method->id,
+        ]);
+
+        $response->assertRedirect('https://gateway.centralapi.org/#/nenv');
+    }
+
+    public function test_env_values_imported_once_if_admin_config_empty(): void
+    {
+        // Create centralpay method with no api_key and no config
+        PaymentMethod::create([
+            'title'      => 'پرداخت ریالی',
+            'slug'       => 'centralpay',
+            'type'       => PaymentMethod::TYPE_CENTRALPAY,
+            'is_active'  => false,
+            'sort_order' => 3,
+        ]);
+
+        $_ENV['CENTRALPAY_API_KEY']      = 'env-imported-key';
+        $_ENV['CENTRALPAY_BASE_URL']     = 'https://env-base.example.com/api';
+        $_ENV['CENTRALPAY_TYPE']         = 'deposit';
+        $_ENV['CENTRALPAY_AMOUNT_UNIT']  = 'TOMAN';
+        $_ENV['CENTRALPAY_CALLBACK_PATH'] = '/payments/centralpay/callback';
+
+        try {
+            (new PaymentMethodSeeder())->run();
+
+            $method = PaymentMethod::where('slug', 'centralpay')->first();
+            $this->assertNotNull($method);
+            // api_key should have been imported from env
+            $this->assertEquals('env-imported-key', $method->api_key);
+            // config values should have been imported from env
+            $this->assertEquals('https://env-base.example.com/api', $method->getConfig('base_url'));
+            $this->assertEquals('deposit', $method->getConfig('type'));
+        } finally {
+            unset(
+                $_ENV['CENTRALPAY_API_KEY'],
+                $_ENV['CENTRALPAY_BASE_URL'],
+                $_ENV['CENTRALPAY_TYPE'],
+                $_ENV['CENTRALPAY_AMOUNT_UNIT'],
+                $_ENV['CENTRALPAY_CALLBACK_PATH'],
+            );
+        }
+    }
+
+    public function test_existing_admin_config_not_overwritten_by_env(): void
+    {
+        // Create centralpay method with admin-configured values
+        $method = PaymentMethod::create([
+            'title'      => 'پرداخت ریالی',
+            'slug'       => 'centralpay',
+            'type'       => PaymentMethod::TYPE_CENTRALPAY,
+            'is_active'  => true,
+            'sort_order' => 3,
+            'api_key'    => 'admin-set-key',
+            'config'     => [
+                'base_url'      => 'https://admin-set-base.example.com/api',
+                'type'          => 'deposit',
+                'amount_unit'   => 'TOMAN',
+                'callback_path' => '/payments/centralpay/callback',
+            ],
+        ]);
+
+        $_ENV['CENTRALPAY_API_KEY']  = 'env-key-should-not-overwrite';
+        $_ENV['CENTRALPAY_BASE_URL'] = 'https://env-base-should-not-overwrite.example.com/api';
+
+        try {
+            (new PaymentMethodSeeder())->run();
+
+            $method->refresh();
+            // Admin-set api_key must NOT be overwritten by env
+            $this->assertEquals('admin-set-key', $method->api_key);
+            // Admin-set base_url must NOT be overwritten by env
+            $this->assertEquals('https://admin-set-base.example.com/api', $method->getConfig('base_url'));
+        } finally {
+            unset($_ENV['CENTRALPAY_API_KEY'], $_ENV['CENTRALPAY_BASE_URL']);
+        }
     }
 }

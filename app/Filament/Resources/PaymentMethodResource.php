@@ -95,6 +95,50 @@ class PaymentMethodResource extends Resource
                     ->step(0.01),
             ])->columns(3)->collapsible()->collapsed(),
 
+            // CentralPay rial gateway configuration — only visible when type=centralpay
+            Forms\Components\Section::make('تنظیمات CentralPay')
+                ->visible(fn (Get $get) => $get('type') === PaymentMethod::TYPE_CENTRALPAY)
+                ->schema([
+                    Forms\Components\TextInput::make('api_key')
+                        ->label('کلید API CentralPay')
+                        ->password()
+                        ->revealable()
+                        ->dehydrated(fn ($state) => filled($state))
+                        ->helperText('کلید API از CentralPay دریافت می‌شود. برای تغییر ندادن کلید، این فیلد را خالی بگذارید.')
+                        ->maxLength(500),
+
+                    Forms\Components\TextInput::make('config.base_url')
+                        ->label('آدرس پایه CentralPay')
+                        ->default('https://centralapi.org/webservice/basic')
+                        ->placeholder('https://centralapi.org/webservice/basic')
+                        ->maxLength(500),
+
+                    Forms\Components\Select::make('config.amount_unit')
+                        ->label('واحد مبلغ')
+                        ->options(['TOMAN' => 'تومان (TOMAN)', 'RIAL' => 'ریال (RIAL)'])
+                        ->default('TOMAN')
+                        ->helperText('مبلغ برای CentralPay به تومان ارسال می‌شود.'),
+
+                    Forms\Components\TextInput::make('config.type')
+                        ->label('نوع تراکنش')
+                        ->default('deposit')
+                        ->helperText('طبق مستندات CentralPay مقدار deposit استفاده می‌شود.')
+                        ->maxLength(100),
+
+                    Forms\Components\TextInput::make('config.callback_path')
+                        ->label('مسیر بازگشت پرداخت')
+                        ->default('/payments/centralpay/callback')
+                        ->helperText('orderId به صورت خودکار به این آدرس اضافه می‌شود.')
+                        ->maxLength(500),
+
+                    Forms\Components\Placeholder::make('callback_url_display')
+                        ->label('آدرس بازگشت پرداخت (جهت ثبت در CentralPay)')
+                        ->content(fn (Get $get) => url($get('config.callback_path') ?: '/payments/centralpay/callback'))
+                        ->helperText('این آدرس را در تنظیمات CentralPay ثبت کنید.'),
+                ])
+                ->columns(2)
+                ->collapsible(),
+
             // NOWPayments gateway configuration — only visible when type=nowpayments
             Forms\Components\Section::make('تنظیمات NOWPayments')
                 ->visible(fn (Get $get) => $get('type') === PaymentMethod::TYPE_NOWPAYMENTS)

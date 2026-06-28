@@ -66,16 +66,55 @@ class PaymentMethodSeeder extends Seeder
             ]
         );
 
-        // CentralPay — seed only if missing; activate via admin panel and set CENTRALPAY_ENABLED=true
+        // CentralPay — seed only if missing; all config is now managed from /zed-admin
         PaymentMethod::firstOrCreate(
             ['slug' => 'centralpay'],
             [
                 'title'       => 'پرداخت ریالی',
                 'type'        => PaymentMethod::TYPE_CENTRALPAY,
                 'description' => 'پرداخت ریالی از طریق درگاه CentralPay',
-                'is_active'   => false,
+                'is_active'   => (bool) env('CENTRALPAY_ENABLED', false),
                 'sort_order'  => 3,
             ]
         );
+
+        // One-time migration: import .env CentralPay values into admin config if not already set.
+        // After this runs once, .env values are no longer required.
+        // Never overwrites admin-edited values.
+        $cpMethod = PaymentMethod::where('slug', 'centralpay')->first();
+        if ($cpMethod) {
+            $updates      = [];
+            $config       = $cpMethod->config ?? [];
+            $configChanged = false;
+
+            // Import api_key from env only if DB column is NULL (not yet configured in admin)
+            $rawApiKey = $cpMethod->getRawOriginal('api_key');
+            if ($rawApiKey === null && ! empty(env('CENTRALPAY_API_KEY'))) {
+                $updates['api_key'] = env('CENTRALPAY_API_KEY');
+            }
+
+            // Import config values from env only if not already set in admin
+            $envConfig = [
+                'base_url'      => env('CENTRALPAY_BASE_URL'),
+                'type'          => env('CENTRALPAY_TYPE'),
+                'amount_unit'   => env('CENTRALPAY_AMOUNT_UNIT'),
+                'callback_path' => env('CENTRALPAY_CALLBACK_PATH'),
+            ];
+
+            foreach ($envConfig as $key => $envValue) {
+                if (! empty($envValue) && ! array_key_exists($key, $config)) {
+                    $config[$key]  = $envValue;
+                    $configChanged = true;
+                }
+            }
+
+            if ($configChanged) {
+                $updates['config'] = $config;
+            }
+
+            if ($updates) {
+                $cpMethod->update($updates);
+            }
+        }
     }
 }

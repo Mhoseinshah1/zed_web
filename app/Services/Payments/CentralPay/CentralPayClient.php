@@ -3,6 +3,7 @@
 namespace App\Services\Payments\CentralPay;
 
 use App\Models\Order;
+use App\Models\PaymentMethod;
 use App\Models\PaymentTransaction;
 use Illuminate\Support\Facades\Http;
 
@@ -11,12 +12,29 @@ class CentralPayClient
     private string $apiKey;
     private string $baseUrl;
     private string $type;
+    private string $callbackPath;
 
-    public function __construct()
+    public function __construct(PaymentMethod $method)
     {
-        $this->apiKey  = config('services.centralpay.api_key', '');
-        $this->baseUrl = rtrim(config('services.centralpay.base_url', 'https://centralapi.org/webservice/basic'), '/');
-        $this->type    = config('services.centralpay.type', 'deposit');
+        $apiKey = $method->api_key;
+
+        if (empty($apiKey)) {
+            throw new \RuntimeException('کلید API درگاه CentralPay ثبت نشده است.');
+        }
+
+        $this->apiKey       = $apiKey;
+        $this->baseUrl      = rtrim($method->getConfig('base_url', 'https://centralapi.org/webservice/basic'), '/');
+        $this->type         = $method->getConfig('type', 'deposit');
+        $this->callbackPath = $method->getConfig('callback_path', '/payments/centralpay/callback');
+    }
+
+    /**
+     * Build the returnUrl sent to CentralPay with orderId appended.
+     * Uses the callback_path stored in admin config, not a hardcoded route.
+     */
+    public function buildReturnUrl(int $txId): string
+    {
+        return url($this->callbackPath) . '?orderId=' . $txId;
     }
 
     /**
@@ -28,7 +46,7 @@ class CentralPayClient
     public function createPaymentLink(Order $order, PaymentTransaction $transaction): array
     {
         $amount    = $this->toCentralPayTomanAmount($order);
-        $returnUrl = route('payments.centralpay.callback', ['orderId' => $transaction->id]);
+        $returnUrl = $this->buildReturnUrl($transaction->id);
 
         $payload = [
             'api_key'   => $this->apiKey,
@@ -96,5 +114,10 @@ class CentralPayClient
         $safe = $payload;
         unset($safe['api_key']);
         return $safe;
+    }
+
+    public function getType(): string
+    {
+        return $this->type;
     }
 }
