@@ -28,10 +28,10 @@
                 <div class="text-left">
                     @php
                         $statusColor = match($order->status) {
-                            'completed'          => 'bg-green-500/10 text-green-400 border-green-500/30',
-                            'cancelled','failed' => 'bg-red-500/10 text-red-400 border-red-500/30',
-                            'paid','processing'  => 'bg-blue-500/10 text-blue-400 border-blue-500/30',
-                            default              => 'bg-yellow-500/10 text-yellow-400 border-yellow-500/30',
+                            'completed'                            => 'bg-green-500/10 text-green-400 border-green-500/30',
+                            'cancelled','failed','provisioning_failed' => 'bg-red-500/10 text-red-400 border-red-500/30',
+                            'paid','processing','provisioning'     => 'bg-blue-500/10 text-blue-400 border-blue-500/30',
+                            default                                => 'bg-yellow-500/10 text-yellow-400 border-yellow-500/30',
                         };
                     @endphp
                     <span class="inline-block border text-xs px-3 py-1 rounded-full {{ $statusColor }}">
@@ -146,16 +146,32 @@
     </div>
     @endif
 
-    {{-- Service link --}}
-    @if($order->service)
+    {{-- Service / provisioning status --}}
+    @if($order->service && $order->service->status === 'active')
+    <div class="bg-green-500/10 border border-green-500/20 rounded-xl p-5 mb-6">
+        <div class="flex items-center justify-between gap-4">
+            <div>
+                <h4 class="text-green-300 font-semibold text-sm mb-1">سرویس فعال شد</h4>
+                <p class="text-green-200/70 text-sm">سرویس شما فعال شد و آماده استفاده است.</p>
+            </div>
+            <a href="{{ route('dashboard.services.show', $order->service) }}"
+               class="shrink-0 text-xs bg-green-700 hover:bg-green-600 text-white px-4 py-2 rounded-lg transition">
+                مشاهده سرویس
+            </a>
+        </div>
+    </div>
+    @elseif($order->service)
     <div class="bg-indigo-500/10 border border-indigo-500/20 rounded-xl p-5 mb-6">
         <div class="flex items-center justify-between gap-4">
             <div>
                 <h4 class="text-indigo-300 font-semibold text-sm mb-1">سرویس مرتبط</h4>
                 <p class="text-indigo-200/70 text-sm">
-                    {{ $order->service->statusLabel() }}
-                    @if($order->service->status === 'pending_provision')
-                        — سرویس شما در حال آماده‌سازی است.
+                    @if(in_array($order->status, ['provisioning', 'paid', 'processing']))
+                        پرداخت شما تایید شده و سرویس در حال فعال‌سازی است.
+                    @elseif($order->status === 'provisioning_failed')
+                        پرداخت شما تایید شده اما فعال‌سازی سرویس با خطا مواجه شده است. پشتیبانی در حال بررسی است.
+                    @else
+                        {{ $order->service->statusLabel() }}
                     @endif
                 </p>
             </div>
@@ -165,13 +181,23 @@
             </a>
         </div>
     </div>
-    @elseif($order->payment_status === 'paid')
+    @elseif(in_array($order->status, ['provisioning', 'paid', 'processing']) && $order->payment_status === 'paid')
     <div class="bg-blue-500/10 border border-blue-500/20 rounded-xl p-5 mb-6">
         <div class="flex gap-3">
             <span class="text-xl">🔄</span>
             <div>
-                <h4 class="text-blue-300 font-semibold text-sm mb-1">سرویس در حال آماده‌سازی</h4>
-                <p class="text-blue-200/70 text-sm">پرداخت تایید شده است. سرویس شما به‌زودی آماده می‌شود.</p>
+                <h4 class="text-blue-300 font-semibold text-sm mb-1">سرویس در حال فعال‌سازی</h4>
+                <p class="text-blue-200/70 text-sm">پرداخت شما تایید شده و سرویس در حال فعال‌سازی است.</p>
+            </div>
+        </div>
+    </div>
+    @elseif($order->status === 'provisioning_failed')
+    <div class="bg-red-500/10 border border-red-500/20 rounded-xl p-5 mb-6">
+        <div class="flex gap-3">
+            <span class="text-xl">⚠️</span>
+            <div>
+                <h4 class="text-red-300 font-semibold text-sm mb-1">خطا در فعال‌سازی سرویس</h4>
+                <p class="text-red-200/70 text-sm">پرداخت شما تایید شده اما فعال‌سازی سرویس با خطا مواجه شده است. پشتیبانی در حال بررسی است.</p>
             </div>
         </div>
     </div>

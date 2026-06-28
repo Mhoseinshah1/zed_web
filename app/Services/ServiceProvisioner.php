@@ -38,6 +38,9 @@ class ServiceProvisioner
                 ->first();
 
             if ($panel) {
+                // Transition order to "provisioning" — job will update to completed/provisioning_failed
+                $order->update(['status' => Order::STATUS_PROVISIONING]);
+
                 VpnServiceProvisionLog::create([
                     'user_service_id' => $service->id,
                     'vpn_panel_id'    => $panel->id,

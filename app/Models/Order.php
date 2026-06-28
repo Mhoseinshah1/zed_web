@@ -10,13 +10,15 @@ use Illuminate\Support\Str;
 class Order extends Model
 {
     // Order statuses
-    const STATUS_PENDING          = 'pending';
-    const STATUS_AWAITING_PAYMENT = 'awaiting_payment';
-    const STATUS_PAID             = 'paid';
-    const STATUS_PROCESSING       = 'processing';
-    const STATUS_COMPLETED        = 'completed';
-    const STATUS_CANCELLED        = 'cancelled';
-    const STATUS_FAILED           = 'failed';
+    const STATUS_PENDING              = 'pending';
+    const STATUS_AWAITING_PAYMENT     = 'awaiting_payment';
+    const STATUS_PAID                 = 'paid';
+    const STATUS_PROCESSING           = 'processing';
+    const STATUS_PROVISIONING         = 'provisioning';
+    const STATUS_PROVISIONING_FAILED  = 'provisioning_failed';
+    const STATUS_COMPLETED            = 'completed';
+    const STATUS_CANCELLED            = 'cancelled';
+    const STATUS_FAILED               = 'failed';
 
     // Payment statuses
     const PAYMENT_UNPAID    = 'unpaid';
@@ -98,14 +100,16 @@ class Order extends Model
     public function statusLabel(): string
     {
         return match($this->status) {
-            self::STATUS_PENDING          => 'در انتظار',
-            self::STATUS_AWAITING_PAYMENT => 'در انتظار پرداخت',
-            self::STATUS_PAID             => 'پرداخت شده',
-            self::STATUS_PROCESSING       => 'در حال پردازش',
-            self::STATUS_COMPLETED        => 'تکمیل شده',
-            self::STATUS_CANCELLED        => 'لغو شده',
-            self::STATUS_FAILED           => 'ناموفق',
-            default                       => $this->status,
+            self::STATUS_PENDING             => 'در انتظار',
+            self::STATUS_AWAITING_PAYMENT    => 'در انتظار پرداخت',
+            self::STATUS_PAID                => 'پرداخت شده',
+            self::STATUS_PROCESSING          => 'در حال پردازش',
+            self::STATUS_PROVISIONING        => 'در حال ساخت سرویس',
+            self::STATUS_PROVISIONING_FAILED => 'خطا در ساخت سرویس',
+            self::STATUS_COMPLETED           => 'فعال',
+            self::STATUS_CANCELLED           => 'لغو شده',
+            self::STATUS_FAILED              => 'ناموفق',
+            default                          => $this->status,
         };
     }
 
@@ -139,13 +143,15 @@ class Order extends Model
     public static function allStatuses(): array
     {
         return [
-            self::STATUS_PENDING          => 'در انتظار',
-            self::STATUS_AWAITING_PAYMENT => 'در انتظار پرداخت',
-            self::STATUS_PAID             => 'پرداخت شده',
-            self::STATUS_PROCESSING       => 'در حال پردازش',
-            self::STATUS_COMPLETED        => 'تکمیل شده',
-            self::STATUS_CANCELLED        => 'لغو شده',
-            self::STATUS_FAILED           => 'ناموفق',
+            self::STATUS_PENDING             => 'در انتظار',
+            self::STATUS_AWAITING_PAYMENT    => 'در انتظار پرداخت',
+            self::STATUS_PAID                => 'پرداخت شده',
+            self::STATUS_PROCESSING          => 'در حال پردازش',
+            self::STATUS_PROVISIONING        => 'در حال ساخت سرویس',
+            self::STATUS_PROVISIONING_FAILED => 'خطا در ساخت سرویس',
+            self::STATUS_COMPLETED           => 'فعال',
+            self::STATUS_CANCELLED           => 'لغو شده',
+            self::STATUS_FAILED              => 'ناموفق',
         ];
     }
 
