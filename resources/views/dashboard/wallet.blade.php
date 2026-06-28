@@ -16,6 +16,16 @@
 </div>
 @endif
 
+@if(!$walletEnabled)
+{{-- Wallet disabled notice --}}
+<div class="bg-yellow-900/30 border border-yellow-700/50 rounded-xl p-6 text-center mb-8">
+    <p class="text-yellow-300 text-lg font-semibold">کیف پول در حال حاضر غیرفعال است.</p>
+    <p class="text-yellow-500 text-sm mt-2">برای اطلاعات بیشتر با پشتیبانی تماس بگیرید.</p>
+    <a href="{{ route('contact') }}" class="inline-block mt-4 text-yellow-400 hover:text-yellow-300 text-sm transition">
+        تماس با پشتیبانی ←
+    </a>
+</div>
+@else
 {{-- Balance card --}}
 <div class="grid grid-cols-1 md:grid-cols-3 gap-5 mb-8">
     <div class="md:col-span-1 bg-indigo-600 rounded-xl p-6 flex flex-col justify-between">
@@ -40,7 +50,7 @@
                 </a>
             @else
                 <p class="text-gray-400 text-sm leading-6">
-                    شارژ کیف پول در حال حاضر از طریق درگاه آنلاین در دسترس نیست.<br>
+                    شارژ کیف پول در حال حاضر غیرفعال است.<br>
                     برای شارژ با پشتیبانی تماس بگیرید.
                 </p>
                 <a href="{{ route('contact') }}" class="inline-block mt-4 text-indigo-400 hover:text-indigo-300 text-sm transition">
@@ -50,6 +60,7 @@
         </div>
     </div>
 </div>
+@endif
 
 {{-- Transaction history --}}
 <div class="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
