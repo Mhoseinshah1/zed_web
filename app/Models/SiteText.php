@@ -25,6 +25,16 @@ class SiteText extends Model
         });
     }
 
+    /**
+     * Read a setting as boolean — accepts '1', 'true', 'yes', true, 1, etc.
+     */
+    public static function getBool(string $key, bool $default = false): bool
+    {
+        $row = static::get($key, $default ? '1' : '0');
+        $str = strtolower(trim($row));
+        return $str === '1' || $str === 'true' || $str === 'yes';
+    }
+
     protected static function booted(): void
     {
         static::saved(function (SiteText $text) {

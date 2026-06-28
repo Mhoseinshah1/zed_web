@@ -80,8 +80,8 @@ class PaymentController extends Controller
 
         // Wallet payment — immediate approval
         if ($method->type === PaymentMethod::TYPE_WALLET) {
-            $walletEnabled        = SiteText::get('wallet_enabled', '0') === '1';
-            $walletPaymentEnabled = SiteText::get('wallet_payment_enabled', '0') === '1';
+            $walletEnabled        = SiteText::getBool('wallet_enabled', true);
+            $walletPaymentEnabled = SiteText::getBool('wallet_payment_enabled', true);
 
             if (! $walletEnabled || ! $walletPaymentEnabled) {
                 return back()->withErrors(['payment_method_id' => 'پرداخت از کیف پول در حال حاضر غیرفعال است.']);

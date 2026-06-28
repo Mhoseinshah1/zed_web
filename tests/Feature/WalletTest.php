@@ -82,27 +82,56 @@ class WalletTest extends TestCase
         );
     }
 
+    /** Set a SiteText key to '1' or '0'; creates the row if missing. */
+    private function setSetting(string $key, string $value): void
+    {
+        SiteText::updateOrCreate(['key' => $key], ['value' => $value, 'group' => 'wallet']);
+    }
+
     private function enableWallet(): void
     {
-        SiteText::firstOrCreate(['key' => 'wallet_enabled'], ['value' => '1', 'group' => 'wallet']);
+        $this->setSetting('wallet_enabled', '1');
+    }
+
+    private function disableWallet(): void
+    {
+        $this->setSetting('wallet_enabled', '0');
     }
 
     private function enableWalletPayment(): void
     {
         $this->enableWallet();
-        SiteText::firstOrCreate(['key' => 'wallet_payment_enabled'], ['value' => '1', 'group' => 'wallet']);
+        $this->setSetting('wallet_payment_enabled', '1');
+    }
+
+    private function disableWalletPayment(): void
+    {
+        $this->enableWallet();
+        $this->setSetting('wallet_payment_enabled', '0');
     }
 
     private function enableWalletTopup(): void
     {
         $this->enableWallet();
-        SiteText::firstOrCreate(['key' => 'wallet_topup_enabled'], ['value' => '1', 'group' => 'wallet']);
+        $this->setSetting('wallet_topup_enabled', '1');
+    }
+
+    private function disableWalletTopup(): void
+    {
+        $this->enableWallet();
+        $this->setSetting('wallet_topup_enabled', '0');
     }
 
     private function enableNowpaymentsTopup(): void
     {
         $this->enableWalletTopup();
-        SiteText::firstOrCreate(['key' => 'wallet_topup_nowpayments_enabled'], ['value' => '1', 'group' => 'wallet']);
+        $this->setSetting('wallet_topup_nowpayments_enabled', '1');
+    }
+
+    private function disableNowpaymentsTopup(): void
+    {
+        $this->enableWalletTopup();
+        $this->setSetting('wallet_topup_nowpayments_enabled', '0');
     }
 
     private function makeIpnSignature(array $payload, string $secret): string
@@ -327,8 +356,7 @@ class WalletTest extends TestCase
 
     public function test_wallet_page_shows_contact_support_when_topup_disabled(): void
     {
-        $this->enableWallet();
-        // topup NOT enabled
+        $this->disableWalletTopup();
         $user = $this->makeUser();
 
         $this->actingAs($user)
@@ -410,7 +438,7 @@ class WalletTest extends TestCase
 
     public function test_wallet_payment_blocked_when_wallet_disabled(): void
     {
-        // wallet_enabled is NOT seeded (defaults to '0')
+        $this->disableWallet();
         $user   = $this->makeUser(['wallet_balance_toman' => 100000]);
         $plan   = $this->makePlan(50000);
         $order  = $this->makeOrder($user, $plan);
@@ -428,8 +456,7 @@ class WalletTest extends TestCase
 
     public function test_wallet_payment_blocked_when_payment_disabled(): void
     {
-        $this->enableWallet();
-        // wallet_payment_enabled NOT enabled
+        $this->disableWalletPayment();
         $user   = $this->makeUser(['wallet_balance_toman' => 100000]);
         $plan   = $this->makePlan(50000);
         $order  = $this->makeOrder($user, $plan);
@@ -541,6 +568,7 @@ class WalletTest extends TestCase
 
     public function test_topup_form_returns_404_when_wallet_disabled(): void
     {
+        $this->disableWallet();
         $user = $this->makeUser();
 
         $this->actingAs($user)
@@ -550,7 +578,7 @@ class WalletTest extends TestCase
 
     public function test_topup_form_returns_404_when_topup_disabled(): void
     {
-        $this->enableWallet(); // wallet enabled but topup NOT enabled
+        $this->disableWalletTopup();
         $user = $this->makeUser();
 
         $this->actingAs($user)
@@ -612,6 +640,7 @@ class WalletTest extends TestCase
 
     public function test_process_topup_blocked_when_wallet_disabled(): void
     {
+        $this->disableWallet();
         $user = $this->makeUser();
 
         $this->actingAs($user)
@@ -849,7 +878,8 @@ class WalletTest extends TestCase
     {
         $user = $this->makeUser();
 
-        // Disabled by default
+        // Disable topup explicitly
+        $this->disableWalletTopup();
         $this->actingAs($user)
             ->get(route('dashboard.wallet.topup'))
             ->assertNotFound();
@@ -864,8 +894,7 @@ class WalletTest extends TestCase
 
     public function test_nowpayments_topup_only_shown_when_enabled(): void
     {
-        $this->enableWalletTopup();
-        // wallet_topup_nowpayments_enabled NOT set
+        $this->disableNowpaymentsTopup();
         $method = $this->makeNowPaymentsMethod();
         $user   = $this->makeUser();
 
@@ -917,5 +946,124 @@ class WalletTest extends TestCase
 
         $this->postJson(route('webhooks.nowpayments'), $payload)
             ->assertStatus(400);
+    }
+
+    // ── PART K: Wallet settings persistence ───────────────────────────────────
+
+    public function test_wallet_settings_boolean_persists_enabled(): void
+    {
+        $this->setSetting('wallet_enabled', '1');
+        \Illuminate\Support\Facades\Cache::forget('site_text:wallet_enabled');
+
+        $this->assertTrue(SiteText::getBool('wallet_enabled', false));
+    }
+
+    public function test_wallet_settings_boolean_persists_disabled(): void
+    {
+        $this->setSetting('wallet_enabled', '0');
+        \Illuminate\Support\Facades\Cache::forget('site_text:wallet_enabled');
+
+        $this->assertFalse(SiteText::getBool('wallet_enabled', true));
+    }
+
+    public function test_wallet_settings_read_from_db_correctly(): void
+    {
+        $this->setSetting('wallet_min_topup_amount', '250000');
+        \Illuminate\Support\Facades\Cache::forget('site_text:wallet_min_topup_amount');
+
+        $this->assertEquals('250000', SiteText::get('wallet_min_topup_amount', ''));
+    }
+
+    public function test_wallet_settings_cache_cleared_after_save(): void
+    {
+        // Prime the cache with '1'
+        $this->setSetting('wallet_enabled', '1');
+        SiteText::getBool('wallet_enabled', false); // warms cache
+
+        // Update value and verify cache is invalidated via Eloquent event
+        $this->setSetting('wallet_enabled', '0');
+
+        // Cache should reflect new value (SiteText::saved event clears it)
+        $fresh = SiteText::getBool('wallet_enabled', true);
+        $this->assertFalse($fresh);
+    }
+
+    public function test_wallet_controller_respects_wallet_enabled_setting(): void
+    {
+        $this->disableWallet();
+        $user = $this->makeUser();
+
+        $this->actingAs($user)
+            ->get(route('dashboard.wallet'))
+            ->assertOk()
+            ->assertSee('کیف پول در حال حاضر غیرفعال است');
+    }
+
+    public function test_checkout_respects_wallet_payment_enabled(): void
+    {
+        $this->disableWalletPayment();
+        $user   = $this->makeUser(['wallet_balance_toman' => 200000]);
+        $plan   = $this->makePlan(50000);
+        $order  = $this->makeOrder($user, $plan);
+        $method = $this->makeWalletMethod();
+
+        $this->actingAs($user)
+            ->post(route('dashboard.orders.pay.submit', $order), [
+                'payment_method_id' => $method->id,
+            ])
+            ->assertRedirect();
+
+        $order->refresh();
+        $this->assertNotEquals(Order::PAYMENT_PAID, $order->payment_status);
+    }
+
+    public function test_topup_page_respects_wallet_topup_enabled(): void
+    {
+        $this->disableWalletTopup();
+        $user = $this->makeUser();
+
+        $this->actingAs($user)
+            ->get(route('dashboard.wallet.topup'))
+            ->assertNotFound();
+
+        $this->enableWalletTopup();
+
+        $this->actingAs($user)
+            ->get(route('dashboard.wallet.topup'))
+            ->assertOk();
+    }
+
+    public function test_topup_process_respects_wallet_topup_enabled(): void
+    {
+        $this->enableWallet();
+        $this->setSetting('wallet_topup_enabled', '0');
+        \Illuminate\Support\Facades\Cache::forget('site_text:wallet_topup_enabled');
+        $user = $this->makeUser();
+
+        $this->actingAs($user)
+            ->post(route('dashboard.wallet.topup.submit'), [
+                'amount'            => 100000,
+                'payment_method_id' => 1,
+            ])
+            ->assertForbidden();
+    }
+
+    public function test_nowpayments_topup_respects_nowpayments_setting(): void
+    {
+        $this->disableNowpaymentsTopup();
+        $method = $this->makeNowPaymentsMethod();
+        $user   = $this->makeUser();
+
+        $this->actingAs($user)
+            ->get(route('dashboard.wallet.topup'))
+            ->assertOk()
+            ->assertDontSee($method->title);
+
+        $this->enableNowpaymentsTopup();
+
+        $this->actingAs($user)
+            ->get(route('dashboard.wallet.topup'))
+            ->assertOk()
+            ->assertSee($method->title);
     }
 }

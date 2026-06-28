@@ -13,16 +13,16 @@ class WalletController extends Controller
         $user         = auth()->user();
         $transactions = $user->walletTransactions()->latest()->paginate(20);
 
-        $walletEnabled = SiteText::get('wallet_enabled', '0') === '1';
-        $topupEnabled  = $walletEnabled && SiteText::get('wallet_topup_enabled', '0') === '1';
+        $walletEnabled = SiteText::getBool('wallet_enabled', true);
+        $topupEnabled  = $walletEnabled && SiteText::getBool('wallet_topup_enabled', true);
 
         return view('dashboard.wallet', compact('user', 'transactions', 'walletEnabled', 'topupEnabled'));
     }
 
     public function topupForm()
     {
-        $walletEnabled = SiteText::get('wallet_enabled', '0') === '1';
-        $topupEnabled  = SiteText::get('wallet_topup_enabled', '0') === '1';
+        $walletEnabled = SiteText::getBool('wallet_enabled', true);
+        $topupEnabled  = SiteText::getBool('wallet_topup_enabled', true);
 
         abort_unless($walletEnabled && $topupEnabled, 404);
 
@@ -40,7 +40,7 @@ class WalletController extends Controller
 
         $methods = collect();
 
-        if (SiteText::get('wallet_topup_nowpayments_enabled', '0') === '1') {
+        if (SiteText::getBool('wallet_topup_nowpayments_enabled', true)) {
             $np = PaymentMethod::where('type', PaymentMethod::TYPE_NOWPAYMENTS)
                 ->where('is_active', true)->first();
             if ($np) {
@@ -48,7 +48,7 @@ class WalletController extends Controller
             }
         }
 
-        if (SiteText::get('wallet_topup_centralpay_enabled', '0') === '1') {
+        if (SiteText::getBool('wallet_topup_centralpay_enabled', false)) {
             $cp = PaymentMethod::where('type', PaymentMethod::TYPE_CENTRALPAY)
                 ->where('is_active', true)->first();
             if ($cp) {
@@ -61,8 +61,8 @@ class WalletController extends Controller
 
     public function processTopup(Request $request)
     {
-        $walletEnabled = SiteText::get('wallet_enabled', '0') === '1';
-        $topupEnabled  = SiteText::get('wallet_topup_enabled', '0') === '1';
+        $walletEnabled = SiteText::getBool('wallet_enabled', true);
+        $topupEnabled  = SiteText::getBool('wallet_topup_enabled', true);
 
         abort_unless($walletEnabled && $topupEnabled, 403);
 
@@ -86,7 +86,7 @@ class WalletController extends Controller
 
         if ($method->isNowPayments()) {
             abort_unless(
-                SiteText::get('wallet_topup_nowpayments_enabled', '0') === '1' && $method->is_active,
+                SiteText::getBool('wallet_topup_nowpayments_enabled', true) && $method->is_active,
                 422
             );
             return app(NowPaymentsController::class)
@@ -95,7 +95,7 @@ class WalletController extends Controller
 
         if ($method->isCentralPay()) {
             abort_unless(
-                SiteText::get('wallet_topup_centralpay_enabled', '0') === '1' && $method->is_active,
+                SiteText::getBool('wallet_topup_centralpay_enabled', false) && $method->is_active,
                 422
             );
             return app(CentralPayController::class)

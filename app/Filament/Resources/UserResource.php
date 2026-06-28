@@ -100,7 +100,7 @@ class UserResource extends Resource
                             ->minValue(1),
                         Forms\Components\Textarea::make('description')
                             ->label('دلیل / توضیح')
-                            ->required(fn () => SiteText::get('wallet_admin_adjustment_requires_note', '1') === '1')
+                            ->required(fn () => SiteText::getBool('wallet_admin_adjustment_requires_note', true))
                             ->rows(2),
                     ])
                     ->action(function (User $record, array $data) {
@@ -140,7 +140,7 @@ class UserResource extends Resource
                             ->minValue(1),
                         Forms\Components\Textarea::make('description')
                             ->label('دلیل / توضیح')
-                            ->required(fn () => SiteText::get('wallet_admin_adjustment_requires_note', '1') === '1')
+                            ->required(fn () => SiteText::getBool('wallet_admin_adjustment_requires_note', true))
                             ->rows(2),
                     ])
                     ->action(function (User $record, array $data) {
