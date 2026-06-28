@@ -10,6 +10,7 @@ class DatabaseSeeder extends Seeder
     {
         $this->call([
             SiteTextSeeder::class,
+            ServiceSettingsSeeder::class,
             FeatureSeeder::class,
             LocationSeeder::class,
             PlanSeeder::class,

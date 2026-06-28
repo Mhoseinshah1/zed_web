@@ -13,6 +13,7 @@ use App\Http\Controllers\PlansController;
 use App\Http\Controllers\ServiceController;
 use App\Http\Controllers\StatusController;
 use App\Http\Controllers\TutorialsController;
+use App\Http\Controllers\UserServiceActionController;
 use App\Http\Controllers\WalletController;
 use Illuminate\Support\Facades\Route;
 
@@ -52,6 +53,21 @@ Route::middleware('auth')->prefix('dashboard')->name('dashboard.')->group(functi
     Route::post('/orders/{order}/pay', [PaymentController::class, 'submit'])->name('orders.pay.submit');
     Route::get('/services', [ServiceController::class, 'index'])->name('services');
     Route::get('/services/{service}', [ServiceController::class, 'show'])->name('services.show');
+
+    // Marzban self-service actions — throttled to prevent abuse
+    Route::middleware('throttle:30,1')->group(function () {
+        Route::post('/services/{service}/sync', [UserServiceActionController::class, 'sync'])
+            ->name('services.sync');
+        Route::post('/services/{service}/revoke-subscription', [UserServiceActionController::class, 'revokeSubscription'])
+            ->name('services.revoke-subscription');
+        Route::post('/services/{service}/reset-traffic', [UserServiceActionController::class, 'resetTraffic'])
+            ->name('services.reset-traffic');
+        Route::post('/services/{service}/disable', [UserServiceActionController::class, 'disable'])
+            ->name('services.disable');
+        Route::post('/services/{service}/enable', [UserServiceActionController::class, 'enable'])
+            ->name('services.enable');
+    });
+
     Route::get('/profile', fn () => view('dashboard.profile', ['user' => auth()->user()]))->name('profile');
     Route::get('/wallet', [WalletController::class, 'index'])->name('wallet');
 });

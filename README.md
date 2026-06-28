@@ -634,9 +634,59 @@ ZedProxy uses [`simplesoftwareio/simple-qrcode`](https://www.simplesoftwareio.co
 
 Users can only see their **own** service pages. Accessing another user's service detail returns 403.
 
+### User self-service Marzban actions
+
+The service detail page at `/dashboard/services/{service}` includes a **مدیریت سرویس** (Service Management) section with user-facing actions. All actions are POST routes under `auth` middleware with global 30 req/min throttle.
+
+| Route | Action | Persian label | Enabled by default |
+|-------|--------|--------------|-------------------|
+| `POST /dashboard/services/{service}/sync` | Sync from Marzban | بروزرسانی وضعیت سرویس | ✅ Yes |
+| `POST /dashboard/services/{service}/revoke-subscription` | Revoke subscription | تغییر لینک اشتراک | ✅ Yes |
+| `POST /dashboard/services/{service}/reset-traffic` | Reset traffic | ریست ترافیک | ❌ No (admin must enable) |
+| `POST /dashboard/services/{service}/disable` | Disable service | غیرفعال‌سازی سرویس | ❌ No (admin must enable) |
+| `POST /dashboard/services/{service}/enable` | Enable service | فعال‌سازی سرویس | ❌ No (admin must enable) |
+
+**Revoke subscription** is additionally rate-limited to **once per 10 minutes per service** (configurable via `services.revoke_subscription_cooldown_seconds` setting). After the cooldown, the user sees: "برای تغییر مجدد لینک اشتراک کمی بعد دوباره تلاش کنید."
+
+When a user revokes their subscription:
+1. `POST /api/user/{username}/revoke_sub` is called on Marzban
+2. Marzban generates a new subscription token
+3. The new `subscription_url` is saved to `user_services.subscription_link`
+4. The new `links[0]` is saved to `user_services.config_link`
+5. The QR code on the page updates automatically on next load
+
+Actions are only shown for **active services** with a `remote_username`. Inactive/pending services see: "این عملیات فقط برای سرویس‌های فعال قابل انجام است."
+
+The enable button is shown for **disabled** services (only when the admin setting allows it).
+
+### Admin settings for user self-service (SiteText, group: `services`)
+
+| Key | Default | Label |
+|-----|---------|-------|
+| `services.allow_user_revoke_subscription` | `true` | اجازه تغییر لینک اشتراک توسط کاربر |
+| `services.allow_user_sync_service` | `true` | اجازه بروزرسانی وضعیت سرویس توسط کاربر |
+| `services.allow_user_reset_traffic` | `false` | اجازه ریست ترافیک توسط کاربر |
+| `services.allow_user_disable_service` | `false` | اجازه غیرفعال‌سازی سرویس توسط کاربر |
+| `services.allow_user_enable_service` | `false` | اجازه فعال‌سازی سرویس توسط کاربر |
+| `services.revoke_subscription_cooldown_seconds` | `600` | فاصله زمانی تغییر لینک اشتراک (ثانیه) |
+
+Settings are seeded via `ServiceSettingsSeeder` using `firstOrCreate` — admin-edited values are **never overwritten** by future deploys.
+
+To change a setting: open `/zed-admin/site-texts` and edit the relevant key, or update the value directly in the database.
+
+### What remains admin-only
+
+The following actions are **never** exposed to users:
+
+- **حذف از مرزبان** (Delete Remote User) — irreversible, admin-only
+- **ساخت دوباره در مرزبان** (Recreate Remote User) — admin-only
+- **پاک کردن لینک‌های محلی** (Clear Local Links) — admin-only
+- Admin notes, provision logs, panel credentials, VPN panel details
+- Any route modification or username change
+
 ### Admin actions on UserServiceResource
 
-All Marzban actions are admin-only. Users do not see revoke/reset/disable buttons.
+The admin panel at `/zed-admin/user-services` has the full action set (admin-only):
 
 | Action | Description |
 |--------|-------------|
@@ -944,6 +994,10 @@ User services, provision logs, VPN panels, and VPN inbounds are **never deleted*
 - **Full admin action set** in UserServiceResource — Recreate, Sync, Reset Traffic, Revoke Subscription (تغییر لینک اشتراک), Disable, Enable, Delete Remote, Clear Local Links, View Subscription QR
 - **Server-side QR codes** — `simplesoftwareio/simple-qrcode` generates inline SVG QR for subscription and config links; no CDN or JavaScript dependency; QR updates automatically after revoke subscription
 - **Subscription + config link display** — user sees subscription URL with copy button and QR code, plus config link QR at `/dashboard/services/{service}`; admin sees QR in modal via **مشاهده بارکد لینک اشتراک**
+- **User self-service Marzban actions** — `UserServiceActionController` with 5 POST routes (sync, revoke-subscription, reset-traffic, disable, enable); ownership enforced; throttled; API failures return flash errors, never crash
+- **Admin-controlled feature flags** — `ServiceSettingsSeeder` seeds 6 `SiteText` settings (group: `services`); sync+revoke enabled by default; reset/disable/enable disabled by default; admin edits via `/zed-admin/site-texts`
+- **Per-service revoke rate limit** — revoke subscription limited to once per 10 minutes per service (configurable); excess attempts get Persian error message
+- **Provision logs for user actions** — every user action creates a `VpnServiceProvisionLog` with action prefix `user_marzban_*`; no tokens or credentials logged
 
 **Next:**
 1. Renew / extra traffic — extend Marzban user expiry or add data via order
