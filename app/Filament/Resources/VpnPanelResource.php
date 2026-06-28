@@ -88,6 +88,63 @@ class VpnPanelResource extends Resource
                 ->columns(2)
                 ->visibleOn('edit'),
 
+            Forms\Components\Section::make('مدیریت قابلیت‌های کاربر')
+                ->description('مشخص کنید کاربران چه اقداماتی روی سرویس‌های این پنل می‌توانند انجام دهند.')
+                ->schema([
+                    Forms\Components\Toggle::make('allow_user_sync_service')
+                        ->label('بروزرسانی وضعیت سرویس')
+                        ->helperText('کاربر می‌تواند وضعیت سرویس خود را از Marzban بروزرسانی کند.')
+                        ->default(true),
+
+                    Forms\Components\Toggle::make('allow_user_revoke_subscription')
+                        ->label('تغییر لینک اشتراک')
+                        ->helperText('کاربر می‌تواند لینک اشتراک خود را تغییر دهد (با محدودیت زمانی).')
+                        ->default(true),
+
+                    Forms\Components\Toggle::make('allow_user_reset_traffic')
+                        ->label('ریست ترافیک')
+                        ->helperText('کاربر می‌تواند مصرف ترافیک سرویس خود را ریست کند.')
+                        ->default(false),
+
+                    Forms\Components\Toggle::make('allow_user_disable_service')
+                        ->label('غیرفعال‌سازی سرویس')
+                        ->helperText('کاربر می‌تواند سرویس فعال خود را موقتاً غیرفعال کند.')
+                        ->default(false),
+
+                    Forms\Components\Toggle::make('allow_user_enable_service')
+                        ->label('فعال‌سازی سرویس')
+                        ->helperText('کاربر می‌تواند سرویس غیرفعال خود را دوباره فعال کند.')
+                        ->default(false),
+
+                    Forms\Components\Toggle::make('allow_user_view_subscription_qr')
+                        ->label('نمایش QR اشتراک')
+                        ->helperText('کاربر می‌تواند QR Code لینک اشتراک را ببیند.')
+                        ->default(true),
+
+                    Forms\Components\Toggle::make('allow_user_view_config_qr')
+                        ->label('نمایش QR کانفیگ')
+                        ->helperText('کاربر می‌تواند QR Code لینک کانفیگ را ببیند.')
+                        ->default(true),
+
+                    Forms\Components\Toggle::make('allow_user_copy_subscription_link')
+                        ->label('کپی لینک اشتراک')
+                        ->helperText('کاربر می‌تواند لینک اشتراک را کپی کند.')
+                        ->default(true),
+
+                    Forms\Components\Toggle::make('allow_user_copy_config_link')
+                        ->label('کپی لینک کانفیگ')
+                        ->helperText('کاربر می‌تواند لینک کانفیگ را کپی کند.')
+                        ->default(true),
+
+                    Forms\Components\Toggle::make('allow_user_view_all_config_links')
+                        ->label('نمایش همه لینک‌های کانفیگ')
+                        ->helperText('کاربر می‌تواند تمام لینک‌های کانفیگ موجود را ببیند.')
+                        ->default(true),
+                ])
+                ->columns(2)
+                ->collapsible()
+                ->collapsed(false),
+
             Forms\Components\Section::make('یادداشت‌ها')->schema([
                 Forms\Components\Textarea::make('notes')
                     ->label('یادداشت')

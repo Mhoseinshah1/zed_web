@@ -3,14 +3,6 @@
 @section('title', 'جزئیات سرویس')
 
 @php
-    use App\Models\SiteText;
-
-    $canSync    = SiteText::get('services.allow_user_sync_service',           'true')  === 'true';
-    $canRevoke  = SiteText::get('services.allow_user_revoke_subscription',    'true')  === 'true';
-    $canReset   = SiteText::get('services.allow_user_reset_traffic',          'false') === 'true';
-    $canDisable = SiteText::get('services.allow_user_disable_service',        'false') === 'true';
-    $canEnable  = SiteText::get('services.allow_user_enable_service',         'false') === 'true';
-
     $isActive   = $service->status === \App\Models\UserService::STATUS_ACTIVE;
     $isDisabled = $service->status === \App\Models\UserService::STATUS_DISABLED;
     $hasRemote  = filled($service->remote_username);
@@ -34,6 +26,14 @@
             <p class="text-xs text-gray-500 mt-0.5 font-mono">{{ $service->service_number }}</p>
         </div>
     </div>
+
+    {{-- ── Auto-sync warning ── --}}
+    @if($syncWarning)
+    <div class="bg-yellow-500/10 border border-yellow-500/30 rounded-xl px-5 py-4 flex items-center gap-3">
+        <span class="text-yellow-400 text-lg">⚠</span>
+        <p class="text-yellow-300 text-sm">{{ $syncWarning }}</p>
+    </div>
+    @endif
 
     {{-- ── Flash messages ── --}}
     @if(session('success'))
@@ -190,7 +190,8 @@
             <p class="text-gray-500 text-xs">این لینک را در برنامه‌های V2Ray / Clash / Sing-Box وارد کنید تا کانفیگ‌ها به‌صورت خودکار دریافت شوند.</p>
         </div>
 
-        {{-- Link + copy --}}
+        {{-- Link + copy (panel-gated) --}}
+        @if($canCopySubLink)
         <div class="bg-gray-800 rounded-lg p-3 flex items-center gap-3">
             <code id="sub-link" class="flex-1 text-xs text-indigo-300 break-all font-mono leading-5">{{ $service->subscription_link }}</code>
             <button onclick="copyText('sub-link', this)"
@@ -198,14 +199,17 @@
                 کپی لینک اشتراک
             </button>
         </div>
+        @endif
 
-        {{-- QR Code (server-side SVG) --}}
+        {{-- QR Code (panel-gated, server-side SVG) --}}
+        @if($canViewSubQr)
         <div class="flex flex-col items-center gap-2">
             <p class="text-xs text-gray-500">بارکد لینک اشتراک</p>
             <div class="bg-white p-3 rounded-xl" id="sub-qr-wrapper">
                 {!! QrCode::format('svg')->size(200)->errorCorrection('M')->generate($service->subscription_link) !!}
             </div>
         </div>
+        @endif
     </div>
     @else
     <div class="bg-gray-900 border border-gray-800 rounded-xl p-6">
@@ -222,6 +226,7 @@
     <div class="bg-gray-900 border border-gray-800 rounded-xl p-6 space-y-5">
         <h4 class="text-white font-medium text-sm">لینک کانفیگ مستقیم</h4>
 
+        @if($canCopyConfigLink)
         <div class="bg-gray-800 rounded-lg p-3 flex items-center gap-3">
             <code id="cfg-link" class="flex-1 text-xs text-gray-300 break-all font-mono leading-5">{{ $service->config_link }}</code>
             <button onclick="copyText('cfg-link', this)"
@@ -229,13 +234,16 @@
                 کپی لینک کانفیگ
             </button>
         </div>
+        @endif
 
+        @if($canViewConfigQr)
         <div class="flex flex-col items-center gap-2">
             <p class="text-xs text-gray-500">بارکد لینک کانفیگ</p>
             <div class="bg-white p-3 rounded-xl">
                 {!! QrCode::format('svg')->size(180)->errorCorrection('M')->generate($service->config_link) !!}
             </div>
         </div>
+        @endif
     </div>
     @endif
 

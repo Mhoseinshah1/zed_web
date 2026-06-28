@@ -23,21 +23,13 @@ class UserServiceActionController extends Controller
 
     // ── Panel resolver ────────────────────────────────────────────────────────
 
-    private function resolvePanel(UserService $service): VpnPanel
+    private function resolvePanel(UserService $service): ?VpnPanel
     {
         return $service->vpnPanel
             ?? VpnPanel::where('type', VpnPanel::TYPE_MARZBAN)
                 ->where('is_active', true)
                 ->where('is_default', true)
-                ->firstOrFail();
-    }
-
-    // ── Setting helper ────────────────────────────────────────────────────────
-
-    private function settingEnabled(string $key, bool $default = false): bool
-    {
-        $val = SiteText::get($key, $default ? 'true' : 'false');
-        return in_array(strtolower($val), ['1', 'true', 'yes', 'on'], true);
+                ->first();
     }
 
     // ── Guard: service must be active with a remote_username ─────────────────
@@ -102,7 +94,9 @@ class UserServiceActionController extends Controller
     {
         $this->authorizeService($service);
 
-        if (! $this->settingEnabled('services.allow_user_sync_service', true)) {
+        $panel = $this->resolvePanel($service);
+
+        if (! $panel || ! $panel->allow_user_sync_service) {
             return back()->with('error', 'این عملیات در حال حاضر غیرفعال است.');
         }
 
@@ -111,7 +105,6 @@ class UserServiceActionController extends Controller
         }
 
         try {
-            $panel       = $this->resolvePanel($service);
             $client      = new MarzbanClient($panel);
             $marzbanUser = $client->getUser($service->remote_username);
             $normalized  = $client->normalizeUserResponse($marzbanUser);
@@ -136,7 +129,9 @@ class UserServiceActionController extends Controller
     {
         $this->authorizeService($service);
 
-        if (! $this->settingEnabled('services.allow_user_revoke_subscription', true)) {
+        $panel = $this->resolvePanel($service);
+
+        if (! $panel || ! $panel->allow_user_revoke_subscription) {
             return back()->with('error', 'این عملیات در حال حاضر غیرفعال است.');
         }
 
@@ -145,7 +140,7 @@ class UserServiceActionController extends Controller
         }
 
         // Rate limit: once per 10 minutes per service
-        $rateLimitKey = 'revoke-sub:' . $service->id . ':' . auth()->id();
+        $rateLimitKey          = 'revoke-sub:' . $service->id . ':' . auth()->id();
         $revokeIntervalSeconds = (int) SiteText::get('services.revoke_subscription_cooldown_seconds', '600');
 
         if (RateLimiter::tooManyAttempts($rateLimitKey, 1)) {
@@ -155,7 +150,6 @@ class UserServiceActionController extends Controller
         }
 
         try {
-            $panel       = $this->resolvePanel($service);
             $client      = new MarzbanClient($panel);
             $marzbanUser = $client->revokeSubscription($service->remote_username);
             $newSubLink  = $client->extractSubscriptionLink($marzbanUser);
@@ -186,7 +180,9 @@ class UserServiceActionController extends Controller
     {
         $this->authorizeService($service);
 
-        if (! $this->settingEnabled('services.allow_user_reset_traffic', false)) {
+        $panel = $this->resolvePanel($service);
+
+        if (! $panel || ! $panel->allow_user_reset_traffic) {
             return back()->with('error', 'این عملیات در حال حاضر غیرفعال است.');
         }
 
@@ -195,7 +191,6 @@ class UserServiceActionController extends Controller
         }
 
         try {
-            $panel  = $this->resolvePanel($service);
             $client = new MarzbanClient($panel);
             $client->resetTraffic($service->remote_username);
 
@@ -221,7 +216,9 @@ class UserServiceActionController extends Controller
     {
         $this->authorizeService($service);
 
-        if (! $this->settingEnabled('services.allow_user_disable_service', false)) {
+        $panel = $this->resolvePanel($service);
+
+        if (! $panel || ! $panel->allow_user_disable_service) {
             return back()->with('error', 'این عملیات در حال حاضر غیرفعال است.');
         }
 
@@ -230,7 +227,6 @@ class UserServiceActionController extends Controller
         }
 
         try {
-            $panel  = $this->resolvePanel($service);
             $client = new MarzbanClient($panel);
             $client->updateUser($service->remote_username, ['status' => 'disabled']);
 
@@ -256,7 +252,9 @@ class UserServiceActionController extends Controller
     {
         $this->authorizeService($service);
 
-        if (! $this->settingEnabled('services.allow_user_enable_service', false)) {
+        $panel = $this->resolvePanel($service);
+
+        if (! $panel || ! $panel->allow_user_enable_service) {
             return back()->with('error', 'این عملیات در حال حاضر غیرفعال است.');
         }
 
@@ -265,7 +263,6 @@ class UserServiceActionController extends Controller
         }
 
         try {
-            $panel  = $this->resolvePanel($service);
             $client = new MarzbanClient($panel);
             $client->updateUser($service->remote_username, ['status' => 'active']);
 

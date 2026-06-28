@@ -4,11 +4,9 @@ namespace Tests\Feature;
 
 use App\Models\Order;
 use App\Models\Plan;
-use App\Models\SiteText;
 use App\Models\User;
 use App\Models\UserService;
 use App\Models\VpnPanel;
-use App\Models\VpnServiceProvisionLog;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\RateLimiter;
@@ -57,9 +55,9 @@ class UserServiceActionsTest extends TestCase
         ]);
     }
 
-    private function makePanel(): VpnPanel
+    private function makePanel(array $overrides = []): VpnPanel
     {
-        return VpnPanel::create([
+        return VpnPanel::create(array_merge([
             'name'       => 'Main Marzban',
             'type'       => VpnPanel::TYPE_MARZBAN,
             'base_url'   => 'https://panel.example.com',
@@ -67,7 +65,10 @@ class UserServiceActionsTest extends TestCase
             'password'   => 'secret',
             'is_active'  => true,
             'is_default' => true,
-        ]);
+            // DB defaults: allow_user_sync_service=true, allow_user_revoke_subscription=true
+            //              allow_user_reset_traffic=false, allow_user_disable_service=false
+            //              allow_user_enable_service=false, all view/copy toggles=true
+        ], $overrides));
     }
 
     private function makeActiveService(User $user, VpnPanel $panel, string $remoteUsername = 'zpx_user_abc'): UserService
@@ -89,13 +90,7 @@ class UserServiceActionsTest extends TestCase
             'remote_username'   => $remoteUsername,
             'subscription_link' => 'https://panel.example.com/sub/OLDTOKEN/',
             'config_link'       => 'vless://old-config',
-        ]);
-    }
-
-    private function fakeToken(): void
-    {
-        Http::fake([
-            '*/api/admin/token' => Http::response(['access_token' => 'tok', 'token_type' => 'bearer'], 200),
+            'last_synced_at'    => now(), // prevent auto-sync on show page
         ]);
     }
 
@@ -111,30 +106,6 @@ class UserServiceActionsTest extends TestCase
             'links'            => ['vless://new-config'],
             'proxies'          => ['vless' => ['id' => 'some-uuid']],
         ];
-    }
-
-    private function enableSetting(string $key): void
-    {
-        SiteText::updateOrCreate(['key' => $key], [
-            'group'      => 'services',
-            'label'      => $key,
-            'value'      => 'true',
-            'type'       => 'boolean',
-            'is_public'  => false,
-            'sort_order' => 0,
-        ]);
-    }
-
-    private function disableSetting(string $key): void
-    {
-        SiteText::updateOrCreate(['key' => $key], [
-            'group'      => 'services',
-            'label'      => $key,
-            'value'      => 'false',
-            'type'       => 'boolean',
-            'is_public'  => false,
-            'sort_order' => 0,
-        ]);
     }
 
     // ── Auth guard ────────────────────────────────────────────────────────────
@@ -187,9 +158,7 @@ class UserServiceActionsTest extends TestCase
 
     public function test_user_cannot_reset_traffic_of_another_user(): void
     {
-        $this->enableSetting('services.allow_user_reset_traffic');
-
-        $panel   = $this->makePanel();
+        $panel   = $this->makePanel(['allow_user_reset_traffic' => true]);
         $owner   = $this->makeUser();
         $other   = $this->makeUser();
         $service = $this->makeActiveService($owner, $panel, 'zpx_owner3');
@@ -203,8 +172,7 @@ class UserServiceActionsTest extends TestCase
 
     public function test_user_can_sync_own_active_service(): void
     {
-        $this->enableSetting('services.allow_user_sync_service');
-
+        // allow_user_sync_service defaults to true
         $panel    = $this->makePanel();
         $user     = $this->makeUser();
         $username = 'zpx_sync_usr';
@@ -227,8 +195,6 @@ class UserServiceActionsTest extends TestCase
 
     public function test_sync_updates_subscription_link_and_config_link(): void
     {
-        $this->enableSetting('services.allow_user_sync_service');
-
         $panel    = $this->makePanel();
         $user     = $this->makeUser();
         $username = 'zpx_sync_links';
@@ -248,9 +214,7 @@ class UserServiceActionsTest extends TestCase
 
     public function test_sync_when_disabled_returns_error(): void
     {
-        $this->disableSetting('services.allow_user_sync_service');
-
-        $panel   = $this->makePanel();
+        $panel   = $this->makePanel(['allow_user_sync_service' => false]);
         $user    = $this->makeUser();
         $service = $this->makeActiveService($user, $panel, 'zpx_sync_dis');
 
@@ -262,8 +226,6 @@ class UserServiceActionsTest extends TestCase
 
     public function test_sync_creates_provision_log_on_success(): void
     {
-        $this->enableSetting('services.allow_user_sync_service');
-
         $panel    = $this->makePanel();
         $user     = $this->makeUser();
         $username = 'zpx_sync_log';
@@ -285,8 +247,6 @@ class UserServiceActionsTest extends TestCase
 
     public function test_sync_api_failure_does_not_crash_and_logs_failed(): void
     {
-        $this->enableSetting('services.allow_user_sync_service');
-
         $panel    = $this->makePanel();
         $user     = $this->makeUser();
         $username = 'zpx_sync_fail';
@@ -312,13 +272,14 @@ class UserServiceActionsTest extends TestCase
 
     public function test_user_can_revoke_own_subscription_when_setting_enabled(): void
     {
-        $this->enableSetting('services.allow_user_revoke_subscription');
-        RateLimiter::clear('revoke-sub:1:1'); // ensure no leftover rate limit
-
+        // allow_user_revoke_subscription defaults to true
         $panel    = $this->makePanel();
         $user     = $this->makeUser();
         $username = 'zpx_revoke_usr';
         $service  = $this->makeActiveService($user, $panel, $username);
+
+        $rateKey = "revoke-sub:{$service->id}:{$user->id}";
+        RateLimiter::clear($rateKey);
 
         Http::fake([
             '*/api/admin/token'                   => Http::response(['access_token' => 'tok', 'token_type' => 'bearer'], 200),
@@ -332,17 +293,19 @@ class UserServiceActionsTest extends TestCase
 
         $service->refresh();
         $this->assertStringContainsString('NEWTOKEN', $service->subscription_link);
+
+        RateLimiter::clear($rateKey);
     }
 
     public function test_revoke_updates_config_link(): void
     {
-        $this->enableSetting('services.allow_user_revoke_subscription');
-        RateLimiter::clear("revoke-sub:2:2");
-
         $panel    = $this->makePanel();
         $user     = $this->makeUser();
         $username = 'zpx_revoke_cfg';
         $service  = $this->makeActiveService($user, $panel, $username);
+
+        $rateKey = "revoke-sub:{$service->id}:{$user->id}";
+        RateLimiter::clear($rateKey);
 
         Http::fake([
             '*/api/admin/token'                 => Http::response(['access_token' => 'tok', 'token_type' => 'bearer'], 200),
@@ -353,13 +316,13 @@ class UserServiceActionsTest extends TestCase
 
         $service->refresh();
         $this->assertEquals('vless://new-config', $service->config_link);
+
+        RateLimiter::clear($rateKey);
     }
 
     public function test_revoke_blocked_when_setting_disabled(): void
     {
-        $this->disableSetting('services.allow_user_revoke_subscription');
-
-        $panel   = $this->makePanel();
+        $panel   = $this->makePanel(['allow_user_revoke_subscription' => false]);
         $user    = $this->makeUser();
         $service = $this->makeActiveService($user, $panel, 'zpx_revoke_dis');
 
@@ -374,20 +337,18 @@ class UserServiceActionsTest extends TestCase
 
     public function test_revoke_rate_limited_after_first_request(): void
     {
-        $this->enableSetting('services.allow_user_revoke_subscription');
-
         $panel    = $this->makePanel();
         $user     = $this->makeUser();
         $username = 'zpx_rl_usr';
         $service  = $this->makeActiveService($user, $panel, $username);
 
+        $rateKey = "revoke-sub:{$service->id}:{$user->id}";
+        RateLimiter::clear($rateKey);
+
         Http::fake([
             '*/api/admin/token'                 => Http::response(['access_token' => 'tok', 'token_type' => 'bearer'], 200),
             "*/api/user/{$username}/revoke_sub" => Http::response($this->fakeMarzbanUser($username), 200),
         ]);
-
-        $rateKey = "revoke-sub:{$service->id}:{$user->id}";
-        RateLimiter::clear($rateKey);
 
         // First request succeeds
         $this->actingAs($user)
@@ -406,8 +367,6 @@ class UserServiceActionsTest extends TestCase
 
     public function test_revoke_creates_provision_log(): void
     {
-        $this->enableSetting('services.allow_user_revoke_subscription');
-
         $panel    = $this->makePanel();
         $user     = $this->makeUser();
         $username = 'zpx_revoke_log';
@@ -436,8 +395,7 @@ class UserServiceActionsTest extends TestCase
 
     public function test_reset_traffic_hidden_when_setting_disabled(): void
     {
-        $this->disableSetting('services.allow_user_reset_traffic');
-
+        // allow_user_reset_traffic defaults to false
         $panel   = $this->makePanel();
         $user    = $this->makeUser();
         $service = $this->makeActiveService($user, $panel, 'zpx_reset_dis');
@@ -450,9 +408,7 @@ class UserServiceActionsTest extends TestCase
 
     public function test_reset_traffic_works_when_setting_enabled(): void
     {
-        $this->enableSetting('services.allow_user_reset_traffic');
-
-        $panel    = $this->makePanel();
+        $panel    = $this->makePanel(['allow_user_reset_traffic' => true]);
         $user     = $this->makeUser();
         $username = 'zpx_reset_usr';
         $service  = $this->makeActiveService($user, $panel, $username);
@@ -475,9 +431,7 @@ class UserServiceActionsTest extends TestCase
 
     public function test_reset_traffic_creates_provision_log(): void
     {
-        $this->enableSetting('services.allow_user_reset_traffic');
-
-        $panel    = $this->makePanel();
+        $panel    = $this->makePanel(['allow_user_reset_traffic' => true]);
         $user     = $this->makeUser();
         $username = 'zpx_reset_log';
         $service  = $this->makeActiveService($user, $panel, $username);
@@ -500,8 +454,7 @@ class UserServiceActionsTest extends TestCase
 
     public function test_disable_blocked_when_setting_disabled(): void
     {
-        $this->disableSetting('services.allow_user_disable_service');
-
+        // allow_user_disable_service defaults to false
         $panel   = $this->makePanel();
         $user    = $this->makeUser();
         $service = $this->makeActiveService($user, $panel, 'zpx_dis_set');
@@ -517,9 +470,7 @@ class UserServiceActionsTest extends TestCase
 
     public function test_disable_works_when_setting_enabled(): void
     {
-        $this->enableSetting('services.allow_user_disable_service');
-
-        $panel    = $this->makePanel();
+        $panel    = $this->makePanel(['allow_user_disable_service' => true]);
         $user     = $this->makeUser();
         $username = 'zpx_dis_usr';
         $service  = $this->makeActiveService($user, $panel, $username);
@@ -540,8 +491,7 @@ class UserServiceActionsTest extends TestCase
 
     public function test_enable_blocked_when_setting_disabled(): void
     {
-        $this->disableSetting('services.allow_user_enable_service');
-
+        // allow_user_enable_service defaults to false
         $panel = $this->makePanel();
         $user  = $this->makeUser();
         $plan  = $this->makePlan();
@@ -559,6 +509,7 @@ class UserServiceActionsTest extends TestCase
             'status'           => UserService::STATUS_DISABLED,
             'provision_status' => UserService::PROVISION_PROVISIONED,
             'remote_username'  => 'zpx_en_set',
+            'last_synced_at'   => now(),
         ]);
 
         $this->actingAs($user)
@@ -572,9 +523,7 @@ class UserServiceActionsTest extends TestCase
 
     public function test_enable_works_when_setting_enabled(): void
     {
-        $this->enableSetting('services.allow_user_enable_service');
-
-        $panel    = $this->makePanel();
+        $panel    = $this->makePanel(['allow_user_enable_service' => true]);
         $user     = $this->makeUser();
         $username = 'zpx_en_usr';
         $plan     = $this->makePlan();
@@ -592,6 +541,7 @@ class UserServiceActionsTest extends TestCase
             'status'           => UserService::STATUS_DISABLED,
             'provision_status' => UserService::PROVISION_PROVISIONED,
             'remote_username'  => $username,
+            'last_synced_at'   => now(),
         ]);
 
         Http::fake([
@@ -647,6 +597,7 @@ class UserServiceActionsTest extends TestCase
 
     public function test_service_detail_shows_subscription_link_and_qr_when_active(): void
     {
+        // allow_user_copy_subscription_link and allow_user_view_subscription_qr default to true
         $panel   = $this->makePanel();
         $user    = $this->makeUser();
         $service = $this->makeActiveService($user, $panel, 'zpx_show_sub');
@@ -674,9 +625,7 @@ class UserServiceActionsTest extends TestCase
 
     public function test_service_detail_shows_management_section_for_active_service(): void
     {
-        $this->enableSetting('services.allow_user_sync_service');
-        $this->enableSetting('services.allow_user_revoke_subscription');
-
+        // allow_user_sync_service and allow_user_revoke_subscription default to true
         $panel   = $this->makePanel();
         $user    = $this->makeUser();
         $service = $this->makeActiveService($user, $panel, 'zpx_show_mgmt');
@@ -691,8 +640,7 @@ class UserServiceActionsTest extends TestCase
 
     public function test_service_detail_hides_reset_traffic_when_setting_disabled(): void
     {
-        $this->disableSetting('services.allow_user_reset_traffic');
-
+        // allow_user_reset_traffic defaults to false
         $panel   = $this->makePanel();
         $user    = $this->makeUser();
         $service = $this->makeActiveService($user, $panel, 'zpx_hide_reset');
@@ -705,9 +653,7 @@ class UserServiceActionsTest extends TestCase
 
     public function test_service_detail_shows_reset_traffic_when_setting_enabled(): void
     {
-        $this->enableSetting('services.allow_user_reset_traffic');
-
-        $panel   = $this->makePanel();
+        $panel   = $this->makePanel(['allow_user_reset_traffic' => true]);
         $user    = $this->makeUser();
         $service = $this->makeActiveService($user, $panel, 'zpx_show_reset');
 
@@ -735,12 +681,36 @@ class UserServiceActionsTest extends TestCase
         $response->assertDontSee('secret'); // panel password
     }
 
+    // ── Show page: copy/QR hidden when panel toggle off ───────────────────────
+
+    public function test_service_detail_hides_subscription_copy_when_panel_toggle_off(): void
+    {
+        $panel   = $this->makePanel(['allow_user_copy_subscription_link' => false]);
+        $user    = $this->makeUser();
+        $service = $this->makeActiveService($user, $panel, 'zpx_hide_copy_sub');
+
+        $this->actingAs($user)
+            ->get(route('dashboard.services.show', $service))
+            ->assertOk()
+            ->assertDontSee('کپی لینک اشتراک');
+    }
+
+    public function test_service_detail_hides_config_copy_when_panel_toggle_off(): void
+    {
+        $panel   = $this->makePanel(['allow_user_copy_config_link' => false]);
+        $user    = $this->makeUser();
+        $service = $this->makeActiveService($user, $panel, 'zpx_hide_copy_cfg');
+
+        $this->actingAs($user)
+            ->get(route('dashboard.services.show', $service))
+            ->assertOk()
+            ->assertDontSee('کپی لینک کانفیگ');
+    }
+
     // ── API failure does not crash user page ──────────────────────────────────
 
     public function test_api_failure_on_revoke_returns_error_not_exception(): void
     {
-        $this->enableSetting('services.allow_user_revoke_subscription');
-
         $panel    = $this->makePanel();
         $user     = $this->makeUser();
         $username = 'zpx_revoke_err';
@@ -767,8 +737,6 @@ class UserServiceActionsTest extends TestCase
 
     public function test_api_failure_on_sync_returns_error_not_exception(): void
     {
-        $this->enableSetting('services.allow_user_sync_service');
-
         $panel    = $this->makePanel();
         $user     = $this->makeUser();
         $username = 'zpx_sync_err';

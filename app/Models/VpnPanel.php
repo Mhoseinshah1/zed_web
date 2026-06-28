@@ -25,14 +25,47 @@ class VpnPanel extends Model
         'notes',
         'last_checked_at',
         'last_error',
+        'allow_user_sync_service',
+        'allow_user_revoke_subscription',
+        'allow_user_reset_traffic',
+        'allow_user_disable_service',
+        'allow_user_enable_service',
+        'allow_user_view_subscription_qr',
+        'allow_user_view_config_qr',
+        'allow_user_copy_subscription_link',
+        'allow_user_copy_config_link',
+        'allow_user_view_all_config_links',
     ];
 
     protected $casts = [
-        'is_active'       => 'boolean',
-        'is_default'      => 'boolean',
-        'last_checked_at' => 'datetime',
-        'password'        => 'encrypted',
-        'token'           => 'encrypted',
+        'is_active'                        => 'boolean',
+        'is_default'                       => 'boolean',
+        'last_checked_at'                  => 'datetime',
+        'password'                         => 'encrypted',
+        'token'                            => 'encrypted',
+        'allow_user_sync_service'          => 'boolean',
+        'allow_user_revoke_subscription'   => 'boolean',
+        'allow_user_reset_traffic'         => 'boolean',
+        'allow_user_disable_service'       => 'boolean',
+        'allow_user_enable_service'        => 'boolean',
+        'allow_user_view_subscription_qr'  => 'boolean',
+        'allow_user_view_config_qr'        => 'boolean',
+        'allow_user_copy_subscription_link' => 'boolean',
+        'allow_user_copy_config_link'      => 'boolean',
+        'allow_user_view_all_config_links' => 'boolean',
+    ];
+
+    protected $attributes = [
+        'allow_user_sync_service'           => true,
+        'allow_user_revoke_subscription'    => true,
+        'allow_user_reset_traffic'          => false,
+        'allow_user_disable_service'        => false,
+        'allow_user_enable_service'         => false,
+        'allow_user_view_subscription_qr'   => true,
+        'allow_user_view_config_qr'         => true,
+        'allow_user_copy_subscription_link' => true,
+        'allow_user_copy_config_link'       => true,
+        'allow_user_view_all_config_links'  => true,
     ];
 
     protected $hidden = ['password', 'token'];
