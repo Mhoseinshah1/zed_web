@@ -344,11 +344,18 @@ class UserServiceResource extends Resource
                             $normalized  = $client->normalizeUserResponse($marzbanUser);
                             $subLink     = $client->extractSubscriptionLink($marzbanUser);
 
-                            $record->update([
-                                'traffic_used_gb'  => $normalized['used_traffic_gb'],
+                            $updates = [
+                                'traffic_used_gb'   => $normalized['used_traffic_gb'],
                                 'subscription_link' => $subLink ?? $record->subscription_link,
-                                'last_synced_at'   => now(),
-                            ]);
+                                'config_link'       => $marzbanUser['links'][0] ?? $record->config_link,
+                                'last_synced_at'    => now(),
+                            ];
+
+                            if (! empty($normalized['expire'])) {
+                                $updates['expires_at'] = \Carbon\Carbon::createFromTimestamp($normalized['expire']);
+                            }
+
+                            $record->update($updates);
 
                             \App\Models\VpnServiceProvisionLog::create([
                                 'user_service_id'  => $record->id,
@@ -382,6 +389,143 @@ class UserServiceResource extends Resource
                                 ->body($e->getMessage())
                                 ->danger()
                                 ->send();
+                        }
+                    }),
+
+                Tables\Actions\Action::make('reset_traffic_marzban')
+                    ->label('ریست ترافیک')
+                    ->icon('heroicon-o-arrow-path')
+                    ->color('warning')
+                    ->requiresConfirmation()
+                    ->visible(fn (UserService $record) => filled($record->remote_username) && $record->vpnPanel?->type === VpnPanel::TYPE_MARZBAN)
+                    ->action(function (UserService $record): void {
+                        $panel = $record->vpnPanel;
+                        if (! $panel) {
+                            Notification::make()->title('پنل VPN مشخص نشده.')->danger()->send();
+                            return;
+                        }
+
+                        try {
+                            $client = new MarzbanClient($panel);
+                            $client->resetTraffic($record->remote_username);
+
+                            $record->update(['traffic_used_gb' => 0, 'last_synced_at' => now()]);
+
+                            \App\Models\VpnServiceProvisionLog::create([
+                                'user_service_id' => $record->id,
+                                'vpn_panel_id'    => $panel->id,
+                                'action'          => 'marzban_reset_traffic',
+                                'status'          => 'success',
+                                'message'         => "Traffic reset for '{$record->remote_username}'.",
+                            ]);
+
+                            Notification::make()->title('ترافیک با موفقیت ریست شد.')->success()->send();
+                        } catch (\Throwable $e) {
+                            Notification::make()->title('خطا در ریست ترافیک')->body($e->getMessage())->danger()->send();
+                        }
+                    }),
+
+                Tables\Actions\Action::make('revoke_sub_marzban')
+                    ->label('لغو اشتراک')
+                    ->icon('heroicon-o-key')
+                    ->color('danger')
+                    ->requiresConfirmation()
+                    ->visible(fn (UserService $record) => filled($record->remote_username) && $record->vpnPanel?->type === VpnPanel::TYPE_MARZBAN)
+                    ->action(function (UserService $record): void {
+                        $panel = $record->vpnPanel;
+                        if (! $panel) {
+                            Notification::make()->title('پنل VPN مشخص نشده.')->danger()->send();
+                            return;
+                        }
+
+                        try {
+                            $client      = new MarzbanClient($panel);
+                            $marzbanUser = $client->revokeSubscription($record->remote_username);
+                            $newSubLink  = $client->extractSubscriptionLink($marzbanUser);
+
+                            $record->update(['subscription_link' => $newSubLink, 'last_synced_at' => now()]);
+
+                            \App\Models\VpnServiceProvisionLog::create([
+                                'user_service_id' => $record->id,
+                                'vpn_panel_id'    => $panel->id,
+                                'action'          => 'marzban_revoke_subscription',
+                                'status'          => 'success',
+                                'message'         => "Subscription revoked for '{$record->remote_username}'.",
+                            ]);
+
+                            Notification::make()->title('اشتراک با موفقیت لغو و لینک جدید ذخیره شد.')->success()->send();
+                        } catch (\Throwable $e) {
+                            Notification::make()->title('خطا در لغو اشتراک')->body($e->getMessage())->danger()->send();
+                        }
+                    }),
+
+                Tables\Actions\Action::make('disable_marzban')
+                    ->label('غیرفعال کردن')
+                    ->icon('heroicon-o-pause-circle')
+                    ->color('danger')
+                    ->requiresConfirmation()
+                    ->visible(fn (UserService $record) => filled($record->remote_username)
+                        && $record->vpnPanel?->type === VpnPanel::TYPE_MARZBAN
+                        && $record->status === UserService::STATUS_ACTIVE)
+                    ->action(function (UserService $record): void {
+                        $panel = $record->vpnPanel;
+                        if (! $panel) {
+                            Notification::make()->title('پنل VPN مشخص نشده.')->danger()->send();
+                            return;
+                        }
+
+                        try {
+                            $client = new MarzbanClient($panel);
+                            $client->updateUser($record->remote_username, ['status' => 'disabled']);
+
+                            $record->update(['status' => UserService::STATUS_DISABLED]);
+
+                            \App\Models\VpnServiceProvisionLog::create([
+                                'user_service_id' => $record->id,
+                                'vpn_panel_id'    => $panel->id,
+                                'action'          => 'marzban_disable_user',
+                                'status'          => 'success',
+                                'message'         => "User '{$record->remote_username}' disabled on Marzban.",
+                            ]);
+
+                            Notification::make()->title('سرویس غیرفعال شد.')->success()->send();
+                        } catch (\Throwable $e) {
+                            Notification::make()->title('خطا در غیرفعال کردن')->body($e->getMessage())->danger()->send();
+                        }
+                    }),
+
+                Tables\Actions\Action::make('enable_marzban')
+                    ->label('فعال کردن')
+                    ->icon('heroicon-o-play-circle')
+                    ->color('success')
+                    ->requiresConfirmation()
+                    ->visible(fn (UserService $record) => filled($record->remote_username)
+                        && $record->vpnPanel?->type === VpnPanel::TYPE_MARZBAN
+                        && $record->status === UserService::STATUS_DISABLED)
+                    ->action(function (UserService $record): void {
+                        $panel = $record->vpnPanel;
+                        if (! $panel) {
+                            Notification::make()->title('پنل VPN مشخص نشده.')->danger()->send();
+                            return;
+                        }
+
+                        try {
+                            $client = new MarzbanClient($panel);
+                            $client->updateUser($record->remote_username, ['status' => 'active']);
+
+                            $record->update(['status' => UserService::STATUS_ACTIVE]);
+
+                            \App\Models\VpnServiceProvisionLog::create([
+                                'user_service_id' => $record->id,
+                                'vpn_panel_id'    => $panel->id,
+                                'action'          => 'marzban_enable_user',
+                                'status'          => 'success',
+                                'message'         => "User '{$record->remote_username}' enabled on Marzban.",
+                            ]);
+
+                            Notification::make()->title('سرویس فعال شد.')->success()->send();
+                        } catch (\Throwable $e) {
+                            Notification::make()->title('خطا در فعال کردن')->body($e->getMessage())->danger()->send();
                         }
                     }),
 

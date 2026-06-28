@@ -18,8 +18,10 @@ class ProvisionMarzbanServiceJob implements ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
-    public int $tries   = 3;
+    public int   $tries  = 3;
     public array $backoff = [30, 60, 120]; // seconds between retries
+
+    private string $resolvedAction = 'marzban_create_user';
 
     public function __construct(
         private int $serviceId,
@@ -35,35 +37,15 @@ class ProvisionMarzbanServiceJob implements ShouldQueue
             return; // deleted before job ran — safe to discard
         }
 
-        $client = new MarzbanClient($panel);
-
-        // Generate or reuse the remote username
+        $client   = new MarzbanClient($panel);
         $username = $service->remote_username ?? $this->generateUsername($service);
 
         try {
-            // Idempotent: if user already exists on Marzban, update instead of create
-            $exists = false;
-            try {
-                $client->getUser($username);
-                $exists = true;
-            } catch (MarzbanException $e) {
-                if ($e->getCode() !== 404) {
-                    throw $e;
-                }
-            }
-
-            $payload = $this->buildPayload($service, $panel);
-
-            if ($exists) {
-                $marzbanUser = $client->updateUser($username, $payload);
-                $action      = 'marzban_update_user';
-            } else {
-                $marzbanUser = $client->createUser(array_merge(['username' => $username], $payload));
-                $action      = 'marzban_create_user';
-            }
+            $marzbanUser = $this->fetchOrCreateUser($client, $username, $service, $panel);
 
             $normalized       = $client->normalizeUserResponse($marzbanUser);
             $subscriptionLink = $client->extractSubscriptionLink($marzbanUser);
+            $configLink       = $marzbanUser['links'][0] ?? null;
 
             $startsAt  = $service->starts_at ?? now();
             $expiresAt = $service->expires_at
@@ -75,6 +57,8 @@ class ProvisionMarzbanServiceJob implements ShouldQueue
                 'vpn_panel_id'      => $panel->id,
                 'remote_username'   => $username,
                 'subscription_link' => $subscriptionLink,
+                'config_link'       => $configLink,
+                'traffic_used_gb'   => $normalized['used_traffic_gb'] ?? 0,
                 'starts_at'         => $startsAt,
                 'activated_at'      => $service->activated_at ?? now(),
                 'expires_at'        => $expiresAt,
@@ -84,10 +68,10 @@ class ProvisionMarzbanServiceJob implements ShouldQueue
             VpnServiceProvisionLog::create([
                 'user_service_id'  => $service->id,
                 'vpn_panel_id'     => $panel->id,
-                'action'           => $action,
+                'action'           => $this->resolvedAction,
                 'status'           => 'success',
-                'message'          => "Marzban user '{$username}' " . ($exists ? 'updated' : 'created') . " on panel '{$panel->name}'.",
-                'request_payload'  => ['username' => $username, 'data_limit' => $payload['data_limit'] ?? null],
+                'message'          => "Marzban user '{$username}' provisioned on panel '{$panel->name}'.",
+                'request_payload'  => ['username' => $username, 'data_limit' => $this->buildPayload($service)['data_limit'] ?? null],
                 'response_payload' => [
                     'status'           => $normalized['status'],
                     'subscription_url' => $subscriptionLink ? 'set' : 'not returned',
@@ -112,58 +96,83 @@ class ProvisionMarzbanServiceJob implements ShouldQueue
         }
     }
 
+    // ── Internal helpers ──────────────────────────────────────────────────────
+
+    private function fetchOrCreateUser(MarzbanClient $client, string $username, UserService $service, VpnPanel $panel): array
+    {
+        // If remote_username was already set, try GET first (idempotent retry)
+        if ($service->remote_username) {
+            try {
+                $existing = $client->getUser($username);
+                VpnServiceProvisionLog::create([
+                    'user_service_id' => $service->id,
+                    'vpn_panel_id'    => $panel->id,
+                    'action'          => 'marzban_get_user',
+                    'status'          => 'success',
+                    'message'         => "Found existing Marzban user '{$username}'. Updating.",
+                ]);
+                $this->resolvedAction = 'marzban_update_user';
+                return $client->updateUser($username, $this->buildPayload($service));
+            } catch (MarzbanException $e) {
+                if ($e->getCode() !== 404) {
+                    throw $e;
+                }
+            }
+        }
+
+        // Attempt to create the user
+        try {
+            return $client->createUser(array_merge(['username' => $username], $this->buildPayload($service)));
+        } catch (MarzbanException $e) {
+            // 409 Conflict — user already exists on panel but wasn't linked locally
+            if ($e->getCode() === 409) {
+                VpnServiceProvisionLog::create([
+                    'user_service_id' => $service->id,
+                    'vpn_panel_id'    => $panel->id,
+                    'action'          => 'marzban_create_user',
+                    'status'          => 'skipped',
+                    'message'         => "Username '{$username}' already exists on Marzban (409). Fetching existing user.",
+                ]);
+                $client->getUser($username);
+                $this->resolvedAction = 'marzban_update_user';
+                return $client->updateUser($username, $this->buildPayload($service));
+            }
+            throw $e;
+        }
+    }
+
     private function generateUsername(UserService $service): string
     {
-        // zpx_{user_id}_{service_id}_{random5} — max 32 chars, safe for Marzban username validation
-        $random = strtolower(Str::random(5));
+        $random    = strtolower(Str::random(5));
         $candidate = "zpx_{$service->user_id}_{$service->id}_{$random}";
-
-        // Marzban allows: ^[a-zA-Z0-9@_.+-]+$ with max 32 chars
         return substr($candidate, 0, 32);
     }
 
-    private function buildPayload(UserService $service, VpnPanel $panel): array
+    private function buildPayload(UserService $service): array
     {
-        // Derive proxies + inbound tags from VpnInbound records on this panel
-        $inbounds = $panel->inbounds()->where('is_active', true)->get();
-
-        $proxies        = [];
-        $inboundMapping = [];
-
-        if ($inbounds->isNotEmpty()) {
-            foreach ($inbounds as $inbound) {
-                $proxies[$inbound->protocol]          = new \stdClass(); // {} = auto-generate settings
-                $inboundMapping[$inbound->protocol][] = $inbound->name; // name = Marzban inbound tag
-            }
-        } else {
-            // No inbounds configured — default to VLESS (Marzban will use all available VLESS inbounds)
-            $proxies = ['vless' => new \stdClass()];
-        }
+        // Always use vless with auto-generated credentials.
+        // Do NOT send inbounds — Marzban auto-assigns all available inbounds.
+        $proxies = ['vless' => new \stdClass()];
 
         // data_limit: 0 = unlimited in Marzban; otherwise convert GB → bytes
         $dataLimitBytes = ($service->traffic_total_gb && $service->traffic_total_gb > 0)
             ? (int) ($service->traffic_total_gb * 1_073_741_824)
             : 0;
 
-        // expire: Marzban expects a Unix timestamp integer; null/omitted = no expiry
         $startsAt  = $service->starts_at ?? now();
         $expiresAt = $service->expires_at
             ?? ($service->duration_days ? $startsAt->copy()->addDays($service->duration_days) : null);
 
         $payload = [
-            'proxies'                    => $proxies,
-            'data_limit'                 => $dataLimitBytes,
-            'data_limit_reset_strategy'  => 'no_reset',
-            'status'                     => 'active',
-            'note'                       => "ZedProxy {$service->service_number}",
+            'proxies'                   => $proxies,
+            'data_limit'                => $dataLimitBytes,
+            'data_limit_reset_strategy' => 'no_reset',
+            'status'                    => 'active',
+            'note'                      => "ZedProxy {$service->service_number}",
         ];
 
         if ($expiresAt) {
             $payload['expire'] = $expiresAt->timestamp;
-        }
-
-        if ($inboundMapping) {
-            $payload['inbounds'] = $inboundMapping;
         }
 
         return $payload;

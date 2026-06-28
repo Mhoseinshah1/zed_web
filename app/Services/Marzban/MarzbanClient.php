@@ -27,7 +27,7 @@ use Illuminate\Http\Client\Response;
 class MarzbanClient
 {
     private const TOKEN_TTL = 3500; // cache ~58 min; Marzban tokens last 24 h
-    private const TIMEOUT   = 15;   // seconds
+    private const TIMEOUT   = 20;   // seconds
 
     public function __construct(private VpnPanel $panel) {}
 
@@ -55,11 +55,28 @@ class MarzbanClient
         return $token;
     }
 
+    // ── Token management (public API) ────────────────────────────────────────
+
+    public function getToken(): string
+    {
+        return $this->token();
+    }
+
+    public function forgetToken(): void
+    {
+        Cache::forget($this->tokenKey());
+    }
+
     // ── Panel-level operations ────────────────────────────────────────────────
 
     public function testConnection(): array
     {
         $this->login(); // always force a fresh login to validate credentials
+        return $this->request('GET', '/api/system');
+    }
+
+    public function getSystem(): array
+    {
         return $this->request('GET', '/api/system');
     }
 
@@ -100,6 +117,11 @@ class MarzbanClient
     public function revokeSubscription(string $username): array
     {
         return $this->request('POST', '/api/user/' . rawurlencode($username) . '/revoke_sub');
+    }
+
+    public function getUsage(string $username): array
+    {
+        return $this->request('GET', '/api/user/' . rawurlencode($username) . '/usage');
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────

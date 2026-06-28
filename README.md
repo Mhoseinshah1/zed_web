@@ -584,13 +584,9 @@ Auth: `Authorization: Bearer {access_token}` on all endpoints except `/api/admin
    - **Default**: toggle on (services will auto-provision here)
 3. Save, then click **تست اتصال** (Test Connection) in the table actions
 
-### Adding inbounds (optional but recommended)
+### Inbounds
 
-In `/zed-admin/vpn-inbounds`, add the Marzban inbound tags you want users provisioned with:
-- **Name**: must match the exact inbound tag name in Marzban (e.g. `VLESS-TCP-REALITY`)
-- **Protocol**: `vless`, `vmess`, `trojan`, or `shadowsocks`
-
-If no inbounds are configured, ZedProxy defaults to enabling `vless` on all available inbounds.
+ZedProxy provisions users with `proxies: {vless: {}}` and does **not** send an `inbounds` key in the create/update payload. Marzban automatically assigns all available inbounds when the `inbounds` key is absent — no manual inbound configuration is required.
 
 ### How automatic provisioning works
 
@@ -598,10 +594,12 @@ If no inbounds are configured, ZedProxy defaults to enabling `vless` on all avai
 2. `PaymentService` calls `ServiceProvisioner::createFromOrder()` — idempotent
 3. If a default active Marzban panel exists, `ProvisionMarzbanServiceJob` is dispatched to the queue
 4. The job:
-   - Checks if the Marzban user already exists (idempotent retry)
-   - Creates or updates the Marzban user with username format `zpx_{user_id}_{service_id}_{random5}`
+   - If `remote_username` is already set (retry scenario): GET user first; if found, update it
+   - Otherwise creates the user — if Marzban returns 409 (duplicate), GET existing then update
+   - Username format: `zpx_{user_id}_{service_id}_{random5}` (max 32 chars)
    - Sets `data_limit` from `traffic_total_gb` (bytes), `expire` from `expires_at` (Unix timestamp)
    - Saves `subscription_url` from the Marzban response to `user_services.subscription_link`
+   - Saves `links[0]` as `config_link`, normalised traffic as `traffic_used_gb`
    - Sets service `status = active`, `provision_status = provisioned`
 5. If no default panel exists, the service stays `provision_status = manual_required`
 
@@ -629,7 +627,11 @@ The Marzban `UserResponse` includes a `subscription_url` field (e.g. `https://pa
 | Action | Description |
 |--------|-------------|
 | **تلاش مجدد Marzban** (Retry Provision) | Runs `ProvisionMarzbanServiceJob` synchronously; creates or updates the Marzban user; visible when provision_status is manual_required, failed, or skipped |
-| **همگام‌سازی از Marzban** (Sync from Marzban) | Calls `GET /api/user/{username}`, updates traffic usage and subscription link; visible when remote_username is set |
+| **همگام‌سازی از Marzban** (Sync from Marzban) | Calls `GET /api/user/{username}`, updates traffic, subscription link, config link, and expiry; visible when remote_username is set |
+| **ریست ترافیک** (Reset Traffic) | Calls `POST /api/user/{username}/reset`; resets used traffic on panel and locally; visible when remote_username is set |
+| **لغو اشتراک** (Revoke Subscription) | Calls `POST /api/user/{username}/revoke_sub`; generates a new subscription token and saves the new URL; visible when remote_username is set |
+| **غیرفعال کردن** (Disable) | Calls `PUT /api/user/{username}` with `{status: disabled}`; sets service status to disabled; visible when service is active |
+| **فعال کردن** (Enable) | Calls `PUT /api/user/{username}` with `{status: active}`; sets service status to active; visible when service is disabled |
 
 ### What happens if provisioning fails
 

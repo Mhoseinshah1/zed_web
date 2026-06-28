@@ -288,6 +288,59 @@ class MarzbanProvisioningTest extends TestCase
         ]);
     }
 
+    // ── 409 conflict → fetch existing and update ──────────────────────────────
+
+    public function test_409_conflict_on_create_fetches_existing_and_updates(): void
+    {
+        $panel   = $this->makeMarzbanPanel();
+        $user    = $this->makeUser();
+        $plan    = $this->makePlan();
+        $order   = $this->makeOrder($user, $plan);
+        $service = UserService::create([
+            'user_id'          => $user->id,
+            'order_id'         => $order->id,
+            'plan_id'          => $plan->id,
+            'plan_name'        => $plan->name,
+            'traffic_total_gb' => 20,
+            'traffic_used_gb'  => 0,
+            'duration_days'    => 30,
+            'status'           => UserService::STATUS_PENDING_PROVISION,
+            'provision_status' => UserService::PROVISION_MANUAL_REQUIRED,
+        ]);
+
+        Http::fake(function ($request) {
+            if (str_contains($request->url(), '/api/admin/token')) {
+                return Http::response(['access_token' => 'tok', 'token_type' => 'bearer'], 200);
+            }
+            if (str_contains($request->url(), '/api/user') && $request->method() === 'POST') {
+                return Http::response(['detail' => 'Username already exists'], 409);
+            }
+            if (str_contains($request->url(), '/api/user/') && $request->method() === 'GET') {
+                return Http::response($this->fakeUserResponse('zpx_conflict_user'), 200);
+            }
+            if (str_contains($request->url(), '/api/user/') && $request->method() === 'PUT') {
+                return Http::response($this->fakeUserResponse('zpx_conflict_user'), 200);
+            }
+        });
+
+        dispatch_sync(new ProvisionMarzbanServiceJob($service->id, $panel->id));
+
+        $service->refresh();
+        $this->assertEquals(UserService::STATUS_ACTIVE, $service->status);
+        $this->assertEquals(UserService::PROVISION_PROVISIONED, $service->provision_status);
+
+        $this->assertDatabaseHas('vpn_service_provision_logs', [
+            'user_service_id' => $service->id,
+            'action'          => 'marzban_create_user',
+            'status'          => 'skipped',
+        ]);
+        $this->assertDatabaseHas('vpn_service_provision_logs', [
+            'user_service_id' => $service->id,
+            'action'          => 'marzban_update_user',
+            'status'          => 'success',
+        ]);
+    }
+
     // ── User cannot see another user's subscription link ──────────────────────
 
     public function test_user_cannot_access_another_users_service_detail(): void

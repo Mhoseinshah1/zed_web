@@ -210,6 +210,172 @@ class MarzbanClientTest extends TestCase
         $this->assertFalse($client->userExists('nonexistent_user'));
     }
 
+    // ── Login uses form-data, not JSON ────────────────────────────────────────
+
+    public function test_login_uses_form_encoded_body_not_json(): void
+    {
+        Http::fake(function ($request) {
+            if (str_contains($request->url(), '/api/admin/token')) {
+                $this->assertStringContainsString(
+                    'application/x-www-form-urlencoded',
+                    $request->header('Content-Type')[0] ?? ''
+                );
+                return Http::response(['access_token' => 'tok', 'token_type' => 'bearer'], 200);
+            }
+        });
+
+        $panel  = $this->makePanel();
+        $client = new MarzbanClient($panel);
+        $client->login();
+    }
+
+    // ── createUser sends proxies as object {}, not array [] ──────────────────
+
+    public function test_create_user_sends_proxies_as_object_not_array(): void
+    {
+        Http::fake(function ($request) {
+            if (str_contains($request->url(), '/api/admin/token')) {
+                return Http::response(['access_token' => 'tok', 'token_type' => 'bearer'], 200);
+            }
+            if (str_contains($request->url(), '/api/user') && $request->method() === 'POST') {
+                $body = $request->body();
+                $this->assertIsObject(json_decode($body)->proxies->vless ?? null);
+                return Http::response($this->fakeUserResponse('zpx_test'), 200);
+            }
+        });
+
+        $panel  = $this->makePanel();
+        $client = new MarzbanClient($panel);
+        $client->createUser([
+            'username'   => 'zpx_test',
+            'proxies'    => ['vless' => new \stdClass()],
+            'data_limit' => 0,
+            'status'     => 'active',
+        ]);
+    }
+
+    // ── createUser does NOT send inbounds ─────────────────────────────────────
+
+    public function test_create_user_payload_has_no_inbounds_key(): void
+    {
+        Http::fake(function ($request) {
+            if (str_contains($request->url(), '/api/admin/token')) {
+                return Http::response(['access_token' => 'tok', 'token_type' => 'bearer'], 200);
+            }
+            if (str_contains($request->url(), '/api/user') && $request->method() === 'POST') {
+                $decoded = json_decode($request->body(), true);
+                $this->assertArrayNotHasKey('inbounds', $decoded);
+                return Http::response($this->fakeUserResponse('zpx_test'), 200);
+            }
+        });
+
+        $panel  = $this->makePanel();
+        $client = new MarzbanClient($panel);
+        $client->createUser([
+            'username'   => 'zpx_test',
+            'proxies'    => ['vless' => new \stdClass()],
+            'data_limit' => 0,
+            'status'     => 'active',
+        ]);
+    }
+
+    // ── reset traffic calls correct endpoint ──────────────────────────────────
+
+    public function test_reset_traffic_calls_correct_endpoint(): void
+    {
+        Http::fake([
+            '*/api/admin/token'          => Http::response(['access_token' => 'tok', 'token_type' => 'bearer'], 200),
+            '*/api/user/zpx_test/reset'  => Http::response($this->fakeUserResponse('zpx_test'), 200),
+        ]);
+
+        $panel  = $this->makePanel();
+        $client = new MarzbanClient($panel);
+        $result = $client->resetTraffic('zpx_test');
+
+        $this->assertEquals('zpx_test', $result['username']);
+    }
+
+    // ── revoke subscription calls correct endpoint ────────────────────────────
+
+    public function test_revoke_subscription_calls_correct_endpoint(): void
+    {
+        $newSubUrl = 'https://panel.example.com/sub/NEWTOKEN456/';
+
+        Http::fake([
+            '*/api/admin/token'              => Http::response(['access_token' => 'tok', 'token_type' => 'bearer'], 200),
+            '*/api/user/zpx_test/revoke_sub' => Http::response(
+                array_merge($this->fakeUserResponse('zpx_test'), ['subscription_url' => $newSubUrl]),
+                200
+            ),
+        ]);
+
+        $panel  = $this->makePanel();
+        $client = new MarzbanClient($panel);
+        $result = $client->revokeSubscription('zpx_test');
+
+        $this->assertEquals($newSubUrl, $result['subscription_url']);
+    }
+
+    // ── disable user sends status=disabled ────────────────────────────────────
+
+    public function test_update_user_can_send_disabled_status(): void
+    {
+        Http::fake(function ($request) {
+            if (str_contains($request->url(), '/api/admin/token')) {
+                return Http::response(['access_token' => 'tok', 'token_type' => 'bearer'], 200);
+            }
+            if (str_contains($request->url(), '/api/user/zpx_test') && $request->method() === 'PUT') {
+                $body = json_decode($request->body(), true);
+                $this->assertEquals('disabled', $body['status']);
+                return Http::response(
+                    array_merge($this->fakeUserResponse('zpx_test'), ['status' => 'disabled']),
+                    200
+                );
+            }
+        });
+
+        $panel  = $this->makePanel();
+        $client = new MarzbanClient($panel);
+        $result = $client->updateUser('zpx_test', ['status' => 'disabled']);
+
+        $this->assertEquals('disabled', $result['status']);
+    }
+
+    // ── enable user sends status=active ──────────────────────────────────────
+
+    public function test_update_user_can_send_active_status(): void
+    {
+        Http::fake(function ($request) {
+            if (str_contains($request->url(), '/api/admin/token')) {
+                return Http::response(['access_token' => 'tok', 'token_type' => 'bearer'], 200);
+            }
+            if (str_contains($request->url(), '/api/user/zpx_test') && $request->method() === 'PUT') {
+                $body = json_decode($request->body(), true);
+                $this->assertEquals('active', $body['status']);
+                return Http::response($this->fakeUserResponse('zpx_test'), 200);
+            }
+        });
+
+        $panel  = $this->makePanel();
+        $client = new MarzbanClient($panel);
+        $result = $client->updateUser('zpx_test', ['status' => 'active']);
+
+        $this->assertEquals('active', $result['status']);
+    }
+
+    // ── forgetToken clears cache ──────────────────────────────────────────────
+
+    public function test_forget_token_removes_from_cache(): void
+    {
+        $panel  = $this->makePanel();
+        Cache::put("marzban_token_panel_{$panel->id}", 'cached-token', 3500);
+
+        $client = new MarzbanClient($panel);
+        $client->forgetToken();
+
+        $this->assertNull(Cache::get("marzban_token_panel_{$panel->id}"));
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     private function fakeUserResponse(string $username, int $usedBytes = 0): array
