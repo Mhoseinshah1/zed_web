@@ -7,6 +7,7 @@ use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\FaqController;
 use App\Http\Controllers\HealthController;
 use App\Http\Controllers\HomeController;
+use App\Http\Controllers\CentralPayController;
 use App\Http\Controllers\NowPaymentsController;
 use App\Http\Controllers\OrderController;
 use App\Http\Controllers\PaymentController;
@@ -21,6 +22,11 @@ use Illuminate\Support\Facades\Route;
 // NOWPayments IPN webhook — no auth, no CSRF (verified by HMAC-SHA512 signature)
 Route::post('/webhooks/nowpayments', [NowPaymentsController::class, 'ipn'])
     ->name('webhooks.nowpayments');
+
+// CentralPay return URL — GET, no CSRF, user is redirected back after payment
+// Always verify server-to-server inside the callback before trusting the outcome
+Route::get('/payments/centralpay/callback', [CentralPayController::class, 'callback'])
+    ->name('payments.centralpay.callback');
 
 // Health check (unauthenticated)
 Route::get('/health', [HealthController::class, 'check'])->name('health');

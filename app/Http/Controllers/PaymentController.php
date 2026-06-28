@@ -48,6 +48,12 @@ class PaymentController extends Controller
                 ->create($request, $order);
         }
 
+        // CentralPay — delegate to dedicated controller
+        if ($method->isCentralPay()) {
+            return app(\App\Http\Controllers\CentralPayController::class)
+                ->initiate($request, $order);
+        }
+
         // Check for existing pending/submitted payment
         $existing = PaymentTransaction::where('order_id', $order->id)
             ->whereIn('status', [PaymentTransaction::STATUS_PENDING, PaymentTransaction::STATUS_SUBMITTED])

@@ -118,6 +118,27 @@
             </div>
         </div>
 
+        {{-- CentralPay rial gateway --}}
+        @foreach($methods->where('type', 'centralpay') as $method)
+        <div x-show="selectedMethod == {{ $method->id }}" x-cloak class="bg-gray-900 border border-gray-800 rounded-xl p-6 mb-6">
+            <div class="flex items-start gap-3">
+                <div class="w-8 h-8 bg-green-500/20 rounded-full flex items-center justify-center flex-shrink-0 mt-0.5">
+                    <svg class="w-4 h-4 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z"/>
+                    </svg>
+                </div>
+                <div>
+                    <p class="text-white font-medium text-sm">پرداخت ریالی از طریق CentralPay</p>
+                    <p class="text-gray-400 text-xs mt-1">
+                        پس از کلیک روی «تایید و پرداخت»، به درگاه ریالی CentralPay هدایت می‌شوید.
+                        پس از پرداخت موفق، به صورت خودکار بازمی‌گردید و سرویس شما فعال می‌شود.
+                    </p>
+                    <p class="text-green-400/80 text-xs mt-2">مبلغ قابل پرداخت: <strong class="text-white">{{ number_format($order->final_price_toman) }} تومان</strong></p>
+                </div>
+            </div>
+        </div>
+        @endforeach
+
         {{-- NOWPayments crypto gateway --}}
         @foreach($methods->where('type', 'nowpayments') as $method)
         @php $npMode = $method->getConfig('nowpayments_mode', 'invoice'); @endphp

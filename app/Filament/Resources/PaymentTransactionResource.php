@@ -5,6 +5,7 @@ namespace App\Filament\Resources;
 use App\Filament\Resources\PaymentTransactionResource\Pages;
 use App\Models\PaymentMethod;
 use App\Models\PaymentTransaction;
+use App\Http\Controllers\CentralPayController;
 use App\Services\Orders\MarkOrderAsPaidService;
 use App\Services\Payments\NowPayments\NowPaymentsClient;
 use App\Services\PaymentService;
@@ -137,6 +138,29 @@ class PaymentTransactionResource extends Resource
                     ->default('—')
                     ->toggleable(isToggledHiddenByDefault: true),
 
+                Tables\Columns\TextColumn::make('gateway_amount')
+                    ->label('مبلغ درگاه (تومان)')
+                    ->numeric()
+                    ->default('—')
+                    ->toggleable(isToggledHiddenByDefault: true),
+
+                Tables\Columns\TextColumn::make('gateway_currency')
+                    ->label('ارز درگاه')
+                    ->default('—')
+                    ->toggleable(isToggledHiddenByDefault: true),
+
+                Tables\Columns\TextColumn::make('failure_reason')
+                    ->label('دلیل خطا')
+                    ->limit(30)
+                    ->default('—')
+                    ->toggleable(isToggledHiddenByDefault: true),
+
+                Tables\Columns\TextColumn::make('verified_at')
+                    ->label('تایید درگاه')
+                    ->dateTime()
+                    ->default('—')
+                    ->toggleable(isToggledHiddenByDefault: true),
+
                 Tables\Columns\BadgeColumn::make('status')
                     ->label('وضعیت')
                     ->formatStateUsing(fn ($state) => PaymentTransaction::allStatuses()[$state] ?? $state)
@@ -156,6 +180,14 @@ class PaymentTransactionResource extends Resource
                 Tables\Filters\SelectFilter::make('status')
                     ->label('وضعیت')
                     ->options(PaymentTransaction::allStatuses()),
+
+                Tables\Filters\SelectFilter::make('provider')
+                    ->label('درگاه')
+                    ->options([
+                        'centralpay'  => 'CentralPay',
+                        'nowpayments' => 'NOWPayments',
+                        'manual'      => 'دستی',
+                    ]),
 
                 Tables\Filters\SelectFilter::make('payment_method_id')
                     ->label('روش پرداخت')
@@ -281,6 +313,26 @@ class PaymentTransactionResource extends Resource
                     ]))
                     ->modalHeading('پاسخ NOWPayments')
                     ->modalSubmitAction(false),
+
+                Tables\Actions\Action::make('centralpay_check')
+                    ->label('بررسی وضعیت CentralPay')
+                    ->icon('heroicon-o-arrow-path')
+                    ->color('success')
+                    ->visible(fn (PaymentTransaction $record) => $record->provider === 'centralpay'
+                        && ! in_array($record->gateway_status, ['verified', 'amount_mismatch', 'user_mismatch'])
+                        && $record->order->payment_status !== \App\Models\Order::PAYMENT_PAID)
+                    ->action(function (PaymentTransaction $record) {
+                        try {
+                            CentralPayController::adminVerify($record, app(MarkOrderAsPaidService::class));
+                            Notification::make()->title('پرداخت CentralPay تایید شد و سفارش پردازش شد.')->success()->send();
+                        } catch (\RuntimeException $e) {
+                            Notification::make()->title($e->getMessage())->danger()->send();
+                        }
+                    })
+                    ->requiresConfirmation()
+                    ->modalHeading('بررسی وضعیت پرداخت CentralPay')
+                    ->modalDescription('آیا می‌خواهید وضعیت این پرداخت را از CentralPay بررسی کنید؟')
+                    ->modalSubmitActionLabel('بله، بررسی کن'),
 
                 Tables\Actions\EditAction::make()->label('جزئیات'),
             ])

@@ -56,6 +56,12 @@ class PaymentTransaction extends Model
         'response_payload',
         'callback_payload',
         'callback_received_at',
+        // CentralPay / shared gateway fields
+        'gateway_amount',
+        'gateway_currency',
+        'verified_at',
+        'failed_at',
+        'failure_reason',
     ];
 
     protected $casts = [
@@ -73,6 +79,9 @@ class PaymentTransaction extends Model
         'response_payload'      => 'array',
         'callback_payload'      => 'array',
         'callback_received_at'  => 'datetime',
+        'gateway_amount'        => 'integer',
+        'verified_at'           => 'datetime',
+        'failed_at'             => 'datetime',
     ];
 
     public function order(): BelongsTo
@@ -147,5 +156,12 @@ class PaymentTransaction extends Model
             self::STATUS_CONFIRMING,
             self::STATUS_PARTIAL,
         ]) && $this->provider_reference !== null;
+    }
+
+    public function isCentralPayActive(): bool
+    {
+        return $this->provider === 'centralpay'
+            && in_array($this->status, [self::STATUS_PENDING, self::STATUS_WAITING])
+            && $this->gateway_url !== null;
     }
 }

@@ -13,6 +13,7 @@ class PaymentMethod extends Model
     const TYPE_MANUAL_RIAL   = 'manual_rial';
     const TYPE_WALLET        = 'wallet';
     const TYPE_NOWPAYMENTS   = 'nowpayments';
+    const TYPE_CENTRALPAY    = 'centralpay';
 
     protected $fillable = [
         'title',
@@ -78,6 +79,11 @@ class PaymentMethod extends Model
         return $this->type === self::TYPE_NOWPAYMENTS;
     }
 
+    public function isCentralPay(): bool
+    {
+        return $this->type === self::TYPE_CENTRALPAY;
+    }
+
     public function getConfig(string $key, mixed $default = null): mixed
     {
         return ($this->config ?? [])[$key] ?? $default;
@@ -91,6 +97,7 @@ class PaymentMethod extends Model
             self::TYPE_MANUAL_RIAL   => 'انتقال ریالی (دستی)',
             self::TYPE_WALLET        => 'کیف پول',
             self::TYPE_NOWPAYMENTS   => 'NOWPayments (کریپتو)',
+            self::TYPE_CENTRALPAY    => 'درگاه ریالی CentralPay',
             default                  => $this->type,
         };
     }
@@ -103,6 +110,7 @@ class PaymentMethod extends Model
             self::TYPE_MANUAL_RIAL   => 'انتقال ریالی (دستی)',
             self::TYPE_WALLET        => 'کیف پول',
             self::TYPE_NOWPAYMENTS   => 'NOWPayments (کریپتو)',
+            self::TYPE_CENTRALPAY    => 'درگاه ریالی CentralPay',
         ];
     }
 

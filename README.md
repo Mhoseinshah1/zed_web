@@ -1001,6 +1001,7 @@ User services, provision logs, VPN panels, and VPN inbounds are **never deleted*
 - **Per-VPN-panel user self-service toggles** — 10 boolean columns on `vpn_panels` control which actions users can perform per panel (sync, revoke, reset-traffic, disable, enable, view QR, copy links); defaults match previous global settings
 - **Auto-sync on service detail view** — `/dashboard/services/{service}` syncs from Marzban if never synced or last sync >30s ago; graceful failure with warning banner
 - **NOWPayments crypto payment gateway** — hosted invoice mode (default, customer chooses currency on NOWPayments) and direct mode; IPN webhook at `POST /webhooks/nowpayments` with HMAC-SHA512 signature verification; IPN matching by invoice_id → provider_reference; manual status check; auto-provisioning on `finished`; currency conversion IRT→USD via admin-configured exchange rate; `api_key` and `ipn_secret` stored encrypted; QR code on payment detail page; 48 automated tests
+- **CentralPay rial payment gateway** — server-to-server verify (never trusts GET alone); amount in Toman; orderId = payment_transactions.id (avoids duplicate_orderId on retries); idempotent (reuses active tx gateway_url); amount mismatch and userId mismatch detection; card number masked before storage (first6 + ****** + last4); api_key never exposed in UI/logs; admin verify action in Filament; 37 automated tests
 
 **Next:**
 1. Renew / extra traffic — extend Marzban user expiry or add data via order
@@ -1185,3 +1186,118 @@ Enable sandbox in the admin config field. Disable it when going live.
 → Go to `/zed-admin/payment-transactions`, find the transaction (provider = nowpayments), and use:
 - "بررسی وضعیت NOWPayments" — polls live status from API
 - "پاسخ درگاه" — shows the raw (sanitized) API response JSON
+
+## CentralPay rial payment gateway
+
+ZedProxy integrates with [CentralPay](https://centralapi.org) to accept rial (Toman) payments from Iranian users.
+
+### How it works
+
+1. User selects "پرداخت ریالی" at checkout and clicks "تایید و پرداخت"
+2. ZedProxy calls `POST .../getLink.php` to create a payment link
+3. User is redirected to the CentralPay payment page
+4. After payment, CentralPay redirects back to ZedProxy's callback URL
+5. ZedProxy immediately calls `POST .../verify.php` server-to-server — the GET callback alone is never trusted
+6. On successful verify, the order is marked paid and the VPN service is provisioned automatically
+
+### Setup (admin)
+
+Add these to your `.env`:
+
+```env
+CENTRALPAY_ENABLED=true
+CENTRALPAY_API_KEY=your_centralpay_api_key
+CENTRALPAY_BASE_URL=https://centralapi.org/webservice/basic
+CENTRALPAY_TYPE=deposit
+CENTRALPAY_AMOUNT_UNIT=TOMAN
+CENTRALPAY_CALLBACK_PATH=/payments/centralpay/callback
+```
+
+Then enable the payment method in the admin panel:
+
+1. Go to `/zed-admin/payment-methods`
+2. Find "پرداخت ریالی" (slug: `centralpay`)
+3. Toggle **Active** on
+4. Save
+
+The CentralPay payment method is seeded as **inactive by default**. It will not appear in checkout until you activate it and set `CENTRALPAY_ENABLED=true` in `.env`.
+
+### Callback URL
+
+Register this URL in your CentralPay merchant panel:
+
+```
+https://yourdomain.com/payments/centralpay/callback
+```
+
+ZedProxy uses a GET callback for redirect only — all verification is done server-to-server via POST to `/verify.php`.
+
+### Amount
+
+ZedProxy stores prices in Toman. The amount is sent to CentralPay as an integer in Toman with no conversion. Example: an order with `final_price_toman = 200000` sends `amount = 200000` to CentralPay.
+
+### orderId and idempotency
+
+ZedProxy uses `payment_transactions.id` (not `orders.id`) as the CentralPay `orderId`. This avoids the `duplicate_orderId` error from CentralPay when a user retries payment for the same order — each retry creates a new `PaymentTransaction` record with a new `id`.
+
+If a CentralPay payment is already pending (status `pending` or `waiting`, `gateway_url` set), the user is redirected to the existing payment URL without calling `getLink.php` again. This prevents duplicate payment sessions.
+
+### Verify behavior
+
+| Condition | Result |
+|-----------|--------|
+| Verify API call fails (HTTP error) | Error shown to user; tx stays pending |
+| `verify.data.status` ≠ success | Error shown; tx marked failed; `failure_reason` saved |
+| Amount in verify ≠ `gateway_amount` | `gateway_status = amount_mismatch`; **NOT marked paid**; user sees error |
+| userId in verify ≠ `order.user_id` | `gateway_status = user_mismatch`; **NOT marked paid** |
+| Already paid (idempotency guard) | Redirected to order page; verify NOT called again |
+| All checks pass | Order marked paid; VPN service provisioned; `gateway_status = verified` |
+
+### Card number masking
+
+CentralPay returns the user's card number in the verify response. ZedProxy masks it before storage:
+
+```
+1111222233334444  →  111122******4444
+```
+
+The masked number is stored in `response_payload` JSON. The raw card number is never saved to the database or logged.
+
+### Security
+
+- `CENTRALPAY_API_KEY` is read from `config('services.centralpay.api_key')` only — never stored in the payment methods table
+- The api_key is stripped from all stored payloads (`request_payload`, `response_payload`)
+- The api_key is never logged or exposed in UI, tables, or API responses
+- Card numbers are masked before storage (first 6 + `******` + last 4)
+- The GET callback is never trusted without a server-to-server POST verify
+- Duplicate provisioning is prevented — verify is skipped for already-paid orders
+
+### Admin actions
+
+Go to `/zed-admin/payment-transactions`, filter by provider `centralpay`:
+
+| Action | Description |
+|--------|-------------|
+| **بررسی وضعیت CentralPay** | Calls `/verify.php` server-to-server and processes the result |
+
+The admin verify action is visible for CentralPay transactions that are not yet in a terminal state (`verified`, `amount_mismatch`, `user_mismatch`) and whose order is not already paid.
+
+### Troubleshooting
+
+**"درگاه CentralPay فعال نیست"**
+→ Set `CENTRALPAY_ENABLED=true` in `.env` and activate the payment method in admin.
+
+**"خطا در ایجاد لینک پرداخت CentralPay"**
+→ Check your `CENTRALPAY_API_KEY` and `CENTRALPAY_BASE_URL`. Inspect `storage/logs/laravel.log` for the sanitized error response.
+
+**"مبلغ تاییدشده با مبلغ سفارش مطابقت ندارد"**
+→ The verified amount from CentralPay does not match the stored gateway amount. The transaction is marked `amount_mismatch` and the order is NOT paid. Contact the user and check the CentralPay merchant dashboard.
+
+**"خطا در تایید پرداخت CentralPay"** / **"پرداخت CentralPay انجام نشد"**
+→ CentralPay returned a non-success status. Check `failure_reason` in the transaction record for details.
+
+**Payment shows pending but user was charged**
+→ Use the "بررسی وضعیت CentralPay" action in `/zed-admin/payment-transactions` to manually trigger server-side verify.
+
+**`duplicate_orderId` error from CentralPay**
+→ This should not occur — ZedProxy uses `payment_transactions.id` as orderId, which is unique per payment attempt. If it does occur, check for stale pending transactions and mark them failed before retrying.

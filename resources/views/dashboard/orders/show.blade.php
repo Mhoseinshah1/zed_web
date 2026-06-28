@@ -94,16 +94,34 @@
 
     {{-- Payment action --}}
     @if(in_array($order->payment_status, ['unpaid', 'pending']) && ! in_array($order->status, ['cancelled', 'failed', 'completed']))
+    @php
+        $activeCpTx = $order->paymentTransactions()
+            ->where('provider', 'centralpay')
+            ->whereIn('status', ['pending', 'waiting'])
+            ->whereNotNull('gateway_url')
+            ->latest()->first();
+    @endphp
     <div class="bg-indigo-500/10 border border-indigo-500/20 rounded-xl p-6 mb-6">
         <div class="flex items-center justify-between gap-4">
             <div>
                 <h4 class="text-indigo-300 font-semibold mb-1">پرداخت سفارش</h4>
+                @if($activeCpTx)
+                <p class="text-indigo-200/70 text-sm">پرداخت ریالی شما در حال انجام است. می‌توانید به درگاه بازگردید.</p>
+                @else
                 <p class="text-indigo-200/70 text-sm">برای فعال‌سازی سرویس، سفارش خود را پرداخت کنید.</p>
+                @endif
             </div>
+            @if($activeCpTx)
+            <a href="{{ $activeCpTx->gateway_url }}" target="_blank"
+               class="shrink-0 bg-green-600 hover:bg-green-500 text-white font-semibold px-6 py-2.5 rounded-xl transition text-sm">
+                بازگشت به درگاه ↗
+            </a>
+            @else
             <a href="{{ route('dashboard.orders.pay', $order) }}"
                class="shrink-0 bg-indigo-600 hover:bg-indigo-500 text-white font-semibold px-6 py-2.5 rounded-xl transition text-sm">
                 پرداخت
             </a>
+            @endif
         </div>
     </div>
     @elseif($order->payment_status === 'paid')

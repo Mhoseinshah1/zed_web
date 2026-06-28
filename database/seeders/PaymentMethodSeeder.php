@@ -65,5 +65,17 @@ class PaymentMethodSeeder extends Seeder
                 ],
             ]
         );
+
+        // CentralPay — seed only if missing; activate via admin panel and set CENTRALPAY_ENABLED=true
+        PaymentMethod::firstOrCreate(
+            ['slug' => 'centralpay'],
+            [
+                'title'       => 'پرداخت ریالی',
+                'type'        => PaymentMethod::TYPE_CENTRALPAY,
+                'description' => 'پرداخت ریالی از طریق درگاه CentralPay',
+                'is_active'   => false,
+                'sort_order'  => 3,
+            ]
+        );
     }
 }

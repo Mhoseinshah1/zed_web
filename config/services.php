@@ -35,4 +35,13 @@ return [
         ],
     ],
 
+    'centralpay' => [
+        'enabled'       => env('CENTRALPAY_ENABLED', false),
+        'api_key'       => env('CENTRALPAY_API_KEY', ''),
+        'base_url'      => env('CENTRALPAY_BASE_URL', 'https://centralapi.org/webservice/basic'),
+        'type'          => env('CENTRALPAY_TYPE', 'deposit'),
+        'amount_unit'   => env('CENTRALPAY_AMOUNT_UNIT', 'TOMAN'),
+        'callback_path' => env('CENTRALPAY_CALLBACK_PATH', '/payments/centralpay/callback'),
+    ],
+
 ];
