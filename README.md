@@ -1001,7 +1001,7 @@ User services, provision logs, VPN panels, and VPN inbounds are **never deleted*
 - **Per-VPN-panel user self-service toggles** — 10 boolean columns on `vpn_panels` control which actions users can perform per panel (sync, revoke, reset-traffic, disable, enable, view QR, copy links); defaults match previous global settings
 - **Auto-sync on service detail view** — `/dashboard/services/{service}` syncs from Marzban if never synced or last sync >30s ago; graceful failure with warning banner
 - **NOWPayments crypto payment gateway** — hosted invoice mode (default, customer chooses currency on NOWPayments) and direct mode; IPN webhook at `POST /webhooks/nowpayments` with HMAC-SHA512 signature verification; IPN matching by invoice_id → provider_reference; manual status check; auto-provisioning on `finished`; currency conversion IRT→USD via admin-configured exchange rate; `api_key` and `ipn_secret` stored encrypted; QR code on payment detail page; 48 automated tests
-- **CentralPay rial payment gateway** — server-to-server verify (never trusts GET alone); amount in Toman; orderId = payment_transactions.id (avoids duplicate_orderId on retries); idempotent (reuses active tx gateway_url); amount mismatch and userId mismatch detection; card number masked before storage (first6 + ****** + last4); api_key never exposed in UI/logs; admin verify action in Filament; 37 automated tests
+- **CentralPay rial payment gateway** — server-to-server verify (never trusts GET alone); amount in Toman; orderId = payment_transactions.id (avoids duplicate_orderId on retries); idempotent (reuses active tx gateway_url); amount mismatch and userId mismatch detection; card number masked before storage (first6 + ****** + last4); api_key stored encrypted in DB and managed from `/zed-admin/payment-methods` (no `.env` keys required after first deploy); all config (base_url, type, amount_unit, callback_path) editable from admin panel; one-time env→DB migration on first update; admin verify action in Filament; 44 automated tests
 
 **Next:**
 1. Renew / extra traffic — extend Marzban user expiry or add data via order
@@ -1202,25 +1202,32 @@ ZedProxy integrates with [CentralPay](https://centralapi.org) to accept rial (To
 
 ### Setup (admin)
 
-Add these to your `.env`:
-
-```env
-CENTRALPAY_ENABLED=true
-CENTRALPAY_API_KEY=your_centralpay_api_key
-CENTRALPAY_BASE_URL=https://centralapi.org/webservice/basic
-CENTRALPAY_TYPE=deposit
-CENTRALPAY_AMOUNT_UNIT=TOMAN
-CENTRALPAY_CALLBACK_PATH=/payments/centralpay/callback
-```
-
-Then enable the payment method in the admin panel:
+All CentralPay configuration is managed from the admin panel — no `.env` keys are required after installation.
 
 1. Go to `/zed-admin/payment-methods`
-2. Find "پرداخت ریالی" (slug: `centralpay`)
-3. Toggle **Active** on
-4. Save
+2. Find "پرداخت ریالی" (slug: `centralpay`) and click **Edit**
+3. Fill in the **تنظیمات CentralPay** section:
 
-The CentralPay payment method is seeded as **inactive by default**. It will not appear in checkout until you activate it and set `CENTRALPAY_ENABLED=true` in `.env`.
+| Field | Description |
+|-------|-------------|
+| **API Key** | From your CentralPay merchant account. Stored encrypted — never exposed in UI or logs. |
+| **آدرس پایه CentralPay** | Default: `https://centralapi.org/webservice/basic` — change only if instructed by CentralPay. |
+| **واحد مبلغ** | `TOMAN` (default) — ZedProxy sends amounts in Toman. |
+| **نوع تراکنش** | `deposit` (default) — as required by CentralPay documentation. |
+| **مسیر بازگشت پرداخت** | Default: `/payments/centralpay/callback` — the path CentralPay redirects to after payment. |
+
+4. Toggle **Active** on
+5. Save
+
+The **آدرس بازگشت پرداخت** placeholder shows the full callback URL you need to register in your CentralPay merchant panel (e.g. `https://yourdomain.com/payments/centralpay/callback`).
+
+The CentralPay payment method is seeded as **inactive by default**. It will not appear in checkout until you set an API key and enable it.
+
+> **Leaving the API key field empty on edit** preserves the existing encrypted key — you only need to re-enter it when you want to change it.
+
+#### Migrating from `.env`-based config
+
+If you previously used `CENTRALPAY_API_KEY`, `CENTRALPAY_BASE_URL`, etc. in `.env`, those values are **automatically imported** the first time the seeder runs after this update (i.e., when `update.sh` runs). The import is one-time and never overwrites values you have already set in the admin panel. After the import, the `.env` keys are no longer read and can be removed.
 
 ### Callback URL
 
@@ -1229,6 +1236,8 @@ Register this URL in your CentralPay merchant panel:
 ```
 https://yourdomain.com/payments/centralpay/callback
 ```
+
+The exact URL is shown in the admin edit form under **آدرس بازگشت پرداخت (جهت ثبت در CentralPay)** and will reflect any custom `callback_path` you configure.
 
 ZedProxy uses a GET callback for redirect only — all verification is done server-to-server via POST to `/verify.php`.
 
@@ -1265,9 +1274,10 @@ The masked number is stored in `response_payload` JSON. The raw card number is n
 
 ### Security
 
-- `CENTRALPAY_API_KEY` is read from `config('services.centralpay.api_key')` only — never stored in the payment methods table
-- The api_key is stripped from all stored payloads (`request_payload`, `response_payload`)
-- The api_key is never logged or exposed in UI, tables, or API responses
+- `api_key` is stored in the `payment_methods` table with Laravel's `encrypted` cast — encrypted at rest using `APP_KEY`
+- The api_key is hidden from model JSON serialization (`$hidden`) and never shown in admin table columns
+- The api_key is stripped from all stored payloads (`request_payload`, `response_payload`) before saving
+- The api_key is never logged — not in API calls, errors, or debug output
 - Card numbers are masked before storage (first 6 + `******` + last 4)
 - The GET callback is never trusted without a server-to-server POST verify
 - Duplicate provisioning is prevented — verify is skipped for already-paid orders
@@ -1284,11 +1294,14 @@ The admin verify action is visible for CentralPay transactions that are not yet 
 
 ### Troubleshooting
 
-**"درگاه CentralPay فعال نیست"**
-→ Set `CENTRALPAY_ENABLED=true` in `.env` and activate the payment method in admin.
+**"درگاه پرداخت ریالی در حال حاضر پیکربندی نشده است"**
+→ The API key is missing. Go to `/zed-admin/payment-methods` → edit "پرداخت ریالی" → fill in the **کلید API CentralPay** field and save.
 
-**"خطا در ایجاد لینک پرداخت CentralPay"**
-→ Check your `CENTRALPAY_API_KEY` and `CENTRALPAY_BASE_URL`. Inspect `storage/logs/laravel.log` for the sanitized error response.
+**"درگاه CentralPay فعال نیست"** / method not showing at checkout
+→ Toggle **Active** on in the payment method edit form and save. The method is inactive by default.
+
+**"خطا در ایجاد لینک پرداخت CentralPay"** / "اتصال به درگاه پرداخت ناموفق بود"
+→ Check that the **کلید API CentralPay** and **آدرس پایه CentralPay** are set correctly in the admin panel. Inspect `storage/logs/laravel.log` for the sanitized error response.
 
 **"مبلغ تاییدشده با مبلغ سفارش مطابقت ندارد"**
 → The verified amount from CentralPay does not match the stored gateway amount. The transaction is marked `amount_mismatch` and the order is NOT paid. Contact the user and check the CentralPay merchant dashboard.
