@@ -4,6 +4,8 @@ namespace App\Filament\Resources;
 
 use App\Filament\Resources\OrderResource\Pages;
 use App\Models\Order;
+use App\Models\ProvisioningAttempt;
+use App\Services\Provisioning\ProvisioningService;
 use App\Services\ServiceProvisioner;
 use Filament\Forms;
 use Filament\Forms\Form;
@@ -88,6 +90,10 @@ class OrderResource extends Resource
     {
         return $table
             ->columns([
+                Tables\Columns\TextColumn::make('id')
+                    ->label('#')
+                    ->sortable(),
+
                 Tables\Columns\TextColumn::make('order_number')
                     ->label('شماره سفارش')
                     ->searchable()
@@ -108,23 +114,13 @@ class OrderResource extends Resource
                 Tables\Columns\TextColumn::make('final_price_toman')
                     ->label('مبلغ (تومان)')
                     ->numeric()
+                    ->formatStateUsing(fn ($state) => number_format($state))
                     ->sortable(),
 
                 Tables\Columns\TextColumn::make('paymentTransactions.paymentMethod.title')
                     ->label('روش پرداخت')
                     ->default('—')
                     ->toggleable(isToggledHiddenByDefault: true),
-
-                Tables\Columns\BadgeColumn::make('status')
-                    ->label('وضعیت')
-                    ->formatStateUsing(fn ($state) => Order::allStatuses()[$state] ?? $state)
-                    ->colors([
-                        'gray'    => ['pending'],
-                        'warning' => ['awaiting_payment'],
-                        'info'    => ['paid', 'processing'],
-                        'success' => ['completed'],
-                        'danger'  => ['cancelled', 'failed'],
-                    ]),
 
                 Tables\Columns\BadgeColumn::make('payment_status')
                     ->label('پرداخت')
@@ -136,6 +132,22 @@ class OrderResource extends Resource
                         'danger'  => ['failed'],
                         'info'    => ['refunded'],
                     ]),
+
+                Tables\Columns\BadgeColumn::make('status')
+                    ->label('وضعیت')
+                    ->formatStateUsing(fn ($state) => Order::allStatuses()[$state] ?? $state)
+                    ->colors([
+                        'gray'    => ['pending', 'awaiting_payment'],
+                        'warning' => ['paid', 'processing', 'provisioning'],
+                        'success' => ['completed'],
+                        'danger'  => ['provisioning_failed', 'cancelled', 'failed'],
+                    ]),
+
+                Tables\Columns\TextColumn::make('paid_at')
+                    ->label('تاریخ پرداخت')
+                    ->dateTime()
+                    ->sortable()
+                    ->toggleable(isToggledHiddenByDefault: true),
 
                 Tables\Columns\TextColumn::make('created_at')
                     ->label('تاریخ ثبت')
@@ -150,8 +162,62 @@ class OrderResource extends Resource
                 Tables\Filters\SelectFilter::make('payment_status')
                     ->label('وضعیت پرداخت')
                     ->options(Order::allPaymentStatuses()),
+
+                Tables\Filters\Filter::make('provisioning_failed')
+                    ->label('خطا در ساخت سرویس')
+                    ->query(fn ($query) => $query->where('status', Order::STATUS_PROVISIONING_FAILED)),
             ])
             ->actions([
+                Tables\Actions\Action::make('retry_provisioning')
+                    ->label('تلاش مجدد برای ساخت سرویس')
+                    ->icon('heroicon-o-arrow-path')
+                    ->color('warning')
+                    ->visible(function (Order $record) {
+                        $isRetryable = in_array($record->status, [
+                            Order::STATUS_PAID,
+                            Order::STATUS_PROVISIONING,
+                            Order::STATUS_PROVISIONING_FAILED,
+                        ]) && $record->payment_status === Order::PAYMENT_PAID;
+
+                        $hasActiveService = $record->service
+                            && $record->service->status === \App\Models\UserService::STATUS_ACTIVE;
+
+                        return $isRetryable && ! $hasActiveService;
+                    })
+                    ->action(function (Order $record) {
+                        try {
+                            app(ProvisioningService::class)->provisionOrder($record, true);
+                            Notification::make()
+                                ->title('سرویس با موفقیت ساخته شد.')
+                                ->success()
+                                ->send();
+                        } catch (\Exception $e) {
+                            Notification::make()
+                                ->title('ساخت سرویس دوباره با خطا مواجه شد.')
+                                ->body($e->getMessage())
+                                ->danger()
+                                ->send();
+                        }
+                    })
+                    ->requiresConfirmation()
+                    ->modalHeading('تلاش مجدد برای ساخت سرویس')
+                    ->modalDescription('آیا می‌خواهید دوباره تلاش کنید؟ این عملیات سرویس جدیدی نمی‌سازد.')
+                    ->modalSubmitActionLabel('بله، دوباره تلاش کن'),
+
+                Tables\Actions\Action::make('view_provisioning_logs')
+                    ->label('مشاهده لاگ ساخت سرویس')
+                    ->icon('heroicon-o-document-text')
+                    ->color('gray')
+                    ->modalContent(function (Order $record) {
+                        $attempts = ProvisioningAttempt::where('order_id', $record->id)
+                            ->orderByDesc('attempt_number')
+                            ->get();
+                        return view('filament.modals.provisioning-attempts', compact('attempts'));
+                    })
+                    ->modalHeading('لاگ‌های ساخت سرویس')
+                    ->modalSubmitAction(false)
+                    ->modalCancelActionLabel('بستن'),
+
                 Tables\Actions\Action::make('mark_processing')
                     ->label('در حال پردازش')
                     ->icon('heroicon-o-cog-6-tooth')
