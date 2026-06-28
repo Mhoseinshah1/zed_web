@@ -2,11 +2,13 @@
 
 namespace App\Models;
 
+use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class PaymentTransaction extends Model
 {
+    use HasFactory;
     const STATUS_PENDING    = 'pending';
     const STATUS_SUBMITTED  = 'submitted';
     const STATUS_APPROVED   = 'approved';

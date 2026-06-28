@@ -2,11 +2,13 @@
 
 namespace App\Models;
 
+use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class WalletTransaction extends Model
 {
+    use HasFactory;
     const TYPE_MANUAL_CREDIT = 'manual_credit';
     const TYPE_MANUAL_DEBIT  = 'manual_debit';
     const TYPE_ORDER_PAYMENT = 'order_payment';

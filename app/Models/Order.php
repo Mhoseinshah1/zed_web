@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
@@ -9,6 +10,7 @@ use Illuminate\Support\Str;
 
 class Order extends Model
 {
+    use HasFactory;
     // Order statuses
     const STATUS_PENDING              = 'pending';
     const STATUS_AWAITING_PAYMENT     = 'awaiting_payment';

@@ -12,7 +12,10 @@ use Filament\Forms\Form;
 use Filament\Notifications\Notification;
 use Filament\Resources\Resource;
 use Filament\Tables;
+use Filament\Tables\Filters\Filter;
+use Filament\Tables\Filters\SelectFilter;
 use Filament\Tables\Table;
+use Illuminate\Database\Eloquent\Builder;
 
 class OrderResource extends Resource
 {
@@ -28,7 +31,6 @@ class OrderResource extends Resource
     public static function form(Form $form): Form
     {
         return $form->schema([
-            // Snapshot (read-only in edit)
             Forms\Components\Section::make('اطلاعات پلن (اسنپشات)')
                 ->description('این اطلاعات در زمان ثبت سفارش ذخیره شده و نباید تغییر کنند.')
                 ->schema([
@@ -52,7 +54,6 @@ class OrderResource extends Resource
                         ->disabled(),
                 ])->columns(3)->collapsible(),
 
-            // Editable fields
             Forms\Components\Section::make('وضعیت سفارش')->schema([
                 Forms\Components\Select::make('status')
                     ->label('وضعیت سفارش')
@@ -92,10 +93,11 @@ class OrderResource extends Resource
             ->columns([
                 Tables\Columns\TextColumn::make('id')
                     ->label('#')
-                    ->sortable(),
+                    ->sortable()
+                    ->toggleable(isToggledHiddenByDefault: true),
 
                 Tables\Columns\TextColumn::make('order_number')
-                    ->label('شماره سفارش')
+                    ->label('شناسه سفارش')
                     ->searchable()
                     ->sortable()
                     ->copyable()
@@ -106,21 +108,37 @@ class OrderResource extends Resource
                     ->searchable()
                     ->sortable(),
 
-                Tables\Columns\TextColumn::make('plan_name')
-                    ->label('پلن')
-                    ->searchable()
-                    ->sortable(),
-
                 Tables\Columns\TextColumn::make('final_price_toman')
                     ->label('مبلغ (تومان)')
                     ->numeric()
                     ->formatStateUsing(fn ($state) => number_format($state))
                     ->sortable(),
 
-                Tables\Columns\TextColumn::make('paymentTransactions.paymentMethod.title')
+                Tables\Columns\TextColumn::make('payment_provider')
                     ->label('روش پرداخت')
-                    ->default('—')
-                    ->toggleable(isToggledHiddenByDefault: true),
+                    ->getStateUsing(function (Order $record): string {
+                        $tx = $record->paymentTransactions()
+                            ->whereNotIn('status', ['failed', 'cancelled', 'rejected', 'expired'])
+                            ->orderByDesc('id')
+                            ->first();
+                        if (! $tx) {
+                            return '—';
+                        }
+                        return match ($tx->provider) {
+                            'nowpayments' => 'NOWPayments',
+                            'centralpay'  => 'CentralPay',
+                            'manual'      => 'دستی',
+                            default       => 'کیف پول',
+                        };
+                    })
+                    ->badge()
+                    ->color(fn (string $state): string => match ($state) {
+                        'NOWPayments' => 'warning',
+                        'CentralPay'  => 'success',
+                        'دستی'        => 'gray',
+                        'کیف پول'     => 'info',
+                        default       => 'gray',
+                    }),
 
                 Tables\Columns\BadgeColumn::make('payment_status')
                     ->label('پرداخت')
@@ -134,7 +152,7 @@ class OrderResource extends Resource
                     ]),
 
                 Tables\Columns\BadgeColumn::make('status')
-                    ->label('وضعیت')
+                    ->label('وضعیت سفارش')
                     ->formatStateUsing(fn ($state) => Order::allStatuses()[$state] ?? $state)
                     ->colors([
                         'gray'    => ['pending', 'awaiting_payment'],
@@ -143,33 +161,84 @@ class OrderResource extends Resource
                         'danger'  => ['provisioning_failed', 'cancelled', 'failed'],
                     ]),
 
-                Tables\Columns\TextColumn::make('paid_at')
-                    ->label('تاریخ پرداخت')
-                    ->dateTime()
-                    ->sortable()
-                    ->toggleable(isToggledHiddenByDefault: true),
+                Tables\Columns\IconColumn::make('service_exists')
+                    ->label('سرویس')
+                    ->getStateUsing(fn (Order $record): bool => $record->service !== null)
+                    ->boolean()
+                    ->trueIcon('heroicon-o-check-circle')
+                    ->falseIcon('heroicon-o-x-circle')
+                    ->trueColor('success')
+                    ->falseColor('gray'),
 
                 Tables\Columns\TextColumn::make('created_at')
                     ->label('تاریخ ثبت')
                     ->dateTime()
                     ->sortable(),
+
+                Tables\Columns\TextColumn::make('paid_at')
+                    ->label('تاریخ پرداخت')
+                    ->dateTime()
+                    ->sortable()
+                    ->toggleable(isToggledHiddenByDefault: true),
             ])
             ->filters([
-                Tables\Filters\SelectFilter::make('status')
+                SelectFilter::make('status')
                     ->label('وضعیت سفارش')
                     ->options(Order::allStatuses()),
 
-                Tables\Filters\SelectFilter::make('payment_status')
+                SelectFilter::make('payment_status')
                     ->label('وضعیت پرداخت')
                     ->options(Order::allPaymentStatuses()),
 
-                Tables\Filters\Filter::make('provisioning_failed')
+                Filter::make('paid_today')
+                    ->label('پرداخت‌شده امروز')
+                    ->query(fn (Builder $query) => $query
+                        ->where('payment_status', Order::PAYMENT_PAID)
+                        ->whereDate('paid_at', today())),
+
+                Filter::make('paid_this_month')
+                    ->label('پرداخت‌شده این ماه')
+                    ->query(fn (Builder $query) => $query
+                        ->where('payment_status', Order::PAYMENT_PAID)
+                        ->whereBetween('paid_at', [now()->startOfMonth(), now()->endOfMonth()])),
+
+                Filter::make('provisioning_failed')
                     ->label('خطا در ساخت سرویس')
-                    ->query(fn ($query) => $query->where('status', Order::STATUS_PROVISIONING_FAILED)),
+                    ->query(fn (Builder $query) => $query->where('status', Order::STATUS_PROVISIONING_FAILED)),
+
+                Filter::make('paid_without_service')
+                    ->label('پرداخت‌شده بدون سرویس')
+                    ->query(fn (Builder $query) => $query
+                        ->where('payment_status', Order::PAYMENT_PAID)
+                        ->whereDoesntHave('service')
+                        ->whereNotIn('status', [Order::STATUS_CANCELLED, Order::STATUS_FAILED])),
+
+                SelectFilter::make('provider')
+                    ->label('درگاه پرداخت')
+                    ->options([
+                        'nowpayments' => 'NOWPayments',
+                        'centralpay'  => 'CentralPay',
+                        'manual'      => 'دستی',
+                    ])
+                    ->query(fn (Builder $query, array $data) => $data['value']
+                        ? $query->whereHas('paymentTransactions', fn ($q) => $q->where('provider', $data['value']))
+                        : $query),
+
+                Tables\Filters\Filter::make('date_range')
+                    ->form([
+                        Forms\Components\DatePicker::make('created_from')->label('از تاریخ'),
+                        Forms\Components\DatePicker::make('created_until')->label('تا تاریخ'),
+                    ])
+                    ->query(function (Builder $query, array $data) {
+                        return $query
+                            ->when($data['created_from'] ?? null, fn ($q, $d) => $q->whereDate('created_at', '>=', $d))
+                            ->when($data['created_until'] ?? null, fn ($q, $d) => $q->whereDate('created_at', '<=', $d));
+                    })
+                    ->label('بازه تاریخ'),
             ])
             ->actions([
                 Tables\Actions\Action::make('retry_provisioning')
-                    ->label('تلاش مجدد برای ساخت سرویس')
+                    ->label('تلاش مجدد ساخت سرویس')
                     ->icon('heroicon-o-arrow-path')
                     ->color('warning')
                     ->visible(function (Order $record) {
@@ -187,25 +256,18 @@ class OrderResource extends Resource
                     ->action(function (Order $record) {
                         try {
                             app(ProvisioningService::class)->provisionOrder($record, true);
-                            Notification::make()
-                                ->title('سرویس با موفقیت ساخته شد.')
-                                ->success()
-                                ->send();
+                            Notification::make()->title('سرویس با موفقیت ساخته شد.')->success()->send();
                         } catch (\Exception $e) {
-                            Notification::make()
-                                ->title('ساخت سرویس دوباره با خطا مواجه شد.')
-                                ->body($e->getMessage())
-                                ->danger()
-                                ->send();
+                            Notification::make()->title('ساخت سرویس دوباره با خطا مواجه شد.')->body($e->getMessage())->danger()->send();
                         }
                     })
                     ->requiresConfirmation()
                     ->modalHeading('تلاش مجدد برای ساخت سرویس')
-                    ->modalDescription('آیا می‌خواهید دوباره تلاش کنید؟ این عملیات سرویس جدیدی نمی‌سازد.')
+                    ->modalDescription('آیا می‌خواهید دوباره تلاش کنید؟')
                     ->modalSubmitActionLabel('بله، دوباره تلاش کن'),
 
                 Tables\Actions\Action::make('view_provisioning_logs')
-                    ->label('مشاهده لاگ ساخت سرویس')
+                    ->label('لاگ ساخت سرویس')
                     ->icon('heroicon-o-document-text')
                     ->color('gray')
                     ->modalContent(function (Order $record) {
@@ -237,10 +299,7 @@ class OrderResource extends Resource
                     ->color('success')
                     ->visible(fn (Order $record) => $record->status === Order::STATUS_PROCESSING)
                     ->action(function (Order $record) {
-                        $record->update([
-                            'status'       => Order::STATUS_COMPLETED,
-                            'completed_at' => now(),
-                        ]);
+                        $record->update(['status' => Order::STATUS_COMPLETED, 'completed_at' => now()]);
                         Notification::make()->title('سفارش تکمیل شد.')->success()->send();
                     })
                     ->requiresConfirmation()
@@ -257,9 +316,7 @@ class OrderResource extends Resource
                         Order::STATUS_FAILED,
                     ]))
                     ->form([
-                        Forms\Components\Textarea::make('admin_notes')
-                            ->label('دلیل لغو (اختیاری)')
-                            ->rows(3),
+                        Forms\Components\Textarea::make('admin_notes')->label('دلیل لغو (اختیاری)')->rows(3),
                     ])
                     ->action(function (Order $record, array $data) {
                         $record->update([
