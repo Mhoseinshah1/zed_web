@@ -4,10 +4,14 @@ namespace App\Filament\Resources;
 
 use App\Filament\Resources\WalletTransactionResource\Pages;
 use App\Models\WalletTransaction;
+use Filament\Forms;
 use Filament\Forms\Form;
 use Filament\Resources\Resource;
 use Filament\Tables;
+use Filament\Tables\Filters\Filter;
+use Filament\Tables\Filters\SelectFilter;
 use Filament\Tables\Table;
+use Illuminate\Database\Eloquent\Builder;
 
 class WalletTransactionResource extends Resource
 {
@@ -31,7 +35,8 @@ class WalletTransactionResource extends Resource
             ->columns([
                 Tables\Columns\TextColumn::make('id')
                     ->label('#')
-                    ->sortable(),
+                    ->sortable()
+                    ->toggleable(isToggledHiddenByDefault: true),
 
                 Tables\Columns\TextColumn::make('user.username')
                     ->label('کاربر')
@@ -39,12 +44,12 @@ class WalletTransactionResource extends Resource
                     ->sortable(),
 
                 Tables\Columns\BadgeColumn::make('type')
-                    ->label('نوع')
+                    ->label('نوع تراکنش')
                     ->formatStateUsing(fn ($state) => WalletTransaction::allTypes()[$state] ?? $state)
                     ->colors([
-                        'success' => ['manual_credit', 'refund'],
-                        'danger'  => ['manual_debit', 'order_payment'],
-                        'warning' => ['adjustment'],
+                        'success' => [WalletTransaction::TYPE_MANUAL_CREDIT, WalletTransaction::TYPE_REFUND, WalletTransaction::TYPE_TOPUP],
+                        'danger'  => [WalletTransaction::TYPE_MANUAL_DEBIT, WalletTransaction::TYPE_ORDER_PAYMENT],
+                        'warning' => [WalletTransaction::TYPE_ADJUSTMENT],
                     ]),
 
                 Tables\Columns\BadgeColumn::make('direction')
@@ -60,22 +65,40 @@ class WalletTransactionResource extends Resource
                     ->numeric()
                     ->sortable()
                     ->formatStateUsing(fn ($state, $record) =>
-                        ($record->direction === 'credit' ? '+' : '-') . number_format($state)
-                    ),
+                        ($record->direction === 'credit' ? '+' : '-') . number_format($state)),
+
+                Tables\Columns\TextColumn::make('balance_before_toman')
+                    ->label('موجودی قبل')
+                    ->formatStateUsing(fn ($state) => number_format($state))
+                    ->toggleable(isToggledHiddenByDefault: true),
 
                 Tables\Columns\TextColumn::make('balance_after_toman')
-                    ->label('موجودی بعد (تومان)')
-                    ->numeric()
+                    ->label('موجودی بعد')
                     ->formatStateUsing(fn ($state) => number_format($state)),
+
+                Tables\Columns\BadgeColumn::make('status')
+                    ->label('وضعیت')
+                    ->formatStateUsing(fn ($state) => match ($state) {
+                        'completed' => 'موفق',
+                        'pending'   => 'در انتظار',
+                        'failed'    => 'ناموفق',
+                        default     => $state,
+                    })
+                    ->colors([
+                        'success' => ['completed'],
+                        'warning' => ['pending'],
+                        'danger'  => ['failed'],
+                    ]),
 
                 Tables\Columns\TextColumn::make('description')
                     ->label('توضیحات')
-                    ->limit(40)
+                    ->limit(45)
                     ->default('—'),
 
                 Tables\Columns\TextColumn::make('admin.username')
                     ->label('ادمین')
-                    ->default('—'),
+                    ->default('—')
+                    ->toggleable(isToggledHiddenByDefault: true),
 
                 Tables\Columns\TextColumn::make('created_at')
                     ->label('تاریخ')
@@ -83,16 +106,63 @@ class WalletTransactionResource extends Resource
                     ->sortable(),
             ])
             ->filters([
-                Tables\Filters\SelectFilter::make('type')
-                    ->label('نوع')
+                SelectFilter::make('type')
+                    ->label('نوع تراکنش')
                     ->options(WalletTransaction::allTypes()),
 
-                Tables\Filters\SelectFilter::make('direction')
+                SelectFilter::make('direction')
                     ->label('جهت')
                     ->options([
-                        'credit' => 'واریز',
+                        'credit' => 'واریز (افزایش موجودی)',
                         'debit'  => 'برداشت',
                     ]),
+
+                SelectFilter::make('status')
+                    ->label('وضعیت')
+                    ->options([
+                        'completed' => 'موفق',
+                        'pending'   => 'در انتظار',
+                        'failed'    => 'ناموفق',
+                    ]),
+
+                Filter::make('topup_only')
+                    ->label('فقط شارژ کیف پول')
+                    ->query(fn (Builder $q) => $q->where('type', WalletTransaction::TYPE_TOPUP)),
+
+                Filter::make('order_payment_only')
+                    ->label('فقط پرداخت سفارش')
+                    ->query(fn (Builder $q) => $q->where('type', WalletTransaction::TYPE_ORDER_PAYMENT)),
+
+                Filter::make('admin_only')
+                    ->label('فقط تغییرات ادمین')
+                    ->query(fn (Builder $q) => $q->whereIn('type', [
+                        WalletTransaction::TYPE_MANUAL_CREDIT,
+                        WalletTransaction::TYPE_MANUAL_DEBIT,
+                        WalletTransaction::TYPE_ADJUSTMENT,
+                    ])),
+
+                Filter::make('today')
+                    ->label('امروز')
+                    ->query(fn (Builder $q) => $q->whereDate('created_at', today())),
+
+                Filter::make('this_month')
+                    ->label('این ماه')
+                    ->query(fn (Builder $q) => $q->whereBetween('created_at', [
+                        now()->startOfMonth(),
+                        now()->endOfMonth(),
+                    ])),
+
+                Filter::make('date_range')
+                    ->form([
+                        Forms\Components\DatePicker::make('from')->label('از تاریخ'),
+                        Forms\Components\DatePicker::make('until')->label('تا تاریخ'),
+                    ])
+                    ->query(function (Builder $query, array $data) {
+                        return $query
+                            ->when($data['from'] ?? null, fn ($q, $d) => $q->whereDate('created_at', '>=', $d))
+                            ->when($data['until'] ?? null, fn ($q, $d) => $q->whereDate('created_at', '<=', $d));
+                    })
+                    ->label('بازه تاریخ'),
             ])
             ->actions([])
             ->bulkActions([])

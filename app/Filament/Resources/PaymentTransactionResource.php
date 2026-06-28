@@ -14,7 +14,10 @@ use Filament\Forms\Form;
 use Filament\Notifications\Notification;
 use Filament\Resources\Resource;
 use Filament\Tables;
+use Filament\Tables\Filters\Filter;
+use Filament\Tables\Filters\SelectFilter;
 use Filament\Tables\Table;
+use Illuminate\Database\Eloquent\Builder;
 
 class PaymentTransactionResource extends Resource
 {
@@ -34,23 +37,18 @@ class PaymentTransactionResource extends Resource
                 Forms\Components\TextInput::make('order.order_number')
                     ->label('شماره سفارش')
                     ->disabled(),
-
                 Forms\Components\TextInput::make('user.username')
                     ->label('کاربر')
                     ->disabled(),
-
                 Forms\Components\TextInput::make('paymentMethod.title')
                     ->label('روش پرداخت')
                     ->disabled(),
-
                 Forms\Components\TextInput::make('amount_toman')
                     ->label('مبلغ (تومان)')
                     ->disabled(),
-
                 Forms\Components\TextInput::make('transaction_reference')
                     ->label('کد تراکنش / TXID')
                     ->disabled(),
-
                 Forms\Components\Select::make('status')
                     ->label('وضعیت')
                     ->options(PaymentTransaction::allStatuses())
@@ -62,7 +60,6 @@ class PaymentTransactionResource extends Resource
                     ->label('توضیح کاربر')
                     ->disabled()
                     ->rows(2),
-
                 Forms\Components\Textarea::make('admin_note')
                     ->label('یادداشت ادمین')
                     ->rows(2),
@@ -72,11 +69,9 @@ class PaymentTransactionResource extends Resource
                 Forms\Components\TextInput::make('reviewer.username')
                     ->label('بررسی‌کننده')
                     ->disabled(),
-
                 Forms\Components\DateTimePicker::make('reviewed_at')
                     ->label('تاریخ بررسی')
                     ->disabled(),
-
                 Forms\Components\DateTimePicker::make('rejected_at')
                     ->label('تاریخ رد')
                     ->disabled(),
@@ -92,73 +87,52 @@ class PaymentTransactionResource extends Resource
                     ->label('#')
                     ->sortable(),
 
+                Tables\Columns\TextColumn::make('user.username')
+                    ->label('کاربر')
+                    ->searchable()
+                    ->sortable(),
+
                 Tables\Columns\TextColumn::make('order.order_number')
                     ->label('سفارش')
                     ->searchable()
-                    ->fontFamily('mono'),
-
-                Tables\Columns\TextColumn::make('user.username')
-                    ->label('کاربر')
-                    ->searchable(),
-
-                Tables\Columns\TextColumn::make('paymentMethod.title')
-                    ->label('روش پرداخت')
+                    ->fontFamily('mono')
                     ->default('—'),
+
+                Tables\Columns\BadgeColumn::make('provider')
+                    ->label('درگاه')
+                    ->formatStateUsing(fn ($state) => match ($state) {
+                        'nowpayments' => 'NOWPayments',
+                        'centralpay'  => 'CentralPay',
+                        'manual'      => 'دستی',
+                        default       => $state ?? '—',
+                    })
+                    ->colors([
+                        'warning' => ['nowpayments'],
+                        'success' => ['centralpay'],
+                        'gray'    => ['manual'],
+                    ]),
+
+                Tables\Columns\BadgeColumn::make('payment_purpose')
+                    ->label('نوع پرداخت')
+                    ->formatStateUsing(fn ($state) => match ($state) {
+                        'order_payment' => 'خرید سرویس',
+                        'wallet_topup'  => 'شارژ کیف پول',
+                        default         => $state ?? '—',
+                    })
+                    ->colors([
+                        'success' => ['order_payment'],
+                        'info'    => ['wallet_topup'],
+                    ]),
 
                 Tables\Columns\TextColumn::make('amount_toman')
                     ->label('مبلغ (تومان)')
                     ->numeric()
+                    ->formatStateUsing(fn ($state) => number_format($state))
                     ->sortable(),
 
-                Tables\Columns\TextColumn::make('transaction_reference')
-                    ->label('TXID')
-                    ->limit(20)
-                    ->default('—')
-                    ->fontFamily('mono'),
-
-                Tables\Columns\TextColumn::make('provider_reference')
-                    ->label('Payment ID')
-                    ->limit(20)
-                    ->default('—')
-                    ->fontFamily('mono')
-                    ->toggleable(isToggledHiddenByDefault: true),
-
-                Tables\Columns\TextColumn::make('gateway_status')
-                    ->label('وضعیت درگاه')
-                    ->default('—')
-                    ->toggleable(isToggledHiddenByDefault: true),
-
-                Tables\Columns\TextColumn::make('pay_amount')
-                    ->label('مبلغ کریپتو')
-                    ->default('—')
-                    ->toggleable(isToggledHiddenByDefault: true),
-
-                Tables\Columns\TextColumn::make('pay_currency')
+                Tables\Columns\TextColumn::make('currency')
                     ->label('ارز')
-                    ->default('—')
-                    ->toggleable(isToggledHiddenByDefault: true),
-
-                Tables\Columns\TextColumn::make('gateway_amount')
-                    ->label('مبلغ درگاه (تومان)')
-                    ->numeric()
-                    ->default('—')
-                    ->toggleable(isToggledHiddenByDefault: true),
-
-                Tables\Columns\TextColumn::make('gateway_currency')
-                    ->label('ارز درگاه')
-                    ->default('—')
-                    ->toggleable(isToggledHiddenByDefault: true),
-
-                Tables\Columns\TextColumn::make('failure_reason')
-                    ->label('دلیل خطا')
-                    ->limit(30)
-                    ->default('—')
-                    ->toggleable(isToggledHiddenByDefault: true),
-
-                Tables\Columns\TextColumn::make('verified_at')
-                    ->label('تایید درگاه')
-                    ->dateTime()
-                    ->default('—')
+                    ->default('IRT')
                     ->toggleable(isToggledHiddenByDefault: true),
 
                 Tables\Columns\BadgeColumn::make('status')
@@ -171,17 +145,36 @@ class PaymentTransactionResource extends Resource
                         'danger'  => ['rejected', 'failed', 'cancelled', 'expired', 'refunded'],
                     ]),
 
+                Tables\Columns\TextColumn::make('gateway_status')
+                    ->label('وضعیت درگاه')
+                    ->default('—')
+                    ->toggleable(isToggledHiddenByDefault: true),
+
+                Tables\Columns\TextColumn::make('transaction_reference')
+                    ->label('شناسه پیگیری')
+                    ->limit(20)
+                    ->default('—')
+                    ->fontFamily('mono')
+                    ->copyable()
+                    ->toggleable(isToggledHiddenByDefault: true),
+
+                Tables\Columns\TextColumn::make('paid_at')
+                    ->label('تاریخ پرداخت')
+                    ->dateTime()
+                    ->sortable()
+                    ->toggleable(isToggledHiddenByDefault: true),
+
                 Tables\Columns\TextColumn::make('created_at')
-                    ->label('تاریخ')
+                    ->label('تاریخ ایجاد')
                     ->dateTime()
                     ->sortable(),
             ])
             ->filters([
-                Tables\Filters\SelectFilter::make('status')
+                SelectFilter::make('status')
                     ->label('وضعیت')
                     ->options(PaymentTransaction::allStatuses()),
 
-                Tables\Filters\SelectFilter::make('provider')
+                SelectFilter::make('provider')
                     ->label('درگاه')
                     ->options([
                         'centralpay'  => 'CentralPay',
@@ -189,7 +182,52 @@ class PaymentTransactionResource extends Resource
                         'manual'      => 'دستی',
                     ]),
 
-                Tables\Filters\SelectFilter::make('payment_method_id')
+                SelectFilter::make('payment_purpose')
+                    ->label('نوع پرداخت')
+                    ->options([
+                        'order_payment' => 'خرید سرویس',
+                        'wallet_topup'  => 'شارژ کیف پول',
+                    ]),
+
+                Filter::make('paid_only')
+                    ->label('فقط پرداخت‌های موفق')
+                    ->query(fn (Builder $q) => $q->where('status', PaymentTransaction::STATUS_APPROVED)),
+
+                Filter::make('failed_only')
+                    ->label('فقط پرداخت‌های ناموفق')
+                    ->query(fn (Builder $q) => $q->whereIn('status', [
+                        PaymentTransaction::STATUS_FAILED,
+                        PaymentTransaction::STATUS_REJECTED,
+                        PaymentTransaction::STATUS_EXPIRED,
+                        PaymentTransaction::STATUS_CANCELLED,
+                    ])),
+
+                Filter::make('pending_only')
+                    ->label('فقط در انتظار')
+                    ->query(fn (Builder $q) => $q->whereIn('status', [
+                        PaymentTransaction::STATUS_PENDING,
+                        PaymentTransaction::STATUS_SUBMITTED,
+                        PaymentTransaction::STATUS_WAITING,
+                        PaymentTransaction::STATUS_CONFIRMING,
+                    ])),
+
+                Filter::make('today')
+                    ->label('امروز')
+                    ->query(fn (Builder $q) => $q->whereDate('created_at', today())),
+
+                Filter::make('date_range')
+                    ->form([
+                        Forms\Components\DatePicker::make('from')->label('از تاریخ'),
+                        Forms\Components\DatePicker::make('until')->label('تا تاریخ'),
+                    ])
+                    ->query(function (Builder $query, array $data) {
+                        return $query
+                            ->when($data['from'] ?? null, fn ($q, $d) => $q->whereDate('created_at', '>=', $d))
+                            ->when($data['until'] ?? null, fn ($q, $d) => $q->whereDate('created_at', '<=', $d));
+                    })
+                    ->label('بازه تاریخ'),
+
+                SelectFilter::make('payment_method_id')
                     ->label('روش پرداخت')
                     ->relationship('paymentMethod', 'title'),
             ])
@@ -203,9 +241,7 @@ class PaymentTransactionResource extends Resource
                         PaymentTransaction::STATUS_SUBMITTED,
                     ]))
                     ->form([
-                        Forms\Components\Textarea::make('admin_note')
-                            ->label('یادداشت ادمین (اختیاری)')
-                            ->rows(3),
+                        Forms\Components\Textarea::make('admin_note')->label('یادداشت ادمین (اختیاری)')->rows(3),
                     ])
                     ->action(function (PaymentTransaction $record, array $data) {
                         try {
@@ -214,20 +250,14 @@ class PaymentTransactionResource extends Resource
                                 auth()->id(),
                                 $data['admin_note'] ?? null
                             );
-                            Notification::make()
-                                ->title('تراکنش با موفقیت تایید شد.')
-                                ->success()
-                                ->send();
+                            Notification::make()->title('تراکنش با موفقیت تایید شد.')->success()->send();
                         } catch (\RuntimeException $e) {
-                            Notification::make()
-                                ->title($e->getMessage())
-                                ->danger()
-                                ->send();
+                            Notification::make()->title($e->getMessage())->danger()->send();
                         }
                     })
                     ->requiresConfirmation()
                     ->modalHeading('تایید پرداخت')
-                    ->modalDescription('آیا از تایید این پرداخت مطمئن هستید؟ سفارش مربوطه به حالت پرداخت شده تغییر می‌کند.')
+                    ->modalDescription('آیا از تایید این پرداخت مطمئن هستید؟ سفارش مربوطه پرداخت‌شده می‌شود.')
                     ->modalSubmitActionLabel('بله، تایید کن'),
 
                 Tables\Actions\Action::make('reject')
@@ -239,9 +269,7 @@ class PaymentTransactionResource extends Resource
                         PaymentTransaction::STATUS_SUBMITTED,
                     ]))
                     ->form([
-                        Forms\Components\Textarea::make('admin_note')
-                            ->label('دلیل رد (اختیاری)')
-                            ->rows(3),
+                        Forms\Components\Textarea::make('admin_note')->label('دلیل رد (اختیاری)')->rows(3),
                     ])
                     ->action(function (PaymentTransaction $record, array $data) {
                         try {
@@ -250,15 +278,9 @@ class PaymentTransactionResource extends Resource
                                 auth()->id(),
                                 $data['admin_note'] ?? null
                             );
-                            Notification::make()
-                                ->title('تراکنش رد شد.')
-                                ->warning()
-                                ->send();
+                            Notification::make()->title('تراکنش رد شد.')->warning()->send();
                         } catch (\RuntimeException $e) {
-                            Notification::make()
-                                ->title($e->getMessage())
-                                ->danger()
-                                ->send();
+                            Notification::make()->title($e->getMessage())->danger()->send();
                         }
                     })
                     ->requiresConfirmation()
@@ -267,30 +289,24 @@ class PaymentTransactionResource extends Resource
                     ->modalSubmitActionLabel('بله، رد کن'),
 
                 Tables\Actions\Action::make('nowpayments_check')
-                    ->label('بررسی وضعیت NOWPayments')
+                    ->label('بررسی NOWPayments')
                     ->icon('heroicon-o-arrow-path')
                     ->color('info')
                     ->visible(fn (PaymentTransaction $record) => $record->provider === 'nowpayments' && $record->provider_reference !== null)
                     ->action(function (PaymentTransaction $record) {
-                        $method = PaymentMethod::where('type', PaymentMethod::TYPE_NOWPAYMENTS)
-                            ->where('is_active', true)
-                            ->first();
-
+                        $method = PaymentMethod::where('type', PaymentMethod::TYPE_NOWPAYMENTS)->where('is_active', true)->first();
                         if (! $method) {
                             Notification::make()->title('روش پرداخت NOWPayments فعال یافت نشد.')->danger()->send();
                             return;
                         }
-
                         try {
-                            $client = new NowPaymentsClient($method);
-                            $status = $client->getPaymentStatus($record->provider_reference);
+                            $client        = new NowPaymentsClient($method);
+                            $status        = $client->getPaymentStatus($record->provider_reference);
                             $gatewayStatus = strtolower($status['payment_status'] ?? '');
-
                             $record->update([
                                 'gateway_status'   => $gatewayStatus,
                                 'response_payload' => collect($status)->except(['api_key', 'ipn_secret'])->all(),
                             ]);
-
                             if ($gatewayStatus === 'finished') {
                                 app(MarkOrderAsPaidService::class)->markPaid($record->order, $record);
                                 Notification::make()->title('پرداخت تایید شد و سفارش پردازش شد.')->success()->send();
@@ -308,14 +324,14 @@ class PaymentTransactionResource extends Resource
                     ->color('gray')
                     ->visible(fn (PaymentTransaction $record) => $record->provider === 'nowpayments' && $record->response_payload !== null)
                     ->modalContent(fn (PaymentTransaction $record) => view('filament.nowpayments-payload-modal', [
-                        'payload' => $record->response_payload,
+                        'payload'     => $record->response_payload,
                         'gateway_url' => $record->gateway_url,
                     ]))
                     ->modalHeading('پاسخ NOWPayments')
                     ->modalSubmitAction(false),
 
                 Tables\Actions\Action::make('centralpay_check')
-                    ->label('بررسی وضعیت CentralPay')
+                    ->label('بررسی CentralPay')
                     ->icon('heroicon-o-arrow-path')
                     ->color('success')
                     ->visible(fn (PaymentTransaction $record) => $record->provider === 'centralpay'
