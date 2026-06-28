@@ -62,11 +62,12 @@
                     name="amount"
                     value="{{ old('amount') }}"
                     min="{{ $minAmount }}"
-                    max="{{ $maxAmount }}"
+                    @if($maxAmount) max="{{ $maxAmount }}" @endif
                     placeholder="{{ number_format($minAmount) }}"
                     class="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-3 text-white placeholder-gray-500 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500">
                 <p class="text-gray-500 text-xs mt-1">
-                    حداقل {{ number_format($minAmount) }} — حداکثر {{ number_format($maxAmount) }} تومان
+                    حداقل {{ number_format($minAmount) }} تومان
+                    @if($maxAmount) — حداکثر {{ number_format($maxAmount) }} تومان @endif
                 </p>
             </div>
 

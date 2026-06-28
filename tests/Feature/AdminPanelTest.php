@@ -3,6 +3,8 @@
 namespace Tests\Feature;
 
 use App\Filament\Pages\Auth\Login as AdminLogin;
+use App\Filament\Pages\WalletSettings;
+use App\Models\SiteText;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Livewire\Livewire;
@@ -147,5 +149,124 @@ class AdminPanelTest extends TestCase
             ->assertHasFormErrors(['username']);
 
         $this->assertGuest();
+    }
+
+    // ── Wallet settings page ─────────────────────────────────────────────────
+
+    public function test_wallet_settings_page_accessible_to_admin(): void
+    {
+        $admin = User::factory()->create([
+            'username' => 'walletadmin',
+            'password' => bcrypt('secret123'),
+            'is_admin' => true,
+            'email_verified_at' => now(),
+        ]);
+
+        $this->actingAs($admin)
+            ->get('/zed-admin/settings/wallet')
+            ->assertOk();
+    }
+
+    public function test_wallet_settings_page_not_accessible_to_guests(): void
+    {
+        $this->get('/zed-admin/settings/wallet')
+            ->assertRedirectContains('/zed-admin/login');
+    }
+
+    public function test_admin_can_save_wallet_settings(): void
+    {
+        $admin = User::factory()->create([
+            'username'          => 'walletadmin2',
+            'password'          => bcrypt('secret123'),
+            'is_admin'          => true,
+            'email_verified_at' => now(),
+        ]);
+
+        SiteText::firstOrCreate(
+            ['key' => 'wallet_enabled'],
+            ['value' => '0', 'group' => 'wallet', 'type' => 'boolean']
+        );
+        SiteText::firstOrCreate(
+            ['key' => 'wallet_payment_enabled'],
+            ['value' => '0', 'group' => 'wallet', 'type' => 'boolean']
+        );
+        SiteText::firstOrCreate(
+            ['key' => 'wallet_topup_enabled'],
+            ['value' => '0', 'group' => 'wallet', 'type' => 'boolean']
+        );
+        SiteText::firstOrCreate(
+            ['key' => 'wallet_topup_nowpayments_enabled'],
+            ['value' => '0', 'group' => 'wallet', 'type' => 'boolean']
+        );
+        SiteText::firstOrCreate(
+            ['key' => 'wallet_topup_centralpay_enabled'],
+            ['value' => '0', 'group' => 'wallet', 'type' => 'boolean']
+        );
+        SiteText::firstOrCreate(
+            ['key' => 'wallet_admin_adjustment_requires_note'],
+            ['value' => '1', 'group' => 'wallet', 'type' => 'boolean']
+        );
+        SiteText::firstOrCreate(
+            ['key' => 'wallet_min_topup_amount'],
+            ['value' => '100000', 'group' => 'wallet', 'type' => 'number']
+        );
+        SiteText::firstOrCreate(
+            ['key' => 'wallet_max_topup_amount'],
+            ['value' => '', 'group' => 'wallet', 'type' => 'number']
+        );
+        SiteText::firstOrCreate(
+            ['key' => 'wallet_currency'],
+            ['value' => 'IRT', 'group' => 'wallet', 'type' => 'text']
+        );
+        SiteText::firstOrCreate(
+            ['key' => 'wallet_topup_preset_amounts'],
+            ['value' => '100000,250000,500000', 'group' => 'wallet', 'type' => 'text']
+        );
+
+        Livewire::actingAs($admin)
+            ->test(WalletSettings::class)
+            ->fillForm([
+                'wallet_enabled'         => true,
+                'wallet_payment_enabled' => true,
+                'wallet_topup_enabled'   => true,
+                'wallet_topup_nowpayments_enabled'  => true,
+                'wallet_topup_centralpay_enabled'   => false,
+                'wallet_min_topup_amount'            => 200000,
+                'wallet_max_topup_amount'            => null,
+                'wallet_currency'                   => 'IRT',
+                'wallet_topup_preset_amounts'       => '200000,500000,1000000',
+                'wallet_admin_adjustment_requires_note' => true,
+            ])
+            ->call('save')
+            ->assertHasNoFormErrors();
+
+        $this->assertEquals('1', SiteText::where('key', 'wallet_enabled')->value('value'));
+        $this->assertEquals('1', SiteText::where('key', 'wallet_topup_enabled')->value('value'));
+        $this->assertEquals('200000', SiteText::where('key', 'wallet_min_topup_amount')->value('value'));
+        $this->assertEquals('0', SiteText::where('key', 'wallet_topup_centralpay_enabled')->value('value'));
+    }
+
+    public function test_wallet_settings_are_read_from_database(): void
+    {
+        SiteText::firstOrCreate(
+            ['key' => 'wallet_enabled'],
+            ['value' => '1', 'group' => 'wallet', 'type' => 'boolean']
+        );
+
+        $this->assertEquals('1', \App\Models\SiteText::get('wallet_enabled', '0'));
+
+        SiteText::where('key', 'wallet_enabled')->update(['value' => '0']);
+        \Illuminate\Support\Facades\Cache::forget('site_text:wallet_enabled');
+
+        $this->assertEquals('0', \App\Models\SiteText::get('wallet_enabled', '1'));
+    }
+
+    public function test_centralpay_topup_is_disabled_by_default_in_seeder(): void
+    {
+        $this->seed(\Database\Seeders\WalletSettingsSeeder::class);
+
+        $record = SiteText::where('key', 'wallet_topup_centralpay_enabled')->first();
+        $this->assertNotNull($record);
+        $this->assertEquals('0', $record->value);
     }
 }

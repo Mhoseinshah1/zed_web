@@ -270,8 +270,21 @@ class WalletTest extends TestCase
             ->assertSee('کیف پول');
     }
 
+    public function test_wallet_page_shows_disabled_message_when_wallet_disabled(): void
+    {
+        // wallet_enabled not set (defaults to '0' in SiteText::get with old default, or simply absent)
+        SiteText::firstOrCreate(['key' => 'wallet_enabled'], ['value' => '0', 'group' => 'wallet']);
+        $user = $this->makeUser();
+
+        $this->actingAs($user)
+            ->get(route('dashboard.wallet'))
+            ->assertOk()
+            ->assertSee('کیف پول در حال حاضر غیرفعال است');
+    }
+
     public function test_wallet_page_shows_balance(): void
     {
+        $this->enableWallet();
         $user = $this->makeUser(['wallet_balance_toman' => 250000]);
 
         $this->actingAs($user)
