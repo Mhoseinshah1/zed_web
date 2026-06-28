@@ -40,16 +40,36 @@ class PaymentController extends Controller
             'user_note'             => ['nullable', 'string', 'max:1000'],
         ]);
 
+        $method = PaymentMethod::findOrFail($request->payment_method_id);
+
+        // NOWPayments — delegate to dedicated controller
+        if ($method->isNowPayments()) {
+            return app(\App\Http\Controllers\NowPaymentsController::class)
+                ->create($request, $order);
+        }
+
         // Check for existing pending/submitted payment
         $existing = PaymentTransaction::where('order_id', $order->id)
             ->whereIn('status', [PaymentTransaction::STATUS_PENDING, PaymentTransaction::STATUS_SUBMITTED])
             ->exists();
 
         if ($existing) {
+            // If there's an active NOWPayments transaction, redirect to its page
+            $activeNowpayments = PaymentTransaction::where('order_id', $order->id)
+                ->whereIn('status', [
+                    PaymentTransaction::STATUS_WAITING,
+                    PaymentTransaction::STATUS_CONFIRMING,
+                    PaymentTransaction::STATUS_PARTIAL,
+                ])
+                ->where('provider', 'nowpayments')
+                ->exists();
+
+            if ($activeNowpayments) {
+                return redirect()->route('dashboard.orders.nowpayments', $order);
+            }
+
             return back()->withErrors(['payment_method_id' => 'یک پرداخت در انتظار تایید برای این سفارش وجود دارد.']);
         }
-
-        $method = PaymentMethod::findOrFail($request->payment_method_id);
 
         // Wallet payment — immediate approval
         if ($method->type === PaymentMethod::TYPE_WALLET) {

@@ -110,6 +110,11 @@ class OrderResource extends Resource
                     ->numeric()
                     ->sortable(),
 
+                Tables\Columns\TextColumn::make('paymentTransactions.paymentMethod.title')
+                    ->label('روش پرداخت')
+                    ->default('—')
+                    ->toggleable(isToggledHiddenByDefault: true),
+
                 Tables\Columns\BadgeColumn::make('status')
                     ->label('وضعیت')
                     ->formatStateUsing(fn ($state) => Order::allStatuses()[$state] ?? $state)

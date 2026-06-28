@@ -998,12 +998,149 @@ User services, provision logs, VPN panels, and VPN inbounds are **never deleted*
 - **Admin-controlled feature flags** — `ServiceSettingsSeeder` seeds 6 `SiteText` settings (group: `services`); sync+revoke enabled by default; reset/disable/enable disabled by default; admin edits via `/zed-admin/site-texts`
 - **Per-service revoke rate limit** — revoke subscription limited to once per 10 minutes per service (configurable); excess attempts get Persian error message
 - **Provision logs for user actions** — every user action creates a `VpnServiceProvisionLog` with action prefix `user_marzban_*`; no tokens or credentials logged
+- **Per-VPN-panel user self-service toggles** — 10 boolean columns on `vpn_panels` control which actions users can perform per panel (sync, revoke, reset-traffic, disable, enable, view QR, copy links); defaults match previous global settings
+- **Auto-sync on service detail view** — `/dashboard/services/{service}` syncs from Marzban if never synced or last sync >30s ago; graceful failure with warning banner
+- **NOWPayments crypto payment gateway** — full integration with `POST /v1/invoice` (hosted checkout), IPN webhook at `POST /webhooks/nowpayments`, HMAC-SHA512 signature verification, manual status check, auto-provisioning on `finished`; currency conversion IRT→USD via admin-configured exchange rate; `api_key` and `ipn_secret` stored encrypted; QR code on payment detail page; 36 automated tests
 
 **Next:**
 1. Renew / extra traffic — extend Marzban user expiry or add data via order
 2. 3x-ui / Sanaei 3x-ui integration — same flow, different panel type
-3. Payment gateway API — NOWPayments, Telegram Stars API, or Rial gateway
-4. Ticket system — support ticket model and panel
-5. Telegram bot — admin reports and notifications
-6. Email — order confirmations, expiry reminders
-7. Docker deployment — containerized installation
+3. Ticket system — support ticket model and panel
+4. Telegram bot — admin reports and notifications
+5. Email — order confirmations, expiry reminders
+6. Docker deployment — containerized installation
+
+## NOWPayments crypto gateway
+
+ZedProxy integrates with [NOWPayments](https://nowpayments.io) to accept cryptocurrency payments automatically. The gateway handles invoice creation, IPN webhook verification, and auto-provisioning on confirmed payment.
+
+### How it works
+
+1. Admin enables the NOWPayments payment method in `/zed-admin/payment-methods`
+2. User selects "پرداخت کریپتو (NOWPayments)" at checkout
+3. User optionally selects the crypto currency (if `allowed_pay_currencies` is set)
+4. ZedProxy calls NOWPayments `POST /v1/invoice` to create a hosted invoice
+5. If an `invoice_url` is returned, user is redirected to the hosted NOWPayments checkout page
+6. If no invoice URL (direct payment), user sees the pay address, amount, QR code, and status on `/dashboard/orders/{order}/nowpayments`
+7. NOWPayments calls the IPN webhook when status changes
+8. When status is `finished`, ZedProxy marks the order paid and provisions the VPN service automatically
+9. User can also click "بررسی وضعیت پرداخت" to manually poll the status
+
+### Setup (admin)
+
+1. Go to `/zed-admin/payment-methods` → **New**
+2. Set **Type** to `NOWPayments (کریپتو)`
+3. Fill in the NOWPayments configuration section:
+
+| Field | Description |
+|-------|-------------|
+| **API Key** | From [NOWPayments dashboard](https://nowpayments.io) → API Keys. Stored encrypted. |
+| **IPN Secret** | From NOWPayments dashboard → API Keys → IPN Secret. Stored encrypted. |
+| **Sandbox mode** | Enable for testing — uses `api-sandbox.nowpayments.io`. Disable for production. |
+| **Site currency** | `IRT` (Toman) or `IRR` (Rial) — the currency your order prices are in |
+| **Exchange rate (Toman/USD)** | Manual exchange rate. Example: `75000` means 75,000 Toman = 1 USD |
+| **Default pay currency** | Default crypto for payment, e.g. `usdttrc20`, `btc`, `eth` |
+| **Allowed pay currencies** | Comma-separated list, e.g. `btc,eth,usdttrc20,ltc`. Leave empty for any. |
+| **IPN Callback URL** | Leave empty — ZedProxy auto-fills with `/webhooks/nowpayments` |
+| **Success URL** | Optional redirect after successful payment |
+| **Cancel URL** | Optional redirect on cancelled payment |
+| **Base URL** | Leave empty for auto-detection by sandbox toggle |
+
+4. Set **Active** to enabled
+5. Save
+
+### Webhook URL
+
+Tell NOWPayments your IPN callback URL:
+
+```
+https://yourdomain.com/webhooks/nowpayments
+```
+
+This is filled automatically when you submit a payment if `ipn_callback_url` is empty in the config.
+
+### Currency conversion
+
+ZedProxy prices are in Toman (IRT) but NOWPayments expects USD (or another supported currency).
+
+The admin must set `exchange_rate_usd` — the number of Toman per 1 USD. Example: if the rate is 75,000 Toman/USD:
+
+```
+order.final_price_toman ÷ 75,000 = USD price sent to NOWPayments
+```
+
+Update the exchange rate regularly from the admin panel to keep prices accurate.
+
+### Supported NOWPayments statuses
+
+| NOWPayments status | ZedProxy action |
+|--------------------|-----------------|
+| `waiting` | Transaction status = `waiting`, order stays pending |
+| `confirming` | Transaction status = `confirming`, order stays pending |
+| `confirmed` | Transaction status = `confirming`, order stays pending |
+| `sending` | Transaction status = `confirming`, order stays pending |
+| `partially_paid` | Transaction status = `partially_paid`, order stays pending |
+| `finished` | **Order marked paid, VPN service provisioned automatically** |
+| `failed` | Transaction status = `failed` |
+| `refunded` | Transaction status = `refunded` |
+| `expired` | Transaction status = `expired` |
+
+**Only `finished` triggers provisioning.** This is intentional — blockchain confirmations take time and partial/in-progress payments must not grant access.
+
+### IPN signature verification
+
+Every IPN request from NOWPayments is verified before processing:
+
+1. Read `x-nowpayments-sig` header
+2. Sort all payload keys alphabetically
+3. JSON-encode with sorted keys
+4. Sign with `HMAC-SHA512` using `ipn_secret`
+5. Compare with `hash_equals()` (constant-time, prevents timing attacks)
+
+Requests with missing or invalid signatures are rejected with `401` and logged (without exposing the secret).
+
+### Manual status check
+
+Users and admins can manually check payment status without waiting for an IPN:
+
+- **User**: click "بررسی وضعیت پرداخت" on the payment detail page
+- **Admin**: click "بررسی وضعیت NOWPayments" in `/zed-admin/payment-transactions`
+
+Both call `GET /v1/payment/{payment_id}` on the NOWPayments API and update the transaction in real time.
+
+### Security
+
+- `api_key` and `ipn_secret` are stored with Laravel's `encrypted` cast — encrypted at rest using `APP_KEY`
+- Neither field appears in admin table views or JSON responses
+- Credentials are never logged — not in API calls, IPN handling, or error messages
+- IPN is verified before any database update
+- Order ownership is verified on every user-facing action
+- Duplicate IPN calls are idempotent — provisioning runs at most once per order
+
+### Sandbox / production
+
+| Mode | Base URL |
+|------|----------|
+| Sandbox (testing) | `https://api-sandbox.nowpayments.io/v1` |
+| Production | `https://api.nowpayments.io/v1` |
+
+Enable sandbox in the admin config field. Disable it when going live.
+
+### Troubleshooting
+
+**"نرخ تبدیل دلار تنظیم نشده است"**
+→ Set `exchange_rate_usd` in the payment method config to a positive value.
+
+**IPN not received**
+→ Ensure the webhook URL `https://yourdomain.com/webhooks/nowpayments` is reachable from the internet. Check that your firewall or Cloudflare does not block `POST` requests to that path.
+
+**Payment shows "waiting" indefinitely**
+→ Click "بررسی وضعیت پرداخت" to manually poll. Or check the NOWPayments dashboard for the payment status. If the payment expired, the user must start a new payment.
+
+**Sandbox payments not completing**
+→ Use the NOWPayments sandbox dashboard to simulate status changes, or manually change the transaction status in the admin panel.
+
+**Admin transactions page**
+→ Go to `/zed-admin/payment-transactions`, find the transaction (provider = nowpayments), and use:
+- "بررسی وضعیت NOWPayments" — polls live status from API
+- "پاسخ درگاه" — shows the raw (sanitized) API response JSON

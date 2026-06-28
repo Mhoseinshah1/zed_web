@@ -3,7 +3,10 @@
 namespace App\Filament\Resources;
 
 use App\Filament\Resources\PaymentTransactionResource\Pages;
+use App\Models\PaymentMethod;
 use App\Models\PaymentTransaction;
+use App\Services\Orders\MarkOrderAsPaidService;
+use App\Services\Payments\NowPayments\NowPaymentsClient;
 use App\Services\PaymentService;
 use Filament\Forms;
 use Filament\Forms\Form;
@@ -112,13 +115,36 @@ class PaymentTransactionResource extends Resource
                     ->default('—')
                     ->fontFamily('mono'),
 
+                Tables\Columns\TextColumn::make('provider_reference')
+                    ->label('Payment ID')
+                    ->limit(20)
+                    ->default('—')
+                    ->fontFamily('mono')
+                    ->toggleable(isToggledHiddenByDefault: true),
+
+                Tables\Columns\TextColumn::make('gateway_status')
+                    ->label('وضعیت درگاه')
+                    ->default('—')
+                    ->toggleable(isToggledHiddenByDefault: true),
+
+                Tables\Columns\TextColumn::make('pay_amount')
+                    ->label('مبلغ کریپتو')
+                    ->default('—')
+                    ->toggleable(isToggledHiddenByDefault: true),
+
+                Tables\Columns\TextColumn::make('pay_currency')
+                    ->label('ارز')
+                    ->default('—')
+                    ->toggleable(isToggledHiddenByDefault: true),
+
                 Tables\Columns\BadgeColumn::make('status')
                     ->label('وضعیت')
                     ->formatStateUsing(fn ($state) => PaymentTransaction::allStatuses()[$state] ?? $state)
                     ->colors([
-                        'warning' => ['pending', 'submitted'],
+                        'warning' => ['pending', 'submitted', 'waiting', 'confirming'],
                         'success' => ['approved'],
-                        'danger'  => ['rejected', 'failed', 'cancelled'],
+                        'info'    => ['partially_paid'],
+                        'danger'  => ['rejected', 'failed', 'cancelled', 'expired', 'refunded'],
                     ]),
 
                 Tables\Columns\TextColumn::make('created_at')
@@ -207,6 +233,54 @@ class PaymentTransactionResource extends Resource
                     ->modalHeading('رد پرداخت')
                     ->modalDescription('آیا از رد این پرداخت مطمئن هستید؟')
                     ->modalSubmitActionLabel('بله، رد کن'),
+
+                Tables\Actions\Action::make('nowpayments_check')
+                    ->label('بررسی وضعیت NOWPayments')
+                    ->icon('heroicon-o-arrow-path')
+                    ->color('info')
+                    ->visible(fn (PaymentTransaction $record) => $record->provider === 'nowpayments' && $record->provider_reference !== null)
+                    ->action(function (PaymentTransaction $record) {
+                        $method = PaymentMethod::where('type', PaymentMethod::TYPE_NOWPAYMENTS)
+                            ->where('is_active', true)
+                            ->first();
+
+                        if (! $method) {
+                            Notification::make()->title('روش پرداخت NOWPayments فعال یافت نشد.')->danger()->send();
+                            return;
+                        }
+
+                        try {
+                            $client = new NowPaymentsClient($method);
+                            $status = $client->getPaymentStatus($record->provider_reference);
+                            $gatewayStatus = strtolower($status['payment_status'] ?? '');
+
+                            $record->update([
+                                'gateway_status'   => $gatewayStatus,
+                                'response_payload' => collect($status)->except(['api_key', 'ipn_secret'])->all(),
+                            ]);
+
+                            if ($gatewayStatus === 'finished') {
+                                app(MarkOrderAsPaidService::class)->markPaid($record->order, $record);
+                                Notification::make()->title('پرداخت تایید شد و سفارش پردازش شد.')->success()->send();
+                            } else {
+                                Notification::make()->title("وضعیت درگاه: {$gatewayStatus}")->info()->send();
+                            }
+                        } catch (\RuntimeException $e) {
+                            Notification::make()->title('خطا: ' . $e->getMessage())->danger()->send();
+                        }
+                    }),
+
+                Tables\Actions\Action::make('view_gateway_response')
+                    ->label('پاسخ درگاه')
+                    ->icon('heroicon-o-eye')
+                    ->color('gray')
+                    ->visible(fn (PaymentTransaction $record) => $record->provider === 'nowpayments' && $record->response_payload !== null)
+                    ->modalContent(fn (PaymentTransaction $record) => view('filament.nowpayments-payload-modal', [
+                        'payload' => $record->response_payload,
+                        'gateway_url' => $record->gateway_url,
+                    ]))
+                    ->modalHeading('پاسخ NOWPayments')
+                    ->modalSubmitAction(false),
 
                 Tables\Actions\EditAction::make()->label('جزئیات'),
             ])

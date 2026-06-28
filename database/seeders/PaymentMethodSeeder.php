@@ -46,5 +46,24 @@ class PaymentMethodSeeder extends Seeder
                 $data
             );
         }
+
+        // NOWPayments — seed only if missing; credentials must be set manually in admin
+        PaymentMethod::firstOrCreate(
+            ['slug' => 'nowpayments'],
+            [
+                'title'       => 'پرداخت کریپتو (NOWPayments)',
+                'type'        => PaymentMethod::TYPE_NOWPAYMENTS,
+                'description' => 'پرداخت با ارزهای دیجیتال از طریق درگاه NOWPayments',
+                'is_active'   => false,
+                'sort_order'  => 5,
+                'config'      => [
+                    'sandbox'              => true,
+                    'site_currency'        => 'IRT',
+                    'price_currency'       => 'usd',
+                    'default_pay_currency' => 'usdttrc20',
+                    'exchange_rate_usd'    => 0,
+                ],
+            ]
+        );
     }
 }

@@ -71,9 +71,9 @@
             @endif
         </div>
 
-        {{-- Manual method details --}}
-        <div x-show="selectedType && selectedType !== 'wallet'" x-cloak>
-            @foreach($methods->where(fn($m) => $m->type !== 'wallet') as $method)
+        {{-- Manual method details (non-wallet, non-nowpayments) --}}
+        <div x-show="selectedType && selectedType !== 'wallet' && selectedType !== 'nowpayments'" x-cloak>
+            @foreach($methods->where(fn($m) => ! in_array($m->type, ['wallet', 'nowpayments'])) as $method)
             <div x-show="selectedMethod == {{ $method->id }}" class="bg-gray-900 border border-gray-800 rounded-xl p-6 mb-6">
                 @if($method->instructions)
                 <div class="mb-5">
@@ -117,6 +117,45 @@
                 </div>
             </div>
         </div>
+
+        {{-- NOWPayments crypto gateway --}}
+        @foreach($methods->where('type', 'nowpayments') as $method)
+        @php
+            $allowedCurrencies = array_filter(array_map('trim', explode(',', $method->getConfig('allowed_pay_currencies', '') ?? '')));
+            $defaultCurrency   = $method->getConfig('default_pay_currency', 'usdttrc20');
+        @endphp
+        <div x-show="selectedMethod == {{ $method->id }}" x-cloak class="bg-gray-900 border border-gray-800 rounded-xl p-6 mb-6">
+            <div class="flex items-start gap-3 mb-4">
+                <div class="w-8 h-8 bg-orange-500/20 rounded-full flex items-center justify-center flex-shrink-0 mt-0.5">
+                    <svg class="w-4 h-4 text-orange-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                    </svg>
+                </div>
+                <div>
+                    <p class="text-white font-medium text-sm">پرداخت کریپتو از طریق NOWPayments</p>
+                    <p class="text-gray-400 text-xs mt-1">پس از تایید، یک آدرس کریپتو برای واریز به شما نمایش داده می‌شود. پرداخت به صورت خودکار تایید می‌شود.</p>
+                </div>
+            </div>
+
+            @if(! empty($allowedCurrencies))
+            <div>
+                <label for="pay_currency_{{ $method->id }}" class="block text-sm text-gray-400 mb-1.5">
+                    ارز پرداخت را انتخاب کنید
+                </label>
+                <select id="pay_currency_{{ $method->id }}" name="pay_currency"
+                        class="w-full bg-gray-800 border border-gray-700 focus:border-indigo-500 rounded-lg px-4 py-2.5 text-white text-sm outline-none transition">
+                    @foreach($allowedCurrencies as $currency)
+                    <option value="{{ $currency }}" {{ $currency === $defaultCurrency ? 'selected' : '' }}>
+                        {{ strtoupper($currency) }}
+                    </option>
+                    @endforeach
+                </select>
+            </div>
+            @else
+            <input type="hidden" name="pay_currency" value="{{ $defaultCurrency }}">
+            @endif
+        </div>
+        @endforeach
 
         <div class="flex gap-3">
             <button type="submit"

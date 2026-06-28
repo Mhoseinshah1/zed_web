@@ -18,6 +18,11 @@ return Application::configure(basePath: dirname(__DIR__))
         // to block the mixed-content XHR — the form then falls back to a native POST
         // to /zed-admin/login (GET-only) and the server returns 405.
         $middleware->trustProxies(at: '*');
+
+        // NOWPayments IPN webhook must bypass CSRF — signature verified via HMAC-SHA512
+        $middleware->validateCsrfTokens(except: [
+            'webhooks/nowpayments',
+        ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         $exceptions->shouldRenderJsonWhen(

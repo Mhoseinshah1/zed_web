@@ -7,6 +7,7 @@ use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\FaqController;
 use App\Http\Controllers\HealthController;
 use App\Http\Controllers\HomeController;
+use App\Http\Controllers\NowPaymentsController;
 use App\Http\Controllers\OrderController;
 use App\Http\Controllers\PaymentController;
 use App\Http\Controllers\PlansController;
@@ -16,6 +17,10 @@ use App\Http\Controllers\TutorialsController;
 use App\Http\Controllers\UserServiceActionController;
 use App\Http\Controllers\WalletController;
 use Illuminate\Support\Facades\Route;
+
+// NOWPayments IPN webhook — no auth, no CSRF (verified by HMAC-SHA512 signature)
+Route::post('/webhooks/nowpayments', [NowPaymentsController::class, 'ipn'])
+    ->name('webhooks.nowpayments');
 
 // Health check (unauthenticated)
 Route::get('/health', [HealthController::class, 'check'])->name('health');
@@ -51,6 +56,8 @@ Route::middleware('auth')->prefix('dashboard')->name('dashboard.')->group(functi
     Route::get('/orders/{order}', [OrderController::class, 'show'])->name('orders.show');
     Route::get('/orders/{order}/pay', [PaymentController::class, 'show'])->name('orders.pay');
     Route::post('/orders/{order}/pay', [PaymentController::class, 'submit'])->name('orders.pay.submit');
+    Route::get('/orders/{order}/nowpayments', [NowPaymentsController::class, 'show'])->name('orders.nowpayments');
+    Route::post('/orders/{order}/nowpayments/check', [NowPaymentsController::class, 'checkStatus'])->name('orders.nowpayments.check');
     Route::get('/services', [ServiceController::class, 'index'])->name('services');
     Route::get('/services/{service}', [ServiceController::class, 'show'])->name('services.show');
 

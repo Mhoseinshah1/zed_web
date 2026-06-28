@@ -6,6 +6,7 @@ use App\Filament\Resources\PaymentMethodResource\Pages;
 use App\Models\PaymentMethod;
 use Filament\Forms;
 use Filament\Forms\Form;
+use Filament\Forms\Get;
 use Filament\Resources\Resource;
 use Filament\Tables;
 use Filament\Tables\Table;
@@ -93,6 +94,83 @@ class PaymentMethodResource extends Resource
                     ->maxValue(100)
                     ->step(0.01),
             ])->columns(3)->collapsible()->collapsed(),
+
+            // NOWPayments gateway configuration — only visible when type=nowpayments
+            Forms\Components\Section::make('تنظیمات NOWPayments')
+                ->visible(fn (Get $get) => $get('type') === PaymentMethod::TYPE_NOWPAYMENTS)
+                ->schema([
+                    Forms\Components\TextInput::make('api_key')
+                        ->label('API Key')
+                        ->password()
+                        ->revealable()
+                        ->helperText('از داشبورد NOWPayments دریافت کنید. رمزگذاری شده ذخیره می‌شود.')
+                        ->maxLength(500),
+
+                    Forms\Components\TextInput::make('ipn_secret')
+                        ->label('IPN Secret')
+                        ->password()
+                        ->revealable()
+                        ->helperText('برای تایید امضای IPN webhook. رمزگذاری شده ذخیره می‌شود.')
+                        ->maxLength(500),
+
+                    Forms\Components\Toggle::make('config.sandbox')
+                        ->label('حالت آزمایشی (Sandbox)')
+                        ->helperText('برای تست از api-sandbox.nowpayments.io استفاده می‌شود')
+                        ->default(false),
+
+                    Forms\Components\TextInput::make('config.base_url')
+                        ->label('Base URL (اختیاری)')
+                        ->placeholder('https://api.nowpayments.io/v1')
+                        ->helperText('فقط در صورت نیاز به override کردن آدرس API پر کنید')
+                        ->url()
+                        ->maxLength(500),
+
+                    Forms\Components\TextInput::make('config.price_currency')
+                        ->label('ارز قیمت‌گذاری')
+                        ->placeholder('usd')
+                        ->default('usd')
+                        ->helperText('ارزی که قیمت‌ها در آن محاسبه می‌شود (معمولاً usd)'),
+
+                    Forms\Components\TextInput::make('config.default_pay_currency')
+                        ->label('ارز پیش‌فرض پرداخت')
+                        ->placeholder('usdttrc20')
+                        ->helperText('ارز پیش‌فرض کریپتو برای پرداخت'),
+
+                    Forms\Components\TextInput::make('config.allowed_pay_currencies')
+                        ->label('ارزهای مجاز (با کاما جدا کنید)')
+                        ->placeholder('btc,eth,usdttrc20,ltc')
+                        ->helperText('خالی بگذارید تا همه ارزها مجاز باشند'),
+
+                    Forms\Components\TextInput::make('config.site_currency')
+                        ->label('ارز سایت')
+                        ->default('IRT')
+                        ->helperText('IRT (تومان) یا IRR (ریال)')
+                        ->placeholder('IRT'),
+
+                    Forms\Components\TextInput::make('config.exchange_rate_usd')
+                        ->label('نرخ تبدیل به دلار (تومان/دلار)')
+                        ->numeric()
+                        ->minValue(0)
+                        ->helperText('تعداد تومان برابر با ۱ دلار آمریکا. مثال: 75000'),
+
+                    Forms\Components\TextInput::make('config.ipn_callback_url')
+                        ->label('IPN Callback URL')
+                        ->helperText('آدرس webhook که به NOWPayments داده می‌شود. خالی = پیش‌فرض سایت')
+                        ->url()
+                        ->maxLength(500),
+
+                    Forms\Components\TextInput::make('config.success_url')
+                        ->label('Success URL (اختیاری)')
+                        ->url()
+                        ->maxLength(500),
+
+                    Forms\Components\TextInput::make('config.cancel_url')
+                        ->label('Cancel URL (اختیاری)')
+                        ->url()
+                        ->maxLength(500),
+                ])
+                ->columns(2)
+                ->collapsible(),
         ]);
     }
 
@@ -118,7 +196,7 @@ class PaymentMethodResource extends Resource
                     ->formatStateUsing(fn ($state) => PaymentMethod::allTypes()[$state] ?? $state)
                     ->colors([
                         'success' => ['wallet'],
-                        'info'    => ['manual_crypto'],
+                        'info'    => ['manual_crypto', 'nowpayments'],
                         'warning' => ['manual_stars', 'manual_rial'],
                     ]),
 
