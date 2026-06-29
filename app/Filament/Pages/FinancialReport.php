@@ -160,6 +160,27 @@ class FinancialReport extends Page implements HasForms
         return Order::where('status', Order::STATUS_PROVISIONING_FAILED)->count();
     }
 
+    public function getRenewalOrdersRange(): int
+    {
+        return Order::where('order_type', Order::TYPE_RENEWAL)
+            ->where('payment_status', Order::PAYMENT_PAID)
+            ->whereBetween('paid_at', [$this->from(), $this->to()])
+            ->count();
+    }
+
+    public function getRenewalSalesRange(): int
+    {
+        return Order::where('order_type', Order::TYPE_RENEWAL)
+            ->where('payment_status', Order::PAYMENT_PAID)
+            ->whereBetween('paid_at', [$this->from(), $this->to()])
+            ->sum('final_price_toman');
+    }
+
+    public function getRenewalFailedCount(): int
+    {
+        return Order::where('status', Order::STATUS_RENEWAL_FAILED)->count();
+    }
+
     // ─── KPI: Wallet ────────────────────────────────────────────────────────
 
     public function getTotalWalletBalance(): int

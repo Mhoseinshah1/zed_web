@@ -94,11 +94,13 @@
     <div class="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500">
         آمار بازه انتخاب‌شده
     </div>
-    <div class="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
+    <div class="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
         @php
             $rangeCards = [
                 ['label'=>'فروش در بازه','value'=>number_format($this->getSalesRange()).' تومان','color'=>'green','icon'=>'💵'],
                 ['label'=>'سفارش‌های پرداخت‌شده','value'=>number_format($this->getPaidOrdersRange()),'color'=>'blue','icon'=>'🛒'],
+                ['label'=>'درآمد تمدید سرویس','value'=>number_format($this->getRenewalSalesRange()).' تومان','color'=>'green','icon'=>'🔄'],
+                ['label'=>'تمدیدهای موفق','value'=>number_format($this->getRenewalOrdersRange()),'color'=>'blue','icon'=>'↻'],
                 ['label'=>'شارژ کیف پول در بازه','value'=>number_format($this->getWalletTopupRange()).' تومان','color'=>'blue','icon'=>'💳'],
                 ['label'=>'پرداخت‌های ناموفق در بازه','value'=>number_format($this->getFailedPaymentsCount()),'color'=>'red','icon'=>'❌'],
             ];
