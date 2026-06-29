@@ -13,7 +13,6 @@ use App\Models\SiteSetting;
 use App\Services\Theme\ThemeManager;
 use Filament\Enums\ThemeMode;
 use Filament\Support\Colors\Color;
-use Filament\Support\Facades\FilamentView;
 use Filament\View\PanelsRenderHook;
 use Filament\Widgets;
 use Illuminate\Support\HtmlString;
@@ -63,6 +62,10 @@ class AdminPanelProvider extends PanelProvider
                 Widgets\AccountWidget::class,
                 \App\Filament\Widgets\StatsOverviewWidget::class,
             ])
+            ->renderHook(
+                PanelsRenderHook::HEAD_START,
+                fn (): HtmlString => new HtmlString($this->adminBootScript()),
+            )
             ->renderHook(
                 PanelsRenderHook::HEAD_END,
                 fn (): HtmlString => new HtmlString($this->adminHeadStyles()),
@@ -115,24 +118,93 @@ class AdminPanelProvider extends PanelProvider
         return [$primary, $themeMode];
     }
 
-    /** Inline density / shape / font tokens for the admin panel <head>. */
-    protected function adminHeadStyles(): string
+    /**
+     * Boot script injected at the very start of <head>: applies the active
+     * admin theme (data-theme + shape tokens) before first paint to avoid a
+     * flash of the wrong theme. Filament manages the light/dark class itself.
+     */
+    protected function adminBootScript(): string
     {
         try {
-            $fontScale   = (int) SiteSetting::get('font_scale', 100);
-            $tableDense  = (string) SiteSetting::get('table_density', 'comfortable');
+            $theme       = ThemeManager::defaultTheme(ThemeManager::SURFACE_ADMIN);
+            $cardRadius  = (string) SiteSetting::get('card_radius', '0.9rem');
+            $btnRadius   = (string) SiteSetting::get('button_radius', '0.6rem');
+            $anim        = ThemeManager::animationSpeed();
+            $iconSize    = (string) SiteSetting::get('icon_size', '1.25rem');
+            $sidebarIcon = (string) SiteSetting::get('sidebar_icon_size', '1.25rem');
+            $animOff     = ThemeManager::animationIntensity() === 'off' ? '1' : '0';
         } catch (\Throwable $e) {
             return '';
         }
 
-        $css = '';
-        if ($fontScale !== 100 && $fontScale >= 80 && $fontScale <= 130) {
-            $css .= 'html{font-size:' . round($fontScale / 100 * 16, 1) . 'px;}';
-        }
-        if ($tableDense === 'compact') {
-            $css .= '.fi-ta-cell{padding-top:.4rem!important;padding-bottom:.4rem!important;}';
+        $theme = e($theme);
+        return <<<HTML
+<script>(function(){try{var el=document.documentElement;
+el.setAttribute('data-theme','{$theme}');
+if({$animOff})el.classList.add('zed-anim-none');
+el.style.setProperty('--zp-card-radius','{$cardRadius}');
+el.style.setProperty('--zp-button-radius','{$btnRadius}');
+el.style.setProperty('--zp-animation-speed','{$anim}');
+el.style.setProperty('--zp-icon-size','{$iconSize}');
+el.style.setProperty('--zp-sidebar-icon-size','{$sidebarIcon}');
+}catch(e){}})();</script>
+HTML;
+    }
+
+    /**
+     * Injects the full design-token stylesheet (plain CSS — Filament does not
+     * load app.css) plus an admin-scoped light-mode sync and density tweaks, so
+     * the selected admin theme reskins the Filament chrome.
+     */
+    protected function adminHeadStyles(): string
+    {
+        $tokens = $this->themeTokensCss();
+        if ($tokens === '') {
+            return '';
         }
 
-        return $css === '' ? '' : '<style>' . $css . '</style>';
+        $out = '<style id="zp-theme-tokens">' . $tokens . '</style>';
+
+        // Filament toggles `.dark` on <html>; mirror its light mode onto our
+        // neutral ramp (admin-scoped so the user side is unaffected).
+        $lightRamp = 'html:not(.dark){'
+            . '--zp-bg:#eef2fb;--zp-bg-soft:#e6ebf7;--zp-surface:#ffffff;--zp-surface-soft:#f3f6fc;'
+            . '--zp-surface-hover:#e9eef8;--zp-text:#1c2233;--zp-text-muted:#5f6883;--zp-border:#d8deec;'
+            . '--zp-card-shadow:0 10px 30px -14px rgb(30 40 80 / .18);}';
+        $out .= '<style id="zp-admin-light">' . $lightRamp . '</style>';
+
+        try {
+            $fontScale  = (int) SiteSetting::get('font_scale', 100);
+            $tableDense = (string) SiteSetting::get('table_density', 'comfortable');
+        } catch (\Throwable $e) {
+            $fontScale = 100;
+            $tableDense = 'comfortable';
+        }
+
+        $extra = '';
+        if ($fontScale !== 100 && $fontScale >= 80 && $fontScale <= 130) {
+            $extra .= 'html{font-size:' . round($fontScale / 100 * 16, 1) . 'px;}';
+        }
+        if ($tableDense === 'compact') {
+            $extra .= '.fi-ta-cell{padding-top:.4rem!important;padding-bottom:.4rem!important;}';
+        } elseif ($tableDense === 'comfortable') {
+            $extra .= '.fi-ta-cell{padding-top:.85rem!important;padding-bottom:.85rem!important;}';
+        }
+        if ($extra !== '') {
+            $out .= '<style>' . $extra . '</style>';
+        }
+
+        return $out;
+    }
+
+    /** Read + cache the plain-CSS design token file. */
+    protected function themeTokensCss(): string
+    {
+        static $cache = null;
+        if ($cache !== null) {
+            return $cache;
+        }
+        $path = resource_path('css/theme-tokens.css');
+        return $cache = is_file($path) ? (string) file_get_contents($path) : '';
     }
 }

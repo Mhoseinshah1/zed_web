@@ -1,0 +1,379 @@
+/* ==========================================================================
+   ZedProxy — design tokens (PLAIN CSS, no Tailwind directives)
+   --------------------------------------------------------------------------
+   This file is valid standalone CSS so it can be:
+     • imported by theme.css for the user side (then re-mapped to Tailwind v4
+       utility classes via @theme inline), and
+     • injected verbatim into the Filament admin <head> (Filament does not
+       load app.css), giving /zed-admin the exact same theme variables and a
+       Filament-surface override layer.
+
+   Two axes:
+     • APPEARANCE  (light / dark)  → neutral ramp  (bg / surface / text)
+     • THEME PRESET (data-theme)   → accent ramp    (primary / accent / gradient)
+   Canonical variables are --zp-*. Legacy --zed-* names alias to them so older
+   markup keeps working.
+   ========================================================================== */
+
+/* ---- Neutral ramp: DARK (default) --------------------------------------- */
+:root {
+    --zp-bg:            #0a0e1a;
+    --zp-bg-soft:       #0e1322;
+    --zp-surface:       #141a2b;
+    --zp-surface-soft:  #1c2438;
+    --zp-surface-hover: #232c44;
+    --zp-text:          #e8ebf5;
+    --zp-text-muted:    #9aa3bd;
+    --zp-border:        #283047;
+
+    /* Accent ramp — default preset: دریای آبی (zed-ocean) */
+    --zp-primary:       #3b82f6;
+    --zp-primary-hover: #2563eb;
+    --zp-secondary:     #0ea5e9;
+    --zp-accent:        #22d3ee;
+
+    --zp-success:       #34d399;
+    --zp-warning:       #fbbf24;
+    --zp-danger:        #f43f5e;
+    --zp-info:          #38bdf8;
+
+    /* Shape / motion (overridable from admin settings, inline). */
+    --zp-card-radius:      0.9rem;
+    --zp-button-radius:    0.6rem;
+    --zp-card-shadow:      0 10px 30px -12px rgb(0 0 0 / 0.5);
+    --zp-glow:             0 0 0 1px rgb(59 130 246 / 0.35), 0 8px 30px -8px rgb(59 130 246 / 0.45);
+    --zp-gradient:         linear-gradient(135deg, #1e3a8a 0%, #3b82f6 50%, #22d3ee 100%);
+    --zp-animation-speed:  220ms;
+    --zp-icon-size:        1.25rem;
+    --zp-sidebar-icon-size:1.25rem;
+    --zp-logo-size:        1.15rem;
+    --zp-font-scale:       1;
+    --zp-image-size:       2.5rem;
+}
+
+/* ---- Neutral ramp: LIGHT ------------------------------------------------- */
+html.zed-light, html.zp-light {
+    --zp-bg:            #eef2fb;
+    --zp-bg-soft:       #e6ebf7;
+    --zp-surface:       #ffffff;
+    --zp-surface-soft:  #f3f6fc;
+    --zp-surface-hover: #e9eef8;
+    --zp-text:          #1c2233;
+    --zp-text-muted:    #5f6883;
+    --zp-border:        #d8deec;
+    --zp-card-shadow:   0 10px 30px -14px rgb(30 40 80 / 0.18);
+}
+
+/* ==========================================================================
+   THEME PRESETS — accent ramp (+ optional dark bg flavour for premium feel).
+   ========================================================================== */
+[data-theme="zed-ocean"] {
+    --zp-primary:#3b82f6; --zp-primary-hover:#2563eb; --zp-secondary:#0ea5e9; --zp-accent:#22d3ee;
+    --zp-gradient:linear-gradient(135deg,#1e3a8a,#3b82f6 50%,#22d3ee);
+    --zp-glow:0 0 0 1px rgb(59 130 246 / .35), 0 8px 30px -8px rgb(59 130 246 / .45);
+}
+[data-theme="zed-cyber-dark"] {
+    --zp-bg:#070912; --zp-bg-soft:#0a0d1a; --zp-surface:#111527; --zp-surface-soft:#181d33; --zp-surface-hover:#1f2643; --zp-border:#232a47;
+    --zp-primary:#6366f1; --zp-primary-hover:#4f46e5; --zp-secondary:#a855f7; --zp-accent:#22d3ee;
+    --zp-gradient:linear-gradient(135deg,#6366f1,#a855f7 50%,#22d3ee);
+    --zp-glow:0 0 0 1px rgb(99 102 241 / .4), 0 8px 34px -8px rgb(168 85 247 / .5);
+}
+[data-theme="zed-luxury-gold"] {
+    --zp-bg:#0b0a07; --zp-bg-soft:#100d09; --zp-surface:#191510; --zp-surface-soft:#221c13; --zp-surface-hover:#2c2418; --zp-border:#3a3020;
+    --zp-primary:#d4af37; --zp-primary-hover:#b8860b; --zp-secondary:#b8860b; --zp-accent:#facc15;
+    --zp-gradient:linear-gradient(135deg,#b8860b,#d4af37 50%,#facc15);
+    --zp-glow:0 0 0 1px rgb(212 175 55 / .4), 0 8px 34px -8px rgb(212 175 55 / .45);
+}
+[data-theme="zed-graphite"] {
+    --zp-bg:#0d0f12; --zp-bg-soft:#12151a; --zp-surface:#191d24; --zp-surface-soft:#212630; --zp-surface-hover:#2a313d; --zp-border:#313844;
+    --zp-primary:#64748b; --zp-primary-hover:#475569; --zp-secondary:#475569; --zp-accent:#38bdf8;
+    --zp-gradient:linear-gradient(135deg,#334155,#64748b 50%,#94a3b8);
+    --zp-glow:0 0 0 1px rgb(100 116 139 / .35), 0 8px 30px -8px rgb(56 189 248 / .35);
+}
+[data-theme="zed-emerald"] {
+    --zp-bg:#06100c; --zp-bg-soft:#091711; --zp-surface:#0f1f18; --zp-surface-soft:#152a20; --zp-surface-hover:#1c3729; --zp-border:#234534;
+    --zp-primary:#10b981; --zp-primary-hover:#059669; --zp-secondary:#059669; --zp-accent:#2dd4bf;
+    --zp-gradient:linear-gradient(135deg,#065f46,#10b981 50%,#2dd4bf);
+    --zp-glow:0 0 0 1px rgb(16 185 129 / .4), 0 8px 30px -8px rgb(45 212 191 / .45);
+}
+[data-theme="zed-aurora"] {
+    --zp-bg:#0b0814; --zp-bg-soft:#100b1d; --zp-surface:#181228; --zp-surface-soft:#211837; --zp-surface-hover:#2c2049; --zp-border:#342552;
+    --zp-primary:#a855f7; --zp-primary-hover:#9333ea; --zp-secondary:#ec4899; --zp-accent:#60a5fa;
+    --zp-gradient:linear-gradient(135deg,#7c3aed,#ec4899 50%,#60a5fa);
+    --zp-glow:0 0 0 1px rgb(168 85 247 / .4), 0 8px 34px -8px rgb(236 72 153 / .5);
+}
+[data-theme="zed-matrix"] {
+    --zp-bg:#050a07; --zp-bg-soft:#08110b; --zp-surface:#0d1a12; --zp-surface-soft:#122418; --zp-surface-hover:#183121; --zp-border:#1d3d28;
+    --zp-primary:#22c55e; --zp-primary-hover:#16a34a; --zp-secondary:#16a34a; --zp-accent:#a3e635;
+    --zp-gradient:linear-gradient(135deg,#14532d,#22c55e 50%,#a3e635);
+    --zp-glow:0 0 0 1px rgb(34 197 94 / .4), 0 8px 30px -8px rgb(163 230 53 / .4);
+}
+[data-theme="zed-crimson"] {
+    --zp-bg:#0f0708; --zp-bg-soft:#160a0c; --zp-surface:#1f1012; --zp-surface-soft:#2a1518; --zp-surface-hover:#371b1f; --zp-border:#451f24;
+    --zp-primary:#ef4444; --zp-primary-hover:#dc2626; --zp-secondary:#b91c1c; --zp-accent:#fb923c;
+    --zp-gradient:linear-gradient(135deg,#7f1d1d,#ef4444 50%,#fb923c);
+    --zp-glow:0 0 0 1px rgb(239 68 68 / .4), 0 8px 34px -8px rgb(251 146 60 / .45);
+}
+[data-theme="zed-titanium"] {
+    --zp-bg:#0a0d11; --zp-bg-soft:#0e1218; --zp-surface:#151b24; --zp-surface-soft:#1d2532; --zp-surface-hover:#26303f; --zp-border:#2d3949;
+    --zp-primary:#60a5fa; --zp-primary-hover:#3b82f6; --zp-secondary:#64748b; --zp-accent:#38bdf8;
+    --zp-gradient:linear-gradient(135deg,#475569,#60a5fa 60%,#94a3b8);
+    --zp-glow:0 0 0 1px rgb(96 165 250 / .35), 0 8px 30px -8px rgb(56 189 248 / .4);
+}
+[data-theme="zed-neon"] {
+    --zp-bg:#070611; --zp-bg-soft:#0b0a1b; --zp-surface:#120f27; --zp-surface-soft:#191436; --zp-surface-hover:#221a4a; --zp-border:#2a2056;
+    --zp-primary:#a78bfa; --zp-primary-hover:#8b5cf6; --zp-secondary:#d946ef; --zp-accent:#22d3ee;
+    --zp-gradient:linear-gradient(135deg,#06b6d4,#d946ef 50%,#a78bfa);
+    --zp-glow:0 0 0 1px rgb(167 139 250 / .45), 0 8px 36px -8px rgb(217 70 239 / .55);
+}
+[data-theme="zed-frost"] {
+    --zp-primary:#38bdf8; --zp-primary-hover:#0ea5e9; --zp-secondary:#818cf8; --zp-accent:#22d3ee;
+    --zp-gradient:linear-gradient(135deg,#0ea5e9,#38bdf8 50%,#a5b4fc);
+    --zp-glow:0 0 0 1px rgb(56 189 248 / .35), 0 8px 30px -10px rgb(129 140 248 / .4);
+}
+[data-theme="zed-minimal-light"] {
+    --zp-primary:#2563eb; --zp-primary-hover:#1d4ed8; --zp-secondary:#6366f1; --zp-accent:#0ea5e9;
+    --zp-gradient:linear-gradient(135deg,#2563eb,#0ea5e9);
+    --zp-glow:0 0 0 1px rgb(37 99 235 / .25), 0 8px 28px -12px rgb(37 99 235 / .35);
+}
+[data-theme="zed-sky-light"] {
+    --zp-primary:#0ea5e9; --zp-primary-hover:#0284c7; --zp-secondary:#3b82f6; --zp-accent:#06b6d4;
+    --zp-gradient:linear-gradient(135deg,#0ea5e9,#06b6d4);
+    --zp-glow:0 0 0 1px rgb(14 165 233 / .25), 0 8px 28px -12px rgb(6 182 212 / .35);
+}
+[data-theme="zed-mint"] {
+    --zp-primary:#10b981; --zp-primary-hover:#059669; --zp-secondary:#14b8a6; --zp-accent:#34d399;
+    --zp-gradient:linear-gradient(135deg,#10b981,#34d399);
+    --zp-glow:0 0 0 1px rgb(16 185 129 / .25), 0 8px 28px -12px rgb(52 211 153 / .35);
+}
+[data-theme="zed-sunset"] {
+    --zp-bg:#0f0a08; --zp-bg-soft:#160d0a; --zp-surface:#1f130d; --zp-surface-soft:#2a1912; --zp-surface-hover:#371f16; --zp-border:#45261a;
+    --zp-primary:#f97316; --zp-primary-hover:#ea580c; --zp-secondary:#db2777; --zp-accent:#a855f7;
+    --zp-gradient:linear-gradient(135deg,#9a3412,#f97316 45%,#a855f7);
+    --zp-glow:0 0 0 1px rgb(249 115 22 / .4), 0 8px 34px -8px rgb(219 39 119 / .45);
+}
+
+/* ==========================================================================
+   Legacy alias: keep older --zed-* names mapped to canonical --zp-*.
+   ========================================================================== */
+:root {
+    --zed-bg:           var(--zp-bg);
+    --zed-surface:      var(--zp-surface);
+    --zed-surface-2:    var(--zp-surface-soft);
+    --zed-surface-3:    var(--zp-surface-hover);
+    --zed-muted-2:      var(--zp-border);
+    --zed-muted:        var(--zp-text-muted);
+    --zed-text-dim:     var(--zp-text-muted);
+    --zed-text:         var(--zp-text);
+    --zed-text-strong:  var(--zp-text);
+    --zed-primary:        var(--zp-primary);
+    --zed-primary-strong: var(--zp-primary-hover);
+    --zed-primary-soft:   var(--zp-accent);
+    --zed-secondary:      var(--zp-secondary);
+    --zed-accent:         var(--zp-accent);
+    --zed-success:        var(--zp-success);
+    --zed-warning:        var(--zp-warning);
+    --zed-danger:         var(--zp-danger);
+    --zed-gradient:       var(--zp-gradient);
+    --zed-radius-card:    var(--zp-card-radius);
+    --zed-radius-button:  var(--zp-button-radius);
+    --zed-shadow-card:    var(--zp-card-shadow);
+    --zed-anim:           var(--zp-animation-speed);
+}
+html.zed-light {
+    --zed-text-strong: var(--zp-text);
+}
+
+/* ==========================================================================
+   Micro-interactions / animations.
+   ========================================================================== */
+@keyframes zp-fade-up { from { opacity:0; transform:translateY(8px);} to { opacity:1; transform:none; } }
+@keyframes zp-pop { from { opacity:0; transform:scale(.96);} to { opacity:1; transform:scale(1); } }
+
+.zed-animate, .zp-animate { animation: zp-fade-up var(--zp-animation-speed) ease-out both; }
+.zp-pop { animation: zp-pop var(--zp-animation-speed) ease-out both; }
+.zed-hover-lift, .zp-hover-lift { transition: transform var(--zp-animation-speed) ease, box-shadow var(--zp-animation-speed) ease; }
+.zed-hover-lift:hover, .zp-hover-lift:hover { transform: translateY(-3px); box-shadow: var(--zp-card-shadow); }
+.zed-menu-item { transition: transform var(--zp-animation-speed) ease, background-color var(--zp-animation-speed) ease, color var(--zp-animation-speed) ease; }
+.zed-menu-item:hover { transform: translateX(-3px); }
+.zed-gradient-text, .zp-gradient-text {
+    background: var(--zp-gradient);
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+.zed-gradient-bg, .zp-gradient-bg { background-image: var(--zp-gradient); }
+
+html.zed-anim-none *, html.zed-anim-none *::before, html.zed-anim-none *::after {
+    animation: none !important; transition: none !important;
+}
+@media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+        animation-duration: .001ms !important; animation-iteration-count: 1 !important;
+        transition-duration: .001ms !important; scroll-behavior: auto !important;
+    }
+}
+
+/* ==========================================================================
+   Reusable component primitives (x-ui.* components + Theme Studio preview).
+   ========================================================================== */
+.zed-card, .zp-card {
+    background-color: var(--zp-surface);
+    border: 1px solid var(--zp-border);
+    border-radius: var(--zp-card-radius);
+    box-shadow: var(--zp-card-shadow);
+}
+.zed-surface-soft, .zp-surface-soft { background-color: var(--zp-surface-soft); }
+.zed-btn, .zp-btn {
+    border-radius: var(--zp-button-radius);
+    transition: transform var(--zp-animation-speed) ease, filter var(--zp-animation-speed) ease, background-color var(--zp-animation-speed) ease;
+}
+.zed-btn:hover, .zp-btn:hover { filter: brightness(1.08); }
+.zed-btn:active, .zp-btn:active { transform: translateY(1px); }
+.zed-btn-primary, .zp-btn-primary { background: var(--zp-gradient); color:#fff; }
+
+/* ==========================================================================
+   FILAMENT admin surface override layer — maps Filament structural classes to
+   the active theme tokens so /zed-admin (which does NOT load app.css) follows
+   the selected admin theme. Injected verbatim into the panel <head>.
+   ========================================================================== */
+.fi-body { background-color: var(--zp-bg) !important; color: var(--zp-text); }
+.fi-main { background-color: var(--zp-bg) !important; }
+.fi-sidebar, .fi-sidebar-nav, .fi-topbar > nav, .fi-topbar nav {
+    background-color: var(--zp-surface) !important;
+    border-color: var(--zp-border) !important;
+}
+.fi-sidebar-header { background-color: var(--zp-surface) !important; border-color: var(--zp-border) !important; }
+.fi-sidebar-item-button:hover { background-color: var(--zp-surface-hover) !important; }
+.fi-sidebar-item-active .fi-sidebar-item-button {
+    background-color: color-mix(in srgb, var(--zp-primary) 18%, transparent) !important;
+}
+.fi-section, .fi-wi-stats-overview-stat, .fi-ta, .fi-fo-component-ctn .fi-section,
+.fi-modal-window, .fi-dropdown-panel {
+    background-color: var(--zp-surface) !important;
+    border-color: var(--zp-border) !important;
+    border-radius: var(--zp-card-radius) !important;
+}
+.fi-input, .fi-select-input, .fi-textarea, input.fi-input, .fi-fo-field-wrp .fi-input {
+    background-color: var(--zp-surface-soft) !important;
+    border-radius: var(--zp-button-radius) !important;
+}
+.fi-ta-row:hover { background-color: var(--zp-surface-hover) !important; }
+.fi-btn { border-radius: var(--zp-button-radius) !important; }
+
+/* ==========================================================================
+   THEME STUDIO — self-contained layout classes (.zps-*) so the premium admin
+   page renders identically regardless of Filament's compiled utility set.
+   ========================================================================== */
+.zps { color: var(--zp-text); }
+.zps * { box-sizing: border-box; }
+.zps-stack { display: flex; flex-direction: column; gap: 1.25rem; }
+
+.zps-hero {
+    position: relative; overflow: hidden;
+    border: 1px solid var(--zp-border); border-radius: var(--zp-card-radius);
+    background: var(--zp-surface); box-shadow: var(--zp-card-shadow);
+    padding: 1.5rem;
+}
+.zps-hero::before {
+    content: ""; position: absolute; inset: 0; opacity: .14; pointer-events: none;
+    background: var(--zp-gradient);
+}
+.zps-hero-inner { position: relative; display: flex; flex-wrap: wrap; gap: 1rem; align-items: flex-start; justify-content: space-between; }
+.zps-hero h1 { font-size: 1.5rem; font-weight: 800; margin: 0; color: var(--zp-text); }
+.zps-hero p { margin: .35rem 0 0; color: var(--zp-text-muted); font-size: .875rem; max-width: 38rem; }
+.zps-badge {
+    display: inline-flex; align-items: center; gap: .35rem; padding: .25rem .7rem;
+    font-size: .72rem; font-weight: 700; border-radius: 9999px;
+    background: color-mix(in srgb, var(--zp-success) 16%, transparent);
+    color: var(--zp-success); border: 1px solid color-mix(in srgb, var(--zp-success) 35%, transparent);
+}
+.zps-dots { display: inline-flex; gap: .25rem; }
+.zps-dot { width: 1rem; height: 1rem; border-radius: 9999px; border: 1px solid rgb(0 0 0 / .25); }
+
+.zps-actions { display: flex; flex-wrap: wrap; gap: .5rem; }
+.zps-btn {
+    display: inline-flex; align-items: center; gap: .4rem; cursor: pointer;
+    padding: .55rem .95rem; font-size: .8rem; font-weight: 700; border-radius: var(--zp-button-radius);
+    border: 1px solid var(--zp-border); background: var(--zp-surface-soft); color: var(--zp-text);
+    transition: transform var(--zp-animation-speed) ease, filter var(--zp-animation-speed) ease, background var(--zp-animation-speed) ease;
+}
+.zps-btn:hover { filter: brightness(1.08); transform: translateY(-1px); }
+.zps-btn:active { transform: translateY(0); }
+.zps-btn-primary { background: var(--zp-gradient); color: #fff; border-color: transparent; }
+.zps-btn-ghost { background: transparent; }
+
+.zps-panel {
+    border: 1px solid var(--zp-border); border-radius: var(--zp-card-radius);
+    background: var(--zp-surface); box-shadow: var(--zp-card-shadow); padding: 1.25rem;
+}
+.zps-panel-title { font-size: .95rem; font-weight: 800; color: var(--zp-text); margin: 0 0 .25rem; display: flex; align-items: center; gap: .5rem; }
+.zps-panel-sub { font-size: .78rem; color: var(--zp-text-muted); margin: 0 0 1rem; }
+
+.zps-layout { display: grid; grid-template-columns: 1fr; gap: 1.25rem; }
+@media (min-width: 1024px) { .zps-layout { grid-template-columns: minmax(0,1.6fr) minmax(0,1fr); align-items: start; } .zps-sticky { position: sticky; top: 1rem; } }
+
+.zps-group-label { font-size: .8rem; font-weight: 800; color: var(--zp-text-muted); margin: 1rem 0 .6rem; display: flex; align-items: center; gap: .4rem; }
+.zps-grid { display: grid; gap: .85rem; grid-template-columns: repeat(1, minmax(0,1fr)); }
+@media (min-width: 480px) { .zps-grid { grid-template-columns: repeat(2, minmax(0,1fr)); } }
+@media (min-width: 1280px) { .zps-grid { grid-template-columns: repeat(3, minmax(0,1fr)); } }
+
+.zps-card {
+    position: relative; cursor: pointer; text-align: right;
+    border: 2px solid var(--zp-border); border-radius: var(--zp-card-radius);
+    background: var(--zp-surface); overflow: hidden;
+    transition: transform var(--zp-animation-speed) ease, box-shadow var(--zp-animation-speed) ease, border-color var(--zp-animation-speed) ease;
+}
+.zps-card:hover { transform: translateY(-4px) scale(1.01); box-shadow: var(--zp-card-shadow); border-color: color-mix(in srgb, var(--zp-primary) 55%, var(--zp-border)); }
+.zps-card.is-active { border-color: var(--zp-primary); box-shadow: var(--zp-glow); }
+.zps-card-preview { height: 5.25rem; position: relative; }
+.zps-card-body { padding: .7rem .8rem .85rem; }
+.zps-card-title { font-size: .9rem; font-weight: 800; color: var(--zp-text); margin: 0; }
+.zps-card-desc { font-size: .72rem; color: var(--zp-text-muted); margin: .2rem 0 .5rem; }
+.zps-check {
+    position: absolute; top: .5rem; left: .5rem; width: 1.5rem; height: 1.5rem;
+    border-radius: 9999px; background: var(--zp-primary); color: #fff;
+    display: none; align-items: center; justify-content: center; box-shadow: 0 2px 8px rgb(0 0 0 / .3);
+}
+.zps-card.is-active .zps-check { display: flex; }
+.zps-pill { position: absolute; top: .5rem; right: .5rem; font-size: .62rem; font-weight: 800; padding: .15rem .5rem; border-radius: 9999px; background: rgb(0 0 0 / .45); color: #fff; }
+
+.zps-seg { display: inline-flex; padding: .25rem; gap: .25rem; border-radius: var(--zp-button-radius); background: var(--zp-surface-soft); border: 1px solid var(--zp-border); }
+.zps-seg button {
+    display: inline-flex; align-items: center; gap: .4rem; cursor: pointer; border: 0;
+    padding: .5rem .9rem; font-size: .8rem; font-weight: 700; border-radius: calc(var(--zp-button-radius) - .15rem);
+    background: transparent; color: var(--zp-text-muted); transition: all var(--zp-animation-speed) ease;
+}
+.zps-seg button.is-active { background: var(--zp-gradient); color: #fff; box-shadow: 0 4px 14px -6px rgb(0 0 0 / .5); }
+
+.zps-preview-fade { transition: opacity var(--zp-animation-speed) ease, transform var(--zp-animation-speed) ease; }
+.zps-prev-card { border: 1px solid var(--zpv-border); border-radius: var(--zp-card-radius); background: var(--zpv-surface); padding: 1rem; }
+.zps-prev-btn { padding: .5rem .9rem; border-radius: var(--zp-button-radius); font-size: .8rem; font-weight: 700; border: 0; cursor: default; }
+
+.zps-chips { display: flex; flex-wrap: wrap; gap: .5rem; }
+.zps-chip {
+    display: inline-flex; align-items: center; gap: .4rem; cursor: pointer;
+    padding: .4rem .7rem; font-size: .75rem; font-weight: 700; border-radius: 9999px;
+    border: 1px solid var(--zp-border); background: var(--zp-surface-soft); color: var(--zp-text-muted);
+    transition: all var(--zp-animation-speed) ease;
+}
+.zps-chip.is-on { color: var(--zp-text); border-color: color-mix(in srgb, var(--zp-success) 45%, transparent); background: color-mix(in srgb, var(--zp-success) 14%, transparent); }
+.zps-chip:hover { transform: translateY(-1px); }
+
+.zps-field { display: flex; flex-direction: column; gap: .35rem; }
+.zps-field > label { font-size: .76rem; font-weight: 700; color: var(--zp-text-muted); }
+.zps-input, .zps-select {
+    width: 100%; padding: .5rem .7rem; font-size: .8rem; font-family: inherit;
+    border-radius: var(--zp-button-radius); border: 1px solid var(--zp-border);
+    background: var(--zp-surface-soft); color: var(--zp-text);
+}
+.zps-controls-grid { display: grid; gap: .9rem; grid-template-columns: repeat(1, minmax(0,1fr)); }
+@media (min-width: 640px) { .zps-controls-grid { grid-template-columns: repeat(2, minmax(0,1fr)); } }
+@media (min-width: 1024px) { .zps-controls-grid { grid-template-columns: repeat(3, minmax(0,1fr)); } }
+.zps-switch-row { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: .6rem 0; border-bottom: 1px solid var(--zp-border); }
+.zps-switch-row:last-child { border-bottom: 0; }
+.zps-switch { position: relative; width: 2.6rem; height: 1.5rem; border-radius: 9999px; background: var(--zp-surface-hover); border: 1px solid var(--zp-border); cursor: pointer; transition: background var(--zp-animation-speed) ease; flex: none; }
+.zps-switch.is-on { background: var(--zp-primary); }
+.zps-switch::after { content: ""; position: absolute; top: 50%; right: .15rem; transform: translateY(-50%); width: 1.1rem; height: 1.1rem; border-radius: 9999px; background: #fff; transition: right var(--zp-animation-speed) ease; }
+.zps-switch.is-on::after { right: calc(100% - 1.25rem); }
+.zps-savebar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .75rem; }
+.zps-dirty { font-size: .78rem; font-weight: 700; color: var(--zp-warning); }
+.zps-saved { font-size: .78rem; font-weight: 700; color: var(--zp-success); }

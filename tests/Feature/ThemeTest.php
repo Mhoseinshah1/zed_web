@@ -2,10 +2,12 @@
 
 namespace Tests\Feature;
 
+use App\Filament\Pages\ThemeStudio;
 use App\Models\SiteSetting;
 use App\Models\User;
 use App\Services\Theme\ThemeManager;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Livewire\Livewire;
 use Tests\TestCase;
 
 class ThemeTest extends TestCase
@@ -23,39 +25,65 @@ class ThemeTest extends TestCase
     {
         $presets = ThemeManager::presets();
         $this->assertCount(15, $presets);
-        $this->assertTrue(ThemeManager::isValidPreset('cyber-dark'));
+        $this->assertTrue(ThemeManager::isValidPreset('zed-ocean'));
         $this->assertFalse(ThemeManager::isValidPreset('does-not-exist'));
         $this->assertFalse(ThemeManager::isValidPreset(null));
+
+        // Every preset carries the rich metadata the Studio depends on.
+        foreach ($presets as $key => $p) {
+            $this->assertArrayHasKey('title', $p);
+            $this->assertArrayHasKey('group', $p);
+            $this->assertContains($p['group'], ['dark', 'light', 'special']);
+            $this->assertArrayHasKey('colors', $p);
+            $this->assertArrayHasKey('gradient', $p['colors']);
+        }
     }
 
-    public function test_default_theme_falls_back_to_cyber_dark(): void
+    public function test_groups_partition_all_presets(): void
     {
-        $this->assertSame('cyber-dark', ThemeManager::defaultTheme(ThemeManager::SURFACE_USER));
+        $groups = ThemeManager::groups();
+        $total = count($groups['dark']) + count($groups['light']) + count($groups['special']);
+        $this->assertSame(15, $total);
+    }
+
+    public function test_legacy_slug_is_normalised(): void
+    {
+        $this->assertSame('zed-cyber-dark', ThemeManager::normalize('cyber-dark'));
+        $this->assertSame('zed-ocean', ThemeManager::normalize('zed-ocean'));
+        $this->assertNull(ThemeManager::normalize('nope'));
+    }
+
+    public function test_default_theme_falls_back_to_default(): void
+    {
+        $this->assertSame(ThemeManager::DEFAULT_THEME, ThemeManager::defaultTheme(ThemeManager::SURFACE_USER));
         SiteSetting::set('default_theme_user', 'invalid-key');
-        $this->assertSame('cyber-dark', ThemeManager::defaultTheme(ThemeManager::SURFACE_USER));
+        $this->assertSame(ThemeManager::DEFAULT_THEME, ThemeManager::defaultTheme(ThemeManager::SURFACE_USER));
+        // Legacy stored value still resolves.
+        SiteSetting::set('default_theme_user', 'emerald');
+        $this->assertSame('zed-emerald', ThemeManager::defaultTheme(ThemeManager::SURFACE_USER));
     }
 
     public function test_user_theme_preference_is_respected_when_enabled(): void
     {
-        SiteSetting::set('enabled_themes', 'cyber-dark,emerald');
-        $user = User::factory()->create(['theme_preference' => 'emerald']);
-        $this->assertSame('emerald', ThemeManager::resolveTheme(ThemeManager::SURFACE_USER, $user));
+        SiteSetting::set('enabled_themes', 'zed-ocean,zed-emerald');
+        $user = User::factory()->create(['theme_preference' => 'zed-emerald']);
+        $this->assertSame('zed-emerald', ThemeManager::resolveTheme(ThemeManager::SURFACE_USER, $user));
     }
 
     public function test_disabled_theme_preference_falls_back_to_default(): void
     {
-        SiteSetting::set('enabled_themes', 'cyber-dark,ocean');
-        SiteSetting::set('default_theme_user', 'ocean');
-        $user = User::factory()->create(['theme_preference' => 'emerald']); // not enabled
-        $this->assertSame('ocean', ThemeManager::resolveTheme(ThemeManager::SURFACE_USER, $user));
+        SiteSetting::set('enabled_themes', 'zed-ocean,zed-cyber-dark');
+        SiteSetting::set('default_theme_user', 'zed-cyber-dark');
+        $user = User::factory()->create(['theme_preference' => 'zed-emerald']); // not enabled
+        $this->assertSame('zed-cyber-dark', ThemeManager::resolveTheme(ThemeManager::SURFACE_USER, $user));
     }
 
     public function test_force_global_theme_overrides_user(): void
     {
         SiteSetting::set('force_global_theme', 'true');
-        SiteSetting::set('default_theme_user', 'royal');
-        $user = User::factory()->create(['theme_preference' => 'emerald']);
-        $this->assertSame('royal', ThemeManager::resolveTheme(ThemeManager::SURFACE_USER, $user));
+        SiteSetting::set('default_theme_user', 'zed-sunset');
+        $user = User::factory()->create(['theme_preference' => 'zed-emerald']);
+        $this->assertSame('zed-sunset', ThemeManager::resolveTheme(ThemeManager::SURFACE_USER, $user));
     }
 
     public function test_appearance_resolves_from_user(): void
@@ -64,29 +92,37 @@ class ThemeTest extends TestCase
         $this->assertSame('light', ThemeManager::resolveAppearance($user));
     }
 
+    public function test_animation_intensity_back_compat(): void
+    {
+        SiteSetting::set('animation_intensity', 'subtle');
+        $this->assertSame('low', ThemeManager::animationIntensity());
+        SiteSetting::set('animation_intensity', 'high');
+        $this->assertSame('high', ThemeManager::animationIntensity());
+    }
+
     // ── Switcher endpoint ────────────────────────────────────────────────────
 
     public function test_user_can_save_theme_and_appearance(): void
     {
-        SiteSetting::set('enabled_themes', 'cyber-dark,emerald,ocean');
+        SiteSetting::set('enabled_themes', 'zed-ocean,zed-emerald,zed-cyber-dark');
         $user = User::factory()->create();
 
         $this->actingAs($user)
-            ->post(route('theme.update'), ['theme' => 'emerald', 'appearance' => 'light'])
+            ->post(route('theme.update'), ['theme' => 'zed-emerald', 'appearance' => 'light'])
             ->assertStatus(302);
 
         $user->refresh();
-        $this->assertSame('emerald', $user->theme_preference);
+        $this->assertSame('zed-emerald', $user->theme_preference);
         $this->assertSame('light', $user->appearance);
     }
 
     public function test_user_cannot_save_disabled_theme(): void
     {
-        SiteSetting::set('enabled_themes', 'cyber-dark,ocean');
+        SiteSetting::set('enabled_themes', 'zed-ocean,zed-cyber-dark');
         $user = User::factory()->create();
 
         $this->actingAs($user)
-            ->post(route('theme.update'), ['theme' => 'neon']);
+            ->post(route('theme.update'), ['theme' => 'zed-neon']);
 
         $user->refresh();
         $this->assertNull($user->theme_preference);
@@ -94,12 +130,48 @@ class ThemeTest extends TestCase
 
     public function test_guest_theme_is_stored_in_cookie(): void
     {
-        SiteSetting::set('enabled_themes', 'cyber-dark,sunset');
-        $this->post(route('theme.update'), ['theme' => 'sunset'])
-            ->assertCookie('zed_theme', 'sunset');
+        SiteSetting::set('enabled_themes', 'zed-ocean,zed-sunset');
+        $this->post(route('theme.update'), ['theme' => 'zed-sunset'])
+            ->assertCookie('zed_theme', 'zed-sunset');
     }
 
-    // ── Admin settings page ──────────────────────────────────────────────────
+    // ── Theme Studio (admin) ─────────────────────────────────────────────────
+
+    public function test_theme_studio_page_loads(): void
+    {
+        $this->actingAs($this->admin())
+            ->get('/zed-admin/theme-studio')
+            ->assertSuccessful()
+            ->assertSee('استودیو تم')
+            ->assertSee('گالری تم‌ها');
+    }
+
+    public function test_theme_studio_persists_state(): void
+    {
+        Livewire::actingAs($this->admin())
+            ->test(ThemeStudio::class)
+            ->call('persist', [
+                'activeTheme'          => 'zed-aurora',
+                'default_theme_public' => 'zed-ocean',
+                'default_theme_user'   => 'zed-emerald',
+                'default_theme_admin'  => 'zed-aurora',
+                'appearance'           => 'dark',
+                'enabled_themes'       => ['zed-ocean', 'zed-aurora'],
+                'allow_user_theme_switch' => true,
+                'force_global_theme'   => false,
+                'animation_intensity'  => 'high',
+                'card_radius'          => '1.2rem',
+                'font_scale'           => 110,
+            ]);
+
+        $this->assertSame('zed-aurora', SiteSetting::get('default_theme_admin'));
+        $this->assertSame('zed-emerald', SiteSetting::get('default_theme_user'));
+        $this->assertSame('high', SiteSetting::get('animation_intensity'));
+        $this->assertSame('1.2rem', SiteSetting::get('card_radius'));
+        // Required defaults are force-enabled even if omitted from the list.
+        $enabled = explode(',', (string) SiteSetting::get('enabled_themes'));
+        $this->assertContains('zed-emerald', $enabled);
+    }
 
     public function test_admin_appearance_settings_page_loads(): void
     {
@@ -129,6 +201,6 @@ class ThemeTest extends TestCase
         $user = User::factory()->create();
         $this->actingAs($user)->get(route('dashboard.profile'))
             ->assertSuccessful()
-            ->assertSee('ظاهر و تم');
+            ->assertSee('تنظیمات ظاهر');
     }
 }

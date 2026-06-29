@@ -14,14 +14,19 @@
     $appearance    = ThemeManager::resolveAppearance(auth()->user());
 @endphp
 
-@if($allowTheme || $allowAppear)
 <div class="zed-card p-4 {{ $compact ? '' : 'space-y-4' }}" data-theme-switcher>
     <div class="flex items-center justify-between">
         <h3 class="text-sm font-semibold text-white flex items-center gap-2">
             <svg class="w-4 h-4 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 21a4 4 0 01-4-4V5a2 2 0 012-2h4a2 2 0 012 2v12a4 4 0 01-4 4zm0 0h12a2 2 0 002-2v-4a2 2 0 00-2-2h-2.343M11 7.343l1.657-1.657a2 2 0 012.828 0l2.829 2.829a2 2 0 010 2.828L9 21"/></svg>
-            ظاهر و تم
+            تنظیمات ظاهر
         </h3>
     </div>
+
+    @if(! $allowTheme && ! $allowAppear)
+        <p class="text-xs text-gray-400 bg-gray-800 border border-gray-700 rounded-lg p-3">
+            تغییر تم توسط مدیریت غیرفعال شده است.
+        </p>
+    @endif
 
     @if($allowAppear)
     <div class="space-y-2">
@@ -61,11 +66,12 @@
                             <span class="w-3.5 h-3.5 rounded-full border border-black/30" style="background: {{ $dot }}"></span>
                         @endforeach
                     </span>
-                    <span class="truncate">{{ $p['name'] }}</span>
+                    <span class="truncate">{{ $p['title'] }}</span>
                 </button>
                 @endif
             @endforeach
         </div>
+        <p class="text-[11px] text-gray-500">انتخاب شما بلافاصله اعمال و ذخیره می‌شود.</p>
     </div>
     @endif
 </div>
@@ -103,4 +109,3 @@
 </script>
 @endpush
 @endonce
-@endif
