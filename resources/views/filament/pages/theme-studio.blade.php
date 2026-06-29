@@ -117,7 +117,7 @@
             {{-- Scope controls --}}
             <div class="zps-panel">
                 <p class="zps-panel-title">دامنه اعمال تم</p>
-                <p class="zps-panel-sub">تم پیش‌فرض هر بخش را تعیین کنید. با فعال‌بودن «اجبار تم سراسری»، تم فعال روی همه‌جا اعمال می‌شود.</p>
+                <p class="zps-panel-sub">با انتخاب تم از گالری، روی هر سه بخش اعمال می‌شود. در صورت نیاز می‌توانید برای هر بخش تم متفاوتی انتخاب کنید.</p>
                 <div class="zps-controls-grid">
                     <div class="zps-field">
                         <label>تم پیش‌فرض سایت عمومی</label>
@@ -350,8 +350,14 @@ function themeStudio(state, presets, groups, groupLabels) {
         bump() { this.fade = false; requestAnimationFrame(() => requestAnimationFrame(() => this.fade = true)); },
 
         selectTheme(key) {
+            // Picking a theme in the gallery applies it everywhere by default
+            // (public + user dashboard + admin). Per-surface overrides below can
+            // still diverge afterwards.
             this.state.activeTheme = key;
             this.state.default_theme_admin = key;
+            this.state.default_theme_public = key;
+            this.state.default_theme_user = key;
+            if (!this.enabledOn(key)) { this.state.enabled_themes = [...(this.state.enabled_themes || []), key]; }
             this.bump(); this.applyLive(); this.dirty = true; this.saved = false;
         },
         setAppearance(mode) { this.state.appearance = mode; this.applyLive(); this.dirty = true; this.saved = false; },
