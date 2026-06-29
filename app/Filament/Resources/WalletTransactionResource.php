@@ -22,7 +22,7 @@ class WalletTransactionResource extends Resource
     protected static ?string $navigationLabel  = 'تراکنش‌های کیف پول';
     protected static ?string $modelLabel       = 'تراکنش کیف پول';
     protected static ?string $pluralModelLabel = 'تراکنش‌های کیف پول';
-    protected static ?int    $navigationSort   = 3;
+    protected static ?int    $navigationSort   = 30;
 
     public static function form(Form $form): Form
     {
