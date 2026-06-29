@@ -2,6 +2,7 @@
 
 namespace App\Filament\Pages;
 
+use App\Models\DiscountRedemption;
 use App\Models\Order;
 use App\Models\PaymentTransaction;
 use App\Models\User;
@@ -391,6 +392,29 @@ class FinancialReport extends Page implements HasForms
             ->latest('paid_at')
             ->limit(10)
             ->get();
+    }
+
+    // ─── Discounts ───────────────────────────────────────────────────────────
+
+    public function getTotalDiscountsToday(): int
+    {
+        return (int) DiscountRedemption::where('status', DiscountRedemption::STATUS_USED)
+            ->whereDate('used_at', today())
+            ->sum('discount_amount');
+    }
+
+    public function getTotalDiscountsRange(): int
+    {
+        return (int) DiscountRedemption::where('status', DiscountRedemption::STATUS_USED)
+            ->whereBetween('used_at', [$this->from(), $this->to()])
+            ->sum('discount_amount');
+    }
+
+    public function getDiscountCountRange(): int
+    {
+        return DiscountRedemption::where('status', DiscountRedemption::STATUS_USED)
+            ->whereBetween('used_at', [$this->from(), $this->to()])
+            ->count();
     }
 
     // ─── Charts ──────────────────────────────────────────────────────────────

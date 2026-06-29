@@ -6,6 +6,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Support\Str;
 
 class Order extends Model
@@ -42,6 +43,10 @@ class Order extends Model
         'price_toman',
         'final_price_toman',
         'discount_toman',
+        'discount_code_id',
+        'discount_code',
+        'discount_type',
+        'discount_value',
         'currency',
         'notes',
         'admin_notes',
@@ -54,6 +59,8 @@ class Order extends Model
         'price_toman'       => 'integer',
         'final_price_toman' => 'integer',
         'discount_toman'    => 'integer',
+        'discount_code_id'  => 'integer',
+        'discount_value'    => 'integer',
         'traffic_gb'        => 'integer',
         'duration_days'     => 'integer',
         'paid_at'           => 'datetime',
@@ -94,9 +101,19 @@ class Order extends Model
         return $this->hasMany(PaymentTransaction::class);
     }
 
-    public function service(): \Illuminate\Database\Eloquent\Relations\HasOne
+    public function service(): HasOne
     {
         return $this->hasOne(UserService::class);
+    }
+
+    public function discountCode(): BelongsTo
+    {
+        return $this->belongsTo(DiscountCode::class);
+    }
+
+    public function discountRedemption(): HasOne
+    {
+        return $this->hasOne(DiscountRedemption::class);
     }
 
     public function statusLabel(): string

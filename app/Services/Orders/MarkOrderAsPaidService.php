@@ -4,6 +4,7 @@ namespace App\Services\Orders;
 
 use App\Models\Order;
 use App\Models\PaymentTransaction;
+use App\Services\Discounts\DiscountService;
 use App\Services\ServiceProvisioner;
 use Illuminate\Support\Facades\DB;
 
@@ -15,7 +16,10 @@ use Illuminate\Support\Facades\DB;
  */
 class MarkOrderAsPaidService
 {
-    public function __construct(private readonly ServiceProvisioner $provisioner) {}
+    public function __construct(
+        private readonly ServiceProvisioner $provisioner,
+        private readonly DiscountService    $discountService,
+    ) {}
 
     /**
      * Mark the order paid and trigger provisioning if not already done.
@@ -50,8 +54,11 @@ class MarkOrderAsPaidService
             }
         });
 
-        // Provisioning runs outside the payment transaction to avoid long-running locks
+        // Mark discount as used — idempotent, safe for duplicate IPN
         $order = $order->fresh();
+        $this->discountService->markUsed($order);
+
+        // Provisioning runs outside the payment transaction to avoid long-running locks
         if ($order->service === null) {
             $this->provisioner->createFromOrder($order);
         }

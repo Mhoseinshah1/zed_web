@@ -60,6 +60,8 @@ Route::middleware('auth')->prefix('dashboard')->name('dashboard.')->group(functi
     Route::get('/', [DashboardController::class, 'index'])->name('index');
     Route::get('/orders', [OrderController::class, 'index'])->name('orders');
     Route::get('/orders/{order}', [OrderController::class, 'show'])->name('orders.show');
+    Route::post('/orders/{order}/discount', [OrderController::class, 'applyDiscount'])->name('orders.discount.apply');
+    Route::delete('/orders/{order}/discount', [OrderController::class, 'removeDiscount'])->name('orders.discount.remove');
     Route::get('/orders/{order}/pay', [PaymentController::class, 'show'])->name('orders.pay');
     Route::post('/orders/{order}/pay', [PaymentController::class, 'submit'])->name('orders.pay.submit');
     Route::get('/orders/{order}/nowpayments', [NowPaymentsController::class, 'show'])->name('orders.nowpayments');
