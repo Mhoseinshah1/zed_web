@@ -13,6 +13,7 @@ use App\Http\Controllers\OrderController;
 use App\Http\Controllers\PaymentController;
 use App\Http\Controllers\PlansController;
 use App\Http\Controllers\RenewalController;
+use App\Http\Controllers\ServiceAddonController;
 use App\Http\Controllers\ServiceController;
 use App\Http\Controllers\StatusController;
 use App\Http\Controllers\TutorialsController;
@@ -71,6 +72,10 @@ Route::middleware('auth')->prefix('dashboard')->name('dashboard.')->group(functi
     Route::get('/services/{service}', [ServiceController::class, 'show'])->name('services.show');
     Route::get('/services/{service}/renew', [RenewalController::class, 'show'])->name('services.renew');
     Route::post('/services/{service}/renew', [RenewalController::class, 'submit'])->name('services.renew.submit');
+    Route::get('/services/{service}/extra-traffic', [ServiceAddonController::class, 'showTraffic'])->name('services.extra-traffic');
+    Route::post('/services/{service}/extra-traffic', [ServiceAddonController::class, 'submitTraffic'])->name('services.extra-traffic.submit');
+    Route::get('/services/{service}/extra-time', [ServiceAddonController::class, 'showTime'])->name('services.extra-time');
+    Route::post('/services/{service}/extra-time', [ServiceAddonController::class, 'submitTime'])->name('services.extra-time.submit');
 
     // Marzban self-service actions — throttled to prevent abuse
     Route::middleware('throttle:30,1')->group(function () {

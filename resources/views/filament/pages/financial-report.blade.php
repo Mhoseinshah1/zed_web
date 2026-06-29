@@ -104,6 +104,10 @@
                 ['label'=>'درآمد تمدید سرویس','value'=>number_format($this->getRenewalSalesRange()).' تومان','color'=>'green','icon'=>'🔄'],
                 ['label'=>'تمدیدهای موفق','value'=>number_format($this->getRenewalOrdersRange()),'color'=>'blue','icon'=>'↻'],
                 ['label'=>'کش‌بک تمدید در بازه','value'=>number_format($this->getRenewalCashbackRange()).' تومان','color'=>'yellow','icon'=>'💸'],
+                ['label'=>'درآمد خرید حجم اضافه','value'=>number_format($this->getExtraTrafficSalesRange()).' تومان','color'=>'green','icon'=>'📦'],
+                ['label'=>'تعداد خرید حجم اضافه','value'=>number_format($this->getExtraTrafficOrdersRange()),'color'=>'blue','icon'=>'📦'],
+                ['label'=>'درآمد خرید زمان اضافه','value'=>number_format($this->getExtraTimeSalesRange()).' تومان','color'=>'green','icon'=>'⏱'],
+                ['label'=>'تعداد خرید زمان اضافه','value'=>number_format($this->getExtraTimeOrdersRange()),'color'=>'blue','icon'=>'⏱'],
                 ['label'=>'شارژ کیف پول در بازه','value'=>number_format($this->getWalletTopupRange()).' تومان','color'=>'blue','icon'=>'💳'],
                 ['label'=>'پرداخت‌های ناموفق در بازه','value'=>number_format($this->getFailedPaymentsCount()),'color'=>'red','icon'=>'❌'],
             ];

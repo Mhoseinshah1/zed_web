@@ -4,6 +4,7 @@ namespace App\Services\Orders;
 
 use App\Models\Order;
 use App\Models\PaymentTransaction;
+use App\Services\Addons\ServiceAddonService;
 use App\Services\Discounts\DiscountService;
 use App\Services\Renewals\RenewalService;
 use App\Services\ServiceProvisioner;
@@ -18,9 +19,10 @@ use Illuminate\Support\Facades\DB;
 class MarkOrderAsPaidService
 {
     public function __construct(
-        private readonly ServiceProvisioner $provisioner,
-        private readonly DiscountService    $discountService,
-        private readonly RenewalService     $renewalService,
+        private readonly ServiceProvisioner  $provisioner,
+        private readonly DiscountService     $discountService,
+        private readonly RenewalService      $renewalService,
+        private readonly ServiceAddonService $addonService,
     ) {}
 
     /**
@@ -36,8 +38,12 @@ class MarkOrderAsPaidService
             if ($order->order_type === Order::TYPE_RENEWAL && $order->renewal_applied_at !== null) {
                 return;
             }
+            // Add-on (extra traffic/time): addon_applied_at is the idempotency marker
+            if ($order->isAddon() && $order->addon_applied_at !== null) {
+                return;
+            }
             // New-service order already provisioned
-            if ($order->order_type !== Order::TYPE_RENEWAL && $order->service !== null) {
+            if (! $order->isRenewal() && ! $order->isAddon() && $order->service !== null) {
                 return;
             }
         }
@@ -70,6 +76,10 @@ class MarkOrderAsPaidService
         // Route to the correct post-payment handler based on order type
         if ($order->order_type === Order::TYPE_RENEWAL) {
             $this->renewalService->applyRenewal($order);
+        } elseif ($order->order_type === Order::TYPE_EXTRA_TRAFFIC) {
+            $this->addonService->applyExtraTraffic($order);
+        } elseif ($order->order_type === Order::TYPE_EXTRA_TIME) {
+            $this->addonService->applyExtraTime($order);
         } elseif ($order->service === null) {
             // New service orders — provisioning runs outside the payment transaction
             $this->provisioner->createFromOrder($order);

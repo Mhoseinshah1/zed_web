@@ -771,6 +771,134 @@ class UserServiceResource extends Resource
                     ->modalHeading('تمدید دستی سرویس')
                     ->modalSubmitActionLabel('تمدید کن'),
 
+                Tables\Actions\Action::make('manual_add_traffic')
+                    ->label('افزودن دستی حجم')
+                    ->icon('heroicon-o-plus-circle')
+                    ->color('success')
+                    ->visible(fn (UserService $record) => (int) $record->traffic_total_gb > 0)
+                    ->form([
+                        Forms\Components\TextInput::make('traffic_gb')
+                            ->label('حجم اضافه (گیگابایت)')
+                            ->numeric()
+                            ->minValue(1)
+                            ->required(),
+                        Forms\Components\Toggle::make('update_marzban')
+                            ->label('بروزرسانی در مرزبان')
+                            ->default(true),
+                        Forms\Components\Textarea::make('note')
+                            ->label('یادداشت ادمین')
+                            ->rows(2)
+                            ->placeholder('اختیاری'),
+                    ])
+                    ->action(function (UserService $record, array $data): void {
+                        $gb = (int) $data['traffic_gb'];
+                        if ($gb <= 0) {
+                            Notification::make()->title('مقدار حجم معتبر نیست.')->danger()->send();
+                            return;
+                        }
+
+                        $newTotal = (int) ($record->traffic_total_gb ?? 0) + $gb;
+
+                        try {
+                            if (! empty($data['update_marzban']) && filled($record->remote_username) && $record->vpnPanel) {
+                                $client = new MarzbanClient($record->vpnPanel);
+                                $client->updateUser($record->remote_username, [
+                                    'data_limit' => (int) ($newTotal * \App\Services\Addons\ServiceAddonService::BYTES_PER_GB),
+                                ]);
+                            }
+
+                            $record->update(['traffic_total_gb' => $newTotal]);
+
+                            $note = "Manual add traffic: +{$gb} GB. New total: {$newTotal} GB.";
+                            if (! empty($data['note'])) {
+                                $note .= " Note: {$data['note']}";
+                            }
+
+                            VpnServiceProvisionLog::create([
+                                'user_service_id' => $record->id,
+                                'vpn_panel_id'    => $record->vpn_panel_id,
+                                'action'          => 'admin_manual_add_traffic',
+                                'status'          => 'success',
+                                'message'         => $note,
+                            ]);
+
+                            Notification::make()->title('حجم اضافه با موفقیت اعمال شد.')->success()->send();
+                        } catch (\Throwable $e) {
+                            Notification::make()->title('خطا در افزودن حجم')->body($e->getMessage())->danger()->send();
+                        }
+                    })
+                    ->requiresConfirmation()
+                    ->modalHeading('افزودن دستی حجم به سرویس')
+                    ->modalSubmitActionLabel('افزودن'),
+
+                Tables\Actions\Action::make('manual_add_time')
+                    ->label('افزودن دستی زمان')
+                    ->icon('heroicon-o-clock')
+                    ->color('info')
+                    ->visible(fn (UserService $record) => $record->expires_at !== null)
+                    ->form([
+                        Forms\Components\TextInput::make('days')
+                            ->label('روز اضافه')
+                            ->numeric()
+                            ->minValue(1)
+                            ->required(),
+                        Forms\Components\Toggle::make('update_marzban')
+                            ->label('بروزرسانی در مرزبان')
+                            ->default(true),
+                        Forms\Components\Textarea::make('note')
+                            ->label('یادداشت ادمین')
+                            ->rows(2)
+                            ->placeholder('اختیاری'),
+                    ])
+                    ->action(function (UserService $record, array $data): void {
+                        $days = (int) $data['days'];
+                        if ($days <= 0) {
+                            Notification::make()->title('مقدار روز معتبر نیست.')->danger()->send();
+                            return;
+                        }
+
+                        $base = ($record->expires_at && $record->expires_at->isFuture())
+                            ? $record->expires_at->copy()
+                            : now();
+                        $newExpiry = $base->addDays($days);
+
+                        try {
+                            if (! empty($data['update_marzban']) && filled($record->remote_username) && $record->vpnPanel) {
+                                $client = new MarzbanClient($record->vpnPanel);
+                                $client->updateUser($record->remote_username, ['expire' => $newExpiry->timestamp]);
+                            }
+
+                            $record->update([
+                                'expires_at' => $newExpiry,
+                                'status'     => UserService::STATUS_ACTIVE,
+                            ]);
+
+                            $note = "Manual add time: +{$days} days. New expiry: {$newExpiry->toDateTimeString()}.";
+                            if (! empty($data['note'])) {
+                                $note .= " Note: {$data['note']}";
+                            }
+
+                            VpnServiceProvisionLog::create([
+                                'user_service_id' => $record->id,
+                                'vpn_panel_id'    => $record->vpn_panel_id,
+                                'action'          => 'admin_manual_add_time',
+                                'status'          => 'success',
+                                'message'         => $note,
+                            ]);
+
+                            Notification::make()
+                                ->title('زمان اضافه با موفقیت اعمال شد.')
+                                ->body("تاریخ انقضای جدید: {$newExpiry->format('Y/m/d H:i')}")
+                                ->success()
+                                ->send();
+                        } catch (\Throwable $e) {
+                            Notification::make()->title('خطا در افزودن زمان')->body($e->getMessage())->danger()->send();
+                        }
+                    })
+                    ->requiresConfirmation()
+                    ->modalHeading('افزودن دستی زمان به سرویس')
+                    ->modalSubmitActionLabel('افزودن'),
+
                 Tables\Actions\EditAction::make()->label('ویرایش'),
             ])
             ->bulkActions([])

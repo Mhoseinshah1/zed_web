@@ -197,6 +197,38 @@ class FinancialReport extends Page implements HasForms
             ->sum('final_price_toman');
     }
 
+    public function getExtraTrafficOrdersRange(): int
+    {
+        return Order::where('order_type', Order::TYPE_EXTRA_TRAFFIC)
+            ->where('payment_status', Order::PAYMENT_PAID)
+            ->whereBetween('paid_at', [$this->from(), $this->to()])
+            ->count();
+    }
+
+    public function getExtraTrafficSalesRange(): int
+    {
+        return (int) Order::where('order_type', Order::TYPE_EXTRA_TRAFFIC)
+            ->where('payment_status', Order::PAYMENT_PAID)
+            ->whereBetween('paid_at', [$this->from(), $this->to()])
+            ->sum('final_price_toman');
+    }
+
+    public function getExtraTimeOrdersRange(): int
+    {
+        return Order::where('order_type', Order::TYPE_EXTRA_TIME)
+            ->where('payment_status', Order::PAYMENT_PAID)
+            ->whereBetween('paid_at', [$this->from(), $this->to()])
+            ->count();
+    }
+
+    public function getExtraTimeSalesRange(): int
+    {
+        return (int) Order::where('order_type', Order::TYPE_EXTRA_TIME)
+            ->where('payment_status', Order::PAYMENT_PAID)
+            ->whereBetween('paid_at', [$this->from(), $this->to()])
+            ->sum('final_price_toman');
+    }
+
     public function getRenewalCashbackRange(): int
     {
         return (int) WalletTransaction::where('type', WalletTransaction::TYPE_RENEWAL_CASHBACK)

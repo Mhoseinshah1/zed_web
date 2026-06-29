@@ -14,8 +14,10 @@ class Order extends Model
     use HasFactory;
 
     // Order types
-    const TYPE_NEW_SERVICE = 'new_service';
-    const TYPE_RENEWAL     = 'renewal';
+    const TYPE_NEW_SERVICE   = 'new_service';
+    const TYPE_RENEWAL       = 'renewal';
+    const TYPE_EXTRA_TRAFFIC = 'extra_traffic';
+    const TYPE_EXTRA_TIME    = 'extra_time';
 
     // Order statuses
     const STATUS_PENDING              = 'pending';
@@ -28,6 +30,7 @@ class Order extends Model
     const STATUS_CANCELLED            = 'cancelled';
     const STATUS_FAILED               = 'failed';
     const STATUS_RENEWAL_FAILED       = 'renewal_failed';
+    const STATUS_ADDON_FAILED         = 'addon_failed';
 
     // Payment statuses
     const PAYMENT_UNPAID    = 'unpaid';
@@ -50,6 +53,13 @@ class Order extends Model
         'renewal_applied_at',
         'renewal_cashback_amount',
         'renewal_cashback_status',
+        'extra_traffic_gb',
+        'extra_time_days',
+        'unit_price',
+        'original_data_limit',
+        'new_data_limit',
+        'addon_applied_at',
+        'addon_apply_failed_reason',
         'status',
         'payment_status',
         'plan_name',
@@ -87,6 +97,12 @@ class Order extends Model
         'original_expire_at'      => 'datetime',
         'new_expire_at'           => 'datetime',
         'renewal_applied_at'      => 'datetime',
+        'extra_traffic_gb'        => 'integer',
+        'extra_time_days'         => 'integer',
+        'unit_price'              => 'integer',
+        'original_data_limit'     => 'integer',
+        'new_data_limit'          => 'integer',
+        'addon_applied_at'        => 'datetime',
         'paid_at'             => 'datetime',
         'completed_at'       => 'datetime',
         'cancelled_at'       => 'datetime',
@@ -160,6 +176,26 @@ class Order extends Model
         return $this->order_type === self::TYPE_RENEWAL;
     }
 
+    public function isAddon(): bool
+    {
+        return in_array($this->order_type, [self::TYPE_EXTRA_TRAFFIC, self::TYPE_EXTRA_TIME], true);
+    }
+
+    public function orderTypeLabel(): string
+    {
+        return self::allOrderTypes()[$this->order_type] ?? $this->order_type;
+    }
+
+    public static function allOrderTypes(): array
+    {
+        return [
+            self::TYPE_NEW_SERVICE   => 'خرید سرویس',
+            self::TYPE_RENEWAL       => 'تمدید سرویس',
+            self::TYPE_EXTRA_TRAFFIC => 'خرید حجم اضافه',
+            self::TYPE_EXTRA_TIME    => 'خرید زمان اضافه',
+        ];
+    }
+
     public function statusLabel(): string
     {
         return match($this->status) {
@@ -173,6 +209,7 @@ class Order extends Model
             self::STATUS_CANCELLED           => 'لغو شده',
             self::STATUS_FAILED              => 'ناموفق',
             self::STATUS_RENEWAL_FAILED      => 'خطا در تمدید',
+            self::STATUS_ADDON_FAILED        => 'خطا در اعمال تغییرات سرویس',
             default                          => $this->status,
         };
     }
@@ -217,6 +254,7 @@ class Order extends Model
             self::STATUS_CANCELLED           => 'لغو شده',
             self::STATUS_FAILED              => 'ناموفق',
             self::STATUS_RENEWAL_FAILED      => 'خطا در تمدید',
+            self::STATUS_ADDON_FAILED        => 'خطا در اعمال تغییرات سرویس',
         ];
     }
 

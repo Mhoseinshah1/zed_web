@@ -106,10 +106,12 @@ class OrderResource extends Resource
 
                 Tables\Columns\BadgeColumn::make('order_type')
                     ->label('نوع')
-                    ->formatStateUsing(fn ($state) => $state === Order::TYPE_RENEWAL ? 'تمدید' : 'سرویس جدید')
+                    ->formatStateUsing(fn ($state) => Order::allOrderTypes()[$state] ?? $state)
                     ->colors([
                         'info'    => Order::TYPE_NEW_SERVICE,
                         'success' => Order::TYPE_RENEWAL,
+                        'warning' => Order::TYPE_EXTRA_TRAFFIC,
+                        'primary' => Order::TYPE_EXTRA_TIME,
                     ]),
 
                 Tables\Columns\TextColumn::make('user.username')
@@ -222,6 +224,18 @@ class OrderResource extends Resource
                 Filter::make('renewal_failed')
                     ->label('خطا در تمدید')
                     ->query(fn (Builder $query) => $query->where('status', Order::STATUS_RENEWAL_FAILED)),
+
+                Filter::make('extra_traffic_orders')
+                    ->label('خرید حجم اضافه')
+                    ->query(fn (Builder $query) => $query->where('order_type', Order::TYPE_EXTRA_TRAFFIC)),
+
+                Filter::make('extra_time_orders')
+                    ->label('خرید زمان اضافه')
+                    ->query(fn (Builder $query) => $query->where('order_type', Order::TYPE_EXTRA_TIME)),
+
+                Filter::make('addon_failed')
+                    ->label('خطا در اعمال حجم/زمان اضافه')
+                    ->query(fn (Builder $query) => $query->where('status', Order::STATUS_ADDON_FAILED)),
 
                 Filter::make('paid_without_service')
                     ->label('پرداخت‌شده بدون سرویس')
@@ -386,6 +400,31 @@ class OrderResource extends Resource
                     })
                     ->requiresConfirmation()
                     ->modalHeading('تلاش مجدد برای اعمال تمدید')
+                    ->modalDescription('آیا می‌خواهید دوباره تلاش کنید؟ پرداخت قبلاً انجام شده است.')
+                    ->modalSubmitActionLabel('بله، دوباره تلاش کن'),
+
+                Tables\Actions\Action::make('retry_addon')
+                    ->label('تلاش مجدد برای اعمال تغییرات سرویس')
+                    ->icon('heroicon-o-arrow-path')
+                    ->color('warning')
+                    ->visible(fn (Order $record) => $record->isAddon()
+                        && $record->status === Order::STATUS_ADDON_FAILED
+                        && $record->payment_status === Order::PAYMENT_PAID)
+                    ->action(function (Order $record) {
+                        try {
+                            $addon = app(\App\Services\Addons\ServiceAddonService::class);
+                            if ($record->order_type === Order::TYPE_EXTRA_TRAFFIC) {
+                                $addon->applyExtraTraffic($record);
+                            } else {
+                                $addon->applyExtraTime($record);
+                            }
+                            Notification::make()->title('تغییرات سرویس با موفقیت اعمال شد.')->success()->send();
+                        } catch (\Throwable $e) {
+                            Notification::make()->title('خطا در اعمال تغییرات سرویس')->body($e->getMessage())->danger()->send();
+                        }
+                    })
+                    ->requiresConfirmation()
+                    ->modalHeading('تلاش مجدد برای اعمال تغییرات سرویس')
                     ->modalDescription('آیا می‌خواهید دوباره تلاش کنید؟ پرداخت قبلاً انجام شده است.')
                     ->modalSubmitActionLabel('بله، دوباره تلاش کن'),
 

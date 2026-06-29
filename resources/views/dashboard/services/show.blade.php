@@ -434,9 +434,6 @@
                     </svg>
                     تمدید سرویس
                 </a>
-                <button disabled class="opacity-40 cursor-not-allowed text-xs bg-gray-800 text-white px-4 py-2 rounded-lg">
-                    خرید حجم اضافه (به‌زودی)
-                </button>
             </div>
             @if($service->isExpired())
                 <p class="text-xs text-amber-500 mt-2">سرویس منقضی شده است. با تمدید، بلافاصله فعال می‌شود.</p>
@@ -450,6 +447,45 @@
             <p class="text-xs text-gray-600">تمدید برای سرویس با وضعیت فعلی در دسترس نیست.</p>
         @endif
     </div>
+
+    {{-- ── Extra traffic / time add-ons ── --}}
+    @php
+        $addon          = app(\App\Services\Addons\ServiceAddonService::class);
+        $eligibleStatus = in_array($service->status, ['active', 'expired', 'disabled']) || $service->isExpired();
+        $eligibleStatus = $eligibleStatus && ($addon->applyToExpired() || ! $service->isExpired());
+        $canBuyTraffic  = $hasRemote && $eligibleStatus && $addon->trafficEnabled()
+                          && $addon->pricePerGb() !== null && $service->traffic_total_gb;
+        $canBuyTime     = $hasRemote && $eligibleStatus && $addon->timeEnabled()
+                          && $addon->pricePerDay() !== null && $service->expires_at !== null;
+    @endphp
+    @if($canBuyTraffic || $canBuyTime)
+    <div class="bg-gray-900 border border-gray-800 rounded-xl p-6">
+        <h4 class="text-white font-medium text-sm mb-3">خرید حجم و زمان اضافه</h4>
+        <div class="flex flex-wrap gap-3">
+            @if($canBuyTraffic)
+            <a href="{{ route('dashboard.services.extra-traffic', $service) }}"
+               class="inline-flex items-center gap-2 bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-medium px-4 py-2.5 rounded-lg transition">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
+                </svg>
+                خرید حجم اضافه
+            </a>
+            @endif
+            @if($canBuyTime)
+            <a href="{{ route('dashboard.services.extra-time', $service) }}"
+               class="inline-flex items-center gap-2 bg-sky-600 hover:bg-sky-500 text-white text-sm font-medium px-4 py-2.5 rounded-lg transition">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                </svg>
+                خرید زمان اضافه
+            </a>
+            @endif
+        </div>
+        <p class="text-xs text-gray-500 mt-3">
+            حجم یا زمان به همین سرویس فعلی اضافه می‌شود؛ سرویس جدیدی ساخته نمی‌شود.
+        </p>
+    </div>
+    @endif
 
     {{-- ── Order link ── --}}
     @if($service->order)

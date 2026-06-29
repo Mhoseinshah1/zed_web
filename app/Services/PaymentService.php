@@ -7,6 +7,7 @@ use App\Models\PaymentMethod;
 use App\Models\PaymentTransaction;
 use App\Models\User;
 use App\Models\WalletTransaction;
+use App\Services\Orders\MarkOrderAsPaidService;
 use Illuminate\Support\Facades\DB;
 use RuntimeException;
 
@@ -19,7 +20,7 @@ class PaymentService
 
     public function payWithWallet(Order $order, User $user): PaymentTransaction
     {
-        return DB::transaction(function () use ($order, $user) {
+        $tx = DB::transaction(function () use ($order, $user) {
             if ($order->payment_status === Order::PAYMENT_PAID) {
                 throw new RuntimeException('این سفارش قبلاً پرداخت شده است.');
             }
@@ -51,17 +52,22 @@ class PaymentService
                 'paid_at'        => now(),
             ]);
 
-            $this->provisioner->createFromOrder($order);
-
             return $tx;
         });
+
+        // Route to the correct post-payment handler (new service / renewal /
+        // extra traffic / extra time). Runs outside the payment transaction and
+        // is idempotent against duplicate calls.
+        app(MarkOrderAsPaidService::class)->markPaid($order->fresh(), $tx->fresh());
+
+        return $tx;
     }
 
     public function approveTransaction(PaymentTransaction $tx, int $adminId, ?string $adminNote = null): void
     {
-        DB::transaction(function () use ($tx, $adminId, $adminNote) {
+        $shouldRoute = DB::transaction(function () use ($tx, $adminId, $adminNote) {
             if ($tx->status === PaymentTransaction::STATUS_APPROVED) {
-                return; // Idempotent — already approved, skip
+                return false; // Idempotent — already approved, skip
             }
 
             if ($tx->status === PaymentTransaction::STATUS_REJECTED) {
@@ -85,8 +91,13 @@ class PaymentService
                 ]);
             }
 
-            $this->provisioner->createFromOrder($order);
+            return true;
         });
+
+        if ($shouldRoute) {
+            // Route to the correct post-payment handler based on order type.
+            app(MarkOrderAsPaidService::class)->markPaid($tx->order->fresh(), $tx->fresh());
+        }
     }
 
     public function rejectTransaction(PaymentTransaction $tx, int $adminId, ?string $adminNote = null): void
