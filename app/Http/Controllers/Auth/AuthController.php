@@ -75,6 +75,20 @@ class AuthController extends Controller
 
         Auth::login($user);
 
+        // When OTP verification is mandatory at registration, send the code and
+        // route the user to the verification page before they can do anything.
+        $phoneVerification = app(\App\Services\Phone\PhoneVerificationService::class);
+        if ($phoneVerification->isRequiredOnRegister()) {
+            $phoneVerification->requestCode($user, [
+                'ip'         => $request->ip(),
+                'user_agent' => substr((string) $request->userAgent(), 0, 255),
+            ]);
+
+            return redirect()
+                ->route('dashboard.profile.complete')
+                ->with('success', 'کد تایید ارسال شد.');
+        }
+
         return redirect()->route('dashboard.index');
     }
 

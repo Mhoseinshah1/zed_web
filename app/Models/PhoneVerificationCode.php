@@ -17,7 +17,13 @@ class PhoneVerificationCode extends Model
         'attempts',
         'ip_address',
         'user_agent',
+        'send_status',
+        'send_error',
     ];
+
+    const SEND_STATUS_SENT   = 'sent';
+    const SEND_STATUS_FAILED = 'failed';
+    const SEND_STATUS_SKIPPED = 'skipped';
 
     protected $casts = [
         'expires_at' => 'datetime',

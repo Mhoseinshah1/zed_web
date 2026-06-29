@@ -161,6 +161,7 @@ class AccountPhoneTest extends TestCase
     public function test_admin_can_require_otp_during_registration(): void
     {
         $svc = app(PhoneVerificationService::class);
+        $this->configureSms();
         SiteSetting::set('phone_verification_enabled', 'true');
         SiteSetting::set('phone_verification_required_on_register', 'true');
         $this->assertTrue($svc->isRequiredOnRegister());
@@ -295,6 +296,7 @@ class AccountPhoneTest extends TestCase
 
     public function test_user_must_verify_when_otp_required(): void
     {
+        $this->configureSms();
         SiteSetting::set('phone_verification_enabled', 'true');
         SiteSetting::set('phone_verification_required_on_register', 'true');
 
@@ -390,6 +392,14 @@ class AccountPhoneTest extends TestCase
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────
+
+    /** Configure a valid (enabled + credentialed) SMS gateway for tests. */
+    private function configureSms(): void
+    {
+        SiteSetting::set('sms_enabled', 'true');
+        SiteSetting::set('sms_provider', 'kavenegar');
+        \App\Services\Sms\SmsService::storeApiKey('test-api-key');
+    }
 
     private function makePlan(): Plan
     {

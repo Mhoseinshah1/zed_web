@@ -181,6 +181,24 @@ class UserResource extends Resource
                         Notification::make()->title('تایید شماره موبایل لغو شد.')->warning()->send();
                     }),
 
+                Tables\Actions\Action::make('resend_otp')
+                    ->label('ارسال مجدد کد تایید')
+                    ->icon('heroicon-o-paper-airplane')
+                    ->color('info')
+                    ->visible(fn (User $record) => filled($record->phone) && is_null($record->phone_verified_at))
+                    ->requiresConfirmation()
+                    ->action(function (User $record) {
+                        $result = app(\App\Services\Phone\PhoneVerificationService::class)->requestCode($record);
+                        if ($result['status'] === 'sent') {
+                            $sent = ($result['sms_sent'] ?? false)
+                                ? 'کد تایید برای کاربر ارسال شد.'
+                                : 'کد تایید ساخته شد اما ارسال پیامک انجام نشد (سرویس پیامک تنظیم نشده است).';
+                            Notification::make()->title($sent)->success()->send();
+                        } else {
+                            Notification::make()->title($result['message'])->warning()->send();
+                        }
+                    }),
+
                 Tables\Actions\Action::make('credit_wallet')
                     ->label('شارژ کیف پول')
                     ->icon('heroicon-o-plus-circle')
