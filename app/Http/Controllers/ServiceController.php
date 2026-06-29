@@ -2,14 +2,22 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\SiteSetting;
 use App\Models\UserService;
 use App\Models\VpnPanel;
-use App\Models\VpnServiceProvisionLog;
-use App\Services\Marzban\MarzbanClient;
-use Carbon\Carbon;
+use App\Services\Marzban\UserServiceSyncService;
+use Illuminate\Http\RedirectResponse;
 
 class ServiceController extends Controller
 {
+    public function __construct(
+        private readonly UserServiceSyncService $sync,
+    ) {}
+
+    /**
+     * Service list — cached local data only. Never calls the Marzban API so
+     * opening the list does not trigger a flood of requests.
+     */
     public function index()
     {
         $user     = auth()->user();
@@ -22,62 +30,23 @@ class ServiceController extends Controller
     {
         abort_if($service->user_id !== auth()->id(), 403);
 
-        $panel       = $service->vpnPanel
-            ?? VpnPanel::where('type', VpnPanel::TYPE_MARZBAN)
-                ->where('is_active', true)
-                ->where('is_default', true)
-                ->first();
-
+        $panel       = $service->marzbanPanel();
         $syncWarning = null;
 
-        // Auto-sync if service is active with a remote username and last sync > 30s ago
+        // On-demand sync for this single service only, gated by the cache window
+        // (default 1 minute). If it's fresh, no Marzban request is made.
+        $cacheMinutes = (int) SiteSetting::get('marzban_user_sync_cache_minutes', 1);
+
         if (
-            $panel &&
             filled($service->remote_username) &&
             $service->status === UserService::STATUS_ACTIVE &&
-            ($service->last_synced_at === null || $service->last_synced_at->lt(now()->subSeconds(30)))
+            $service->isSyncStale($cacheMinutes)
         ) {
-            try {
-                $client      = new MarzbanClient($panel);
-                $marzbanUser = $client->getUser($service->remote_username);
-                $normalized  = $client->normalizeUserResponse($marzbanUser);
-                $subLink     = $client->extractSubscriptionLink($marzbanUser);
+            $this->sync->syncService($service);
+            $service->refresh();
 
-                $updates = [
-                    'traffic_used_gb'   => $normalized['used_traffic_gb'],
-                    'subscription_link' => $subLink ?? $service->subscription_link,
-                    'config_link'       => $marzbanUser['links'][0] ?? $service->config_link,
-                    'last_synced_at'    => now(),
-                ];
-
-                if (! empty($normalized['expire'])) {
-                    $updates['expires_at'] = Carbon::createFromTimestamp((int) $normalized['expire']);
-                }
-
-                if ($normalized['data_limit_gb'] > 0) {
-                    $updates['traffic_total_gb'] = $normalized['data_limit_gb'];
-                }
-
-                if ($normalized['status'] === 'active' && $service->status === UserService::STATUS_DISABLED) {
-                    $updates['status'] = UserService::STATUS_ACTIVE;
-                } elseif ($normalized['status'] === 'disabled' && $service->status === UserService::STATUS_ACTIVE) {
-                    $updates['status'] = UserService::STATUS_DISABLED;
-                }
-
-                $service->update($updates);
-                $service->refresh();
-
-                VpnServiceProvisionLog::create([
-                    'user_service_id'  => $service->id,
-                    'vpn_panel_id'     => $panel->id,
-                    'action'           => 'user_auto_sync_on_view',
-                    'status'           => 'success',
-                    'message'          => "Auto-synced on service detail view. Status: {$normalized['status']}.",
-                    'response_payload' => ['status' => $normalized['status'], 'used_traffic_gb' => $normalized['used_traffic_gb']],
-                ]);
-
-            } catch (\Throwable $e) {
-                $syncWarning = 'بروزرسانی خودکار اطلاعات سرویس در این لحظه امکان‌پذیر نبود.';
+            if ($service->sync_status === UserService::SYNC_FAILED) {
+                $syncWarning = 'اطلاعات سرویس در حال حاضر از آخرین بروزرسانی نمایش داده می‌شود.';
             }
         }
 
@@ -108,5 +77,33 @@ class ServiceController extends Controller
             'canCopyConfigLink',
             'canViewAllConfigLinks',
         ));
+    }
+
+    /**
+     * Manual refresh for a single service. Owner-only, with a per-service
+     * cooldown (default 60s). Syncs only this service.
+     */
+    public function refresh(UserService $service): RedirectResponse
+    {
+        abort_if($service->user_id !== auth()->id(), 403);
+
+        $cooldown = (int) SiteSetting::get('marzban_manual_refresh_cooldown_seconds', 60);
+
+        if (
+            $service->last_manual_sync_at !== null &&
+            $service->last_manual_sync_at->gt(now()->subSeconds($cooldown))
+        ) {
+            return back()->with('error', 'برای بروزرسانی مجدد 1 دقیقه صبر کنید.');
+        }
+
+        $service->update(['last_manual_sync_at' => now()]);
+        $this->sync->syncService($service);
+        $service->refresh();
+
+        if ($service->sync_status === UserService::SYNC_FAILED) {
+            return back()->with('error', 'اطلاعات سرویس در حال حاضر از آخرین بروزرسانی نمایش داده می‌شود.');
+        }
+
+        return back()->with('success', 'اطلاعات سرویس بروزرسانی شد.');
     }
 }

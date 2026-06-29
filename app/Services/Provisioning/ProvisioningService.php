@@ -107,6 +107,7 @@ class ProvisioningService
                 'activated_at'      => $service->activated_at ?? now(),
                 'expires_at'        => $expiresAt,
                 'last_synced_at'    => now(),
+                'sync_status'       => UserService::SYNC_SYNCED,
             ]);
 
             $attempt->update([

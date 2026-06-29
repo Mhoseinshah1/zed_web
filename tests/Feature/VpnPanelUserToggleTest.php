@@ -419,7 +419,10 @@ class VpnPanelUserToggleTest extends TestCase
         $this->actingAs($user)
             ->get(route('dashboard.services.show', $service))
             ->assertOk()
-            ->assertSee('بروزرسانی خودکار اطلاعات سرویس');
+            ->assertSee('اطلاعات سرویس در حال حاضر از آخرین بروزرسانی نمایش داده می‌شود.');
+
+        // Failure is recorded but cached data is preserved.
+        $this->assertSame(UserService::SYNC_FAILED, $service->fresh()->sync_status);
     }
 
     public function test_auto_sync_creates_provision_log_on_success(): void
@@ -457,11 +460,10 @@ class VpnPanelUserToggleTest extends TestCase
             ->get(route('dashboard.services.show', $service))
             ->assertOk();
 
-        $this->assertDatabaseHas('vpn_service_provision_logs', [
-            'user_service_id' => $service->id,
-            'action'          => 'user_auto_sync_on_view',
-            'status'          => 'success',
-        ]);
+        // On-demand sync now records sync status on the service itself.
+        $service->refresh();
+        $this->assertSame(UserService::SYNC_SYNCED, $service->sync_status);
+        $this->assertNotNull($service->last_synced_at);
     }
 
     // ── Authorization: show page denies other user ────────────────────────────

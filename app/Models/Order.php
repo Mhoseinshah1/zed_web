@@ -60,6 +60,8 @@ class Order extends Model
         'new_data_limit',
         'addon_applied_at',
         'addon_apply_failed_reason',
+        'last_retry_at',
+        'failure_reviewed_at',
         'status',
         'payment_status',
         'plan_name',
@@ -103,6 +105,8 @@ class Order extends Model
         'original_data_limit'     => 'integer',
         'new_data_limit'          => 'integer',
         'addon_applied_at'        => 'datetime',
+        'last_retry_at'           => 'datetime',
+        'failure_reviewed_at'     => 'datetime',
         'paid_at'             => 'datetime',
         'completed_at'       => 'datetime',
         'cancelled_at'       => 'datetime',
@@ -179,6 +183,37 @@ class Order extends Model
     public function isAddon(): bool
     {
         return in_array($this->order_type, [self::TYPE_EXTRA_TRAFFIC, self::TYPE_EXTRA_TIME], true);
+    }
+
+    /** Statuses that represent a paid order whose service operation failed. */
+    public static function failedOperationStatuses(): array
+    {
+        return [
+            self::STATUS_PROVISIONING_FAILED,
+            self::STATUS_RENEWAL_FAILED,
+            self::STATUS_ADDON_FAILED,
+        ];
+    }
+
+    public function isFailedOperation(): bool
+    {
+        return in_array($this->status, self::failedOperationStatuses(), true);
+    }
+
+    /** The applied_at marker relevant to this order type (null if not applied). */
+    public function appliedAt(): ?\Illuminate\Support\Carbon
+    {
+        return match (true) {
+            $this->isRenewal() => $this->renewal_applied_at,
+            $this->isAddon()   => $this->addon_applied_at,
+            default            => $this->service?->created_at,
+        };
+    }
+
+    /** Human-readable failure reason for the failed-operations panel. */
+    public function failureReason(): ?string
+    {
+        return $this->addon_apply_failed_reason ?? $this->admin_notes;
     }
 
     public function orderTypeLabel(): string

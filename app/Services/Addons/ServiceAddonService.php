@@ -245,7 +245,11 @@ class ServiceAddonService
         }
 
         DB::transaction(function () use ($order, $service, $newTotalGb) {
-            $service->update(['traffic_total_gb' => $newTotalGb]);
+            $service->update([
+                'traffic_total_gb' => $newTotalGb,
+                'last_synced_at'   => now(),
+                'sync_status'      => UserService::SYNC_SYNCED,
+            ]);
             $order->update([
                 'status'           => Order::STATUS_COMPLETED,
                 'completed_at'     => now(),
@@ -314,8 +318,10 @@ class ServiceAddonService
 
         DB::transaction(function () use ($order, $service, $newExpiry) {
             $service->update([
-                'expires_at' => $newExpiry,
-                'status'     => UserService::STATUS_ACTIVE,
+                'expires_at'     => $newExpiry,
+                'status'         => UserService::STATUS_ACTIVE,
+                'last_synced_at' => now(),
+                'sync_status'    => UserService::SYNC_SYNCED,
             ]);
             $order->update([
                 'status'           => Order::STATUS_COMPLETED,

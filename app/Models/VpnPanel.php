@@ -25,6 +25,10 @@ class VpnPanel extends Model
         'notes',
         'last_checked_at',
         'last_error',
+        'last_health_checked_at',
+        'health_status',
+        'health_error',
+        'system_info',
         'allow_user_sync_service',
         'allow_user_revoke_subscription',
         'allow_user_reset_traffic',
@@ -37,10 +41,15 @@ class VpnPanel extends Model
         'allow_user_view_all_config_links',
     ];
 
+    const HEALTH_ONLINE  = 'online';
+    const HEALTH_OFFLINE = 'offline';
+
     protected $casts = [
         'is_active'                        => 'boolean',
         'is_default'                       => 'boolean',
         'last_checked_at'                  => 'datetime',
+        'last_health_checked_at'           => 'datetime',
+        'system_info'                      => 'array',
         'password'                         => 'encrypted',
         'token'                            => 'encrypted',
         'allow_user_sync_service'          => 'boolean',

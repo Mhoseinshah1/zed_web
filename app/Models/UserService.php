@@ -24,6 +24,13 @@ class UserService extends Model
     const PROVISION_FAILED          = 'failed';
     const PROVISION_SKIPPED         = 'skipped';
 
+    // Marzban sync statuses
+    const SYNC_SYNCED    = 'synced';
+    const SYNC_FAILED    = 'failed';
+    const SYNC_PENDING   = 'pending';
+    const SYNC_DISABLED  = 'disabled';
+    const SYNC_NOT_FOUND = 'not_found';
+
     protected $fillable = [
         'service_number',
         'user_id',
@@ -51,6 +58,15 @@ class UserService extends Model
         'remote_username',
         'admin_notes',
         'user_notes',
+        'sync_status',
+        'sync_error',
+        'marzban_status',
+        'marzban_used_traffic',
+        'marzban_data_limit',
+        'marzban_expire_at',
+        'marzban_online_at',
+        'marzban_raw',
+        'last_manual_sync_at',
     ];
 
     protected $casts = [
@@ -63,6 +79,12 @@ class UserService extends Model
         'activated_at'         => 'datetime',
         'disabled_at'          => 'datetime',
         'last_synced_at'       => 'datetime',
+        'marzban_expire_at'    => 'datetime',
+        'marzban_online_at'    => 'datetime',
+        'last_manual_sync_at'  => 'datetime',
+        'marzban_used_traffic' => 'integer',
+        'marzban_data_limit'   => 'integer',
+        'marzban_raw'          => 'array',
     ];
 
     protected static function booted(): void
@@ -223,6 +245,45 @@ class UserService extends Model
             self::PROVISION_PROVISIONED     => 'ساخته شده',
             self::PROVISION_FAILED          => 'ناموفق',
             self::PROVISION_SKIPPED         => 'رد شده',
+        ];
+    }
+
+    // ── Marzban sync helpers ─────────────────────────────────────────────────
+
+    /**
+     * Resolve the Marzban panel for this service (own panel, else default).
+     */
+    public function marzbanPanel(): ?VpnPanel
+    {
+        return $this->vpnPanel
+            ?? VpnPanel::where('type', VpnPanel::TYPE_MARZBAN)
+                ->where('is_active', true)
+                ->where('is_default', true)
+                ->first();
+    }
+
+    /**
+     * Whether this service's cached data is stale enough to re-sync.
+     */
+    public function isSyncStale(int $cacheMinutes = 1): bool
+    {
+        return $this->last_synced_at === null
+            || $this->last_synced_at->lt(now()->subMinutes(max(0, $cacheMinutes)));
+    }
+
+    public function syncStatusLabel(): string
+    {
+        return self::allSyncStatuses()[$this->sync_status] ?? ($this->sync_status ?? '—');
+    }
+
+    public static function allSyncStatuses(): array
+    {
+        return [
+            self::SYNC_SYNCED    => 'سینک‌شده',
+            self::SYNC_FAILED    => 'خطا در سینک',
+            self::SYNC_PENDING   => 'در انتظار سینک',
+            self::SYNC_DISABLED  => 'غیرفعال',
+            self::SYNC_NOT_FOUND => 'پیدا نشده در Marzban',
         ];
     }
 }

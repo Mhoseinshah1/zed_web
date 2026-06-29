@@ -160,6 +160,9 @@ class RenewalService
             'completed_at' => now(),
         ]);
 
+        // Local mirror is now authoritative & freshly pushed to Marzban.
+        $service->update(['last_synced_at' => now(), 'sync_status' => UserService::SYNC_SYNCED]);
+
         // Notify the user their service was renewed. Idempotent per order.
         if ($order->user) {
             app(\App\Services\Notifications\NotificationService::class)->notify(

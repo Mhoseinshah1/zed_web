@@ -84,6 +84,8 @@ Route::middleware('auth')->prefix('dashboard')->name('dashboard.')->group(functi
 
     // Marzban self-service actions — throttled to prevent abuse
     Route::middleware('throttle:30,1')->group(function () {
+        Route::post('/services/{service}/refresh', [ServiceController::class, 'refresh'])
+            ->name('services.refresh');
         Route::post('/services/{service}/sync', [UserServiceActionController::class, 'sync'])
             ->name('services.sync');
         Route::post('/services/{service}/revoke-subscription', [UserServiceActionController::class, 'revokeSubscription'])

@@ -186,16 +186,36 @@ class VpnPanelResource extends Resource
                     ->label('پیش‌فرض')
                     ->boolean(),
 
+                Tables\Columns\BadgeColumn::make('health_status')
+                    ->label('سلامت پنل')
+                    ->formatStateUsing(fn ($state) => match ($state) {
+                        \App\Models\VpnPanel::HEALTH_ONLINE  => 'آنلاین',
+                        \App\Models\VpnPanel::HEALTH_OFFLINE => 'آفلاین',
+                        default                              => '—',
+                    })
+                    ->colors([
+                        'success' => [\App\Models\VpnPanel::HEALTH_ONLINE],
+                        'danger'  => [\App\Models\VpnPanel::HEALTH_OFFLINE],
+                        'gray'    => [null],
+                    ]),
+
+                Tables\Columns\TextColumn::make('last_health_checked_at')
+                    ->label('آخرین بررسی سلامت')
+                    ->dateTime('Y/m/d H:i')
+                    ->placeholder('—')
+                    ->sortable(),
+
                 Tables\Columns\TextColumn::make('last_checked_at')
                     ->label('آخرین تست')
                     ->dateTime()
                     ->sortable()
-                    ->placeholder('—'),
+                    ->placeholder('—')
+                    ->toggleable(isToggledHiddenByDefault: true),
 
-                Tables\Columns\TextColumn::make('last_error')
-                    ->label('آخرین خطا')
+                Tables\Columns\TextColumn::make('health_error')
+                    ->label('خطای سلامت')
                     ->limit(40)
-                    ->default('—')
+                    ->placeholder('—')
                     ->color('danger'),
             ])
             ->filters([])
@@ -214,8 +234,14 @@ class VpnPanelResource extends Resource
                             $info   = $client->testConnection();
 
                             $record->update([
-                                'last_checked_at' => now(),
-                                'last_error'      => null,
+                                'last_checked_at'        => now(),
+                                'last_error'             => null,
+                                'last_health_checked_at' => now(),
+                                'health_status'          => VpnPanel::HEALTH_ONLINE,
+                                'health_error'           => null,
+                                'system_info'            => collect($info)->only([
+                                    'version', 'mem_total', 'mem_used', 'cpu_cores', 'cpu_usage', 'total_user', 'users_active',
+                                ])->all(),
                             ]);
 
                             $version = $info['version'] ?? 'unknown';
@@ -228,8 +254,11 @@ class VpnPanelResource extends Resource
 
                         } catch (\Throwable $e) {
                             $record->update([
-                                'last_checked_at' => now(),
-                                'last_error'      => $e->getMessage(),
+                                'last_checked_at'        => now(),
+                                'last_error'             => $e->getMessage(),
+                                'last_health_checked_at' => now(),
+                                'health_status'          => VpnPanel::HEALTH_OFFLINE,
+                                'health_error'           => $e->getMessage(),
                             ]);
 
                             Notification::make()
