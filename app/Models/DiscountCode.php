@@ -28,6 +28,7 @@ class DiscountCode extends Model
         'first_purchase_only',
         'new_users_only',
         'allowed_plan_ids',
+        'allowed_order_types',
         'admin_note',
     ];
 
@@ -38,6 +39,7 @@ class DiscountCode extends Model
         'first_purchase_only' => 'boolean',
         'new_users_only'      => 'boolean',
         'allowed_plan_ids'    => 'array',
+        'allowed_order_types' => 'array',
         'value'               => 'integer',
         'max_discount_amount' => 'integer',
         'min_order_amount'    => 'integer',
@@ -48,6 +50,18 @@ class DiscountCode extends Model
     public function redemptions(): HasMany
     {
         return $this->hasMany(DiscountRedemption::class);
+    }
+
+    /**
+     * Whether this code may be used for the given order type.
+     * Empty/null allowed_order_types means all real purchase types are allowed.
+     */
+    public function allowsOrderType(?string $orderType): bool
+    {
+        if (empty($this->allowed_order_types)) {
+            return true;
+        }
+        return in_array($orderType, $this->allowed_order_types, true);
     }
 
     public function usedCount(): int

@@ -21,11 +21,17 @@ class DiscountService
             ?? DiscountCode::where('code', trim($code))->first();
 
         if (! $discountCode) {
-            return $this->invalid('کد تخفیف معتبر نیست.');
+            return $this->invalid('این کد تخفیف معتبر نیست.');
         }
 
         if (! $discountCode->is_active) {
             return $this->invalid('این کد تخفیف غیرفعال است.');
+        }
+
+        // Wallet top-up is never an Order, so order-type restriction only
+        // applies to real purchase orders. Discounts never touch top-ups.
+        if (! $discountCode->allowsOrderType($order->order_type)) {
+            return $this->invalid('این کد تخفیف برای این نوع خرید قابل استفاده نیست.');
         }
 
         if ($discountCode->starts_at && $discountCode->starts_at->isFuture()) {
@@ -41,7 +47,7 @@ class DiscountService
                 ->where('status', DiscountRedemption::STATUS_USED)
                 ->count();
             if ($usedCount >= $discountCode->total_usage_limit) {
-                return $this->invalid('سقف استفاده از این کد تکمیل شده است.');
+                return $this->invalid('سقف استفاده از این کد تخفیف تکمیل شده است.');
             }
         }
 
@@ -50,15 +56,20 @@ class DiscountService
             ->where('status', DiscountRedemption::STATUS_USED)
             ->count();
         if ($userUsedCount >= $discountCode->per_user_usage_limit) {
-            return $this->invalid('شما قبلاً از این کد استفاده کرده‌اید.');
+            return $this->invalid('شما قبلاً از این کد تخفیف استفاده کرده‌اید.');
         }
 
+        // Minimum order amount is checked against the (pre-discount) order amount,
+        // which is the add-on amount for extra traffic/time orders.
         if ($discountCode->min_order_amount !== null && $order->price_toman < $discountCode->min_order_amount) {
-            return $this->invalid('مبلغ سفارش برای استفاده از این کد کافی نیست.');
+            return $this->invalid('حداقل مبلغ سفارش برای این کد تخفیف رعایت نشده است.');
         }
 
-        if (! empty($discountCode->allowed_plan_ids) && $order->plan_id !== null) {
-            if (! in_array($order->plan_id, $discountCode->allowed_plan_ids)) {
+        // Plan restriction: new-service/renewal orders carry plan_id directly;
+        // add-on orders inherit the plan of their target service.
+        if (! empty($discountCode->allowed_plan_ids)) {
+            $effectivePlanId = $order->plan_id ?? $order->userService?->plan_id;
+            if ($effectivePlanId !== null && ! in_array($effectivePlanId, $discountCode->allowed_plan_ids)) {
                 return $this->invalid('این کد برای این پلن قابل استفاده نیست.');
             }
         }

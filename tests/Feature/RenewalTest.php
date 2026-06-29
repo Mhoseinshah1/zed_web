@@ -678,7 +678,7 @@ class RenewalTest extends TestCase
 
         $order = Order::where('order_type', Order::TYPE_RENEWAL)->latest()->first();
         $this->assertNotNull($order);
-        $response->assertRedirect(route('dashboard.orders.pay', $order));
+        $response->assertRedirect(route('dashboard.orders.show', $order));
     }
 
     public function test_renewal_submit_rejects_inactive_plan(): void
@@ -733,7 +733,7 @@ class RenewalTest extends TestCase
         $this->assertNotNull($order->fresh()->renewal_applied_at);
     }
 
-    public function test_discount_message_visible_on_renew_page(): void
+    public function test_discount_hint_visible_on_renew_page(): void
     {
         $user    = $this->makeUser();
         $service = $this->makeService($user);
@@ -742,7 +742,10 @@ class RenewalTest extends TestCase
         $response = $this->actingAs($user)
             ->get(route('dashboard.services.renew', $service));
 
-        $response->assertSee('کد تخفیف برای تمدید سرویس در حال حاضر فعال نیست.');
+        // Discounts are now supported for renewals; the page hints that the code
+        // can be applied on the next step rather than declaring it disabled.
+        $response->assertDontSee('کد تخفیف برای تمدید سرویس در حال حاضر فعال نیست.');
+        $response->assertSee('کد تخفیف');
     }
 
     // ── Financial report ─────────────────────────────────────────────────────

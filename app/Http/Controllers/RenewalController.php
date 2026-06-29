@@ -79,6 +79,7 @@ class RenewalController extends Controller
                 ->with('error', $e->getMessage());
         }
 
-        return redirect()->route('dashboard.orders.pay', $order);
+        // Land on the order page so the user can apply a discount code before paying.
+        return redirect()->route('dashboard.orders.show', $order);
     }
 }

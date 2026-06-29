@@ -118,6 +118,34 @@ class FinancialReport extends Page implements HasForms
             ->sum('final_price_toman');
     }
 
+    /**
+     * Gross sales = sum of pre-discount amounts of paid orders in range.
+     */
+    public function getGrossSalesRange(): int
+    {
+        return (int) Order::where('payment_status', Order::PAYMENT_PAID)
+            ->whereBetween('paid_at', [$this->from(), $this->to()])
+            ->sum('price_toman');
+    }
+
+    /**
+     * Discount given on paid orders in range (the order snapshot, authoritative).
+     */
+    public function getOrderDiscountsRange(): int
+    {
+        return (int) Order::where('payment_status', Order::PAYMENT_PAID)
+            ->whereBetween('paid_at', [$this->from(), $this->to()])
+            ->sum('discount_toman');
+    }
+
+    /**
+     * Net sales = actual collected revenue = gross − discount = sum(final_price).
+     */
+    public function getNetSalesRange(): int
+    {
+        return $this->getSalesRange();
+    }
+
     public function getPaidOrdersToday(): int
     {
         return Order::where('payment_status', Order::PAYMENT_PAID)

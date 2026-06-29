@@ -53,9 +53,9 @@
     <div class="bg-gray-900 border border-gray-800 rounded-xl p-5">
         <h3 class="text-sm font-medium text-gray-300 mb-4">مقدار حجم اضافه مورد نظر را وارد کنید</h3>
 
-        {{-- Discount disabled for add-ons --}}
+        {{-- Discount can be applied on the next step (order page) --}}
         <div class="mb-4 p-3 bg-gray-800/60 border border-gray-700 rounded-lg">
-            <p class="text-xs text-gray-500">کد تخفیف برای خرید حجم یا زمان اضافه در حال حاضر فعال نیست.</p>
+            <p class="text-xs text-gray-400">اگر کد تخفیف دارید، در مرحله بعد (صفحه سفارش) می‌توانید آن را اعمال کنید.</p>
         </div>
 
         <form action="{{ route('dashboard.services.extra-traffic.submit', $service) }}" method="POST" id="addon-form">

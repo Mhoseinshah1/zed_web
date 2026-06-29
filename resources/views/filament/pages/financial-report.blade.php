@@ -97,7 +97,9 @@
     <div class="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
         @php
             $rangeCards = [
-                ['label'=>'فروش در بازه','value'=>number_format($this->getSalesRange()).' تومان','color'=>'green','icon'=>'💵'],
+                ['label'=>'فروش ناخالص (قبل از تخفیف)','value'=>number_format($this->getGrossSalesRange()).' تومان','color'=>'blue','icon'=>'🧾'],
+                ['label'=>'مجموع تخفیف‌ها در بازه','value'=>number_format($this->getOrderDiscountsRange()).' تومان','color'=>'yellow','icon'=>'🏷'],
+                ['label'=>'فروش خالص (بعد از تخفیف)','value'=>number_format($this->getNetSalesRange()).' تومان','color'=>'green','icon'=>'💵'],
                 ['label'=>'سفارش‌های پرداخت‌شده','value'=>number_format($this->getPaidOrdersRange()),'color'=>'blue','icon'=>'🛒'],
                 ['label'=>'درآمد خرید سرویس جدید','value'=>number_format($this->getNewServiceSalesRange()).' تومان','color'=>'green','icon'=>'🆕'],
                 ['label'=>'خریدهای جدید','value'=>number_format($this->getNewServiceOrdersRange()),'color'=>'blue','icon'=>'🛒'],

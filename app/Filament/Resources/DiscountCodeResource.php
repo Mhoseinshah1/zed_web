@@ -125,6 +125,19 @@ class DiscountCodeResource extends Resource
                     ->helperText('خالی بگذارید برای اعمال روی همه پلن‌ها'),
             ])->columns(1),
 
+            Forms\Components\Section::make('نوع خریدهای مجاز')->schema([
+                Forms\Components\CheckboxList::make('allowed_order_types')
+                    ->label('نوع خریدهای مجاز')
+                    ->options([
+                        \App\Models\Order::TYPE_NEW_SERVICE   => 'خرید سرویس جدید',
+                        \App\Models\Order::TYPE_RENEWAL       => 'تمدید سرویس',
+                        \App\Models\Order::TYPE_EXTRA_TRAFFIC => 'خرید حجم اضافه',
+                        \App\Models\Order::TYPE_EXTRA_TIME    => 'خرید زمان اضافه',
+                    ])
+                    ->columns(2)
+                    ->helperText('خالی بگذارید تا کد برای همه انواع خرید (به‌جز شارژ کیف پول) فعال باشد.'),
+            ])->columns(1),
+
             Forms\Components\Section::make('یادداشت')->schema([
                 Forms\Components\Textarea::make('admin_note')
                     ->label('توضیحات ادمین')

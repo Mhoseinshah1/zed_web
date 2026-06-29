@@ -66,7 +66,8 @@ class ServiceAddonController extends Controller
             return $this->back($service, $e->getMessage());
         }
 
-        return redirect()->route('dashboard.orders.pay', $order);
+        // Land on the order page so the user can apply a discount code before paying.
+        return redirect()->route('dashboard.orders.show', $order);
     }
 
     // ── Extra time ───────────────────────────────────────────────────────────
@@ -121,7 +122,8 @@ class ServiceAddonController extends Controller
             return $this->back($service, $e->getMessage());
         }
 
-        return redirect()->route('dashboard.orders.pay', $order);
+        // Land on the order page so the user can apply a discount code before paying.
+        return redirect()->route('dashboard.orders.show', $order);
     }
 
     private function back(UserService $service, string $message): RedirectResponse

@@ -253,7 +253,7 @@ class ServiceAddonTest extends TestCase
         $this->assertSame(20, $order->extra_traffic_gb);
         $this->assertSame(20000, $order->final_price_toman);
         $this->assertSame($service->id, $order->user_service_id);
-        $response->assertRedirect(route('dashboard.orders.pay', $order));
+        $response->assertRedirect(route('dashboard.orders.show', $order));
     }
 
     public function test_submit_extra_time_creates_order_and_redirects_to_payment(): void
@@ -268,7 +268,7 @@ class ServiceAddonTest extends TestCase
         $this->assertNotNull($order);
         $this->assertSame(7, $order->extra_time_days);
         $this->assertSame(14000, $order->final_price_toman);
-        $response->assertRedirect(route('dashboard.orders.pay', $order));
+        $response->assertRedirect(route('dashboard.orders.show', $order));
     }
 
     public function test_amount_below_min_is_rejected(): void
