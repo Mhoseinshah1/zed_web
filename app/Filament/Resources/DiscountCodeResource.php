@@ -173,15 +173,13 @@ class DiscountCodeResource extends Resource
 
                 Tables\Columns\TextColumn::make('starts_at')
                     ->label('تاریخ شروع')
-                    ->dateTime('Y/m/d H:i')
-                    ->default('—')
+                    ->getStateUsing(fn (DiscountCode $record) => $record->starts_at?->format('Y/m/d H:i') ?? '—')
                     ->sortable()
                     ->toggleable(),
 
                 Tables\Columns\TextColumn::make('expires_at')
                     ->label('تاریخ پایان')
-                    ->dateTime('Y/m/d H:i')
-                    ->default('—')
+                    ->getStateUsing(fn (DiscountCode $record) => $record->expires_at?->format('Y/m/d H:i') ?? '—')
                     ->sortable(),
 
                 Tables\Columns\BadgeColumn::make('status_computed')
