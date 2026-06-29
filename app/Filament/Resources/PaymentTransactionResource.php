@@ -28,7 +28,7 @@ class PaymentTransactionResource extends Resource
     protected static ?string $navigationLabel  = 'تراکنش‌های پرداخت';
     protected static ?string $modelLabel       = 'تراکنش';
     protected static ?string $pluralModelLabel = 'تراکنش‌ها';
-    protected static ?int    $navigationSort   = 2;
+    protected static ?int    $navigationSort   = 20;
 
     public static function form(Form $form): Form
     {
@@ -127,7 +127,7 @@ class PaymentTransactionResource extends Resource
                 Tables\Columns\TextColumn::make('amount_toman')
                     ->label('مبلغ (تومان)')
                     ->numeric()
-                    ->formatStateUsing(fn ($state) => number_format($state))
+                    ->formatStateUsing(fn ($state) => $state !== null ? number_format($state) : '—')
                     ->sortable(),
 
                 Tables\Columns\TextColumn::make('currency')
@@ -137,7 +137,7 @@ class PaymentTransactionResource extends Resource
 
                 Tables\Columns\BadgeColumn::make('status')
                     ->label('وضعیت')
-                    ->formatStateUsing(fn ($state) => PaymentTransaction::allStatuses()[$state] ?? $state)
+                    ->formatStateUsing(fn ($state) => $state !== null ? (PaymentTransaction::allStatuses()[$state] ?? $state) : '—')
                     ->colors([
                         'warning' => ['pending', 'submitted', 'waiting', 'confirming'],
                         'success' => ['approved'],
@@ -308,6 +308,10 @@ class PaymentTransactionResource extends Resource
                                 'response_payload' => collect($status)->except(['api_key', 'ipn_secret'])->all(),
                             ]);
                             if ($gatewayStatus === 'finished') {
+                                if ($record->order === null) {
+                                    Notification::make()->title('پرداخت تایید شد اما سفارش مرتبط یافت نشد.')->warning()->send();
+                                    return;
+                                }
                                 app(MarkOrderAsPaidService::class)->markPaid($record->order, $record);
                                 Notification::make()->title('پرداخت تایید شد و سفارش پردازش شد.')->success()->send();
                             } else {
@@ -335,6 +339,7 @@ class PaymentTransactionResource extends Resource
                     ->icon('heroicon-o-arrow-path')
                     ->color('success')
                     ->visible(fn (PaymentTransaction $record) => $record->provider === 'centralpay'
+                        && $record->order !== null
                         && ! in_array($record->gateway_status, ['verified', 'amount_mismatch', 'user_mismatch'])
                         && $record->order->payment_status !== \App\Models\Order::PAYMENT_PAID)
                     ->action(function (PaymentTransaction $record) {

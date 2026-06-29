@@ -26,7 +26,7 @@ class FinancialReport extends Page implements HasForms
     protected static ?string $navigationLabel = 'گزارش مالی';
     protected static ?string $title           = 'داشبورد مالی';
     protected static ?string $slug            = 'reports/financial';
-    protected static ?int    $navigationSort  = 1;
+    protected static ?int    $navigationSort  = 10;
 
     public string $dateFrom = '';
     public string $dateTo   = '';
