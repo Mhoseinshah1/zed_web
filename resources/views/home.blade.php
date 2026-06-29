@@ -1,11 +1,16 @@
 @php
     use App\Services\Theme\TemplateManager;
     $activeTemplate = TemplateManager::activeTemplate();
+    $templateLayout = match ($activeTemplate) {
+        'modern' => 'layouts.modern',
+        'shop'   => 'layouts.shop',
+        default  => 'layouts.app',
+    };
 @endphp
 {{-- Homepage template dispatcher: chooses the layout + body for the active
-     homepage template (classic | modern). The colour theme is handled
-     separately by ThemeManager and applies to both templates. --}}
-@extends($activeTemplate === 'modern' ? 'layouts.modern' : 'layouts.app')
+     homepage template (classic | modern | shop). The colour theme is handled
+     separately by ThemeManager and applies to all templates. --}}
+@extends($templateLayout)
 
 @section('title', site_setting('home_meta_title') ?: 'خانه')
 @section('description', site_setting('home_meta_description', site_setting('hero_description', 'خرید VPN و پروکسی با کیفیت بالا، سرعت فوق‌العاده و قیمت مناسب - ZedProxy')))
