@@ -10,32 +10,49 @@
         <p class="text-gray-400 mt-3">راهنمای گام‌به‌گام اتصال روی تمام دستگاه‌ها</p>
     </div>
 
-    <div class="grid grid-cols-1 sm:grid-cols-2 gap-6">
-        @foreach ([
-            ['os' => 'اندروید', 'icon' => '🤖', 'app' => 'V2RayNG', 'steps' => ['دانلود V2RayNG از Google Play', 'در پنل کاربری، لینک اشتراک را کپی کنید', 'در V2RayNG گزینه + سپس Import config from URL را بزنید', 'لینک را paste کنید و اتصال را شروع کنید']],
-            ['os' => 'iOS (آیفون)', 'icon' => '🍎', 'app' => 'V2Box', 'steps' => ['دانلود V2Box از App Store', 'در پنل کاربری، لینک اشتراک را کپی کنید', 'در V2Box گزینه Subscriptions را بزنید', 'لینک را اضافه کنید و اتصال را شروع کنید']],
-            ['os' => 'ویندوز', 'icon' => '🪟', 'app' => 'Hiddify', 'steps' => ['دانلود Hiddify از سایت رسمی', 'در پنل کاربری، لینک اشتراک را کپی کنید', 'در Hiddify گزینه Add Profile را بزنید', 'لینک را paste کنید و Connect را بزنید']],
-            ['os' => 'مک (macOS)', 'icon' => '💻', 'app' => 'V2Box', 'steps' => ['دانلود V2Box از Mac App Store', 'در پنل کاربری، لینک اشتراک را کپی کنید', 'در V2Box گزینه Subscriptions را بزنید', 'لینک را اضافه کنید و اتصال را شروع کنید']],
-        ] as $tutorial)
-        <div class="bg-gray-900 border border-gray-800 rounded-2xl p-6 hover:border-gray-700 transition">
-            <div class="flex items-center gap-3 mb-5">
-                <span class="text-3xl">{{ $tutorial['icon'] }}</span>
-                <div>
-                    <h3 class="font-bold text-white text-lg">{{ $tutorial['os'] }}</h3>
-                    <p class="text-indigo-400 text-sm">اپلیکیشن: {{ $tutorial['app'] }}</p>
+    @if(isset($tutorials) && $tutorials->isNotEmpty())
+        @php $platforms = \App\Models\Tutorial::platforms(); @endphp
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+            @foreach($tutorials as $tutorial)
+                <a href="{{ route('tutorials.show', $tutorial->slug) }}"
+                   class="zed-card zed-hover-lift block p-6 group">
+                    @if($img = cms_asset_url($tutorial->image))
+                        <img src="{{ $img }}" alt="{{ $tutorial->title }}" class="h-32 w-full object-cover rounded-xl mb-4">
+                    @endif
+                    <span class="inline-block text-[11px] px-2 py-0.5 rounded-full bg-indigo-600/15 text-indigo-300 mb-3">
+                        {{ $platforms[$tutorial->platform] ?? $tutorial->platform }}
+                    </span>
+                    <h3 class="font-bold text-white text-lg group-hover:text-indigo-300 transition">{{ $tutorial->title }}</h3>
+                    @if($tutorial->short_description)
+                        <p class="text-gray-400 text-sm mt-2">{{ $tutorial->short_description }}</p>
+                    @endif
+                    <span class="inline-flex items-center gap-1 text-indigo-400 text-sm mt-4">مشاهده آموزش
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 17l-5-5 5-5M18 17l-5-5 5-5"/></svg>
+                    </span>
+                </a>
+            @endforeach
+        </div>
+    @else
+        {{-- Fallback content if no tutorials are configured yet --}}
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-6">
+            @foreach ([
+                ['os' => 'اندروید', 'icon' => '🤖', 'app' => 'V2RayNG'],
+                ['os' => 'iOS (آیفون)', 'icon' => '🍎', 'app' => 'V2Box'],
+                ['os' => 'ویندوز', 'icon' => '🪟', 'app' => 'Hiddify'],
+                ['os' => 'مک (macOS)', 'icon' => '💻', 'app' => 'V2Box'],
+            ] as $t)
+            <div class="zed-card p-6">
+                <div class="flex items-center gap-3">
+                    <span class="text-3xl">{{ $t['icon'] }}</span>
+                    <div>
+                        <h3 class="font-bold text-white text-lg">{{ $t['os'] }}</h3>
+                        <p class="text-indigo-400 text-sm">اپلیکیشن: {{ $t['app'] }}</p>
+                    </div>
                 </div>
             </div>
-            <ol class="space-y-3">
-                @foreach ($tutorial['steps'] as $i => $step)
-                <li class="flex items-start gap-3 text-sm text-gray-300">
-                    <span class="flex-shrink-0 w-6 h-6 rounded-full bg-indigo-600/30 text-indigo-300 text-xs flex items-center justify-center font-bold mt-0.5">{{ $i + 1 }}</span>
-                    {{ $step }}
-                </li>
-                @endforeach
-            </ol>
+            @endforeach
         </div>
-        @endforeach
-    </div>
+    @endif
 
     <div class="mt-10 bg-yellow-500/10 border border-yellow-500/20 rounded-xl p-6 text-sm text-yellow-200">
         <strong>نکته:</strong> پس از خرید پلن، از پنل کاربری خود لینک اشتراک را دریافت کنید.

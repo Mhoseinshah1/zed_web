@@ -26,6 +26,36 @@ class SiteText extends Model
     }
 
     /**
+     * Create or update a text value by key, setting label/group metadata only
+     * the first time the row is created (never overwrites metadata on update).
+     */
+    public static function set(string $key, ?string $value, array $meta = []): void
+    {
+        $row = static::firstOrNew(['key' => $key]);
+        $row->value = (string) ($value ?? '');
+        if (! $row->exists) {
+            $row->group       = $meta['group'] ?? $row->group;
+            $row->label       = $meta['label'] ?? $key;
+            $row->type        = $meta['type'] ?? 'text';
+            $row->is_public   = $meta['is_public'] ?? true;
+            $row->description = $meta['description'] ?? null;
+            $row->sort_order  = $meta['sort_order'] ?? 0;
+        }
+        $row->save();
+    }
+
+    /**
+     * Seed a default value ONLY if the key is missing — never overwrites
+     * admin-edited content.
+     */
+    public static function seedDefault(string $key, string $value, array $meta = []): void
+    {
+        if (! static::where('key', $key)->exists()) {
+            static::set($key, $value, $meta);
+        }
+    }
+
+    /**
      * Read a setting as boolean — accepts '1', 'true', 'yes', true, 1, etc.
      */
     public static function getBool(string $key, bool $default = false): bool

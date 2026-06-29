@@ -45,6 +45,17 @@ class PlanResource extends Resource
                     ->maxLength(100)
                     ->helperText('شناسه یکتا — به‌صورت خودکار از نام پر می‌شود'),
 
+                Forms\Components\Select::make('category_id')
+                    ->label('دسته‌بندی پلن')
+                    ->relationship('category', 'title')
+                    ->searchable()->preload()->native(false)
+                    ->placeholder('بدون دسته‌بندی'),
+
+                Forms\Components\TextInput::make('short_description')
+                    ->label('توضیح کوتاه')
+                    ->maxLength(255)
+                    ->helperText('روی کارت پلن نمایش داده می‌شود'),
+
                 Forms\Components\Textarea::make('description')
                     ->label('توضیحات')
                     ->rows(3)
@@ -55,6 +66,18 @@ class PlanResource extends Resource
                     ->maxLength(50)
                     ->placeholder('مثال: محبوب‌ترین')
                     ->helperText('اختیاری — روی کارت پلن نمایش داده می‌شود'),
+
+                Forms\Components\Select::make('badge_type')
+                    ->label('نوع برچسب')
+                    ->options([
+                        'primary' => 'اصلی', 'success' => 'موفقیت', 'warning' => 'هشدار',
+                        'danger' => 'خطر', 'accent' => 'تأکید',
+                    ])->native(false)->placeholder('پیش‌فرض'),
+
+                Forms\Components\TagsInput::make('feature_list')
+                    ->label('ویژگی‌ها (هر مورد یک خط)')
+                    ->placeholder('افزودن ویژگی')
+                    ->columnSpanFull(),
             ])->columns(2),
 
             Forms\Components\Section::make('قیمت و مشخصات')->schema([

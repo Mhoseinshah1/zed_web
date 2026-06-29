@@ -10,6 +10,7 @@ use App\Http\Controllers\HomeController;
 use App\Http\Controllers\CentralPayController;
 use App\Http\Controllers\NowPaymentsController;
 use App\Http\Controllers\OrderController;
+use App\Http\Controllers\PageController;
 use App\Http\Controllers\PaymentController;
 use App\Http\Controllers\PlansController;
 use App\Http\Controllers\NotificationController;
@@ -43,8 +44,17 @@ Route::get('/', [HomeController::class, 'index'])->name('home');
 Route::get('/plans', [PlansController::class, 'index'])->name('plans');
 Route::get('/faq', [FaqController::class, 'index'])->name('faq');
 Route::get('/tutorials', [TutorialsController::class, 'index'])->name('tutorials');
+Route::get('/tutorials/{slug}', [TutorialsController::class, 'show'])->name('tutorials.show');
 Route::get('/status', [StatusController::class, 'index'])->name('status');
 Route::get('/contact', [ContactController::class, 'index'])->name('contact');
+
+// Pretty aliases for common static pages → CMS pages
+Route::get('/terms', fn () => redirect()->route('pages.show', 'terms'));
+Route::get('/privacy', fn () => redirect()->route('pages.show', 'privacy'));
+Route::get('/about', fn () => redirect()->route('pages.show', 'about'));
+
+// CMS static pages (keep last so it doesn't shadow named routes above)
+Route::get('/pages/{slug}', [PageController::class, 'show'])->name('pages.show');
 
 // Authentication — guest-only
 Route::middleware('guest')->group(function () {
