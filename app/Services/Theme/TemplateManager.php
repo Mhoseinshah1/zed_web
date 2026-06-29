@@ -37,6 +37,12 @@ class TemplateManager
                 'preview'     => 'modern',
                 'accent'      => 'linear-gradient(135deg,#1e3a8a,#3b82f6 50%,#22d3ee)',
             ],
+            'shop' => [
+                'title'       => 'قالب فروشگاهی',
+                'description' => 'فروش‌محور · با گالری سرورها، نظرات و آمار زنده',
+                'preview'     => 'shop',
+                'accent'      => 'linear-gradient(135deg,#0ea5e9,#22d3ee 55%,#34d399)',
+            ],
         ];
     }
 

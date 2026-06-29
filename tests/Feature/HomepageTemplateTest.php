@@ -24,7 +24,9 @@ class HomepageTemplateTest extends TestCase
     public function test_default_template_is_classic(): void
     {
         $this->assertSame('classic', TemplateManager::activeTemplate());
-        $this->assertCount(2, TemplateManager::templates());
+        $this->assertGreaterThanOrEqual(2, count(TemplateManager::templates()));
+        $this->assertArrayHasKey('classic', TemplateManager::templates());
+        $this->assertArrayHasKey('modern', TemplateManager::templates());
     }
 
     public function test_validation_and_normalisation(): void
