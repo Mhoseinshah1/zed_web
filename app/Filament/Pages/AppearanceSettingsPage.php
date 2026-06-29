@@ -23,22 +23,22 @@ class AppearanceSettingsPage extends Page implements HasForms
 
     protected static string $view = 'filament.pages.appearance-settings';
 
-    protected static ?string $navigationIcon  = 'heroicon-o-swatch';
+    protected static ?string $navigationIcon  = 'heroicon-o-adjustments-horizontal';
     protected static ?string $navigationGroup = 'ظاهر سایت';
-    protected static ?string $navigationLabel = 'تنظیمات ظاهر و تم';
+    protected static ?string $navigationLabel = 'تنظیمات ظاهر';
     protected static ?string $title           = 'تنظیمات ظاهر و تم';
     protected static ?string $slug            = 'settings/appearance';
-    protected static ?int    $navigationSort  = 1;
+    protected static ?int    $navigationSort  = 2;
 
     /** @var array<string,mixed> */
     public array $data = [];
 
-    /** @return array<string,string> preset key => persian name */
+    /** @return array<string,string> preset key => persian title */
     protected function presetOptions(): array
     {
         $opts = [];
         foreach (ThemeManager::presets() as $key => $preset) {
-            $opts[$key] = $preset['name'];
+            $opts[$key] = $preset['title'] . ' — ' . $preset['name'];
         }
         return $opts;
     }
@@ -63,6 +63,7 @@ class AppearanceSettingsPage extends Page implements HasForms
             'font_scale'                  => (int) SiteSetting::get('font_scale', 100),
             'table_density'               => (string) SiteSetting::get('table_density', 'comfortable'),
             'card_density'                => (string) SiteSetting::get('card_density', 'comfortable'),
+            'image_size'                  => (string) SiteSetting::get('image_size', '2.5rem'),
         ]);
     }
 
@@ -111,16 +112,16 @@ class AppearanceSettingsPage extends Page implements HasForms
                 Forms\Components\Section::make('شکل، تراکم و انیمیشن')
                     ->schema([
                         Forms\Components\Select::make('animation_intensity')
-                            ->label('شدت انیمیشن')
-                            ->options(['none' => 'بدون انیمیشن', 'subtle' => 'ملایم', 'rich' => 'پررنگ'])
-                            ->native(false)->default('subtle'),
+                            ->label('شدت انیمیشن‌ها')
+                            ->options(['off' => 'خاموش', 'low' => 'کم', 'medium' => 'متوسط', 'high' => 'زیاد'])
+                            ->native(false)->default('medium'),
                         Forms\Components\TextInput::make('font_scale')
                             ->label('مقیاس فونت (٪)')->numeric()->minValue(80)->maxValue(130)->default(100),
                         Forms\Components\Select::make('card_radius')
                             ->label('گردی گوشه کارت‌ها')
                             ->options([
-                                '0.35rem' => 'کم', '0.6rem' => 'متوسط', '0.85rem' => 'پیش‌فرض',
-                                '1.1rem' => 'زیاد', '1.5rem' => 'خیلی زیاد',
+                                '0.35rem' => 'کم', '0.6rem' => 'متوسط', '0.9rem' => 'پیش‌فرض',
+                                '1.2rem' => 'زیاد', '1.6rem' => 'خیلی زیاد',
                             ])->native(false),
                         Forms\Components\Select::make('button_radius')
                             ->label('گردی گوشه دکمه‌ها')
@@ -130,11 +131,15 @@ class AppearanceSettingsPage extends Page implements HasForms
                             ])->native(false),
                         Forms\Components\Select::make('table_density')
                             ->label('تراکم جدول‌ها')
-                            ->options(['compact' => 'فشرده', 'comfortable' => 'استاندارد'])
+                            ->options(['compact' => 'فشرده', 'normal' => 'عادی', 'comfortable' => 'راحت'])
                             ->native(false),
                         Forms\Components\Select::make('card_density')
                             ->label('تراکم کارت‌ها')
-                            ->options(['compact' => 'فشرده', 'comfortable' => 'استاندارد'])
+                            ->options(['compact' => 'فشرده', 'normal' => 'عادی', 'comfortable' => 'راحت'])
+                            ->native(false),
+                        Forms\Components\Select::make('image_size')
+                            ->label('اندازه تصاویر و آواتارها')
+                            ->options(['2rem' => 'کوچک', '2.5rem' => 'پیش‌فرض', '3rem' => 'بزرگ'])
                             ->native(false),
                         Forms\Components\Select::make('icon_size')
                             ->label('اندازه آیکون‌ها')
@@ -161,14 +166,22 @@ class AppearanceSettingsPage extends Page implements HasForms
         $data = $this->form->getState();
 
         $themeKeys = ThemeManager::presetKeys();
-        $valid = fn ($k, $default) => in_array($k, $themeKeys, true) ? $k : $default;
+        $default   = ThemeManager::DEFAULT_THEME;
+        $valid = fn ($k, $fallback) => in_array(ThemeManager::normalize($k), $themeKeys, true) ? ThemeManager::normalize($k) : $fallback;
 
-        SiteSetting::set('default_theme_public', $valid($data['default_theme_public'] ?? null, 'cyber-dark'));
-        SiteSetting::set('default_theme_user', $valid($data['default_theme_user'] ?? null, 'cyber-dark'));
-        SiteSetting::set('default_theme_admin', $valid($data['default_theme_admin'] ?? null, 'cyber-dark'));
+        SiteSetting::set('default_theme_public', $valid($data['default_theme_public'] ?? null, $default));
+        SiteSetting::set('default_theme_user', $valid($data['default_theme_user'] ?? null, $default));
+        SiteSetting::set('default_theme_admin', $valid($data['default_theme_admin'] ?? null, $default));
         SiteSetting::set('default_appearance', in_array($data['default_appearance'] ?? null, ['light', 'dark', 'system'], true) ? $data['default_appearance'] : 'dark');
 
-        $enabled = array_values(array_filter((array) ($data['enabled_themes'] ?? []), fn ($k) => in_array($k, $themeKeys, true)));
+        $enabled = [];
+        foreach ((array) ($data['enabled_themes'] ?? []) as $k) {
+            $norm = ThemeManager::normalize($k);
+            if ($norm !== null) {
+                $enabled[] = $norm;
+            }
+        }
+        $enabled = array_values(array_unique($enabled));
         if (empty($enabled)) {
             $enabled = $themeKeys; // never lock everyone out
         }
@@ -178,15 +191,16 @@ class AppearanceSettingsPage extends Page implements HasForms
         SiteSetting::set('allow_user_appearance_switch', ! empty($data['allow_user_appearance_switch']) ? 'true' : 'false');
         SiteSetting::set('force_global_theme', ! empty($data['force_global_theme']) ? 'true' : 'false');
 
-        SiteSetting::set('animation_intensity', in_array($data['animation_intensity'] ?? null, ['none', 'subtle', 'rich'], true) ? $data['animation_intensity'] : 'subtle');
+        SiteSetting::set('animation_intensity', in_array($data['animation_intensity'] ?? null, ['off', 'low', 'medium', 'high'], true) ? $data['animation_intensity'] : 'medium');
         SiteSetting::set('font_scale', (int) max(80, min(130, (int) ($data['font_scale'] ?? 100))));
-        SiteSetting::set('card_radius', $data['card_radius'] ?? '0.85rem');
+        SiteSetting::set('card_radius', $data['card_radius'] ?? '0.9rem');
         SiteSetting::set('button_radius', $data['button_radius'] ?? '0.6rem');
         SiteSetting::set('icon_size', $data['icon_size'] ?? '1.25rem');
         SiteSetting::set('sidebar_icon_size', $data['sidebar_icon_size'] ?? '1.25rem');
-        SiteSetting::set('logo_size', $data['logo_size'] ?? '1.125rem');
-        SiteSetting::set('table_density', $data['table_density'] ?? 'comfortable');
-        SiteSetting::set('card_density', $data['card_density'] ?? 'comfortable');
+        SiteSetting::set('logo_size', $data['logo_size'] ?? '1.15rem');
+        SiteSetting::set('image_size', $data['image_size'] ?? '2.5rem');
+        SiteSetting::set('table_density', in_array($data['table_density'] ?? null, ['compact', 'normal', 'comfortable'], true) ? $data['table_density'] : 'comfortable');
+        SiteSetting::set('card_density', in_array($data['card_density'] ?? null, ['compact', 'normal', 'comfortable'], true) ? $data['card_density'] : 'comfortable');
 
         Notification::make()->title('تنظیمات ظاهر ذخیره شد.')->success()->send();
     }
