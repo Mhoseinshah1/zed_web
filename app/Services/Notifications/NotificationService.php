@@ -185,6 +185,21 @@ class NotificationService
                 'message'   => '{message}',
                 'variables' => '{user_name}, {order_id}, {service_id}, {error}, {message}',
             ],
+            Notification::TYPE_TICKET_ADMIN_REPLY => [
+                'title'     => 'پاسخ جدید پشتیبانی',
+                'message'   => 'پشتیبانی به تیکت {ticket_number} شما پاسخ داد.',
+                'variables' => '{user_name}, {ticket_number}',
+            ],
+            Notification::TYPE_TICKET_CREATED => [
+                'title'     => 'تیکت جدید',
+                'message'   => 'تیکت جدید {ticket_number} توسط کاربر {user_name} ثبت شد: {subject}',
+                'variables' => '{user_name}, {ticket_number}, {subject}',
+            ],
+            Notification::TYPE_TICKET_USER_REPLY => [
+                'title'     => 'پاسخ جدید کاربر در تیکت',
+                'message'   => 'کاربر {user_name} به تیکت {ticket_number} پاسخ داد.',
+                'variables' => '{user_name}, {ticket_number}',
+            ],
         ];
     }
 

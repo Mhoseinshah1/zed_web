@@ -54,6 +54,15 @@
                 </span>
                 @endif
             </a>
+            @php $unreadTickets = \App\Models\SupportTicket::forUser(auth()->id())->where('user_unread', true)->count(); @endphp
+            <a href="{{ route('dashboard.tickets') }}"
+               class="flex items-center gap-3 px-3 py-2 rounded-lg {{ request()->routeIs('dashboard.tickets*') ? 'bg-indigo-600 text-white' : 'text-gray-400 hover:text-white hover:bg-gray-800' }} transition">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18 13v5a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h5m11-2l-9 9m0 0V4m0 5h5"/></svg>
+                <span>تیکت‌های پشتیبانی</span>
+                @if($unreadTickets > 0)
+                <span class="mr-auto inline-flex items-center justify-center min-w-5 h-5 px-1.5 text-[11px] font-bold rounded-full bg-red-500 text-white">{{ $unreadTickets }}</span>
+                @endif
+            </a>
             <a href="{{ route('dashboard.profile') }}"
                class="flex items-center gap-3 px-3 py-2 rounded-lg {{ request()->routeIs('dashboard.profile') ? 'bg-indigo-600 text-white' : 'text-gray-400 hover:text-white hover:bg-gray-800' }} transition">
                 <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/></svg>

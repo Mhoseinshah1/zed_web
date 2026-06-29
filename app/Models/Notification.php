@@ -20,10 +20,14 @@ class Notification extends Model
     const TYPE_RENEWAL_CASHBACK_SUCCESS = 'renewal_cashback_success';
     const TYPE_DISCOUNT_USED            = 'discount_used';
 
+    const TYPE_TICKET_ADMIN_REPLY    = 'ticket_admin_reply';
+
     // ── Admin / system notification types ────────────────────────────────────
     const TYPE_MARZBAN_UPDATE_FAILED = 'marzban_update_failed';
     const TYPE_PROVISIONING_FAILED   = 'provisioning_failed';
     const TYPE_ADMIN_WARNING         = 'admin_warning';
+    const TYPE_TICKET_CREATED        = 'ticket_created';
+    const TYPE_TICKET_USER_REPLY     = 'ticket_user_reply';
 
     protected $fillable = [
         'user_id',
@@ -95,9 +99,12 @@ class Notification extends Model
             self::TYPE_EXTRA_TIME_SUCCESS       => 'خرید زمان اضافه',
             self::TYPE_RENEWAL_CASHBACK_SUCCESS => 'کش‌بک تمدید',
             self::TYPE_DISCOUNT_USED            => 'استفاده از کد تخفیف',
+            self::TYPE_TICKET_ADMIN_REPLY       => 'پاسخ پشتیبانی',
             self::TYPE_MARZBAN_UPDATE_FAILED    => 'خطای Marzban',
             self::TYPE_PROVISIONING_FAILED      => 'خطای ساخت سرویس',
             self::TYPE_ADMIN_WARNING            => 'هشدار سیستم',
+            self::TYPE_TICKET_CREATED           => 'تیکت جدید',
+            self::TYPE_TICKET_USER_REPLY        => 'پاسخ کاربر در تیکت',
         ];
     }
 

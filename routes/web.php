@@ -16,6 +16,7 @@ use App\Http\Controllers\NotificationController;
 use App\Http\Controllers\ProfileController;
 use App\Http\Controllers\RenewalController;
 use App\Http\Controllers\ServiceAddonController;
+use App\Http\Controllers\SupportTicketController;
 use App\Http\Controllers\ServiceController;
 use App\Http\Controllers\StatusController;
 use App\Http\Controllers\TutorialsController;
@@ -98,6 +99,14 @@ Route::middleware('auth')->prefix('dashboard')->name('dashboard.')->group(functi
     Route::get('/notifications', [NotificationController::class, 'index'])->name('notifications');
     Route::post('/notifications/read-all', [NotificationController::class, 'markAllRead'])->name('notifications.read-all');
     Route::post('/notifications/{notification}/read', [NotificationController::class, 'markRead'])->name('notifications.read');
+
+    // Support tickets
+    Route::get('/tickets', [SupportTicketController::class, 'index'])->name('tickets');
+    Route::get('/tickets/create', [SupportTicketController::class, 'create'])->name('tickets.create');
+    Route::post('/tickets', [SupportTicketController::class, 'store'])->name('tickets.store');
+    Route::get('/tickets/{ticket}', [SupportTicketController::class, 'show'])->name('tickets.show');
+    Route::post('/tickets/{ticket}/reply', [SupportTicketController::class, 'reply'])->name('tickets.reply');
+    Route::post('/tickets/{ticket}/close', [SupportTicketController::class, 'close'])->name('tickets.close');
 
     Route::get('/profile', [ProfileController::class, 'index'])->name('profile');
     Route::get('/profile/complete', [ProfileController::class, 'complete'])->name('profile.complete');
