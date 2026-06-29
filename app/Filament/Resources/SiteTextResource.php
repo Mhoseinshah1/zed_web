@@ -15,11 +15,11 @@ class SiteTextResource extends Resource
     protected static ?string $model = SiteText::class;
 
     protected static ?string $navigationIcon  = 'heroicon-o-document-text';
-    protected static ?string $navigationGroup = 'تنظیمات سایت';
-    protected static ?string $navigationLabel = 'متن‌های سایت';
-    protected static ?string $modelLabel      = 'متن سایت';
-    protected static ?string $pluralModelLabel = 'متن‌های سایت';
-    protected static ?int $navigationSort     = 10;
+    protected static ?string $navigationGroup = 'مدیریت محتوا';
+    protected static ?string $navigationLabel = 'متن‌های عمومی';
+    protected static ?string $modelLabel      = 'متن عمومی';
+    protected static ?string $pluralModelLabel = 'متن‌های عمومی';
+    protected static ?int $navigationSort     = 100;
 
     public static function form(Form $form): Form
     {

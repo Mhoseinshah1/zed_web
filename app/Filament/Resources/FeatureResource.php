@@ -16,11 +16,11 @@ class FeatureResource extends Resource
     protected static ?string $model = Feature::class;
 
     protected static ?string $navigationIcon  = 'heroicon-o-star';
-    protected static ?string $navigationGroup = 'کاربران و سفارش‌ها';
+    protected static ?string $navigationGroup = 'مدیریت محتوا';
     protected static ?string $navigationLabel = 'ویژگی‌ها';
     protected static ?string $modelLabel      = 'ویژگی';
     protected static ?string $pluralModelLabel = 'ویژگی‌ها';
-    protected static ?int $navigationSort     = 3;
+    protected static ?int $navigationSort     = 50;
 
     public static function form(Form $form): Form
     {

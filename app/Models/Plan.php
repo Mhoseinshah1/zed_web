@@ -12,9 +12,11 @@ class Plan extends Model
 {
     use HasFactory;
     protected $fillable = [
-        'name', 'slug', 'description', 'traffic_gb', 'duration_days',
+        'name', 'slug', 'description', 'short_description', 'feature_list',
+        'traffic_gb', 'duration_days',
         'price_toman', 'old_price_toman', 'is_active', 'is_featured',
-        'is_economic', 'sort_order', 'badge',
+        'is_economic', 'sort_order', 'badge', 'badge_text', 'badge_type',
+        'category_id',
         'renewal_enabled', 'renewal_price', 'renewal_duration_days',
         'renewal_cashback_enabled', 'renewal_cashback_type', 'renewal_cashback_value',
     ];
@@ -24,6 +26,7 @@ class Plan extends Model
         'is_featured'              => 'boolean',
         'is_economic'              => 'boolean',
         'sort_order'               => 'integer',
+        'feature_list'             => 'array',
         'renewal_enabled'          => 'boolean',
         'renewal_price'            => 'integer',
         'renewal_duration_days'    => 'integer',
@@ -34,6 +37,11 @@ class Plan extends Model
     public function features(): BelongsToMany
     {
         return $this->belongsToMany(Feature::class, 'feature_plan');
+    }
+
+    public function category(): \Illuminate\Database\Eloquent\Relations\BelongsTo
+    {
+        return $this->belongsTo(PlanCategory::class, 'category_id');
     }
 
     public function orders(): HasMany

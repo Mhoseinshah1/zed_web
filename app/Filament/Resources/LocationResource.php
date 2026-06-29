@@ -15,11 +15,11 @@ class LocationResource extends Resource
     protected static ?string $model = Location::class;
 
     protected static ?string $navigationIcon  = 'heroicon-o-globe-alt';
-    protected static ?string $navigationGroup = 'تنظیمات سایت';
+    protected static ?string $navigationGroup = 'مدیریت محتوا';
     protected static ?string $navigationLabel = 'لوکیشن‌ها';
     protected static ?string $modelLabel      = 'لوکیشن';
     protected static ?string $pluralModelLabel = 'لوکیشن‌ها';
-    protected static ?int $navigationSort     = 11;
+    protected static ?int $navigationSort     = 60;
 
     public static function form(Form $form): Form
     {
