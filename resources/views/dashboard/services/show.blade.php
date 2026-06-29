@@ -417,6 +417,8 @@
         <h4 class="text-white font-medium text-sm mb-3">تمدید سرویس</h4>
         @if($service->expires_at === null)
             <p class="text-xs text-gray-500">این سرویس تاریخ انقضا ندارد و قابل تمدید نیست.</p>
+        @elseif(!\App\Models\SiteSetting::get('renewal_enabled', true))
+            <p class="text-xs text-amber-400">تمدید سرویس در حال حاضر غیرفعال است.</p>
         @elseif(in_array($service->status, ['active', 'expired', 'disabled']))
             @if(session('error'))
                 <div class="mb-3 text-xs text-red-400 bg-red-900/30 border border-red-800 rounded-lg px-3 py-2">

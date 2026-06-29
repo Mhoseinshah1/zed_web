@@ -15,13 +15,20 @@ class Plan extends Model
         'name', 'slug', 'description', 'traffic_gb', 'duration_days',
         'price_toman', 'old_price_toman', 'is_active', 'is_featured',
         'is_economic', 'sort_order', 'badge',
+        'renewal_enabled', 'renewal_price', 'renewal_duration_days',
+        'renewal_cashback_enabled', 'renewal_cashback_type', 'renewal_cashback_value',
     ];
 
     protected $casts = [
-        'is_active'   => 'boolean',
-        'is_featured' => 'boolean',
-        'is_economic' => 'boolean',
-        'sort_order'  => 'integer',
+        'is_active'                => 'boolean',
+        'is_featured'              => 'boolean',
+        'is_economic'              => 'boolean',
+        'sort_order'               => 'integer',
+        'renewal_enabled'          => 'boolean',
+        'renewal_price'            => 'integer',
+        'renewal_duration_days'    => 'integer',
+        'renewal_cashback_enabled' => 'boolean',
+        'renewal_cashback_value'   => 'integer',
     ];
 
     public function features(): BelongsToMany
@@ -71,5 +78,33 @@ class Plan extends Model
     public function scopeOrdered($query)
     {
         return $query->orderBy('sort_order')->orderBy('price_toman');
+    }
+
+    public function scopeRenewable($query)
+    {
+        return $query->where('is_active', true)->where('renewal_enabled', true);
+    }
+
+    public function effectiveRenewalPrice(): int
+    {
+        return $this->renewal_price ?? $this->price_toman;
+    }
+
+    public function effectiveRenewalDays(): ?int
+    {
+        return $this->renewal_duration_days ?? $this->duration_days;
+    }
+
+    public function effectiveCashbackAmount(): ?int
+    {
+        if (! $this->renewal_cashback_enabled || ! $this->renewal_cashback_value) {
+            return null;
+        }
+        $price = $this->effectiveRenewalPrice();
+        if ($this->renewal_cashback_type === 'percent') {
+            return (int) round($price * $this->renewal_cashback_value / 100);
+        }
+
+        return (int) $this->renewal_cashback_value;
     }
 }

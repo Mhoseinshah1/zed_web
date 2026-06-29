@@ -2,7 +2,8 @@
 
 namespace App\Http\Controllers;
 
-use App\Models\RenewalPackage;
+use App\Models\Plan;
+use App\Models\SiteSetting;
 use App\Models\UserService;
 use App\Services\Renewals\RenewalService;
 use Illuminate\Http\RedirectResponse;
@@ -19,32 +20,41 @@ class RenewalController extends Controller
     {
         abort_if($service->user_id !== auth()->id(), 403);
 
+        if (! SiteSetting::get('renewal_enabled', true)) {
+            return redirect()
+                ->route('dashboard.services.show', $service)
+                ->with('error', 'تمدید سرویس در حال حاضر غیرفعال است.');
+        }
+
         if ($service->expires_at === null) {
             return redirect()
                 ->route('dashboard.services.show', $service)
                 ->with('error', 'این سرویس تاریخ انقضا ندارد و قابل تمدید نیست.');
         }
 
-        $allPackages = RenewalPackage::where('is_active', true)
-            ->orderBy('sort_order')
-            ->orderBy('duration_days')
+        $plans = Plan::where('is_active', true)
+            ->where('renewal_enabled', true)
+            ->ordered()
             ->get();
 
-        // Filter to packages allowed for this service's plan
-        $packages = $allPackages->filter(fn ($pkg) => $pkg->isAllowedForPlan($service->plan_id));
-
-        if ($packages->isEmpty()) {
+        if ($plans->isEmpty()) {
             return redirect()
                 ->route('dashboard.services.show', $service)
-                ->with('error', 'در حال حاضر بسته تمدیدی برای این سرویس موجود نیست. لطفاً با پشتیبانی تماس بگیرید.');
+                ->with('error', 'در حال حاضر پلنی برای تمدید سرویس موجود نیست. لطفاً با پشتیبانی تماس بگیرید.');
         }
 
-        return view('dashboard.services.renew', compact('service', 'packages'));
+        return view('dashboard.services.renew', compact('service', 'plans'));
     }
 
     public function submit(Request $request, UserService $service): RedirectResponse
     {
         abort_if($service->user_id !== auth()->id(), 403);
+
+        if (! SiteSetting::get('renewal_enabled', true)) {
+            return redirect()
+                ->route('dashboard.services.show', $service)
+                ->with('error', 'تمدید سرویس در حال حاضر غیرفعال است.');
+        }
 
         if ($service->expires_at === null) {
             return redirect()
@@ -53,15 +63,16 @@ class RenewalController extends Controller
         }
 
         $validated = $request->validate([
-            'renewal_package_id' => ['required', 'integer', 'exists:renewal_packages,id'],
+            'plan_id' => ['required', 'integer', 'exists:plans,id'],
         ]);
 
-        $package = RenewalPackage::where('id', $validated['renewal_package_id'])
+        $plan = Plan::where('id', $validated['plan_id'])
             ->where('is_active', true)
+            ->where('renewal_enabled', true)
             ->firstOrFail();
 
         try {
-            $order = $this->renewalService->createRenewalOrder($service, $package);
+            $order = $this->renewalService->createRenewalOrder($service, $plan, auth()->user());
         } catch (\InvalidArgumentException $e) {
             return redirect()
                 ->route('dashboard.services.show', $service)

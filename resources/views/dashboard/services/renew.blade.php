@@ -1,6 +1,6 @@
 @extends('layouts.panel')
 
-@section('title', 'تمدید سرویس')
+@section('title', 'انتخاب پلن برای تمدید')
 
 @section('content')
 <div class="max-w-2xl space-y-6">
@@ -13,7 +13,7 @@
             </svg>
         </a>
         <div>
-            <h1 class="text-xl font-bold text-white">تمدید سرویس</h1>
+            <h1 class="text-xl font-bold text-white">انتخاب پلن برای تمدید</h1>
             <p class="text-sm text-gray-400 mt-0.5">{{ $service->service_number }}</p>
         </div>
     </div>
@@ -45,11 +45,11 @@
         </div>
     </div>
 
-    {{-- ── Packages ── --}}
+    {{-- ── Plans ── --}}
     <div class="bg-gray-900 border border-gray-800 rounded-xl p-5">
-        <h3 class="text-sm font-medium text-gray-300 mb-4">انتخاب پکیج تمدید</h3>
+        <h3 class="text-sm font-medium text-gray-300 mb-4">انتخاب پلن برای تمدید سرویس</h3>
 
-        {{-- Discount disabled for renewal - Task 10 --}}
+        {{-- Discount disabled for renewal --}}
         <div class="mb-4 p-3 bg-gray-800/60 border border-gray-700 rounded-lg">
             <p class="text-xs text-gray-500">کد تخفیف برای تمدید سرویس در حال حاضر فعال نیست.</p>
         </div>
@@ -57,35 +57,66 @@
         <form action="{{ route('dashboard.services.renew.submit', $service) }}" method="POST" id="renewal-form">
             @csrf
             <div class="space-y-3">
-                @foreach($packages as $package)
+                @foreach($plans as $plan)
+                @php
+                    $renewalPrice   = $plan->effectiveRenewalPrice();
+                    $renewalDays    = $plan->effectiveRenewalDays();
+                    $cashback       = $plan->effectiveCashbackAmount();
+                    $finalPrice     = $renewalPrice - ($cashback ?? 0);
+                    $newExpiry      = $service->isExpired()
+                        ? now()->addDays($renewalDays)
+                        : $service->expires_at->copy()->addDays($renewalDays);
+                @endphp
                 <label class="block cursor-pointer">
-                    <input type="radio" name="renewal_package_id" value="{{ $package->id }}"
+                    <input type="radio" name="plan_id" value="{{ $plan->id }}"
                            class="sr-only peer" required
-                           {{ old('renewal_package_id') == $package->id ? 'checked' : '' }}>
+                           {{ old('plan_id') == $plan->id ? 'checked' : '' }}>
                     <div class="border border-gray-700 peer-checked:border-indigo-500 peer-checked:bg-indigo-900/20
                                 rounded-xl p-4 transition hover:border-gray-600">
-                        <div class="flex items-center justify-between">
-                            <div>
-                                <p class="text-sm font-medium text-white">{{ $package->name }}</p>
-                                @if($package->description)
-                                <p class="text-xs text-gray-500 mt-0.5">{{ $package->description }}</p>
+                        <div class="flex items-start justify-between gap-3">
+                            <div class="flex-1 min-w-0">
+                                <p class="text-sm font-medium text-white">{{ $plan->name }}</p>
+                                @if($plan->description)
+                                <p class="text-xs text-gray-500 mt-0.5">{{ $plan->description }}</p>
                                 @endif
-                                <p class="text-xs text-indigo-400 mt-1">{{ $package->duration_days }} روز</p>
+                                <div class="flex flex-wrap items-center gap-3 mt-1.5">
+                                    @if($renewalDays)
+                                    <span class="text-xs text-indigo-400">⏱ {{ $renewalDays }} روز</span>
+                                    @endif
+                                    @if($plan->traffic_gb)
+                                    <span class="text-xs text-gray-400">📦 {{ $plan->traffic_gb }} گیگابایت</span>
+                                    @else
+                                    <span class="text-xs text-gray-400">📦 نامحدود</span>
+                                    @endif
+                                </div>
                             </div>
-                            <div class="text-left">
-                                <p class="text-base font-bold text-white">{{ number_format($package->price_toman) }}</p>
+                            <div class="text-left shrink-0">
+                                @if($cashback)
+                                <p class="text-xs text-gray-500 line-through text-right">{{ number_format($renewalPrice) }} تومان</p>
+                                <p class="text-base font-bold text-white">{{ number_format($renewalPrice) }}</p>
                                 <p class="text-xs text-gray-500">تومان</p>
+                                @else
+                                <p class="text-base font-bold text-white">{{ number_format($renewalPrice) }}</p>
+                                <p class="text-xs text-gray-500">تومان</p>
+                                @endif
                             </div>
                         </div>
-                        @if(!$service->isExpired())
+
+                        @if($cashback)
+                        <div class="mt-2 flex items-center gap-1.5 text-xs text-green-400 bg-green-900/20 border border-green-800/40 rounded-lg px-2.5 py-1.5">
+                            <span>💸</span>
+                            <span>کش‌بک: {{ number_format($cashback) }} تومان
+                                @if($plan->renewal_cashback_type === 'percent')
+                                    ({{ $plan->renewal_cashback_value }}٪)
+                                @endif
+                                پس از پرداخت به کیف پول شما واریز می‌شود.
+                            </span>
+                        </div>
+                        @endif
+
+                        @if($renewalDays)
                         <p class="text-xs text-gray-600 mt-2">
-                            انقضای جدید:
-                            {{ $service->expires_at->copy()->addDays($package->duration_days)->format('Y/m/d') }}
-                        </p>
-                        @else
-                        <p class="text-xs text-gray-600 mt-2">
-                            انقضای جدید:
-                            {{ now()->addDays($package->duration_days)->format('Y/m/d') }}
+                            انقضای جدید: {{ $newExpiry->format('Y/m/d') }}
                         </p>
                         @endif
                     </div>
@@ -93,7 +124,7 @@
                 @endforeach
             </div>
 
-            @error('renewal_package_id')
+            @error('plan_id')
             <p class="text-xs text-red-400 mt-2">{{ $message }}</p>
             @enderror
 
@@ -101,7 +132,7 @@
                 <button type="submit"
                         class="flex-1 bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium
                                px-6 py-3 rounded-lg transition text-center">
-                    ادامه و پرداخت
+                    تمدید با این پلن
                 </button>
                 <a href="{{ route('dashboard.services.show', $service) }}"
                    class="flex-1 bg-gray-800 hover:bg-gray-700 text-gray-300 text-sm font-medium

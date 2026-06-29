@@ -19,6 +19,7 @@ class RenewalPackageResource extends Resource
 
     protected static ?string $navigationIcon   = 'heroicon-o-arrow-path';
     protected static ?string $navigationGroup  = 'سرویس‌ها';
+    protected static bool   $shouldRegisterNavigation = false;
     protected static ?string $navigationLabel  = 'بسته‌های تمدید';
     protected static ?string $modelLabel       = 'بسته تمدید';
     protected static ?string $pluralModelLabel = 'بسته‌های تمدید';

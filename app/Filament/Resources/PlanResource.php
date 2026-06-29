@@ -115,6 +115,50 @@ class PlanResource extends Resource
                     ->preload()
                     ->columnSpanFull(),
             ]),
+
+            Forms\Components\Section::make('تنظیمات تمدید سرویس')
+                ->description('تنظیمات اختصاصی هنگامی که کاربر از این پلن برای تمدید سرویس موجود استفاده می‌کند.')
+                ->collapsible()
+                ->schema([
+                    Forms\Components\Toggle::make('renewal_enabled')
+                        ->label('قابل استفاده برای تمدید')
+                        ->helperText('اگر غیرفعال باشد، این پلن در صفحه تمدید سرویس نمایش داده نمی‌شود.')
+                        ->default(true),
+
+                    Forms\Components\TextInput::make('renewal_price')
+                        ->label('قیمت تمدید (تومان)')
+                        ->numeric()
+                        ->minValue(0)
+                        ->suffix('تومان')
+                        ->helperText('خالی بگذارید تا از قیمت اصلی پلن استفاده شود.'),
+
+                    Forms\Components\TextInput::make('renewal_duration_days')
+                        ->label('مدت تمدید (روز)')
+                        ->numeric()
+                        ->minValue(1)
+                        ->suffix('روز')
+                        ->helperText('خالی بگذارید تا از مدت اصلی پلن استفاده شود.'),
+
+                    Forms\Components\Toggle::make('renewal_cashback_enabled')
+                        ->label('کش‌بک تمدید فعال')
+                        ->default(false)
+                        ->live(),
+
+                    Forms\Components\Select::make('renewal_cashback_type')
+                        ->label('نوع کش‌بک تمدید')
+                        ->options([
+                            'percent' => 'درصدی',
+                            'fixed'   => 'مبلغ ثابت',
+                        ])
+                        ->visible(fn (Forms\Get $get) => $get('renewal_cashback_enabled')),
+
+                    Forms\Components\TextInput::make('renewal_cashback_value')
+                        ->label('مقدار کش‌بک تمدید')
+                        ->numeric()
+                        ->minValue(1)
+                        ->helperText('برای درصدی: عدد درصد (مثال: ۱۰). برای ثابت: مبلغ به تومان.')
+                        ->visible(fn (Forms\Get $get) => $get('renewal_cashback_enabled')),
+                ])->columns(3),
         ]);
     }
 
@@ -143,6 +187,8 @@ class PlanResource extends Resource
                     ->formatStateUsing(fn ($state) => $state ? $state . ' روز' : 'نامحدود')
                     ->sortable(),
                 Tables\Columns\IconColumn::make('is_active')->label('فعال')->boolean(),
+                Tables\Columns\IconColumn::make('renewal_enabled')->label('تمدید')->boolean()
+                    ->trueColor('success')->falseColor('gray'),
                 Tables\Columns\IconColumn::make('is_featured')->label('ویژه')->boolean(),
                 Tables\Columns\IconColumn::make('is_economic')->label('اقتصادی')->boolean(),
                 Tables\Columns\TextColumn::make('badge')

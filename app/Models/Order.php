@@ -44,9 +44,12 @@ class Order extends Model
         'user_service_id',
         'renewal_package_id',
         'renewal_days',
+        'original_plan_id',
         'original_expire_at',
         'new_expire_at',
         'renewal_applied_at',
+        'renewal_cashback_amount',
+        'renewal_cashback_status',
         'status',
         'payment_status',
         'plan_name',
@@ -76,12 +79,14 @@ class Order extends Model
         'discount_value'     => 'integer',
         'traffic_gb'         => 'integer',
         'duration_days'      => 'integer',
-        'renewal_days'       => 'integer',
-        'renewal_package_id' => 'integer',
-        'user_service_id'    => 'integer',
-        'original_expire_at'  => 'datetime',
-        'new_expire_at'       => 'datetime',
-        'renewal_applied_at'  => 'datetime',
+        'renewal_days'            => 'integer',
+        'renewal_package_id'      => 'integer',
+        'user_service_id'         => 'integer',
+        'original_plan_id'        => 'integer',
+        'renewal_cashback_amount' => 'integer',
+        'original_expire_at'      => 'datetime',
+        'new_expire_at'           => 'datetime',
+        'renewal_applied_at'      => 'datetime',
         'paid_at'             => 'datetime',
         'completed_at'       => 'datetime',
         'cancelled_at'       => 'datetime',
@@ -143,6 +148,11 @@ class Order extends Model
     public function renewalPackage(): BelongsTo
     {
         return $this->belongsTo(RenewalPackage::class);
+    }
+
+    public function originalPlan(): BelongsTo
+    {
+        return $this->belongsTo(Plan::class, 'original_plan_id');
     }
 
     public function isRenewal(): bool

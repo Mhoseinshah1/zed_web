@@ -181,6 +181,31 @@ class FinancialReport extends Page implements HasForms
         return Order::where('status', Order::STATUS_RENEWAL_FAILED)->count();
     }
 
+    public function getNewServiceOrdersRange(): int
+    {
+        return Order::where('order_type', Order::TYPE_NEW_SERVICE)
+            ->where('payment_status', Order::PAYMENT_PAID)
+            ->whereBetween('paid_at', [$this->from(), $this->to()])
+            ->count();
+    }
+
+    public function getNewServiceSalesRange(): int
+    {
+        return Order::where('order_type', Order::TYPE_NEW_SERVICE)
+            ->where('payment_status', Order::PAYMENT_PAID)
+            ->whereBetween('paid_at', [$this->from(), $this->to()])
+            ->sum('final_price_toman');
+    }
+
+    public function getRenewalCashbackRange(): int
+    {
+        return (int) WalletTransaction::where('type', WalletTransaction::TYPE_RENEWAL_CASHBACK)
+            ->where('direction', WalletTransaction::DIRECTION_CREDIT)
+            ->where('status', WalletTransaction::STATUS_COMPLETED)
+            ->whereBetween('created_at', [$this->from(), $this->to()])
+            ->sum('amount_toman');
+    }
+
     // ─── KPI: Wallet ────────────────────────────────────────────────────────
 
     public function getTotalWalletBalance(): int

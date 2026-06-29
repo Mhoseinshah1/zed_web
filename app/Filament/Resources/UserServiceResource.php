@@ -4,7 +4,7 @@ namespace App\Filament\Resources;
 
 use App\Filament\Resources\UserServiceResource\Pages;
 use App\Jobs\ProvisionMarzbanServiceJob;
-use App\Models\RenewalPackage;
+use App\Models\Plan;
 use App\Models\UserService;
 use App\Models\VpnPanel;
 use App\Models\VpnServiceProvisionLog;
@@ -702,25 +702,38 @@ class UserServiceResource extends Resource
                     ->visible(fn (UserService $record) => $record->expires_at !== null
                         && in_array($record->status, [UserService::STATUS_ACTIVE, UserService::STATUS_EXPIRED, UserService::STATUS_DISABLED]))
                     ->form([
-                        Forms\Components\Select::make('renewal_package_id')
-                            ->label('پکیج تمدید')
-                            ->options(fn () => RenewalPackage::where('is_active', true)
-                                ->orderBy('sort_order')
-                                ->orderBy('duration_days')
-                                ->pluck('name', 'id'))
+                        Forms\Components\Select::make('plan_id')
+                            ->label('پلن تمدید')
+                            ->options(fn () => Plan::where('is_active', true)
+                                ->where('renewal_enabled', true)
+                                ->ordered()
+                                ->get()
+                                ->mapWithKeys(fn (Plan $p) => [
+                                    $p->id => "{$p->name} — " . number_format($p->effectiveRenewalPrice()) . ' تومان / ' . ($p->effectiveRenewalDays() ?? '—') . ' روز',
+                                ]))
                             ->required()
-                            ->helperText('انتخاب پکیج برای محاسبه مدت تمدید'),
+                            ->helperText('مدت تمدید از پلن انتخاب‌شده محاسبه می‌شود.'),
+                        Forms\Components\Textarea::make('admin_note')
+                            ->label('یادداشت ادمین')
+                            ->rows(2)
+                            ->placeholder('اختیاری'),
                     ])
                     ->action(function (UserService $record, array $data): void {
-                        $package = RenewalPackage::find($data['renewal_package_id']);
-                        if (! $package) {
-                            Notification::make()->title('پکیج تمدید یافت نشد.')->danger()->send();
+                        $plan = Plan::find($data['plan_id']);
+                        if (! $plan) {
+                            Notification::make()->title('پلن یافت نشد.')->danger()->send();
                             return;
                         }
 
                         try {
                             $renewalService = app(RenewalService::class);
-                            $newExpiry = $renewalService->calculateNewExpiry($record, $package->duration_days);
+                            $renewalDays    = $plan->effectiveRenewalDays();
+                            if (! $renewalDays) {
+                                Notification::make()->title('مدت پلن تعریف نشده است.')->danger()->send();
+                                return;
+                            }
+
+                            $newExpiry = $renewalService->calculateNewExpiry($record, $renewalDays);
 
                             if (filled($record->remote_username) && $record->vpnPanel) {
                                 $client = new MarzbanClient($record->vpnPanel);
@@ -732,12 +745,17 @@ class UserServiceResource extends Resource
                                 'status'     => UserService::STATUS_ACTIVE,
                             ]);
 
+                            $note = "Manual renewal with plan '{$plan->name}': +{$renewalDays} days. New expiry: {$newExpiry->toDateTimeString()}.";
+                            if (! empty($data['admin_note'])) {
+                                $note .= " Note: {$data['admin_note']}";
+                            }
+
                             VpnServiceProvisionLog::create([
                                 'user_service_id' => $record->id,
                                 'vpn_panel_id'    => $record->vpn_panel_id,
                                 'action'          => 'admin_manual_renewal',
                                 'status'          => 'success',
-                                'message'         => "Manual renewal: +{$package->duration_days} days. New expiry: {$newExpiry->toDateTimeString()}",
+                                'message'         => $note,
                             ]);
 
                             Notification::make()

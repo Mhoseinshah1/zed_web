@@ -99,8 +99,11 @@
             $rangeCards = [
                 ['label'=>'فروش در بازه','value'=>number_format($this->getSalesRange()).' تومان','color'=>'green','icon'=>'💵'],
                 ['label'=>'سفارش‌های پرداخت‌شده','value'=>number_format($this->getPaidOrdersRange()),'color'=>'blue','icon'=>'🛒'],
+                ['label'=>'درآمد خرید سرویس جدید','value'=>number_format($this->getNewServiceSalesRange()).' تومان','color'=>'green','icon'=>'🆕'],
+                ['label'=>'خریدهای جدید','value'=>number_format($this->getNewServiceOrdersRange()),'color'=>'blue','icon'=>'🛒'],
                 ['label'=>'درآمد تمدید سرویس','value'=>number_format($this->getRenewalSalesRange()).' تومان','color'=>'green','icon'=>'🔄'],
                 ['label'=>'تمدیدهای موفق','value'=>number_format($this->getRenewalOrdersRange()),'color'=>'blue','icon'=>'↻'],
+                ['label'=>'کش‌بک تمدید در بازه','value'=>number_format($this->getRenewalCashbackRange()).' تومان','color'=>'yellow','icon'=>'💸'],
                 ['label'=>'شارژ کیف پول در بازه','value'=>number_format($this->getWalletTopupRange()).' تومان','color'=>'blue','icon'=>'💳'],
                 ['label'=>'پرداخت‌های ناموفق در بازه','value'=>number_format($this->getFailedPaymentsCount()),'color'=>'red','icon'=>'❌'],
             ];
