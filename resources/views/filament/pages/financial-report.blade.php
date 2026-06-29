@@ -114,6 +114,29 @@
         @endforeach
     </div>
 
+    {{-- ─── Discount Summary ────────────────────────────────────────────── --}}
+    <div class="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500">
+        مجموع تخفیف‌های اعمال‌شده
+    </div>
+    <div class="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-3">
+        @php
+            $discountCards = [
+                ['label'=>'تخفیف امروز','value'=>number_format($this->getTotalDiscountsToday()).' تومان','color'=>'yellow','icon'=>'🏷️'],
+                ['label'=>'تخفیف در بازه','value'=>number_format($this->getTotalDiscountsRange()).' تومان','color'=>'yellow','icon'=>'🎟️'],
+                ['label'=>'تعداد استفاده در بازه','value'=>number_format($this->getDiscountCountRange()),'color'=>'blue','icon'=>'🔢'],
+            ];
+        @endphp
+        @foreach ($discountCards as $card)
+            <div class="rounded-xl border border-gray-200 p-4 shadow-sm {{ $colorMap[$card['color']] }} dark:border-gray-700">
+                <div class="flex items-center gap-2 mb-1">
+                    <span class="text-lg">{{ $card['icon'] }}</span>
+                    <span class="text-xs text-gray-500 dark:text-gray-400">{{ $card['label'] }}</span>
+                </div>
+                <div class="text-xl font-bold {{ $textMap[$card['color']] }}">{{ $card['value'] }}</div>
+            </div>
+        @endforeach
+    </div>
+
     {{-- ─── Charts ──────────────────────────────────────────────────────── --}}
     <div class="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500">
         نمودارها

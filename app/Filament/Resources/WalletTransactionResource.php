@@ -18,11 +18,11 @@ class WalletTransactionResource extends Resource
     protected static ?string $model = WalletTransaction::class;
 
     protected static ?string $navigationIcon   = 'heroicon-o-banknotes';
-    protected static ?string $navigationGroup  = 'کاربران و سفارش‌ها';
+    protected static ?string $navigationGroup  = 'مالی';
     protected static ?string $navigationLabel  = 'تراکنش‌های کیف پول';
     protected static ?string $modelLabel       = 'تراکنش کیف پول';
     protected static ?string $pluralModelLabel = 'تراکنش‌های کیف پول';
-    protected static ?int    $navigationSort   = 5;
+    protected static ?int    $navigationSort   = 3;
 
     public static function form(Form $form): Form
     {

@@ -52,12 +52,15 @@
                     <span class="text-white">{{ $order->created_at->format('Y/m/d H:i') }}</span>
                 </div>
                 <div>
-                    <span class="text-gray-400 block mb-1">مبلغ نهایی</span>
+                    <span class="text-gray-400 block mb-1">مبلغ قابل پرداخت</span>
                     <span class="text-white text-lg font-semibold">{{ number_format($order->final_price_toman) }} تومان</span>
+                    @if($order->discount_toman > 0)
+                    <span class="block text-xs text-gray-500 line-through mt-0.5">{{ number_format($order->price_toman) }} تومان</span>
+                    @endif
                 </div>
                 @if($order->discount_toman > 0)
                 <div>
-                    <span class="text-gray-400 block mb-1">تخفیف</span>
+                    <span class="text-gray-400 block mb-1">تخفیف ({{ $order->discount_code }})</span>
                     <span class="text-green-400">{{ number_format($order->discount_toman) }} تومان</span>
                 </div>
                 @endif
@@ -91,6 +94,69 @@
             </div>
         </div>
     </div>
+
+    {{-- Discount code section --}}
+    @if(in_array($order->payment_status, ['unpaid']) && ! in_array($order->status, ['cancelled', 'failed', 'completed']))
+    <div class="bg-gray-900 border border-gray-800 rounded-xl p-5 mb-6" x-data="{ open: {{ $order->discount_toman > 0 ? 'true' : 'false' }} }">
+        <button type="button" @click="open = !open"
+                class="flex items-center justify-between w-full text-sm text-gray-300 hover:text-white transition">
+            <span class="font-medium">کد تخفیف دارید؟</span>
+            <svg class="w-4 h-4 transition-transform" :class="open ? 'rotate-180' : ''" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+            </svg>
+        </button>
+
+        <div x-show="open" x-cloak class="mt-4">
+            @if(session('discount_success'))
+            <div class="mb-3 bg-green-500/10 border border-green-500/30 rounded-lg p-3 text-sm text-green-300">
+                {{ session('discount_success') }}
+            </div>
+            @endif
+
+            @error('discount_code')
+            <div class="mb-3 bg-red-500/10 border border-red-500/30 rounded-lg p-3 text-sm text-red-300">
+                {{ $message }}
+            </div>
+            @enderror
+
+            @if($order->discount_toman > 0)
+            {{-- Active discount summary --}}
+            <div class="mb-3 bg-green-500/10 border border-green-500/30 rounded-lg p-4">
+                <div class="flex items-center justify-between">
+                    <div class="text-sm">
+                        <span class="text-green-300 font-semibold font-mono">{{ $order->discount_code }}</span>
+                        <span class="text-green-200/70 mr-2">
+                            — {{ $order->discount_type === 'percent' ? $order->discount_value . '٪ تخفیف' : number_format($order->discount_value) . ' تومان تخفیف' }}
+                        </span>
+                        <div class="text-green-400 text-xs mt-1">صرفه‌جویی: {{ number_format($order->discount_toman) }} تومان</div>
+                    </div>
+                    <form method="POST" action="{{ route('dashboard.orders.discount.remove', $order) }}">
+                        @csrf @method('DELETE')
+                        <button type="submit" class="text-xs text-red-400 hover:text-red-300 transition">
+                            حذف کد
+                        </button>
+                    </form>
+                </div>
+            </div>
+            @else
+            {{-- Discount code input --}}
+            <form method="POST" action="{{ route('dashboard.orders.discount.apply', $order) }}"
+                  class="flex gap-2">
+                @csrf
+                <input type="text" name="discount_code"
+                       value="{{ old('discount_code') }}"
+                       placeholder="کد تخفیف را وارد کنید"
+                       class="flex-1 bg-gray-800 border border-gray-700 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 rounded-lg px-4 py-2.5 text-white text-sm outline-none transition font-mono uppercase"
+                       autocomplete="off" style="text-transform:uppercase">
+                <button type="submit"
+                        class="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium rounded-lg transition whitespace-nowrap">
+                    اعمال
+                </button>
+            </form>
+            @endif
+        </div>
+    </div>
+    @endif
 
     {{-- Payment action --}}
     @if(in_array($order->payment_status, ['unpaid', 'pending']) && ! in_array($order->status, ['cancelled', 'failed', 'completed']))
