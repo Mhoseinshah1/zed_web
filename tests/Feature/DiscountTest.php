@@ -627,4 +627,66 @@ class DiscountTest extends TestCase
         $result2 = app(DiscountService::class)->validateCode($user, $order, 'Test10');
         $this->assertTrue($result2['valid']);
     }
+
+    // ── Index page null-date safety ───────────────────────────────────────────
+
+    public function test_discount_code_index_page_renders_with_null_dates(): void
+    {
+        $admin = User::factory()->create([
+            'username'          => 'dc_idx_admin',
+            'is_admin'          => true,
+            'email_verified_at' => now(),
+        ]);
+
+        // Record with null starts_at and expires_at — previously caused DateMalformedStringException
+        DiscountCode::create([
+            'code'                 => 'NULLDATES',
+            'type'                 => DiscountCode::TYPE_PERCENT,
+            'value'                => 15,
+            'is_active'            => true,
+            'per_user_usage_limit' => 1,
+            'starts_at'            => null,
+            'expires_at'           => null,
+        ]);
+
+        $this->actingAs($admin)
+            ->get('/zed-admin/discount-codes')
+            ->assertOk();
+    }
+
+    public function test_discount_code_index_page_renders_with_real_dates(): void
+    {
+        $admin = User::factory()->create([
+            'username'          => 'dc_idx_admin2',
+            'is_admin'          => true,
+            'email_verified_at' => now(),
+        ]);
+
+        DiscountCode::create([
+            'code'                 => 'WITHDATES',
+            'type'                 => DiscountCode::TYPE_FIXED,
+            'value'                => 5000,
+            'is_active'            => false,
+            'per_user_usage_limit' => 1,
+            'starts_at'            => now()->subDay(),
+            'expires_at'           => now()->subHour(),
+        ]);
+
+        $this->actingAs($admin)
+            ->get('/zed-admin/discount-codes')
+            ->assertOk();
+    }
+
+    public function test_discount_code_create_page_still_opens(): void
+    {
+        $admin = User::factory()->create([
+            'username'          => 'dc_create_admin',
+            'is_admin'          => true,
+            'email_verified_at' => now(),
+        ]);
+
+        $this->actingAs($admin)
+            ->get('/zed-admin/discount-codes/create')
+            ->assertOk();
+    }
 }
