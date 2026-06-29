@@ -1,0 +1,242 @@
+/* ==========================================================================
+   ZedProxy — dynamic theme system (Tailwind v4 design tokens)
+   --------------------------------------------------------------------------
+   The neutral ramp (surfaces/text) is driven by APPEARANCE (light/dark),
+   the accent ramp (primary/accent/semantic) is driven by the THEME PRESET.
+   Existing Tailwind utility classes (bg-gray-900, text-white, bg-indigo-600,
+   rounded-xl, …) are remapped to these variables, so a theme change reskins
+   the whole site without touching markup.
+   ========================================================================== */
+
+/* ---- Neutral ramp: DARK (default) --------------------------------------- */
+:root {
+    --zed-bg:           #0a0b12;
+    --zed-surface:      #14151f;
+    --zed-surface-2:    #1e2030;
+    --zed-surface-3:    #2a2d40;
+    --zed-muted-2:      #5d6275;
+    --zed-muted:        #8b90a6;
+    --zed-text-dim:     #c3c7d6;
+    --zed-text:         #e7e9f3;
+    --zed-text-strong:  #ffffff;
+
+    /* Accent ramp — default preset: Zed Cyber Dark */
+    --zed-primary:        #6366f1;
+    --zed-primary-strong: #818cf8;
+    --zed-primary-soft:   #a5b4fc;
+    --zed-secondary:      #a855f7;
+    --zed-accent:         #22d3ee;
+    --zed-success:        #34d399;
+    --zed-warning:        #fbbf24;
+    --zed-danger:         #f43f5e;
+    --zed-gradient: linear-gradient(135deg, #6366f1 0%, #a855f7 50%, #22d3ee 100%);
+
+    /* Shape / motion tokens (overridable from admin settings inline). */
+    --zed-radius-card:   0.85rem;
+    --zed-radius-button: 0.6rem;
+    --zed-shadow-card:   0 10px 30px -12px rgb(0 0 0 / 0.45);
+    --zed-anim:          200ms;
+}
+
+/* ---- Neutral ramp: LIGHT ------------------------------------------------- */
+html.zed-light {
+    --zed-bg:          #eef1f8;
+    --zed-surface:     #ffffff;
+    --zed-surface-2:   #f3f5fb;
+    --zed-surface-3:   #e7ebf5;
+    --zed-muted-2:     #aab0c0;
+    --zed-muted:       #6b7180;
+    --zed-text-dim:    #3b4254;
+    --zed-text:        #232838;
+    --zed-text-strong: #0b0e18;
+    --zed-shadow-card: 0 10px 30px -14px rgb(30 40 80 / 0.18);
+}
+
+/* ==========================================================================
+   THEME PRESETS — each sets the accent ramp + gradient. Some default to a
+   light appearance (handled at render time), all work with either appearance.
+   ========================================================================== */
+[data-theme="cyber-dark"] {
+    --zed-primary:#6366f1; --zed-primary-strong:#818cf8; --zed-primary-soft:#a5b4fc;
+    --zed-secondary:#a855f7; --zed-accent:#22d3ee;
+    --zed-gradient:linear-gradient(135deg,#6366f1,#a855f7 50%,#22d3ee);
+}
+[data-theme="luxury-gold"] {
+    --zed-primary:#d4af37; --zed-primary-strong:#e6c558; --zed-primary-soft:#f0d878;
+    --zed-secondary:#b8860b; --zed-accent:#facc15;
+    --zed-gradient:linear-gradient(135deg,#b8860b,#d4af37 50%,#facc15);
+}
+[data-theme="ocean"] {
+    --zed-primary:#3b82f6; --zed-primary-strong:#60a5fa; --zed-primary-soft:#93c5fd;
+    --zed-secondary:#0ea5e9; --zed-accent:#22d3ee;
+    --zed-gradient:linear-gradient(135deg,#1e3a8a,#3b82f6 50%,#22d3ee);
+}
+[data-theme="emerald"] {
+    --zed-primary:#10b981; --zed-primary-strong:#34d399; --zed-primary-soft:#6ee7b7;
+    --zed-secondary:#059669; --zed-accent:#2dd4bf;
+    --zed-gradient:linear-gradient(135deg,#065f46,#10b981 50%,#2dd4bf);
+}
+[data-theme="graphite"] {
+    --zed-primary:#64748b; --zed-primary-strong:#94a3b8; --zed-primary-soft:#cbd5e1;
+    --zed-secondary:#475569; --zed-accent:#38bdf8;
+    --zed-gradient:linear-gradient(135deg,#334155,#64748b 50%,#94a3b8);
+}
+[data-theme="aurora"] {
+    --zed-primary:#a855f7; --zed-primary-strong:#c084fc; --zed-primary-soft:#d8b4fe;
+    --zed-secondary:#ec4899; --zed-accent:#60a5fa;
+    --zed-gradient:linear-gradient(135deg,#7c3aed,#ec4899 50%,#60a5fa);
+}
+[data-theme="minimal-light"] {
+    --zed-primary:#2563eb; --zed-primary-strong:#3b82f6; --zed-primary-soft:#93c5fd;
+    --zed-secondary:#6366f1; --zed-accent:#0ea5e9;
+    --zed-gradient:linear-gradient(135deg,#2563eb,#0ea5e9);
+}
+[data-theme="frost"] {
+    --zed-primary:#38bdf8; --zed-primary-strong:#7dd3fc; --zed-primary-soft:#bae6fd;
+    --zed-secondary:#818cf8; --zed-accent:#22d3ee;
+    --zed-gradient:linear-gradient(135deg,#0ea5e9,#38bdf8 50%,#a5b4fc);
+}
+[data-theme="matrix"] {
+    --zed-primary:#22c55e; --zed-primary-strong:#4ade80; --zed-primary-soft:#86efac;
+    --zed-secondary:#16a34a; --zed-accent:#a3e635;
+    --zed-gradient:linear-gradient(135deg,#14532d,#22c55e 50%,#a3e635);
+}
+[data-theme="royal"] {
+    --zed-primary:#7c3aed; --zed-primary-strong:#8b5cf6; --zed-primary-soft:#c4b5fd;
+    --zed-secondary:#4f46e5; --zed-accent:#cbd5e1;
+    --zed-gradient:linear-gradient(135deg,#4c1d95,#4f46e5 50%,#7c3aed);
+}
+[data-theme="crimson"] {
+    --zed-primary:#ef4444; --zed-primary-strong:#f87171; --zed-primary-soft:#fca5a5;
+    --zed-secondary:#b91c1c; --zed-accent:#fb923c;
+    --zed-gradient:linear-gradient(135deg,#7f1d1d,#ef4444 50%,#fb923c);
+}
+[data-theme="sky-light"] {
+    --zed-primary:#0ea5e9; --zed-primary-strong:#38bdf8; --zed-primary-soft:#7dd3fc;
+    --zed-secondary:#3b82f6; --zed-accent:#06b6d4;
+    --zed-gradient:linear-gradient(135deg,#0ea5e9,#06b6d4);
+}
+[data-theme="neon"] {
+    --zed-primary:#22d3ee; --zed-primary-strong:#67e8f9; --zed-primary-soft:#a5f3fc;
+    --zed-secondary:#d946ef; --zed-accent:#a78bfa;
+    --zed-gradient:linear-gradient(135deg,#06b6d4,#d946ef 50%,#a78bfa);
+}
+[data-theme="titanium"] {
+    --zed-primary:#60a5fa; --zed-primary-strong:#93c5fd; --zed-primary-soft:#bfdbfe;
+    --zed-secondary:#64748b; --zed-accent:#38bdf8;
+    --zed-gradient:linear-gradient(135deg,#475569,#60a5fa 60%,#94a3b8);
+}
+[data-theme="sunset"] {
+    --zed-primary:#f97316; --zed-primary-strong:#fb923c; --zed-primary-soft:#fdba74;
+    --zed-secondary:#db2777; --zed-accent:#a855f7;
+    --zed-gradient:linear-gradient(135deg,#9a3412,#f97316 45%,#a855f7);
+}
+
+/* ==========================================================================
+   Tailwind v4 token remap — makes existing utility classes theme-aware.
+   ========================================================================== */
+@theme inline {
+    --color-gray-950: var(--zed-bg);
+    --color-gray-900: var(--zed-surface);
+    --color-gray-800: var(--zed-surface-2);
+    --color-gray-700: var(--zed-surface-3);
+    --color-gray-600: var(--zed-muted-2);
+    --color-gray-500: var(--zed-muted);
+    --color-gray-400: var(--zed-muted);
+    --color-gray-300: var(--zed-text-dim);
+    --color-gray-200: var(--zed-text);
+    --color-gray-100: var(--zed-text);
+    --color-gray-50:  var(--zed-text-strong);
+    --color-white:    var(--zed-text-strong);
+
+    /* Primary family (indigo is the app's default accent) */
+    --color-indigo-700: var(--zed-primary);
+    --color-indigo-600: var(--zed-primary);
+    --color-indigo-500: var(--zed-primary-strong);
+    --color-indigo-400: var(--zed-primary-soft);
+    --color-indigo-300: var(--zed-primary-soft);
+    --color-indigo-900: var(--zed-primary);
+
+    /* Secondary / accent families */
+    --color-purple-600: var(--zed-secondary);
+    --color-purple-500: var(--zed-secondary);
+    --color-purple-400: var(--zed-secondary);
+    --color-violet-600: var(--zed-secondary);
+    --color-fuchsia-500: var(--zed-secondary);
+    --color-sky-600: var(--zed-accent);
+    --color-sky-500: var(--zed-accent);
+    --color-cyan-500: var(--zed-accent);
+    --color-cyan-400: var(--zed-accent);
+    --color-blue-600: var(--zed-accent);
+    --color-blue-500: var(--zed-accent);
+
+    /* Semantic */
+    --color-green-500: var(--zed-success);
+    --color-green-400: var(--zed-success);
+    --color-emerald-600: var(--zed-success);
+    --color-emerald-500: var(--zed-success);
+    --color-emerald-400: var(--zed-success);
+    --color-amber-500: var(--zed-warning);
+    --color-amber-400: var(--zed-warning);
+    --color-yellow-500: var(--zed-warning);
+    --color-yellow-400: var(--zed-warning);
+    --color-red-600: var(--zed-danger);
+    --color-red-500: var(--zed-danger);
+    --color-red-400: var(--zed-danger);
+    --color-rose-500: var(--zed-danger);
+
+    /* Radius driven by admin settings */
+    --radius-2xl: var(--zed-radius-card);
+    --radius-xl:  var(--zed-radius-card);
+    --radius-lg:  var(--zed-radius-card);
+    --radius-md:  var(--zed-radius-button);
+}
+
+/* ==========================================================================
+   Micro-interactions / animations (respect reduced motion + intensity).
+   ========================================================================== */
+@keyframes zed-fade-up { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+
+.zed-animate { animation: zed-fade-up var(--zed-anim) ease-out both; }
+.zed-hover-lift { transition: transform var(--zed-anim) ease, box-shadow var(--zed-anim) ease; }
+.zed-hover-lift:hover { transform: translateY(-3px); box-shadow: var(--zed-shadow-card); }
+.zed-menu-item { transition: transform var(--zed-anim) ease, background-color var(--zed-anim) ease, color var(--zed-anim) ease; }
+.zed-menu-item:hover { transform: translateX(-3px); }
+.zed-gradient-text {
+    background: var(--zed-gradient);
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+.zed-gradient-bg { background-image: var(--zed-gradient); }
+
+/* Animation intensity: "none" disables motion entirely. */
+html.zed-anim-none *, html.zed-anim-none *::before, html.zed-anim-none *::after {
+    animation: none !important;
+    transition: none !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+        animation-duration: 0.001ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.001ms !important;
+        scroll-behavior: auto !important;
+    }
+}
+
+/* ==========================================================================
+   Reusable component primitives (used by x-ui.* Blade components).
+   ========================================================================== */
+.zed-card {
+    background-color: var(--zed-surface);
+    border: 1px solid var(--zed-surface-2);
+    border-radius: var(--zed-radius-card);
+    box-shadow: var(--zed-shadow-card);
+}
+.zed-surface-soft { background-color: var(--zed-surface-2); }
+.zed-btn {
+    border-radius: var(--zed-radius-button);
+    transition: transform var(--zed-anim) ease, filter var(--zed-anim) ease, background-color var(--zed-anim) ease;
+}
+.zed-btn:hover { filter: brightness(1.08); }
+.zed-btn:active { transform: translateY(1px); }
+.zed-btn-primary { background: var(--zed-gradient); color: #fff; }

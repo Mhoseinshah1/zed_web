@@ -39,6 +39,8 @@ class User extends Authenticatable implements FilamentUser
         'total_commission_earned',
         'representative_approved_at',
         'representative_note',
+        'theme_preference',
+        'appearance',
     ];
 
     // Representative statuses

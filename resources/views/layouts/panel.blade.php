@@ -1,10 +1,18 @@
+@php
+    use App\Services\Theme\ThemeManager;
+    $zedTheme      = ThemeManager::resolveTheme(ThemeManager::SURFACE_USER, auth()->user());
+    $zedAppearance = ThemeManager::resolveAppearance(auth()->user());
+@endphp
 <!DOCTYPE html>
-<html lang="fa" dir="rtl" class="scroll-smooth">
+<html lang="fa" dir="rtl" class="scroll-smooth {{ ThemeManager::htmlClassFor($zedTheme, $zedAppearance) }}"
+      data-theme="{{ $zedTheme }}" data-appearance="{{ $zedAppearance }}"
+      style="{{ ThemeManager::inlineStyle() }}">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="csrf-token" content="{{ csrf_token() }}">
     <title>@yield('title', 'داشبورد') | ZedProxy</title>
+    <script>{!! ThemeManager::noFoucScript($zedAppearance) !!}</script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     @vite(['resources/css/app.css', 'resources/js/app.js'])
