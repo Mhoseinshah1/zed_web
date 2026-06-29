@@ -173,12 +173,37 @@ class ThemeTest extends TestCase
         $this->assertContains('zed-emerald', $enabled);
     }
 
-    public function test_admin_appearance_settings_page_loads(): void
+    public function test_old_appearance_settings_page_is_gone(): void
     {
+        // Merged into Theme Studio — the standalone settings page must not exist.
         $this->actingAs($this->admin())
             ->get('/zed-admin/settings/appearance')
+            ->assertNotFound();
+    }
+
+    public function test_gallery_selection_applies_to_user_surface(): void
+    {
+        // Persisting an active theme (as the gallery does) updates the user
+        // dashboard default so the user panel re-themes too.
+        Livewire::actingAs($this->admin())
+            ->test(ThemeStudio::class)
+            ->call('persist', [
+                'activeTheme'          => 'zed-sunset',
+                'default_theme_public' => 'zed-sunset',
+                'default_theme_user'   => 'zed-sunset',
+                'default_theme_admin'  => 'zed-sunset',
+                'appearance'           => 'dark',
+                'enabled_themes'       => ['zed-sunset'],
+            ]);
+
+        $this->assertSame('zed-sunset', ThemeManager::defaultTheme(ThemeManager::SURFACE_USER));
+        $this->assertSame('zed-sunset', ThemeManager::defaultTheme(ThemeManager::SURFACE_PUBLIC));
+
+        // And it shows up on the actually-rendered user dashboard.
+        $user = User::factory()->create();
+        $this->actingAs($user)->get(route('dashboard.index'))
             ->assertSuccessful()
-            ->assertSee('تنظیمات ظاهر و تم');
+            ->assertSee('data-theme="zed-sunset"', false);
     }
 
     // ── Key pages still render with theme wiring ─────────────────────────────
