@@ -4,10 +4,12 @@ namespace App\Filament\Resources;
 
 use App\Filament\Resources\UserServiceResource\Pages;
 use App\Jobs\ProvisionMarzbanServiceJob;
+use App\Models\RenewalPackage;
 use App\Models\UserService;
 use App\Models\VpnPanel;
 use App\Models\VpnServiceProvisionLog;
 use App\Services\Marzban\MarzbanClient;
+use App\Services\Renewals\RenewalService;
 use App\Services\ServiceProvisioner;
 use Carbon\Carbon;
 use Filament\Forms;
@@ -692,6 +694,64 @@ class UserServiceResource extends Resource
                     ->modalSubmitAction(false)
                     ->modalCancelActionLabel('بستن')
                     ->visible(fn (UserService $record) => filled($record->subscription_link)),
+
+                Tables\Actions\Action::make('manual_renew')
+                    ->label('تمدید دستی')
+                    ->icon('heroicon-o-calendar-days')
+                    ->color('success')
+                    ->visible(fn (UserService $record) => $record->expires_at !== null
+                        && in_array($record->status, [UserService::STATUS_ACTIVE, UserService::STATUS_EXPIRED, UserService::STATUS_DISABLED]))
+                    ->form([
+                        Forms\Components\Select::make('renewal_package_id')
+                            ->label('پکیج تمدید')
+                            ->options(fn () => RenewalPackage::where('is_active', true)
+                                ->orderBy('sort_order')
+                                ->orderBy('duration_days')
+                                ->pluck('name', 'id'))
+                            ->required()
+                            ->helperText('انتخاب پکیج برای محاسبه مدت تمدید'),
+                    ])
+                    ->action(function (UserService $record, array $data): void {
+                        $package = RenewalPackage::find($data['renewal_package_id']);
+                        if (! $package) {
+                            Notification::make()->title('پکیج تمدید یافت نشد.')->danger()->send();
+                            return;
+                        }
+
+                        try {
+                            $renewalService = app(RenewalService::class);
+                            $newExpiry = $renewalService->calculateNewExpiry($record, $package->duration_days);
+
+                            if (filled($record->remote_username) && $record->vpnPanel) {
+                                $client = new MarzbanClient($record->vpnPanel);
+                                $client->updateUser($record->remote_username, ['expire' => $newExpiry->timestamp]);
+                            }
+
+                            $record->update([
+                                'expires_at' => $newExpiry,
+                                'status'     => UserService::STATUS_ACTIVE,
+                            ]);
+
+                            VpnServiceProvisionLog::create([
+                                'user_service_id' => $record->id,
+                                'vpn_panel_id'    => $record->vpn_panel_id,
+                                'action'          => 'admin_manual_renewal',
+                                'status'          => 'success',
+                                'message'         => "Manual renewal: +{$package->duration_days} days. New expiry: {$newExpiry->toDateTimeString()}",
+                            ]);
+
+                            Notification::make()
+                                ->title('سرویس با موفقیت تمدید شد.')
+                                ->body("تاریخ انقضای جدید: {$newExpiry->format('Y/m/d H:i')}")
+                                ->success()
+                                ->send();
+                        } catch (\Throwable $e) {
+                            Notification::make()->title('خطا در تمدید دستی')->body($e->getMessage())->danger()->send();
+                        }
+                    })
+                    ->requiresConfirmation()
+                    ->modalHeading('تمدید دستی سرویس')
+                    ->modalSubmitActionLabel('تمدید کن'),
 
                 Tables\Actions\EditAction::make()->label('ویرایش'),
             ])

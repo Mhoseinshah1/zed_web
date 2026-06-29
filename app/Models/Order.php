@@ -12,6 +12,11 @@ use Illuminate\Support\Str;
 class Order extends Model
 {
     use HasFactory;
+
+    // Order types
+    const TYPE_NEW_SERVICE = 'new_service';
+    const TYPE_RENEWAL     = 'renewal';
+
     // Order statuses
     const STATUS_PENDING              = 'pending';
     const STATUS_AWAITING_PAYMENT     = 'awaiting_payment';
@@ -22,6 +27,7 @@ class Order extends Model
     const STATUS_COMPLETED            = 'completed';
     const STATUS_CANCELLED            = 'cancelled';
     const STATUS_FAILED               = 'failed';
+    const STATUS_RENEWAL_FAILED       = 'renewal_failed';
 
     // Payment statuses
     const PAYMENT_UNPAID    = 'unpaid';
@@ -32,8 +38,15 @@ class Order extends Model
 
     protected $fillable = [
         'order_number',
+        'order_type',
         'user_id',
         'plan_id',
+        'user_service_id',
+        'renewal_package_id',
+        'renewal_days',
+        'original_expire_at',
+        'new_expire_at',
+        'renewal_applied_at',
         'status',
         'payment_status',
         'plan_name',
@@ -56,16 +69,22 @@ class Order extends Model
     ];
 
     protected $casts = [
-        'price_toman'       => 'integer',
-        'final_price_toman' => 'integer',
-        'discount_toman'    => 'integer',
-        'discount_code_id'  => 'integer',
-        'discount_value'    => 'integer',
-        'traffic_gb'        => 'integer',
-        'duration_days'     => 'integer',
-        'paid_at'           => 'datetime',
-        'completed_at'      => 'datetime',
-        'cancelled_at'      => 'datetime',
+        'price_toman'        => 'integer',
+        'final_price_toman'  => 'integer',
+        'discount_toman'     => 'integer',
+        'discount_code_id'   => 'integer',
+        'discount_value'     => 'integer',
+        'traffic_gb'         => 'integer',
+        'duration_days'      => 'integer',
+        'renewal_days'       => 'integer',
+        'renewal_package_id' => 'integer',
+        'user_service_id'    => 'integer',
+        'original_expire_at'  => 'datetime',
+        'new_expire_at'       => 'datetime',
+        'renewal_applied_at'  => 'datetime',
+        'paid_at'             => 'datetime',
+        'completed_at'       => 'datetime',
+        'cancelled_at'       => 'datetime',
     ];
 
     protected static function booted(): void
@@ -116,6 +135,21 @@ class Order extends Model
         return $this->hasOne(DiscountRedemption::class);
     }
 
+    public function userService(): BelongsTo
+    {
+        return $this->belongsTo(UserService::class, 'user_service_id');
+    }
+
+    public function renewalPackage(): BelongsTo
+    {
+        return $this->belongsTo(RenewalPackage::class);
+    }
+
+    public function isRenewal(): bool
+    {
+        return $this->order_type === self::TYPE_RENEWAL;
+    }
+
     public function statusLabel(): string
     {
         return match($this->status) {
@@ -128,6 +162,7 @@ class Order extends Model
             self::STATUS_COMPLETED           => 'فعال',
             self::STATUS_CANCELLED           => 'لغو شده',
             self::STATUS_FAILED              => 'ناموفق',
+            self::STATUS_RENEWAL_FAILED      => 'خطا در تمدید',
             default                          => $this->status,
         };
     }
@@ -171,6 +206,7 @@ class Order extends Model
             self::STATUS_COMPLETED           => 'فعال',
             self::STATUS_CANCELLED           => 'لغو شده',
             self::STATUS_FAILED              => 'ناموفق',
+            self::STATUS_RENEWAL_FAILED      => 'خطا در تمدید',
         ];
     }
 

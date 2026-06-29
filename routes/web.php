@@ -12,6 +12,7 @@ use App\Http\Controllers\NowPaymentsController;
 use App\Http\Controllers\OrderController;
 use App\Http\Controllers\PaymentController;
 use App\Http\Controllers\PlansController;
+use App\Http\Controllers\RenewalController;
 use App\Http\Controllers\ServiceController;
 use App\Http\Controllers\StatusController;
 use App\Http\Controllers\TutorialsController;
@@ -68,6 +69,8 @@ Route::middleware('auth')->prefix('dashboard')->name('dashboard.')->group(functi
     Route::post('/orders/{order}/nowpayments/check', [NowPaymentsController::class, 'checkStatus'])->name('orders.nowpayments.check');
     Route::get('/services', [ServiceController::class, 'index'])->name('services');
     Route::get('/services/{service}', [ServiceController::class, 'show'])->name('services.show');
+    Route::get('/services/{service}/renew', [RenewalController::class, 'show'])->name('services.renew');
+    Route::post('/services/{service}/renew', [RenewalController::class, 'submit'])->name('services.renew.submit');
 
     // Marzban self-service actions — throttled to prevent abuse
     Route::middleware('throttle:30,1')->group(function () {

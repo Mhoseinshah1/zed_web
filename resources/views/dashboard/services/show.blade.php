@@ -412,18 +412,41 @@
         @endif {{-- canDoRemoteActions --}}
     </div>
 
-    {{-- ── Placeholder renewal actions ── --}}
+    {{-- ── Renewal actions ── --}}
     <div class="bg-gray-900 border border-gray-800 rounded-xl p-6">
-        <h4 class="text-white font-medium text-sm mb-3">عملیات</h4>
-        <div class="flex flex-wrap gap-3">
-            <button disabled class="opacity-40 cursor-not-allowed text-xs bg-gray-800 text-white px-4 py-2 rounded-lg">
-                تمدید سرویس (به‌زودی)
-            </button>
-            <button disabled class="opacity-40 cursor-not-allowed text-xs bg-gray-800 text-white px-4 py-2 rounded-lg">
-                خرید حجم اضافه (به‌زودی)
-            </button>
-        </div>
-        <p class="text-xs text-gray-600 mt-3">قابلیت تمدید و خرید حجم اضافه در نسخه بعدی فعال می‌شود.</p>
+        <h4 class="text-white font-medium text-sm mb-3">تمدید سرویس</h4>
+        @if($service->expires_at === null)
+            <p class="text-xs text-gray-500">این سرویس تاریخ انقضا ندارد و قابل تمدید نیست.</p>
+        @elseif(in_array($service->status, ['active', 'expired', 'disabled']))
+            @if(session('error'))
+                <div class="mb-3 text-xs text-red-400 bg-red-900/30 border border-red-800 rounded-lg px-3 py-2">
+                    {{ session('error') }}
+                </div>
+            @endif
+            <div class="flex flex-wrap gap-3">
+                <a href="{{ route('dashboard.services.renew', $service) }}"
+                   class="inline-flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium px-4 py-2.5 rounded-lg transition">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                              d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+                    </svg>
+                    تمدید سرویس
+                </a>
+                <button disabled class="opacity-40 cursor-not-allowed text-xs bg-gray-800 text-white px-4 py-2 rounded-lg">
+                    خرید حجم اضافه (به‌زودی)
+                </button>
+            </div>
+            @if($service->isExpired())
+                <p class="text-xs text-amber-500 mt-2">سرویس منقضی شده است. با تمدید، بلافاصله فعال می‌شود.</p>
+            @else
+                <p class="text-xs text-gray-500 mt-2">
+                    انقضا در {{ $service->daysRemaining() }} روز دیگر
+                    ({{ $service->expires_at->format('Y/m/d') }})
+                </p>
+            @endif
+        @else
+            <p class="text-xs text-gray-600">تمدید برای سرویس با وضعیت فعلی در دسترس نیست.</p>
+        @endif
     </div>
 
     {{-- ── Order link ── --}}

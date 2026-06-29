@@ -6,6 +6,7 @@ use App\Filament\Resources\OrderResource\Pages;
 use App\Models\Order;
 use App\Models\ProvisioningAttempt;
 use App\Services\Provisioning\ProvisioningService;
+use App\Services\Renewals\RenewalService;
 use App\Services\ServiceProvisioner;
 use Filament\Forms;
 use Filament\Forms\Form;
@@ -102,6 +103,14 @@ class OrderResource extends Resource
                     ->sortable()
                     ->copyable()
                     ->fontFamily('mono'),
+
+                Tables\Columns\BadgeColumn::make('order_type')
+                    ->label('نوع')
+                    ->formatStateUsing(fn ($state) => $state === Order::TYPE_RENEWAL ? 'تمدید' : 'سرویس جدید')
+                    ->colors([
+                        'info'    => Order::TYPE_NEW_SERVICE,
+                        'success' => Order::TYPE_RENEWAL,
+                    ]),
 
                 Tables\Columns\TextColumn::make('user.username')
                     ->label('کاربر')
@@ -205,6 +214,14 @@ class OrderResource extends Resource
                 Filter::make('provisioning_failed')
                     ->label('خطا در ساخت سرویس')
                     ->query(fn (Builder $query) => $query->where('status', Order::STATUS_PROVISIONING_FAILED)),
+
+                Filter::make('renewal_orders')
+                    ->label('سفارش‌های تمدید')
+                    ->query(fn (Builder $query) => $query->where('order_type', Order::TYPE_RENEWAL)),
+
+                Filter::make('renewal_failed')
+                    ->label('خطا در تمدید')
+                    ->query(fn (Builder $query) => $query->where('status', Order::STATUS_RENEWAL_FAILED)),
 
                 Filter::make('paid_without_service')
                     ->label('پرداخت‌شده بدون سرویس')
@@ -351,6 +368,26 @@ class OrderResource extends Resource
                     ->modalHeading('ایجاد سرویس برای این سفارش')
                     ->modalDescription('آیا می‌خواهید یک سرویس جدید برای این سفارش ایجاد کنید؟')
                     ->modalSubmitActionLabel('بله، ایجاد کن'),
+
+                Tables\Actions\Action::make('retry_renewal')
+                    ->label('تلاش مجدد تمدید')
+                    ->icon('heroicon-o-arrow-path')
+                    ->color('warning')
+                    ->visible(fn (Order $record) => $record->order_type === Order::TYPE_RENEWAL
+                        && $record->status === Order::STATUS_RENEWAL_FAILED
+                        && $record->payment_status === Order::PAYMENT_PAID)
+                    ->action(function (Order $record) {
+                        try {
+                            app(RenewalService::class)->applyRenewal($record);
+                            Notification::make()->title('تمدید با موفقیت اعمال شد.')->success()->send();
+                        } catch (\Exception $e) {
+                            Notification::make()->title('خطا در تلاش مجدد تمدید')->body($e->getMessage())->danger()->send();
+                        }
+                    })
+                    ->requiresConfirmation()
+                    ->modalHeading('تلاش مجدد برای اعمال تمدید')
+                    ->modalDescription('آیا می‌خواهید دوباره تلاش کنید؟ پرداخت قبلاً انجام شده است.')
+                    ->modalSubmitActionLabel('بله، دوباره تلاش کن'),
 
                 Tables\Actions\EditAction::make()->label('ویرایش'),
             ])

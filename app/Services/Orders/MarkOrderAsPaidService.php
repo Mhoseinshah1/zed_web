@@ -5,6 +5,7 @@ namespace App\Services\Orders;
 use App\Models\Order;
 use App\Models\PaymentTransaction;
 use App\Services\Discounts\DiscountService;
+use App\Services\Renewals\RenewalService;
 use App\Services\ServiceProvisioner;
 use Illuminate\Support\Facades\DB;
 
@@ -19,6 +20,7 @@ class MarkOrderAsPaidService
     public function __construct(
         private readonly ServiceProvisioner $provisioner,
         private readonly DiscountService    $discountService,
+        private readonly RenewalService     $renewalService,
     ) {}
 
     /**
@@ -29,8 +31,15 @@ class MarkOrderAsPaidService
     public function markPaid(Order $order, PaymentTransaction $tx): void
     {
         // Idempotency guard — already fully processed
-        if ($order->payment_status === Order::PAYMENT_PAID && $order->service !== null) {
-            return;
+        if ($order->payment_status === Order::PAYMENT_PAID) {
+            // Renewal: renewal_applied_at is the authoritative idempotency marker
+            if ($order->order_type === Order::TYPE_RENEWAL && $order->renewal_applied_at !== null) {
+                return;
+            }
+            // New-service order already provisioned
+            if ($order->order_type !== Order::TYPE_RENEWAL && $order->service !== null) {
+                return;
+            }
         }
 
         DB::transaction(function () use ($order, $tx) {
@@ -58,8 +67,11 @@ class MarkOrderAsPaidService
         $order = $order->fresh();
         $this->discountService->markUsed($order);
 
-        // Provisioning runs outside the payment transaction to avoid long-running locks
-        if ($order->service === null) {
+        // Route to the correct post-payment handler based on order type
+        if ($order->order_type === Order::TYPE_RENEWAL) {
+            $this->renewalService->applyRenewal($order);
+        } elseif ($order->service === null) {
+            // New service orders — provisioning runs outside the payment transaction
             $this->provisioner->createFromOrder($order);
         }
     }
