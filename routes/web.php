@@ -20,6 +20,7 @@ use App\Http\Controllers\ServiceAddonController;
 use App\Http\Controllers\SupportTicketController;
 use App\Http\Controllers\ServiceController;
 use App\Http\Controllers\StatusController;
+use App\Http\Controllers\ThemeController;
 use App\Http\Controllers\TutorialsController;
 use App\Http\Controllers\UserServiceActionController;
 use App\Http\Controllers\WalletController;
@@ -55,6 +56,9 @@ Route::middleware('guest')->group(function () {
 
 // Logout (any authenticated user)
 Route::post('/logout', [AuthController::class, 'logout'])->middleware('auth')->name('logout');
+
+// Theme / appearance preference — available to guests (cookie) and users (saved)
+Route::post('/theme', [ThemeController::class, 'update'])->name('theme.update');
 
 // Buy flow — POST to prevent accidental double-submit on page reload
 Route::post('/plans/{plan}/buy', [CheckoutController::class, 'buy'])

@@ -56,6 +56,9 @@
         </div>
     </div>
 
+    {{-- ── Appearance / theme section ── --}}
+    <x-ui.theme-switcher />
+
     <p class="text-xs text-gray-600 text-center">برای تغییر سایر اطلاعات حساب با پشتیبانی تماس بگیرید.</p>
 </div>
 @endsection

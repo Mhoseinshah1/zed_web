@@ -1,11 +1,19 @@
+@php
+    use App\Services\Theme\ThemeManager;
+    $zedTheme      = ThemeManager::resolveTheme(ThemeManager::SURFACE_PUBLIC, auth()->user());
+    $zedAppearance = ThemeManager::resolveAppearance(auth()->user());
+@endphp
 <!DOCTYPE html>
-<html lang="fa" dir="rtl" class="scroll-smooth">
+<html lang="fa" dir="rtl" class="scroll-smooth {{ ThemeManager::htmlClassFor($zedTheme, $zedAppearance) }}"
+      data-theme="{{ $zedTheme }}" data-appearance="{{ $zedAppearance }}"
+      style="{{ ThemeManager::inlineStyle() }}">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="csrf-token" content="{{ csrf_token() }}">
     <title>@yield('title', 'ZedProxy') | سرویس VPN و پروکسی</title>
     <meta name="description" content="@yield('description', 'خرید VPN و پروکسی با کیفیت بالا، سرعت فوق‌العاده و قیمت مناسب')">
+    <script>{!! ThemeManager::noFoucScript($zedAppearance) !!}</script>
 
     <!-- Fonts: Vazirmatn (Persian) -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
