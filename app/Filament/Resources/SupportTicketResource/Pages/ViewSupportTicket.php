@@ -12,7 +12,13 @@ use Filament\Infolists\Components;
 use Filament\Infolists\Infolist;
 use Filament\Notifications\Notification;
 use Filament\Resources\Pages\ViewRecord;
+use Livewire\Attributes\On;
 
+/**
+ * Admin ticket page: user info, ticket meta, the conversation thread, and an
+ * inline reply composer rendered directly under the conversation (no separate
+ * reply modal). Status/assignment/close actions remain in the header.
+ */
 class ViewSupportTicket extends ViewRecord
 {
     protected static string $resource = SupportTicketResource::class;
@@ -20,8 +26,14 @@ class ViewSupportTicket extends ViewRecord
     public function mount(int | string $record): void
     {
         parent::mount($record);
-        // Opening the ticket clears the admin's unread flag.
         app(SupportTicketService::class)->markReadByAdmin($this->record);
+    }
+
+    /** Re-render the page (and the conversation) after the composer sends a reply. */
+    #[On('ticket-reply-sent')]
+    public function onReplySent(): void
+    {
+        $this->record->refresh();
     }
 
     public function infolist(Infolist $infolist): Infolist
@@ -42,7 +54,7 @@ class ViewSupportTicket extends ViewRecord
                     Components\TextEntry::make('active_services_count')
                         ->label('سرویس‌های فعال')
                         ->state(fn (SupportTicket $record) => (string) ($record->user?->activeServicesCount() ?? 0)),
-                ])->columns(3)->collapsible(),
+                ])->columns(3)->collapsible()->collapsed(),
 
             Components\Section::make('مشخصات تیکت')
                 ->schema([
@@ -64,6 +76,15 @@ class ViewSupportTicket extends ViewRecord
                         ->view('filament.support.conversation')
                         ->viewData(['ticket' => $this->record]),
                 ]),
+
+            // Inline reply composer (Livewire child) — directly under the conversation.
+            Components\Section::make('پاسخ پشتیبانی')
+                ->visible(fn (SupportTicket $record) => ! $record->isClosed())
+                ->schema([
+                    Components\ViewEntry::make('reply_composer')
+                        ->view('filament.support.composer')
+                        ->viewData(['ticketId' => $this->record->id]),
+                ]),
         ]);
     }
 
@@ -72,45 +93,6 @@ class ViewSupportTicket extends ViewRecord
         $ticket = $this->record;
 
         return [
-            Actions\Action::make('reply')
-                ->label('پاسخ به کاربر')
-                ->icon('heroicon-o-paper-airplane')
-                ->color('primary')
-                ->visible(fn () => ! $ticket->isClosed())
-                ->form([
-                    Forms\Components\Textarea::make('body')->label('متن پاسخ')->required()->rows(4),
-                    Forms\Components\FileUpload::make('attachment')
-                        ->label('پیوست')
-                        ->disk('public')
-                        ->directory('support-tickets')
-                        ->acceptedFileTypes(['image/jpeg', 'image/png', 'image/webp', 'application/pdf', 'text/plain'])
-                        ->maxSize(5120),
-                ])
-                ->action(function (array $data) use ($ticket) {
-                    app(SupportTicketService::class)->adminReply(
-                        $ticket, auth()->user(), $data['body'], internal: false,
-                    );
-                    // FileUpload stored the file already; attach its path if present.
-                    if (! empty($data['attachment'])) {
-                        $msg = $ticket->messages()->latest('id')->first();
-                        $msg?->update(['attachment_path' => $data['attachment'], 'attachment_name' => basename($data['attachment'])]);
-                    }
-                    Notification::make()->title('پاسخ ارسال شد.')->success()->send();
-                    $this->refreshFormData([]);
-                }),
-
-            Actions\Action::make('internal_note')
-                ->label('یادداشت داخلی')
-                ->icon('heroicon-o-lock-closed')
-                ->color('gray')
-                ->form([
-                    Forms\Components\Textarea::make('body')->label('یادداشت داخلی (برای کاربر نمایش داده نمی‌شود)')->required()->rows(3),
-                ])
-                ->action(function (array $data) use ($ticket) {
-                    app(SupportTicketService::class)->adminReply($ticket, auth()->user(), $data['body'], internal: true);
-                    Notification::make()->title('یادداشت داخلی ثبت شد.')->success()->send();
-                }),
-
             Actions\Action::make('set_status')
                 ->label('تغییر وضعیت')
                 ->icon('heroicon-o-flag')

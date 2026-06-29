@@ -5,6 +5,7 @@ namespace App\Services\Support;
 use App\Models\Notification;
 use App\Models\Order;
 use App\Models\SupportTicket;
+use App\Models\SupportTicketAttachment;
 use App\Models\SupportTicketMessage;
 use App\Models\User;
 use App\Models\UserService;
@@ -24,13 +25,14 @@ class SupportTicketService
      * Related order/service are only attached when they belong to the user.
      *
      * @param array{subject:string,body:string,category_id?:int|null,priority?:string,order_id?:int|null,user_service_id?:int|null} $data
+     * @param array<int, UploadedFile> $attachments
      */
-    public function createTicket(User $user, array $data, ?UploadedFile $attachment = null): SupportTicket
+    public function createTicket(User $user, array $data, array $attachments = []): SupportTicket
     {
         $orderId   = $this->ownedOrderId($user, $data['order_id'] ?? null);
         $serviceId = $this->ownedServiceId($user, $data['user_service_id'] ?? null);
 
-        $ticket = DB::transaction(function () use ($user, $data, $orderId, $serviceId, $attachment) {
+        $ticket = DB::transaction(function () use ($user, $data, $orderId, $serviceId, $attachments) {
             $ticket = SupportTicket::create([
                 'user_id'         => $user->id,
                 'category_id'     => $data['category_id'] ?? null,
@@ -44,7 +46,7 @@ class SupportTicketService
                 'user_unread'     => false,
             ]);
 
-            $this->storeMessage($ticket, $user, $data['body'], isAdmin: false, isInternal: false, attachment: $attachment);
+            $this->storeMessage($ticket, $user, $data['body'], isAdmin: false, isInternal: false, attachments: $attachments);
 
             return $ticket;
         });
@@ -67,14 +69,17 @@ class SupportTicketService
      *
      * @throws \RuntimeException when the ticket is closed
      */
-    public function userReply(SupportTicket $ticket, User $user, string $body, ?UploadedFile $attachment = null): SupportTicketMessage
+    /**
+     * @param array<int, UploadedFile> $attachments
+     */
+    public function userReply(SupportTicket $ticket, User $user, string $body, array $attachments = []): SupportTicketMessage
     {
         if ($ticket->isClosed()) {
             throw new \RuntimeException('این تیکت بسته شده است و امکان پاسخ وجود ندارد.');
         }
 
-        $message = DB::transaction(function () use ($ticket, $user, $body, $attachment) {
-            $message = $this->storeMessage($ticket, $user, $body, isAdmin: false, isInternal: false, attachment: $attachment);
+        $message = DB::transaction(function () use ($ticket, $user, $body, $attachments) {
+            $message = $this->storeMessage($ticket, $user, $body, isAdmin: false, isInternal: false, attachments: $attachments);
 
             $ticket->update([
                 'status'        => SupportTicket::STATUS_WAITING_ADMIN,
@@ -102,10 +107,13 @@ class SupportTicketService
      * An admin replies to a ticket. Internal notes are never shown to the user
      * and do not notify them or change the public status.
      */
-    public function adminReply(SupportTicket $ticket, User $admin, string $body, bool $internal = false, ?UploadedFile $attachment = null): SupportTicketMessage
+    /**
+     * @param array<int, UploadedFile> $attachments
+     */
+    public function adminReply(SupportTicket $ticket, User $admin, string $body, bool $internal = false, array $attachments = []): SupportTicketMessage
     {
-        $message = DB::transaction(function () use ($ticket, $admin, $body, $internal, $attachment) {
-            $message = $this->storeMessage($ticket, $admin, $body, isAdmin: true, isInternal: $internal, attachment: $attachment);
+        $message = DB::transaction(function () use ($ticket, $admin, $body, $internal, $attachments) {
+            $message = $this->storeMessage($ticket, $admin, $body, isAdmin: true, isInternal: $internal, attachments: $attachments);
 
             if (! $internal) {
                 $ticket->update([
@@ -160,33 +168,57 @@ class SupportTicketService
 
     // ── Internal ─────────────────────────────────────────────────────────────
 
-    private function storeMessage(SupportTicket $ticket, User $author, string $body, bool $isAdmin, bool $isInternal, ?UploadedFile $attachment): SupportTicketMessage
+    /**
+     * @param array<int, UploadedFile> $attachments
+     */
+    private function storeMessage(SupportTicket $ticket, User $author, string $body, bool $isAdmin, bool $isInternal, array $attachments = []): SupportTicketMessage
     {
-        [$path, $name] = $this->storeAttachment($attachment);
-
-        return SupportTicketMessage::create([
+        $message = SupportTicketMessage::create([
             'support_ticket_id' => $ticket->id,
             'user_id'           => $author->id,
             'is_admin'          => $isAdmin,
             'is_internal_note'  => $isInternal,
             'body'              => $body,
-            'attachment_path'   => $path,
-            'attachment_name'   => $name,
+        ]);
+
+        foreach ($attachments as $file) {
+            if ($file instanceof UploadedFile) {
+                $this->persistUploadedFile($message, $file);
+            }
+        }
+
+        return $message;
+    }
+
+    private function persistUploadedFile(SupportTicketMessage $message, UploadedFile $file): SupportTicketAttachment
+    {
+        $path = $file->store('support-tickets', 'public');
+
+        return $message->attachments()->create([
+            'path'          => $path,
+            'original_name' => $file->getClientOriginalName(),
+            'mime_type'     => $file->getClientMimeType(),
+            'size'          => $file->getSize(),
         ]);
     }
 
     /**
-     * @return array{0:?string,1:?string} [path, original name]
+     * Attach already-stored files (e.g. uploaded by a Filament FileUpload that
+     * stored them on the public disk) to a message.
+     *
+     * @param array<int, string> $paths
      */
-    private function storeAttachment(?UploadedFile $file): array
+    public function attachStoredPaths(SupportTicketMessage $message, array $paths): void
     {
-        if (! $file) {
-            return [null, null];
+        foreach ($paths as $path) {
+            if (blank($path)) {
+                continue;
+            }
+            $message->attachments()->create([
+                'path'          => $path,
+                'original_name' => basename($path),
+            ]);
         }
-
-        $path = $file->store('support-tickets', 'public');
-
-        return [$path, $file->getClientOriginalName()];
     }
 
     private function ownedOrderId(User $user, ?int $orderId): ?int

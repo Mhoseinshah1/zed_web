@@ -11,8 +11,13 @@ use Illuminate\View\View;
 
 class SupportTicketController extends Controller
 {
-    /** Allowed attachment rules (shared by create + reply). */
+    /** Whitelisted attachment types — executables (php/js/html/exe/sh/…) are rejected. */
     private const ATTACHMENT_RULES = ['nullable', 'file', 'mimes:jpg,jpeg,png,webp,pdf,txt', 'max:5120'];
+
+    private const ATTACHMENT_MESSAGES = [
+        'attachments.*.mimes' => 'فرمت فایل پیوست مجاز نیست. فقط jpg، png، webp، pdf و txt پذیرفته می‌شود.',
+        'attachments.*.max'   => 'حجم هر فایل پیوست نباید بیشتر از ۵ مگابایت باشد.',
+    ];
 
     public function __construct(
         private readonly SupportTicketService $tickets,
@@ -50,16 +55,17 @@ class SupportTicketController extends Controller
             'priority'        => ['nullable', 'string'],
             'order_id'        => ['nullable', 'integer'],
             'user_service_id' => ['nullable', 'integer'],
-            'attachment'      => self::ATTACHMENT_RULES,
-        ], [
+            'attachments'     => ['nullable', 'array', 'max:5'],
+            'attachments.*'   => self::ATTACHMENT_RULES,
+        ], array_merge([
             'subject.required' => 'موضوع تیکت الزامی است.',
             'body.required'    => 'متن پیام الزامی است.',
-        ]);
+        ], self::ATTACHMENT_MESSAGES));
 
         $ticket = $this->tickets->createTicket(
             auth()->user(),
             $validated,
-            $request->file('attachment'),
+            $request->file('attachments', []),
         );
 
         return redirect()
@@ -84,14 +90,15 @@ class SupportTicketController extends Controller
         abort_if($ticket->user_id !== auth()->id(), 403);
 
         $validated = $request->validate([
-            'body'       => ['required', 'string', 'max:5000'],
-            'attachment' => self::ATTACHMENT_RULES,
-        ], [
+            'body'          => ['required', 'string', 'max:5000'],
+            'attachments'   => ['nullable', 'array', 'max:5'],
+            'attachments.*' => self::ATTACHMENT_RULES,
+        ], array_merge([
             'body.required' => 'متن پیام الزامی است.',
-        ]);
+        ], self::ATTACHMENT_MESSAGES));
 
         try {
-            $this->tickets->userReply($ticket, auth()->user(), $validated['body'], $request->file('attachment'));
+            $this->tickets->userReply($ticket, auth()->user(), $validated['body'], $request->file('attachments', []));
         } catch (\RuntimeException $e) {
             return back()->with('error', $e->getMessage());
         }

@@ -79,10 +79,10 @@
         </div>
 
         <div>
-            <label class="block text-sm text-gray-300 mb-1.5">پیوست (اختیاری)</label>
-            <input type="file" name="attachment"
+            <label class="block text-sm text-gray-300 mb-1.5">پیوست فایل (اختیاری)</label>
+            <input type="file" name="attachments[]" multiple accept=".jpg,.jpeg,.png,.webp,.pdf,.txt"
                    class="w-full text-sm text-gray-400 file:mr-3 file:py-2 file:px-4 file:rounded-lg file:border-0 file:bg-gray-800 file:text-gray-200">
-            <p class="text-xs text-gray-600 mt-1">فرمت‌های مجاز: jpg, png, webp, pdf, txt — حداکثر ۵ مگابایت</p>
+            <p class="text-xs text-gray-600 mt-1">فرمت‌های مجاز: jpg, png, webp, pdf, txt — حداکثر ۵ مگابایت (تا ۵ فایل)</p>
         </div>
 
         <div class="flex gap-3 pt-2">

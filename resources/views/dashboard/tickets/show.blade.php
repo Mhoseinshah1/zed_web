@@ -63,13 +63,8 @@
                     </span>
                     <span class="text-[11px] text-gray-600">{{ $message->created_at->format('Y/m/d H:i') }}</span>
                 </div>
-                <p class="text-sm text-gray-200 leading-7 whitespace-pre-line">{{ $message->body }}</p>
-                @if($message->hasAttachment())
-                <a href="{{ asset('storage/' . $message->attachment_path) }}" target="_blank"
-                   class="inline-flex items-center gap-1 mt-2 text-xs text-indigo-400 hover:text-indigo-300">
-                    📎 {{ $message->attachment_name ?? 'پیوست' }}
-                </a>
-                @endif
+                <div class="text-sm text-gray-200 leading-7">{!! \App\Support\MessageFormatter::linkify($message->body) !!}</div>
+                @include('partials.ticket-attachments', ['message' => $message])
             </div>
         </div>
         @endforeach
@@ -86,8 +81,11 @@
             @csrf
             <textarea name="body" rows="4" required maxlength="5000" placeholder="پاسخ خود را بنویسید..."
                       class="w-full bg-gray-800 border border-gray-700 focus:border-indigo-500 rounded-lg px-4 py-2.5 text-white text-sm outline-none">{{ old('body') }}</textarea>
-            <input type="file" name="attachment"
-                   class="w-full text-sm text-gray-400 file:mr-3 file:py-2 file:px-4 file:rounded-lg file:border-0 file:bg-gray-800 file:text-gray-200">
+            <div>
+                <input type="file" name="attachments[]" multiple accept=".jpg,.jpeg,.png,.webp,.pdf,.txt"
+                       class="w-full text-sm text-gray-400 file:mr-3 file:py-2 file:px-4 file:rounded-lg file:border-0 file:bg-gray-800 file:text-gray-200">
+                <p class="text-[11px] text-gray-600 mt-1">پیوست فایل — فرمت‌های مجاز: jpg, png, webp, pdf, txt (حداکثر ۵ مگابایت)</p>
+            </div>
             <div class="flex gap-3">
                 <button type="submit" class="bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium px-6 py-2.5 rounded-lg transition">
                     ارسال پاسخ
