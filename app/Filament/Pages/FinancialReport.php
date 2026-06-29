@@ -257,6 +257,19 @@ class FinancialReport extends Page implements HasForms
             ->sum('final_price_toman');
     }
 
+    public function getCommissionsRange(): int
+    {
+        return (int) \App\Models\Commission::where('status', \App\Models\Commission::STATUS_CREDITED)
+            ->whereBetween('credited_at', [$this->from(), $this->to()])
+            ->sum('commission_amount');
+    }
+
+    /** Net sales after representative commissions in the range. */
+    public function getNetAfterCommissionsRange(): int
+    {
+        return $this->getNetSalesRange() - $this->getCommissionsRange();
+    }
+
     public function getRenewalCashbackRange(): int
     {
         return (int) WalletTransaction::where('type', WalletTransaction::TYPE_RENEWAL_CASHBACK)

@@ -95,6 +95,7 @@ class UserResource extends Resource
                         return $query->where(function ($q) use ($search) {
                             $q->where('account_id', 'like', "%{$search}%")
                                 ->orWhere('normalized_phone', 'like', "%{$search}%")
+                                ->orWhere('referral_code', 'like', "%{$search}%")
                                 ->orWhere('id', $search);
                         });
                     })
@@ -112,6 +113,34 @@ class UserResource extends Resource
                     ->label('تایید شماره')
                     ->boolean()
                     ->getStateUsing(fn ($record) => ! is_null($record->phone_verified_at)),
+
+                Tables\Columns\TextColumn::make('referral_code')
+                    ->label('کد دعوت')
+                    ->fontFamily('mono')
+                    ->searchable()
+                    ->toggleable(),
+
+                Tables\Columns\TextColumn::make('referrer.account_id')
+                    ->label('معرف')
+                    ->fontFamily('mono')
+                    ->placeholder('—')
+                    ->toggleable(),
+
+                Tables\Columns\TextColumn::make('representative_status')
+                    ->label('وضعیت نمایندگی')
+                    ->formatStateUsing(fn ($state) => \App\Models\User::representativeStatuses()[$state] ?? $state)
+                    ->badge()
+                    ->toggleable(),
+
+                Tables\Columns\TextColumn::make('referred_users_count')
+                    ->label('معرفی‌شده‌ها')
+                    ->counts('referredUsers')
+                    ->toggleable(),
+
+                Tables\Columns\TextColumn::make('total_commission_earned')
+                    ->label('پورسانت کل')
+                    ->formatStateUsing(fn ($state) => number_format((int) $state))
+                    ->toggleable(),
                 Tables\Columns\TextColumn::make('wallet_balance_toman')
                     ->label('موجودی کیف پول')
                     ->numeric()

@@ -200,6 +200,16 @@ class NotificationService
                 'message'   => 'کاربر {user_name} به تیکت {ticket_number} پاسخ داد.',
                 'variables' => '{user_name}, {ticket_number}',
             ],
+            Notification::TYPE_COMMISSION_CREDITED => [
+                'title'     => 'واریز پورسانت',
+                'message'   => 'پورسانت فروش به کیف پول شما اضافه شد. مبلغ: {amount} تومان',
+                'variables' => '{user_name}, {amount}',
+            ],
+            Notification::TYPE_REPRESENTATIVE_REQUEST => [
+                'title'     => 'درخواست نمایندگی جدید',
+                'message'   => 'درخواست نمایندگی جدید ثبت شد. کاربر: {user_name} (شناسه {account_id}).',
+                'variables' => '{user_name}, {account_id}',
+            ],
         ];
     }
 

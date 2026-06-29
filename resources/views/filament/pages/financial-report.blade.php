@@ -100,6 +100,8 @@
                 ['label'=>'فروش ناخالص (قبل از تخفیف)','value'=>number_format($this->getGrossSalesRange()).' تومان','color'=>'blue','icon'=>'🧾'],
                 ['label'=>'مجموع تخفیف‌ها در بازه','value'=>number_format($this->getOrderDiscountsRange()).' تومان','color'=>'yellow','icon'=>'🏷'],
                 ['label'=>'فروش خالص (بعد از تخفیف)','value'=>number_format($this->getNetSalesRange()).' تومان','color'=>'green','icon'=>'💵'],
+                ['label'=>'پورسانت نمایندگان','value'=>number_format($this->getCommissionsRange()).' تومان','color'=>'yellow','icon'=>'🤝'],
+                ['label'=>'خالص پس از پورسانت','value'=>number_format($this->getNetAfterCommissionsRange()).' تومان','color'=>'green','icon'=>'📊'],
                 ['label'=>'سفارش‌های پرداخت‌شده','value'=>number_format($this->getPaidOrdersRange()),'color'=>'blue','icon'=>'🛒'],
                 ['label'=>'درآمد خرید سرویس جدید','value'=>number_format($this->getNewServiceSalesRange()).' تومان','color'=>'green','icon'=>'🆕'],
                 ['label'=>'خریدهای جدید','value'=>number_format($this->getNewServiceOrdersRange()),'color'=>'blue','icon'=>'🛒'],

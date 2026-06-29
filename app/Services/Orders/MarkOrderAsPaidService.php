@@ -100,5 +100,9 @@ class MarkOrderAsPaidService
             // New service orders — provisioning runs outside the payment transaction
             $this->provisioner->createFromOrder($order);
         }
+
+        // Representative commission — idempotent (one per order). Never applies
+        // to wallet top-ups (those are not Orders routed here).
+        app(\App\Services\Referrals\CommissionService::class)->recordForOrder($order->fresh());
     }
 }

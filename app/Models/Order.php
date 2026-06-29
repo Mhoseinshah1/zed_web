@@ -175,6 +175,11 @@ class Order extends Model
         return $this->belongsTo(Plan::class, 'original_plan_id');
     }
 
+    public function commission(): HasOne
+    {
+        return $this->hasOne(Commission::class);
+    }
+
     public function isRenewal(): bool
     {
         return $this->order_type === self::TYPE_RENEWAL;

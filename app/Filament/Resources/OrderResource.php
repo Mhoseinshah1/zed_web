@@ -200,6 +200,18 @@ class OrderResource extends Resource
                         'danger'  => ['provisioning_failed', 'cancelled', 'failed'],
                     ]),
 
+                Tables\Columns\TextColumn::make('commission_info')
+                    ->label('پورسانت نماینده')
+                    ->getStateUsing(function (Order $record): string {
+                        $c = $record->commission;
+                        if (! $c) {
+                            return '—';
+                        }
+                        $rep = $record->user?->referrer?->account_id ?? '—';
+                        return number_format($c->commission_amount) . ' (' . ($c->statusLabel()) . ') • ' . $rep;
+                    })
+                    ->toggleable(),
+
                 Tables\Columns\IconColumn::make('service_exists')
                     ->label('سرویس')
                     ->getStateUsing(fn (Order $record): bool => $record->service !== null)

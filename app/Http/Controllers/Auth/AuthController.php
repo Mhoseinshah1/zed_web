@@ -34,8 +34,19 @@ class AuthController extends Controller
         ])->onlyInput('username');
     }
 
-    public function showRegister()
+    public function showRegister(Request $request)
     {
+        // Remember a referral code from ?ref= so it survives until registration.
+        if ($request->filled('ref')) {
+            $code = strtoupper(trim((string) $request->query('ref')));
+            $request->session()->put('referral_code', $code);
+            \Illuminate\Support\Facades\Cookie::queue(
+                'referral_code',
+                $code,
+                60 * 24 * \App\Services\Referrals\ReferralSettings::referralCookieDays(),
+            );
+        }
+
         return view('auth.register');
     }
 
@@ -72,6 +83,13 @@ class AuthController extends Controller
             'normalized_phone' => $normalized,
             'password'         => Hash::make($validated['password']),
         ]);
+
+        // Attach the referrer from ?ref= / session / cookie (mode-aware, safe).
+        $referralCode = $request->input('ref')
+            ?? $request->session()->pull('referral_code')
+            ?? $request->cookie('referral_code');
+        app(\App\Services\Referrals\ReferralService::class)->attachReferrer($user, $referralCode);
+        \Illuminate\Support\Facades\Cookie::queue(\Illuminate\Support\Facades\Cookie::forget('referral_code'));
 
         Auth::login($user);
 

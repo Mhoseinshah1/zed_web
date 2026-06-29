@@ -54,6 +54,19 @@
                 </span>
                 @endif
             </a>
+            @php
+                $repMode = \App\Services\Referrals\ReferralSettings::mode();
+                $showRep = $repMode === \App\Services\Referrals\ReferralSettings::MODE_ALL_USERS
+                    || auth()->user()->isApprovedRepresentative()
+                    || \App\Services\Referrals\ReferralSettings::representativeSystemEnabled();
+            @endphp
+            @if($showRep)
+            <a href="{{ route('dashboard.representative') }}"
+               class="flex items-center gap-3 px-3 py-2 rounded-lg {{ request()->routeIs('dashboard.representative*') ? 'bg-indigo-600 text-white' : 'text-gray-400 hover:text-white hover:bg-gray-800' }} transition">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a4 4 0 00-3-3.87M9 20H4v-2a4 4 0 013-3.87m6-1.13a4 4 0 10-4-4 4 4 0 004 4zm6 0a3 3 0 10-2.83-4"/></svg>
+                نمایندگی
+            </a>
+            @endif
             @php $unreadTickets = \App\Models\SupportTicket::forUser(auth()->id())->where('user_unread', true)->count(); @endphp
             <a href="{{ route('dashboard.tickets') }}"
                class="flex items-center gap-3 px-3 py-2 rounded-lg {{ request()->routeIs('dashboard.tickets*') ? 'bg-indigo-600 text-white' : 'text-gray-400 hover:text-white hover:bg-gray-800' }} transition">

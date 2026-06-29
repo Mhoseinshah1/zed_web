@@ -16,6 +16,7 @@ class WalletTransaction extends Model
     const TYPE_REFUND            = 'refund';
     const TYPE_ADJUSTMENT        = 'adjustment';
     const TYPE_RENEWAL_CASHBACK  = 'renewal_cashback';
+    const TYPE_REPRESENTATIVE_COMMISSION = 'representative_commission';
 
     const DIRECTION_CREDIT = 'credit';
     const DIRECTION_DEBIT  = 'debit';
@@ -76,6 +77,7 @@ class WalletTransaction extends Model
             self::TYPE_REFUND        => 'برگشت وجه',
             self::TYPE_ADJUSTMENT       => 'تعدیل',
             self::TYPE_RENEWAL_CASHBACK => 'کش‌بک تمدید',
+            self::TYPE_REPRESENTATIVE_COMMISSION => 'پورسانت نماینده',
             default                     => $this->type,
         };
     }
@@ -90,6 +92,7 @@ class WalletTransaction extends Model
             self::TYPE_REFUND        => 'برگشت وجه',
             self::TYPE_ADJUSTMENT       => 'تعدیل',
             self::TYPE_RENEWAL_CASHBACK => 'کش‌بک تمدید',
+            self::TYPE_REPRESENTATIVE_COMMISSION => 'پورسانت نماینده',
         ];
     }
 }

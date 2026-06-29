@@ -15,6 +15,7 @@ use App\Http\Controllers\PlansController;
 use App\Http\Controllers\NotificationController;
 use App\Http\Controllers\ProfileController;
 use App\Http\Controllers\RenewalController;
+use App\Http\Controllers\RepresentativeController;
 use App\Http\Controllers\ServiceAddonController;
 use App\Http\Controllers\SupportTicketController;
 use App\Http\Controllers\ServiceController;
@@ -101,6 +102,10 @@ Route::middleware('auth')->prefix('dashboard')->name('dashboard.')->group(functi
     Route::get('/notifications', [NotificationController::class, 'index'])->name('notifications');
     Route::post('/notifications/read-all', [NotificationController::class, 'markAllRead'])->name('notifications.read-all');
     Route::post('/notifications/{notification}/read', [NotificationController::class, 'markRead'])->name('notifications.read');
+
+    // Representative / referral dashboard
+    Route::get('/representative', [RepresentativeController::class, 'index'])->name('representative');
+    Route::post('/representative/request', [RepresentativeController::class, 'requestAccess'])->name('representative.request');
 
     // Support tickets
     Route::get('/tickets', [SupportTicketController::class, 'index'])->name('tickets');
