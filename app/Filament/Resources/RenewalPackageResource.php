@@ -3,6 +3,7 @@
 namespace App\Filament\Resources;
 
 use App\Filament\Resources\RenewalPackageResource\Pages;
+use App\Models\Plan;
 use App\Models\RenewalPackage;
 use Filament\Forms;
 use Filament\Forms\Form;
@@ -17,24 +18,24 @@ class RenewalPackageResource extends Resource
     protected static ?string $model = RenewalPackage::class;
 
     protected static ?string $navigationIcon   = 'heroicon-o-arrow-path';
-    protected static ?string $navigationGroup  = 'کاربران و سفارش‌ها';
-    protected static ?string $navigationLabel  = 'پکیج‌های تمدید';
-    protected static ?string $modelLabel       = 'پکیج تمدید';
-    protected static ?string $pluralModelLabel = 'پکیج‌های تمدید';
-    protected static ?int    $navigationSort   = 5;
+    protected static ?string $navigationGroup  = 'سرویس‌ها';
+    protected static ?string $navigationLabel  = 'بسته‌های تمدید';
+    protected static ?string $modelLabel       = 'بسته تمدید';
+    protected static ?string $pluralModelLabel = 'بسته‌های تمدید';
+    protected static ?int    $navigationSort   = 10;
 
     public static function form(Form $form): Form
     {
         return $form->schema([
-            Forms\Components\Section::make('اطلاعات پکیج تمدید')->schema([
+            Forms\Components\Section::make('اطلاعات بسته تمدید')->schema([
                 Forms\Components\TextInput::make('name')
-                    ->label('عنوان پکیج')
+                    ->label('عنوان')
                     ->required()
                     ->maxLength(255)
                     ->placeholder('مثلاً: تمدید ۳۰ روزه'),
 
                 Forms\Components\TextInput::make('duration_days')
-                    ->label('مدت (روز)')
+                    ->label('مدت تمدید (روز)')
                     ->required()
                     ->numeric()
                     ->minValue(1)
@@ -58,8 +59,21 @@ class RenewalPackageResource extends Resource
                     ->default(true)
                     ->inline(false),
 
+                Forms\Components\Select::make('allowed_plan_ids')
+                    ->label('پلن‌های مجاز')
+                    ->multiple()
+                    ->options(fn () => Plan::where('is_active', true)->pluck('name', 'id'))
+                    ->helperText('خالی بگذارید برای اعمال روی همه پلن‌ها')
+                    ->nullable(),
+
                 Forms\Components\Textarea::make('description')
                     ->label('توضیحات')
+                    ->rows(2)
+                    ->nullable()
+                    ->columnSpanFull(),
+
+                Forms\Components\Textarea::make('admin_note')
+                    ->label('توضیحات ادمین')
                     ->rows(2)
                     ->nullable()
                     ->columnSpanFull(),
@@ -82,7 +96,7 @@ class RenewalPackageResource extends Resource
                     ->sortable(),
 
                 Tables\Columns\TextColumn::make('duration_days')
-                    ->label('مدت (روز)')
+                    ->label('مدت تمدید')
                     ->sortable()
                     ->formatStateUsing(fn ($state) => $state . ' روز'),
 
@@ -90,6 +104,18 @@ class RenewalPackageResource extends Resource
                     ->label('قیمت')
                     ->formatStateUsing(fn ($state) => number_format($state) . ' تومان')
                     ->sortable(),
+
+                Tables\Columns\TextColumn::make('allowed_plan_ids')
+                    ->label('پلن‌های مجاز')
+                    ->getStateUsing(function (RenewalPackage $record): string {
+                        if (empty($record->allowed_plan_ids)) {
+                            return 'همه پلن‌ها';
+                        }
+                        $names = Plan::whereIn('id', $record->allowed_plan_ids)->pluck('name');
+                        return $names->implode('، ');
+                    })
+                    ->default('همه پلن‌ها')
+                    ->wrap(),
 
                 Tables\Columns\IconColumn::make('is_active')
                     ->label('فعال')
@@ -118,6 +144,14 @@ class RenewalPackageResource extends Resource
                     ->query(fn (Builder $query) => $query->where('is_active', false)),
             ])
             ->actions([
+                Tables\Actions\Action::make('toggle_active')
+                    ->label(fn (RenewalPackage $record) => $record->is_active ? 'غیرفعال کن' : 'فعال کن')
+                    ->icon(fn (RenewalPackage $record) => $record->is_active ? 'heroicon-o-pause-circle' : 'heroicon-o-play-circle')
+                    ->color(fn (RenewalPackage $record) => $record->is_active ? 'warning' : 'success')
+                    ->action(function (RenewalPackage $record): void {
+                        $record->update(['is_active' => ! $record->is_active]);
+                    }),
+
                 Tables\Actions\EditAction::make()->label('ویرایش'),
                 Tables\Actions\DeleteAction::make()->label('حذف'),
             ])

@@ -18,14 +18,21 @@ class RenewalService
 
     /**
      * Create a renewal order for a user service.
-     * Returns the created order (awaiting payment).
      *
-     * @throws \InvalidArgumentException if the service cannot be renewed
+     * @throws \InvalidArgumentException if the service or package is ineligible
      */
     public function createRenewalOrder(UserService $service, RenewalPackage $package): Order
     {
         if ($service->expires_at === null) {
-            throw new \InvalidArgumentException('این سرویس نامحدود است و نیازی به تمدید ندارد.');
+            throw new \InvalidArgumentException('این سرویس تاریخ انقضا ندارد و قابل تمدید نیست.');
+        }
+
+        if (! $package->is_active) {
+            throw new \InvalidArgumentException('بسته تمدید انتخاب‌شده فعال نیست.');
+        }
+
+        if (! $package->isAllowedForPlan($service->plan_id)) {
+            throw new \InvalidArgumentException('این بسته تمدید برای پلن این سرویس مجاز نیست.');
         }
 
         return DB::transaction(function () use ($service, $package) {
@@ -51,7 +58,8 @@ class RenewalService
     }
 
     /**
-     * Calculate the new expiry date for a service after adding $days days.
+     * Calculate the new expiry date.
+     * Extends from expires_at if still in future, otherwise from now.
      */
     public function calculateNewExpiry(UserService $service, int $days): Carbon
     {
@@ -63,13 +71,13 @@ class RenewalService
     }
 
     /**
-     * Apply a paid renewal order: update UserService and push to Marzban.
-     * Idempotent — safe to call multiple times.
+     * Apply a paid renewal order: update UserService expiry and push to Marzban.
+     * Idempotent via renewal_applied_at — safe against duplicate IPN/callbacks.
      */
     public function applyRenewal(Order $order): void
     {
-        // Already applied
-        if ($order->new_expire_at !== null && $order->status === Order::STATUS_COMPLETED) {
+        // Idempotent — already applied
+        if ($order->renewal_applied_at !== null) {
             return;
         }
 
@@ -87,6 +95,7 @@ class RenewalService
             $order->update([
                 'original_expire_at' => $service->expires_at,
                 'new_expire_at'      => $newExpiry,
+                'renewal_applied_at' => now(),
             ]);
 
             $service->update([
@@ -95,10 +104,16 @@ class RenewalService
             ]);
         });
 
-        // Push to Marzban if the service has a remote username
+        // Push to Marzban — updates expire only, preserves proxies/links/traffic
         if ($service->remote_username) {
             try {
-                $this->marzban->updateUser($service->remote_username, [
+                $panel = $service->vpnPanel;
+                if ($panel) {
+                    $client = new MarzbanClient($panel);
+                } else {
+                    $client = $this->marzban;
+                }
+                $client->updateUser($service->remote_username, [
                     'expire' => $newExpiry->timestamp,
                 ]);
             } catch (\Exception $e) {
@@ -108,6 +123,7 @@ class RenewalService
                     'remote_username' => $service->remote_username,
                     'error'           => $e->getMessage(),
                 ]);
+                // Payment is already confirmed; mark renewal failed so admin can retry
                 $order->update(['status' => Order::STATUS_RENEWAL_FAILED]);
                 return;
             }

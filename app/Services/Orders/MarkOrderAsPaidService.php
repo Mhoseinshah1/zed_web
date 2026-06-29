@@ -32,9 +32,11 @@ class MarkOrderAsPaidService
     {
         // Idempotency guard — already fully processed
         if ($order->payment_status === Order::PAYMENT_PAID) {
-            if ($order->order_type === Order::TYPE_RENEWAL && $order->status === Order::STATUS_COMPLETED) {
+            // Renewal: renewal_applied_at is the authoritative idempotency marker
+            if ($order->order_type === Order::TYPE_RENEWAL && $order->renewal_applied_at !== null) {
                 return;
             }
+            // New-service order already provisioned
             if ($order->order_type !== Order::TYPE_RENEWAL && $order->service !== null) {
                 return;
             }

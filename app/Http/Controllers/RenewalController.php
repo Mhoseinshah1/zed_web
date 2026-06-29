@@ -22,18 +22,21 @@ class RenewalController extends Controller
         if ($service->expires_at === null) {
             return redirect()
                 ->route('dashboard.services.show', $service)
-                ->with('error', 'این سرویس نامحدود است و نیازی به تمدید ندارد.');
+                ->with('error', 'این سرویس تاریخ انقضا ندارد و قابل تمدید نیست.');
         }
 
-        $packages = RenewalPackage::where('is_active', true)
+        $allPackages = RenewalPackage::where('is_active', true)
             ->orderBy('sort_order')
             ->orderBy('duration_days')
             ->get();
 
+        // Filter to packages allowed for this service's plan
+        $packages = $allPackages->filter(fn ($pkg) => $pkg->isAllowedForPlan($service->plan_id));
+
         if ($packages->isEmpty()) {
             return redirect()
                 ->route('dashboard.services.show', $service)
-                ->with('error', 'در حال حاضر پکیج تمدیدی فعالی موجود نیست. لطفاً با پشتیبانی تماس بگیرید.');
+                ->with('error', 'در حال حاضر بسته تمدیدی برای این سرویس موجود نیست. لطفاً با پشتیبانی تماس بگیرید.');
         }
 
         return view('dashboard.services.renew', compact('service', 'packages'));
@@ -46,7 +49,7 @@ class RenewalController extends Controller
         if ($service->expires_at === null) {
             return redirect()
                 ->route('dashboard.services.show', $service)
-                ->with('error', 'این سرویس نامحدود است و نیازی به تمدید ندارد.');
+                ->with('error', 'این سرویس تاریخ انقضا ندارد و قابل تمدید نیست.');
         }
 
         $validated = $request->validate([

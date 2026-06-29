@@ -49,9 +49,9 @@
     <div class="bg-gray-900 border border-gray-800 rounded-xl p-5">
         <h3 class="text-sm font-medium text-gray-300 mb-4">انتخاب پکیج تمدید</h3>
 
-        {{-- No discounts on renewal --}}
+        {{-- Discount disabled for renewal - Task 10 --}}
         <div class="mb-4 p-3 bg-gray-800/60 border border-gray-700 rounded-lg">
-            <p class="text-xs text-gray-500">کدهای تخفیف برای تمدید سرویس قابل استفاده نیستند.</p>
+            <p class="text-xs text-gray-500">کد تخفیف برای تمدید سرویس در حال حاضر فعال نیست.</p>
         </div>
 
         <form action="{{ route('dashboard.services.renew.submit', $service) }}" method="POST" id="renewal-form">
