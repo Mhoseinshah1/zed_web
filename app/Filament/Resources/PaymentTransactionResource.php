@@ -87,6 +87,8 @@ class PaymentTransactionResource extends Resource
                     ->label('#')
                     ->sortable(),
 
+                \App\Filament\Support\UserAccountColumn::make(),
+
                 Tables\Columns\TextColumn::make('user.username')
                     ->label('کاربر')
                     ->searchable()

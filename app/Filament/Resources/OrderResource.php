@@ -32,6 +32,32 @@ class OrderResource extends Resource
     public static function form(Form $form): Form
     {
         return $form->schema([
+            Forms\Components\Section::make('اطلاعات کاربر')
+                ->visible(fn (?Order $record) => $record?->user !== null)
+                ->schema([
+                    Forms\Components\Placeholder::make('user_account_id')
+                        ->label('شناسه اکانت')
+                        ->content(fn (?Order $record) => $record?->user?->account_id ?? '—'),
+                    Forms\Components\Placeholder::make('user_name')
+                        ->label('نام کاربر')
+                        ->content(fn (?Order $record) => $record?->user?->name ?? '—'),
+                    Forms\Components\Placeholder::make('user_phone')
+                        ->label('شماره موبایل')
+                        ->content(fn (?Order $record) => $record?->user?->phone ?? '—'),
+                    Forms\Components\Placeholder::make('user_phone_verified')
+                        ->label('وضعیت تایید شماره')
+                        ->content(fn (?Order $record) => $record?->user?->hasVerifiedPhone() ? 'تایید شده' : 'تایید نشده'),
+                    Forms\Components\Placeholder::make('user_email')
+                        ->label('ایمیل')
+                        ->content(fn (?Order $record) => $record?->user?->email ?? '—'),
+                    Forms\Components\Placeholder::make('user_wallet')
+                        ->label('موجودی کیف پول')
+                        ->content(fn (?Order $record) => number_format((int) ($record?->user?->wallet_balance_toman ?? 0)) . ' تومان'),
+                    Forms\Components\Placeholder::make('user_active_services')
+                        ->label('سرویس‌های فعال')
+                        ->content(fn (?Order $record) => (string) ($record?->user?->activeServicesCount() ?? 0)),
+                ])->columns(3)->collapsible(),
+
             Forms\Components\Section::make('اطلاعات پلن (اسنپشات)')
                 ->description('این اطلاعات در زمان ثبت سفارش ذخیره شده و نباید تغییر کنند.')
                 ->schema([
@@ -113,6 +139,8 @@ class OrderResource extends Resource
                         'warning' => Order::TYPE_EXTRA_TRAFFIC,
                         'primary' => Order::TYPE_EXTRA_TIME,
                     ]),
+
+                \App\Filament\Support\UserAccountColumn::make(),
 
                 Tables\Columns\TextColumn::make('user.username')
                     ->label('کاربر')

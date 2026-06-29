@@ -23,6 +23,11 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->validateCsrfTokens(except: [
             'webhooks/nowpayments',
         ]);
+
+        // Gate sensitive purchase actions behind a completed profile (phone).
+        $middleware->alias([
+            'profile.complete' => \App\Http\Middleware\EnsureProfileComplete::class,
+        ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         $exceptions->shouldRenderJsonWhen(

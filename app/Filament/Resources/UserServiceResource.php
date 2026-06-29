@@ -165,6 +165,8 @@ class UserServiceResource extends Resource
                     ->fontFamily('mono')
                     ->copyable(),
 
+                \App\Filament\Support\UserAccountColumn::make(),
+
                 Tables\Columns\TextColumn::make('user.username')
                     ->label('کاربر')
                     ->searchable()

@@ -76,13 +76,14 @@ class UserAuthTest extends TestCase
             'name'                  => 'New User',
             'username'              => 'newuser',
             'email'                 => 'newuser@example.com',
+            'phone'                 => '09123456789',
             'password'              => 'password123',
             'password_confirmation' => 'password123',
         ]);
 
         $response->assertRedirect(route('dashboard.index'));
         $this->assertAuthenticated();
-        $this->assertDatabaseHas('users', ['username' => 'newuser', 'email' => 'newuser@example.com']);
+        $this->assertDatabaseHas('users', ['username' => 'newuser', 'email' => 'newuser@example.com', 'normalized_phone' => '+989123456789']);
     }
 
     public function test_registration_fails_with_duplicate_username(): void
@@ -93,6 +94,7 @@ class UserAuthTest extends TestCase
             'name'                  => 'Another User',
             'username'              => 'taken',
             'email'                 => 'other@example.com',
+            'phone'                 => '09120000001',
             'password'              => 'password123',
             'password_confirmation' => 'password123',
         ]);
@@ -109,6 +111,7 @@ class UserAuthTest extends TestCase
             'name'                  => 'Another User',
             'username'              => 'user2',
             'email'                 => 'dup@example.com',
+            'phone'                 => '09120000002',
             'password'              => 'password123',
             'password_confirmation' => 'password123',
         ]);

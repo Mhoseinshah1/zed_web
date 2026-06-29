@@ -77,6 +77,8 @@ class NotificationResource extends Resource
                     ->tooltip(fn (NotificationModel $record) => $record->message)
                     ->wrap(),
 
+                \App\Filament\Support\UserAccountColumn::make(),
+
                 Tables\Columns\TextColumn::make('user.username')
                     ->label('کاربر')
                     ->searchable()

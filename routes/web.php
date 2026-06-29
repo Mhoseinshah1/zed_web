@@ -13,6 +13,7 @@ use App\Http\Controllers\OrderController;
 use App\Http\Controllers\PaymentController;
 use App\Http\Controllers\PlansController;
 use App\Http\Controllers\NotificationController;
+use App\Http\Controllers\ProfileController;
 use App\Http\Controllers\RenewalController;
 use App\Http\Controllers\ServiceAddonController;
 use App\Http\Controllers\ServiceController;
@@ -55,7 +56,7 @@ Route::post('/logout', [AuthController::class, 'logout'])->middleware('auth')->n
 
 // Buy flow — POST to prevent accidental double-submit on page reload
 Route::post('/plans/{plan}/buy', [CheckoutController::class, 'buy'])
-    ->middleware('auth')
+    ->middleware(['auth', 'profile.complete'])
     ->name('plans.buy');
 
 // User dashboard (prefix: /dashboard, name: dashboard.*)
@@ -71,12 +72,14 @@ Route::middleware('auth')->prefix('dashboard')->name('dashboard.')->group(functi
     Route::post('/orders/{order}/nowpayments/check', [NowPaymentsController::class, 'checkStatus'])->name('orders.nowpayments.check');
     Route::get('/services', [ServiceController::class, 'index'])->name('services');
     Route::get('/services/{service}', [ServiceController::class, 'show'])->name('services.show');
-    Route::get('/services/{service}/renew', [RenewalController::class, 'show'])->name('services.renew');
-    Route::post('/services/{service}/renew', [RenewalController::class, 'submit'])->name('services.renew.submit');
-    Route::get('/services/{service}/extra-traffic', [ServiceAddonController::class, 'showTraffic'])->name('services.extra-traffic');
-    Route::post('/services/{service}/extra-traffic', [ServiceAddonController::class, 'submitTraffic'])->name('services.extra-traffic.submit');
-    Route::get('/services/{service}/extra-time', [ServiceAddonController::class, 'showTime'])->name('services.extra-time');
-    Route::post('/services/{service}/extra-time', [ServiceAddonController::class, 'submitTime'])->name('services.extra-time.submit');
+    Route::middleware('profile.complete')->group(function () {
+        Route::get('/services/{service}/renew', [RenewalController::class, 'show'])->name('services.renew');
+        Route::post('/services/{service}/renew', [RenewalController::class, 'submit'])->name('services.renew.submit');
+        Route::get('/services/{service}/extra-traffic', [ServiceAddonController::class, 'showTraffic'])->name('services.extra-traffic');
+        Route::post('/services/{service}/extra-traffic', [ServiceAddonController::class, 'submitTraffic'])->name('services.extra-traffic.submit');
+        Route::get('/services/{service}/extra-time', [ServiceAddonController::class, 'showTime'])->name('services.extra-time');
+        Route::post('/services/{service}/extra-time', [ServiceAddonController::class, 'submitTime'])->name('services.extra-time.submit');
+    });
 
     // Marzban self-service actions — throttled to prevent abuse
     Route::middleware('throttle:30,1')->group(function () {
@@ -96,10 +99,17 @@ Route::middleware('auth')->prefix('dashboard')->name('dashboard.')->group(functi
     Route::post('/notifications/read-all', [NotificationController::class, 'markAllRead'])->name('notifications.read-all');
     Route::post('/notifications/{notification}/read', [NotificationController::class, 'markRead'])->name('notifications.read');
 
-    Route::get('/profile', fn () => view('dashboard.profile', ['user' => auth()->user()]))->name('profile');
+    Route::get('/profile', [ProfileController::class, 'index'])->name('profile');
+    Route::get('/profile/complete', [ProfileController::class, 'complete'])->name('profile.complete');
+    Route::post('/profile/phone', [ProfileController::class, 'savePhone'])->name('profile.phone.save');
+    Route::post('/profile/phone/send-otp', [ProfileController::class, 'sendOtp'])->name('profile.phone.send-otp');
+    Route::post('/profile/phone/verify', [ProfileController::class, 'verifyPhone'])->name('profile.phone.verify');
+
     Route::get('/wallet', [WalletController::class, 'index'])->name('wallet');
-    Route::get('/wallet/topup', [WalletController::class, 'topupForm'])->name('wallet.topup');
-    Route::post('/wallet/topup', [WalletController::class, 'processTopup'])->name('wallet.topup.submit');
+    Route::middleware('profile.complete')->group(function () {
+        Route::get('/wallet/topup', [WalletController::class, 'topupForm'])->name('wallet.topup');
+        Route::post('/wallet/topup', [WalletController::class, 'processTopup'])->name('wallet.topup.submit');
+    });
 });
 
 // Legacy /panel redirects → /dashboard

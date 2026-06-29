@@ -41,6 +41,13 @@
                         placeholder="email@example.com">
                 </div>
                 <div>
+                    <label for="phone" class="block text-sm font-medium text-gray-300 mb-1.5">شماره موبایل</label>
+                    <input type="tel" id="phone" name="phone" value="{{ old('phone') }}" required dir="ltr"
+                        class="w-full bg-gray-800 border border-gray-700 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 rounded-lg px-4 py-2.5 text-white text-sm outline-none transition text-left"
+                        placeholder="مثلاً 09123456789">
+                    @error('phone')<p class="text-xs text-red-400 mt-1">{{ $message }}</p>@enderror
+                </div>
+                <div>
                     <label for="password" class="block text-sm font-medium text-gray-300 mb-1.5">رمز عبور</label>
                     <input type="password" id="password" name="password" required
                         class="w-full bg-gray-800 border border-gray-700 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 rounded-lg px-4 py-2.5 text-white text-sm outline-none transition"

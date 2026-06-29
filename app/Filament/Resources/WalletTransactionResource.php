@@ -38,6 +38,8 @@ class WalletTransactionResource extends Resource
                     ->sortable()
                     ->toggleable(isToggledHiddenByDefault: true),
 
+                \App\Filament\Support\UserAccountColumn::make(),
+
                 Tables\Columns\TextColumn::make('user.username')
                     ->label('کاربر')
                     ->searchable()
