@@ -4,10 +4,14 @@ namespace App\Http\Controllers\Auth;
 
 use App\Http\Controllers\Controller;
 use App\Models\User;
+use App\Services\Auth\LoginThrottleSettings;
 use App\Support\PhoneNumber;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\RateLimiter;
+use Illuminate\Support\Str;
 use Illuminate\Validation\Rules\Password;
 
 class AuthController extends Controller
@@ -24,14 +28,63 @@ class AuthController extends Controller
             'password' => ['required', 'string'],
         ]);
 
+        // Brute-force protection: throttle by username + IP. After too many
+        // failed attempts the pair is locked for a configurable cooldown.
+        $throttleKey = $this->loginThrottleKey($request);
+
+        if (RateLimiter::tooManyAttempts($throttleKey, LoginThrottleSettings::maxAttempts())) {
+            $seconds = RateLimiter::availableIn($throttleKey);
+
+            Log::warning('Login throttled — too many failed attempts', [
+                'username' => $request->input('username'),
+                'ip'       => $request->ip(),
+                'seconds'  => $seconds,
+            ]);
+
+            return back()->withErrors([
+                'username' => $this->lockoutMessage($seconds),
+            ])->onlyInput('username');
+        }
+
         if (Auth::attempt($credentials, $request->boolean('remember'))) {
+            RateLimiter::clear($throttleKey);
             $request->session()->regenerate();
             return redirect()->intended(route('dashboard.index'));
         }
 
+        // Count this failure and (never the password) log it for monitoring.
+        RateLimiter::hit($throttleKey, LoginThrottleSettings::lockoutSeconds());
+
+        Log::warning('Failed login attempt', [
+            'username' => $request->input('username'),
+            'ip'       => $request->ip(),
+        ]);
+
         return back()->withErrors([
             'username' => 'نام کاربری یا رمز عبور اشتباه است.',
         ])->onlyInput('username');
+    }
+
+    /**
+     * Throttle key for the login limiter — scoped to the submitted username
+     * and the client IP so one attacker can't lock out every account.
+     */
+    private function loginThrottleKey(Request $request): string
+    {
+        return 'login:' . Str::lower((string) $request->input('username')) . '|' . $request->ip();
+    }
+
+    /**
+     * Persian lockout message including the remaining wait time.
+     */
+    private function lockoutMessage(int $seconds): string
+    {
+        if ($seconds >= 60) {
+            $minutes = (int) ceil($seconds / 60);
+            return "تعداد تلاش‌های ناموفق بیش از حد مجاز است. لطفاً پس از {$minutes} دقیقه دوباره تلاش کنید.";
+        }
+
+        return "تعداد تلاش‌های ناموفق بیش از حد مجاز است. لطفاً پس از {$seconds} ثانیه دوباره تلاش کنید.";
     }
 
     public function showRegister(Request $request)

@@ -59,9 +59,11 @@ Route::get('/pages/{slug}', [PageController::class, 'show'])->name('pages.show')
 // Authentication — guest-only
 Route::middleware('guest')->group(function () {
     Route::get('/login', [AuthController::class, 'showLogin'])->name('login');
+    // Per-username+IP brute-force protection is enforced inside the controller.
     Route::post('/login', [AuthController::class, 'login']);
     Route::get('/register', [AuthController::class, 'showRegister'])->name('register');
-    Route::post('/register', [AuthController::class, 'register']);
+    // Throttle registration to curb automated/spam sign-ups (per IP).
+    Route::post('/register', [AuthController::class, 'register'])->middleware('throttle:5,1');
 });
 
 // Logout (any authenticated user)

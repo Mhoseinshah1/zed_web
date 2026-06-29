@@ -22,6 +22,7 @@ class PhoneVerificationService
     public const CODE_TTL_MINUTES    = 5;
     public const MAX_ATTEMPTS        = 5;
     public const RESEND_COOLDOWN_SEC = 60;
+    public const DAILY_CAP           = 10;
 
     public function __construct(
         private readonly SmsService $sms,
@@ -64,6 +65,12 @@ class PhoneVerificationService
         return max(0, (int) SiteSetting::get('otp_resend_cooldown_seconds', self::RESEND_COOLDOWN_SEC));
     }
 
+    /** Maximum OTP codes that may be sent to one phone in a rolling 24h window. */
+    public function dailyCap(): int
+    {
+        return max(1, (int) SiteSetting::get('otp_daily_cap', self::DAILY_CAP));
+    }
+
     public function normalizePhone(string $phone): ?string
     {
         return PhoneNumber::normalize($phone);
@@ -84,6 +91,23 @@ class PhoneVerificationService
             ->exists();
     }
 
+    /**
+     * Whether the daily SMS cap for this phone has been reached. Every code we
+     * generate triggers a (paid) SMS, so this guards against runaway cost even
+     * when each request honours the per-resend cooldown.
+     */
+    public function reachedDailyCap(User $user): bool
+    {
+        $normalized = $user->normalized_phone ?? PhoneNumber::normalize((string) $user->phone);
+        if ($normalized === null) {
+            return false;
+        }
+
+        return PhoneVerificationCode::where('normalized_phone', $normalized)
+            ->where('created_at', '>=', now()->subDay())
+            ->count() >= $this->dailyCap();
+    }
+
     // ── Send ─────────────────────────────────────────────────────────────────
 
     /**
@@ -99,6 +123,10 @@ class PhoneVerificationService
 
         if (! $this->canResend($user)) {
             return ['status' => 'rate_limited', 'message' => 'برای ارسال مجدد کد کمی صبر کنید.'];
+        }
+
+        if ($this->reachedDailyCap($user)) {
+            return ['status' => 'rate_limited', 'message' => 'تعداد درخواست کد تایید در شبانه‌روز به حداکثر رسیده است. لطفاً فردا دوباره تلاش کنید.'];
         }
 
         $normalized = $user->normalized_phone ?? PhoneNumber::normalize((string) $user->phone);
