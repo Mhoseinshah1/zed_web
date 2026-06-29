@@ -213,6 +213,45 @@ class SmsOtpTest extends TestCase
         $this->assertNotNull($oldRow->used_at);
     }
 
+    public function test_otp_daily_cap_enforced(): void
+    {
+        SiteSetting::set('otp_daily_cap', 3);
+        SiteSetting::set('otp_resend_cooldown_seconds', 60);
+        $user = User::factory()->unverifiedPhone()->create();
+        $svc  = app(PhoneVerificationService::class);
+
+        // Send up to the cap, spacing each send beyond the resend cooldown.
+        for ($i = 0; $i < 3; $i++) {
+            $this->assertSame('sent', $svc->requestCode($user)['status']);
+            $this->travel(61)->seconds();
+        }
+
+        // The next send within the same 24h window is blocked by the daily cap.
+        $result = $svc->requestCode($user);
+        $this->assertSame('rate_limited', $result['status']);
+        $this->assertTrue($svc->reachedDailyCap($user->fresh()));
+    }
+
+    public function test_send_otp_route_is_rate_limited_per_phone(): void
+    {
+        Http::fake();
+        $this->configureSms();
+        SiteSetting::set('phone_verification_enabled', 'true');
+        SiteSetting::set('otp_resend_cooldown_seconds', 60);
+
+        $user = User::factory()->unverifiedPhone()->create();
+
+        // First request through the route sends a code.
+        $this->actingAs($user)
+            ->post(route('dashboard.profile.phone.send-otp'))
+            ->assertSessionHas('success');
+
+        // An immediate second request is rejected by the per-phone cooldown.
+        $this->actingAs($user)
+            ->post(route('dashboard.profile.phone.send-otp'))
+            ->assertSessionHasErrors('otp');
+    }
+
     // ── Verify from account settings ─────────────────────────────────────────
 
     public function test_user_can_verify_phone_from_account_settings(): void

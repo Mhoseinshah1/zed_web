@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Models\User;
+use App\Services\Auth\LoginThrottleSettings;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
@@ -165,6 +166,52 @@ class UserAuthTest extends TestCase
         $this->assertGuest();
     }
 
+    // ── Brute-force protection ───────────────────────────────────────────────
+
+    public function test_login_locks_after_too_many_failed_attempts(): void
+    {
+        User::factory()->create([
+            'username' => 'bruteforce',
+            'password' => bcrypt('correctpassword'),
+        ]);
+
+        // Exhaust the allowed attempts (default 5) with wrong passwords.
+        for ($i = 0; $i < LoginThrottleSettings::MAX_ATTEMPTS; $i++) {
+            $this->post('/login', ['username' => 'bruteforce', 'password' => 'wrongpassword']);
+            $this->assertGuest();
+        }
+
+        // The next attempt is locked — even the correct password is rejected.
+        $response = $this->post('/login', ['username' => 'bruteforce', 'password' => 'correctpassword']);
+
+        $response->assertSessionHasErrors('username');
+        $this->assertGuest();
+    }
+
+    public function test_login_reopens_after_lockout_window_passes(): void
+    {
+        $user = User::factory()->create([
+            'username' => 'reopenuser',
+            'password' => bcrypt('correctpassword'),
+        ]);
+
+        for ($i = 0; $i < LoginThrottleSettings::MAX_ATTEMPTS; $i++) {
+            $this->post('/login', ['username' => 'reopenuser', 'password' => 'wrongpassword']);
+        }
+
+        // Locked: correct password still bounces.
+        $this->post('/login', ['username' => 'reopenuser', 'password' => 'correctpassword'])
+            ->assertSessionHasErrors('username');
+        $this->assertGuest();
+
+        // Travel past the lockout window — the limiter window expires.
+        $this->travel(LoginThrottleSettings::LOCKOUT_SECONDS + 1)->seconds();
+
+        $this->post('/login', ['username' => 'reopenuser', 'password' => 'correctpassword'])
+            ->assertRedirect(route('dashboard.index'));
+        $this->assertAuthenticatedAs($user);
+    }
+
     // ── Logout ───────────────────────────────────────────────────────────────
 
     public function test_authenticated_user_can_logout(): void
@@ -209,5 +256,24 @@ class UserAuthTest extends TestCase
     {
         $response = $this->get('/zed-admin/login');
         $response->assertOk();
+    }
+
+    public function test_filament_admin_login_inherits_built_in_throttling(): void
+    {
+        // The custom admin Login overrides only the username field / credentials /
+        // failure message — NOT authenticate(), so Filament's built-in
+        // $this->rateLimit(5) brute-force protection stays active.
+        $authenticate = new \ReflectionMethod(\App\Filament\Pages\Auth\Login::class, 'authenticate');
+        $this->assertSame(
+            \Filament\Pages\Auth\Login::class,
+            $authenticate->getDeclaringClass()->getName(),
+            'Custom admin Login must not override authenticate() or it would bypass Filament throttling.'
+        );
+
+        // The inherited authenticate() does call the rate limiter.
+        $source = (string) file_get_contents(
+            (new \ReflectionClass(\Filament\Pages\Auth\Login::class))->getFileName()
+        );
+        $this->assertStringContainsString('$this->rateLimit(', $source);
     }
 }
