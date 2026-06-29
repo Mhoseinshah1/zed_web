@@ -84,9 +84,22 @@ class WalletService
             return $existing;
         }
 
-        return $this->credit($user, (int) $tx->amount_toman, WalletTransaction::TYPE_TOPUP, [
+        $walletTx = $this->credit($user, (int) $tx->amount_toman, WalletTransaction::TYPE_TOPUP, [
             'payment_transaction_id' => $tx->id,
             'description'            => 'شارژ کیف پول از طریق درگاه پرداخت',
         ]);
+
+        // Notify the user that their wallet was topped up. Idempotent per tx.
+        app(\App\Services\Notifications\NotificationService::class)->notify(
+            \App\Models\Notification::TYPE_WALLET_TOPUP_SUCCESS,
+            $user,
+            [
+                'user_name'     => $user->name ?? $user->username,
+                'wallet_amount' => number_format((int) $tx->amount_toman),
+            ],
+            'wallet_topup_success:tx:' . $tx->id,
+        );
+
+        return $walletTx;
     }
 }

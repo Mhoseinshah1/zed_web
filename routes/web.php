@@ -12,6 +12,7 @@ use App\Http\Controllers\NowPaymentsController;
 use App\Http\Controllers\OrderController;
 use App\Http\Controllers\PaymentController;
 use App\Http\Controllers\PlansController;
+use App\Http\Controllers\NotificationController;
 use App\Http\Controllers\RenewalController;
 use App\Http\Controllers\ServiceAddonController;
 use App\Http\Controllers\ServiceController;
@@ -90,6 +91,10 @@ Route::middleware('auth')->prefix('dashboard')->name('dashboard.')->group(functi
         Route::post('/services/{service}/enable', [UserServiceActionController::class, 'enable'])
             ->name('services.enable');
     });
+
+    Route::get('/notifications', [NotificationController::class, 'index'])->name('notifications');
+    Route::post('/notifications/read-all', [NotificationController::class, 'markAllRead'])->name('notifications.read-all');
+    Route::post('/notifications/{notification}/read', [NotificationController::class, 'markRead'])->name('notifications.read');
 
     Route::get('/profile', fn () => view('dashboard.profile', ['user' => auth()->user()]))->name('profile');
     Route::get('/wallet', [WalletController::class, 'index'])->name('wallet');

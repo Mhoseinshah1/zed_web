@@ -261,6 +261,20 @@ class ServiceAddonService
             'message'         => "+{$gb} GB extra traffic applied (order {$order->order_number}). New total: {$newTotalGb} GB.",
         ]);
 
+        if ($order->user) {
+            app(\App\Services\Notifications\NotificationService::class)->notify(
+                \App\Models\Notification::TYPE_EXTRA_TRAFFIC_SUCCESS,
+                $order->user,
+                [
+                    'user_name'    => $order->user->name ?? $order->user->username,
+                    'service_name' => $service->plan_name ?? $service->service_number,
+                    'order_id'     => $order->order_number,
+                    'traffic_gb'   => $gb,
+                ],
+                'extra_traffic_success:order:' . $order->id,
+            );
+        }
+
         return $service->fresh();
     }
 
@@ -319,6 +333,21 @@ class ServiceAddonService
             'message'         => "+{$days} days extra time applied (order {$order->order_number}). New expiry: {$newExpiry->toDateTimeString()}.",
         ]);
 
+        if ($order->user) {
+            app(\App\Services\Notifications\NotificationService::class)->notify(
+                \App\Models\Notification::TYPE_EXTRA_TIME_SUCCESS,
+                $order->user,
+                [
+                    'user_name'    => $order->user->name ?? $order->user->username,
+                    'service_name' => $service->plan_name ?? $service->service_number,
+                    'order_id'     => $order->order_number,
+                    'days'         => $days,
+                    'expiry_date'  => $newExpiry->format('Y/m/d'),
+                ],
+                'extra_time_success:order:' . $order->id,
+            );
+        }
+
         return $service->fresh();
     }
 
@@ -363,6 +392,19 @@ class ServiceAddonService
             'status'          => 'failed',
             'message'         => $e->getMessage(),
         ]);
+
+        // System/admin warning — payment is confirmed but the Marzban add-on
+        // update failed; admin can retry. Idempotent per order.
+        app(\App\Services\Notifications\NotificationService::class)->notifyAdmins(
+            \App\Models\Notification::TYPE_MARZBAN_UPDATE_FAILED,
+            [
+                'user_name'  => $order->user?->name ?? $order->user?->username ?? '—',
+                'order_id'   => $order->order_number,
+                'service_id' => $service->id,
+                'error'      => $e->getMessage(),
+            ],
+            'marzban_update_failed:' . $action . ':' . $order->id,
+        );
 
         return $service->fresh();
     }

@@ -60,6 +60,18 @@ class PaymentService
         // is idempotent against duplicate calls.
         app(MarkOrderAsPaidService::class)->markPaid($order->fresh(), $tx->fresh());
 
+        // Notify the user that the wallet payment succeeded. Idempotent per order.
+        app(\App\Services\Notifications\NotificationService::class)->notify(
+            \App\Models\Notification::TYPE_WALLET_PAYMENT_SUCCESS,
+            $user,
+            [
+                'user_name'    => $user->name ?? $user->username,
+                'order_id'     => $order->order_number,
+                'final_amount' => number_format($order->final_price_toman),
+            ],
+            'wallet_payment_success:order:' . $order->id,
+        );
+
         return $tx;
     }
 

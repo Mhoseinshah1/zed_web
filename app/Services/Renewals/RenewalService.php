@@ -140,6 +140,17 @@ class RenewalService
                 ]);
                 // Payment is already confirmed; mark renewal failed so admin can retry
                 $order->update(['status' => Order::STATUS_RENEWAL_FAILED]);
+
+                app(\App\Services\Notifications\NotificationService::class)->notifyAdmins(
+                    \App\Models\Notification::TYPE_MARZBAN_UPDATE_FAILED,
+                    [
+                        'user_name'  => $order->user?->name ?? $order->user?->username ?? '—',
+                        'order_id'   => $order->order_number,
+                        'service_id' => $service->id,
+                        'error'      => $e->getMessage(),
+                    ],
+                    'marzban_update_failed:renewal:' . $order->id,
+                );
                 return;
             }
         }
@@ -148,6 +159,22 @@ class RenewalService
             'status'       => Order::STATUS_COMPLETED,
             'completed_at' => now(),
         ]);
+
+        // Notify the user their service was renewed. Idempotent per order.
+        if ($order->user) {
+            app(\App\Services\Notifications\NotificationService::class)->notify(
+                \App\Models\Notification::TYPE_RENEWAL_SUCCESS,
+                $order->user,
+                [
+                    'user_name'    => $order->user->name ?? $order->user->username,
+                    'service_name' => $service->plan_name ?? $service->service_number,
+                    'order_id'     => $order->order_number,
+                    'days'         => $days,
+                    'expiry_date'  => $newExpiry->format('Y/m/d'),
+                ],
+                'renewal_success:order:' . $order->id,
+            );
+        }
 
         // Credit cashback — idempotent, safe for duplicate calls
         $this->applyCashback($order->fresh());
@@ -184,6 +211,17 @@ class RenewalService
                 'description' => 'کش‌بک تمدید سرویس',
             ]);
             $order->update(['renewal_cashback_status' => 'credited']);
+
+            app(\App\Services\Notifications\NotificationService::class)->notify(
+                \App\Models\Notification::TYPE_RENEWAL_CASHBACK_SUCCESS,
+                $user,
+                [
+                    'user_name'       => $user->name ?? $user->username,
+                    'cashback_amount' => number_format($order->renewal_cashback_amount),
+                    'order_id'        => $order->order_number,
+                ],
+                'renewal_cashback_success:order:' . $order->id,
+            );
         } catch (\Exception $e) {
             Log::error('RenewalService: cashback credit failed', [
                 'order_id' => $order->id,

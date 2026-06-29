@@ -215,6 +215,21 @@ class DiscountService
                 'status'  => DiscountRedemption::STATUS_USED,
                 'used_at' => now(),
             ]);
+
+        // Notify the user their discount was applied. Idempotent per order.
+        if ($order->user) {
+            app(\App\Services\Notifications\NotificationService::class)->notify(
+                \App\Models\Notification::TYPE_DISCOUNT_USED,
+                $order->user,
+                [
+                    'user_name'       => $order->user->name ?? $order->user->username,
+                    'order_id'        => $order->order_number,
+                    'discount_amount' => number_format($order->discount_toman),
+                    'final_amount'    => number_format($order->final_price_toman),
+                ],
+                'discount_used:order:' . $order->id,
+            );
+        }
     }
 
     /**

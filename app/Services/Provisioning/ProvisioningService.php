@@ -139,6 +139,20 @@ class ProvisioningService
                 'panel'      => $panel->name,
             ]);
 
+            // Notify the user their service is now active. Idempotent per service.
+            if ($order->user) {
+                app(\App\Services\Notifications\NotificationService::class)->notify(
+                    \App\Models\Notification::TYPE_NEW_SERVICE_CREATED,
+                    $order->user,
+                    [
+                        'user_name'    => $order->user->name ?? $order->user->username,
+                        'service_name' => $service->plan_name ?? $service->service_number,
+                        'order_id'     => $order->order_number,
+                    ],
+                    'new_service_created:service:' . $service->id,
+                );
+            }
+
             return $service->fresh();
 
         } catch (\Throwable $e) {
@@ -169,6 +183,18 @@ class ProvisioningService
                 'attempt'    => $attemptNumber,
                 'error'      => $safeMessage,
             ]);
+
+            // System/admin warning — order paid but provisioning failed.
+            app(\App\Services\Notifications\NotificationService::class)->notifyAdmins(
+                \App\Models\Notification::TYPE_PROVISIONING_FAILED,
+                [
+                    'user_name'  => $order->user?->name ?? $order->user?->username ?? '—',
+                    'order_id'   => $order->order_number,
+                    'service_id' => $service->id,
+                    'error'      => $safeMessage,
+                ],
+                'provisioning_failed:order:' . $order->id,
+            );
 
             throw new \RuntimeException('ساخت سرویس در Marzban با خطا مواجه شد: ' . $safeMessage);
         }

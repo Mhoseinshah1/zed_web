@@ -73,6 +73,22 @@ class MarkOrderAsPaidService
         $order = $order->fresh();
         $this->discountService->markUsed($order);
 
+        // Notify the buyer that payment succeeded (new-service flow). Idempotent
+        // via dedupe key so a duplicate IPN/callback does not re-notify.
+        if (! $order->isRenewal() && ! $order->isAddon() && $order->user) {
+            app(\App\Services\Notifications\NotificationService::class)->notify(
+                \App\Models\Notification::TYPE_PAYMENT_SUCCESS,
+                $order->user,
+                [
+                    'user_name'    => $order->user->name ?? $order->user->username,
+                    'order_id'     => $order->order_number,
+                    'amount'       => number_format($order->price_toman),
+                    'final_amount' => number_format($order->final_price_toman),
+                ],
+                'payment_success:order:' . $order->id,
+            );
+        }
+
         // Route to the correct post-payment handler based on order type
         if ($order->order_type === Order::TYPE_RENEWAL) {
             $this->renewalService->applyRenewal($order);
