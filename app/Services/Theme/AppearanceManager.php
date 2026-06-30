@@ -103,6 +103,15 @@ class AppearanceManager
     /**
      * Global colour custom-properties produced from the active palette.
      *
+     * IMPORTANT — only the ACCENT / brand / semantic colours are emitted here.
+     * The neutral chrome ramp (bg / surface / text / border) is deliberately
+     * NOT included: those are owned by the light/dark appearance (the
+     * `html.zed-light` ramp in theme-tokens.css and Filament's light ramp), so
+     * switching light/dark actually flips the whole site. If we injected the
+     * neutral ramp here it would land as inline style on <html> and override
+     * `html.zed-light`, defeating the toggle. Accent colours are appearance-
+     * independent, so they are safe to inject and let the preset re-skin them.
+     *
      * @return array<string,string>
      */
     public static function colorVars(): array
@@ -110,14 +119,6 @@ class AppearanceManager
         $p = self::activePalette();
 
         return [
-            '--zp-bg'            => $p['bg'],
-            '--zp-bg-soft'       => $p['bg_soft'],
-            '--zp-surface'       => $p['surface'],
-            '--zp-surface-soft'  => $p['surface_soft'],
-            '--zp-surface-hover' => $p['surface_hover'],
-            '--zp-text'          => $p['text'],
-            '--zp-text-muted'    => $p['muted'],
-            '--zp-border'        => $p['border'],
             '--zp-primary'       => $p['primary'],
             '--zp-primary-hover' => $p['primary'],
             '--zp-secondary'     => $p['accent'],

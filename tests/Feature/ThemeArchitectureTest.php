@@ -62,13 +62,20 @@ class ThemeArchitectureTest extends TestCase
         );
     }
 
-    /** Preset selection drives the global colour variables. */
-    public function test_preset_changes_color_vars(): void
+    /**
+     * Preset selection drives the ACCENT colour variables. The neutral chrome
+     * ramp (bg/surface/text/border) is intentionally NOT emitted here — it is
+     * owned by the light/dark appearance so the toggle can flip it.
+     */
+    public function test_preset_changes_accent_vars(): void
     {
         SiteSetting::set('site_theme_preset', 'minimal_light');
         $vars = \App\Services\Theme\AppearanceManager::colorVars();
         $this->assertSame('#2563eb', $vars['--zp-primary']);
-        $this->assertSame('#ffffff', $vars['--zp-surface']);
+        $this->assertSame('#0ea5e9', $vars['--zp-accent']);
+        // Neutral chrome must NOT be part of the injected colour vars.
+        $this->assertArrayNotHasKey('--zp-surface', $vars);
+        $this->assertArrayNotHasKey('--zp-bg', $vars);
     }
 
     /** primary_color / accent_color override the preset colours. */

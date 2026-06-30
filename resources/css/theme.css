@@ -11,6 +11,21 @@
 @import './theme-tokens.css';
 
 @theme inline {
+    /* ----------------------------------------------------------------------
+       Semantic CHROME colours — wire neutral background/text/border to the
+       theme variables so light/dark (html.zed-light) flips the whole shell.
+       Use these in markup: bg-base, bg-surface, text-content, border-line, …
+       (Brand/accent colours stay separate — see the indigo/cyan families.)
+       ---------------------------------------------------------------------- */
+    --color-base:           var(--zp-bg);
+    --color-base-soft:      var(--zp-bg-soft);
+    --color-surface:        var(--zp-surface);
+    --color-surface-soft:   var(--zp-surface-soft);
+    --color-surface-hover:  var(--zp-surface-hover);
+    --color-content:        var(--zp-text);
+    --color-content-muted:  var(--zp-text-muted);
+    --color-line:           var(--zp-border);
+
     --color-gray-950: var(--zp-bg);
     --color-gray-900: var(--zp-surface);
     --color-gray-800: var(--zp-surface-soft);
