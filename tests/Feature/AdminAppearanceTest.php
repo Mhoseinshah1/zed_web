@@ -42,6 +42,8 @@ class AdminAppearanceTest extends TestCase
         SiteSetting::set('logo_size', '0px');
         SiteSetting::set('card_radius', '500rem');
         SiteSetting::set('font_scale', '900');
+        SiteSetting::set('admin_sidebar_width', '9999px');
+        SiteSetting::set('admin_sidebar_item_height', '2px');
 
         $r = AdminAppearanceResolver::resolve();
 
@@ -49,6 +51,23 @@ class AdminAppearanceTest extends TestCase
         $this->assertSame('24px', $r['vars']['--zp-admin-logo-size']);   // min 24
         $this->assertSame('28px', $r['vars']['--zp-admin-card-radius']); // max 28
         $this->assertSame('1.15', $r['vars']['--zp-admin-font-scale']);  // max 1.15
+        $this->assertSame('340px', $r['vars']['--zp-admin-sidebar-width']);       // max 340
+        $this->assertSame('34px', $r['vars']['--zp-admin-sidebar-item-height']);  // min 34
+    }
+
+    /** Admin sidebar controls resolve and reflect saved values. */
+    public function test_resolver_resolves_sidebar_controls(): void
+    {
+        SiteSetting::set('admin_sidebar_brand_size', '20px');
+        SiteSetting::set('admin_sidebar_font_size', '13px');
+        SiteSetting::set('admin_sidebar_width', '320px');
+
+        $vars = AdminAppearanceResolver::resolve()['vars'];
+
+        $this->assertSame('20px', $vars['--zp-admin-sidebar-brand-size']);
+        $this->assertSame('13px', $vars['--zp-admin-sidebar-font-size']);
+        $this->assertSame('320px', $vars['--zp-admin-sidebar-width']);
+        $this->assertSame('320px', $vars['--sidebar-width']); // Filament layout var
     }
 
     /** Every documented admin variable is present and non-empty. */
@@ -80,6 +99,7 @@ class AdminAppearanceTest extends TestCase
         foreach ([
             '--zp-admin-icon-size', '--zp-admin-sidebar-icon-size', '--zp-admin-logo-size',
             '--zp-admin-font-scale', '--zp-admin-table-row-height', '--zp-admin-card-padding',
+            '--zp-admin-sidebar-brand-size', '--zp-admin-sidebar-width', '--zp-admin-sidebar-font-size',
         ] as $name) {
             $this->assertStringContainsString($name, $html, "admin page missing {$name}");
         }
@@ -98,5 +118,8 @@ class AdminAppearanceTest extends TestCase
         $this->assertStringContainsString('عیب‌یابی تنظیمات ظاهر', $html);
         $this->assertStringContainsString('نمونهٔ زندهٔ پنل مدیریت', $html);
         $this->assertStringContainsString('بررسی اعمال تنظیمات', $html);
+        // Admin sidebar control panel is present.
+        $this->assertStringContainsString('سایدبار پنل مدیریت', $html);
+        $this->assertStringContainsString('عرض سایدبار', $html);
     }
 }

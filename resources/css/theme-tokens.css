@@ -71,6 +71,15 @@
     --zp-admin-form-control-height:42px;
     --zp-admin-density-gap:        14px;
     --zp-admin-animation-speed:    220ms;
+
+    /* Admin sidebar controls. */
+    --zp-admin-sidebar-brand-size:       24px;
+    --zp-admin-sidebar-font-size:        14px;
+    --zp-admin-sidebar-group-label-size: 13px;
+    --zp-admin-sidebar-chevron-size:     12px;
+    --zp-admin-sidebar-item-height:      40px;
+    --zp-admin-sidebar-item-gap:         4px;
+    --zp-admin-sidebar-width:            280px;
 }
 
 /* ---- Neutral ramp: LIGHT ------------------------------------------------- */
@@ -319,10 +328,40 @@ html.zed-anim-none *, html.zed-anim-none *::before, html.zed-anim-none *::after 
     width:  calc(var(--zp-admin-icon-size, 16px) + 6px) !important;
     height: calc(var(--zp-admin-icon-size, 16px) + 6px) !important;
 }
-/* Brand logo / avatars: bounded, never icon-sized. */
-.fi-logo { font-size: var(--zp-admin-logo-size, 32px) !important; }
+/* Brand logo / avatars: bounded, never icon-sized. The text brand follows the
+   sidebar brand-size control; an uploaded <img> logo follows the logo-size. */
+.fi-logo { font-size: var(--zp-admin-sidebar-brand-size, 24px) !important; }
 .fi-logo img, .fi-sidebar-header img { max-height: var(--zp-admin-logo-size, 32px) !important; width: auto !important; }
 .fi-avatar { width: 32px !important; height: 32px !important; }
+
+/* ==========================================================================
+   ADMIN SIDEBAR — fully controllable, compact by default. Scoped to .fi-sidebar
+   structural classes only. Width is driven through Filament's own
+   --sidebar-width variable (set in the theme-vars block) so the main content
+   offset follows automatically; we also pin the element width as a fallback.
+   ========================================================================== */
+.fi-sidebar, .fi-sidebar-nav { width: var(--zp-admin-sidebar-width, 280px) !important; }
+.fi-sidebar-item-label, .fi-sidebar-item-button {
+    font-size: var(--zp-admin-sidebar-font-size, 14px) !important;
+}
+.fi-sidebar-group-label, .fi-sidebar-group-button .fi-sidebar-group-label {
+    font-size: var(--zp-admin-sidebar-group-label-size, 13px) !important;
+}
+/* Collapse chevrons only — NOT the group/item icons. */
+.fi-sidebar-group-collapse-button svg, .fi-sidebar-item-button .fi-sidebar-item-grouped-border + svg {
+    width:  var(--zp-admin-sidebar-chevron-size, 12px) !important;
+    height: var(--zp-admin-sidebar-chevron-size, 12px) !important;
+    max-width:  var(--zp-admin-sidebar-chevron-size, 12px);
+    max-height: var(--zp-admin-sidebar-chevron-size, 12px);
+}
+.fi-sidebar-item-button {
+    min-height: var(--zp-admin-sidebar-item-height, 40px) !important;
+    padding-top:    calc((var(--zp-admin-sidebar-item-height, 40px) - var(--zp-admin-sidebar-font-size, 14px)) / 2 - 1px) !important;
+    padding-bottom: calc((var(--zp-admin-sidebar-item-height, 40px) - var(--zp-admin-sidebar-font-size, 14px)) / 2 - 1px) !important;
+}
+.fi-sidebar-group-items, .fi-sidebar-nav-groups, .fi-sidebar-nav .fi-sidebar-group {
+    gap: var(--zp-admin-sidebar-item-gap, 4px) !important;
+}
 
 /* ==========================================================================
    SELECT / DROPDOWN caret — small, single, RTL-correct. Scoped to actual admin

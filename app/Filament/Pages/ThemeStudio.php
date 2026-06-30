@@ -75,8 +75,27 @@ class ThemeStudio extends Page
             'font_scale'                  => (int) SiteSetting::get('font_scale', 100),
             'table_density'               => (string) SiteSetting::get('table_density', 'comfortable'),
             'card_density'                => (string) SiteSetting::get('card_density', 'comfortable'),
+            // Admin sidebar controls.
+            'admin_sidebar_brand_size'       => (string) SiteSetting::get('admin_sidebar_brand_size', '24px'),
+            'admin_sidebar_font_size'        => (string) SiteSetting::get('admin_sidebar_font_size', '14px'),
+            'admin_sidebar_group_label_size' => (string) SiteSetting::get('admin_sidebar_group_label_size', '13px'),
+            'admin_sidebar_chevron_size'     => (string) SiteSetting::get('admin_sidebar_chevron_size', '12px'),
+            'admin_sidebar_item_height'      => (string) SiteSetting::get('admin_sidebar_item_height', '40px'),
+            'admin_sidebar_item_gap'         => (string) SiteSetting::get('admin_sidebar_item_gap', '4px'),
+            'admin_sidebar_width'            => (string) SiteSetting::get('admin_sidebar_width', '280px'),
         ];
     }
+
+    /** Allowed option values per admin sidebar key (guards bad input). */
+    protected const SIDEBAR_OPTIONS = [
+        'admin_sidebar_brand_size'       => ['18px', '20px', '22px', '24px', '28px', '32px'],
+        'admin_sidebar_font_size'        => ['12px', '13px', '14px', '15px', '16px'],
+        'admin_sidebar_group_label_size' => ['11px', '12px', '13px', '14px', '15px'],
+        'admin_sidebar_chevron_size'     => ['10px', '12px', '14px', '16px'],
+        'admin_sidebar_item_height'      => ['34px', '38px', '40px', '44px', '48px'],
+        'admin_sidebar_item_gap'         => ['2px', '4px', '6px', '8px', '10px'],
+        'admin_sidebar_width'            => ['240px', '260px', '280px', '300px', '320px', '340px'],
+    ];
 
     /**
      * Persist the whole studio state. Called from the Blade "Save" button via
@@ -131,7 +150,16 @@ class ThemeStudio extends Page
         SiteSetting::set('table_density', in_array($state['table_density'] ?? null, ['compact', 'normal', 'comfortable'], true) ? $state['table_density'] : 'comfortable');
         SiteSetting::set('card_density', in_array($state['card_density'] ?? null, ['compact', 'normal', 'comfortable'], true) ? $state['card_density'] : 'comfortable');
 
-        Notification::make()->title('تم با موفقیت ذخیره شد.')->success()->send();
+        // Admin sidebar controls — only persist values from the allowed option
+        // set; AdminAppearanceResolver clamps anyway as a final safety net.
+        foreach (self::SIDEBAR_OPTIONS as $key => $allowed) {
+            $val = $state[$key] ?? null;
+            if (is_string($val) && in_array($val, $allowed, true)) {
+                SiteSetting::set($key, $val);
+            }
+        }
+
+        Notification::make()->title('تغییرات ظاهر با موفقیت ذخیره و اعمال شد.')->success()->send();
     }
 
     /** Reset every theme setting to its shipped default. */
@@ -155,6 +183,13 @@ class ThemeStudio extends Page
         SiteSetting::set('font_scale', '100');
         SiteSetting::set('table_density', 'comfortable');
         SiteSetting::set('card_density', 'comfortable');
+        SiteSetting::set('admin_sidebar_brand_size', '24px');
+        SiteSetting::set('admin_sidebar_font_size', '14px');
+        SiteSetting::set('admin_sidebar_group_label_size', '13px');
+        SiteSetting::set('admin_sidebar_chevron_size', '12px');
+        SiteSetting::set('admin_sidebar_item_height', '40px');
+        SiteSetting::set('admin_sidebar_item_gap', '4px');
+        SiteSetting::set('admin_sidebar_width', '280px');
 
         Notification::make()->title('تنظیمات به حالت پیش‌فرض بازنشانی شد.')->success()->send();
         $this->redirect(static::getUrl());

@@ -45,6 +45,15 @@ class AdminAppearanceResolver
         $rawBtnR    = (string) $get('button_radius', '0.6rem');
         $rawFont    = (int) $get('font_scale', 100);
 
+        // Admin sidebar controls (new, admin-only). Stored as px strings.
+        $rawSbBrand  = (string) $get('admin_sidebar_brand_size', '24px');
+        $rawSbFont   = (string) $get('admin_sidebar_font_size', '14px');
+        $rawSbGroup  = (string) $get('admin_sidebar_group_label_size', '13px');
+        $rawSbChev   = (string) $get('admin_sidebar_chevron_size', '12px');
+        $rawSbItemH  = (string) $get('admin_sidebar_item_height', '40px');
+        $rawSbItemG  = (string) $get('admin_sidebar_item_gap', '4px');
+        $rawSbWidth  = (string) $get('admin_sidebar_width', '280px');
+
         $tableDensity = self::oneOf((string) $get('table_density', 'comfortable'), ['compact', 'normal', 'comfortable'], 'comfortable');
         $cardDensity  = self::oneOf((string) $get('card_density', 'comfortable'), ['compact', 'normal', 'comfortable'], 'comfortable');
 
@@ -67,6 +76,15 @@ class AdminAppearanceResolver
         $fontScale = self::clampFloat($rawFont / 100, 0.9, 1.15);
         $cardR    = self::clamp(self::toPx($rawCardR), 8, 28);
         $btnR     = self::clamp(self::toPx($rawBtnR), 6, 24);
+
+        // ── sidebar (clamped) ───────────────────────────────────────────────
+        $sbBrand  = self::clamp(self::toPx($rawSbBrand), 18, 32);
+        $sbFont   = self::clamp(self::toPx($rawSbFont), 12, 16);
+        $sbGroup  = self::clamp(self::toPx($rawSbGroup), 11, 15);
+        $sbChev   = self::clamp(self::toPx($rawSbChev), 10, 16);
+        $sbItemH  = self::clamp(self::toPx($rawSbItemH), 34, 48);
+        $sbItemG  = self::clamp(self::toPx($rawSbItemG), 2, 10);
+        $sbWidth  = self::clamp(self::toPx($rawSbWidth), 240, 340);
 
         // ── density presets (px) ────────────────────────────────────────────
         [$cardPad, $ctrlH, $gap] = match ($cardDensity) {
@@ -104,6 +122,17 @@ class AdminAppearanceResolver
             '--zp-admin-form-control-height' => self::px($ctrlH),
             '--zp-admin-density-gap'        => self::px($gap),
             '--zp-admin-animation-speed'    => $animSpeed,
+            // Admin sidebar controls.
+            '--zp-admin-sidebar-brand-size'       => self::px($sbBrand),
+            '--zp-admin-sidebar-font-size'        => self::px($sbFont),
+            '--zp-admin-sidebar-group-label-size' => self::px($sbGroup),
+            '--zp-admin-sidebar-chevron-size'     => self::px($sbChev),
+            '--zp-admin-sidebar-item-height'      => self::px($sbItemH),
+            '--zp-admin-sidebar-item-gap'         => self::px($sbItemG),
+            '--zp-admin-sidebar-width'            => self::px($sbWidth),
+            // Filament's own layout width variable — set so the main content
+            // offset follows the chosen sidebar width.
+            '--sidebar-width'                     => self::px($sbWidth),
             // Admin-scoped base aliases so existing .fi-* rules that read the
             // canonical tokens follow the resolved admin radius/motion too.
             // (This style block is injected ONLY into the admin head.)
@@ -129,6 +158,13 @@ class AdminAppearanceResolver
                 'table_density'     => $tableDensity,
                 'card_density'      => $cardDensity,
                 'animation_intensity' => $anim,
+                'admin_sidebar_brand_size'       => $rawSbBrand,
+                'admin_sidebar_font_size'        => $rawSbFont,
+                'admin_sidebar_group_label_size' => $rawSbGroup,
+                'admin_sidebar_chevron_size'     => $rawSbChev,
+                'admin_sidebar_item_height'      => $rawSbItemH,
+                'admin_sidebar_item_gap'         => $rawSbItemG,
+                'admin_sidebar_width'            => $rawSbWidth,
             ],
         ];
     }

@@ -246,6 +246,76 @@
                 </div>
             </div>
 
+            {{-- ── Admin sidebar controls ──────────────────────────────────
+                 Dedicated, fully-functional sizing for the /zed-admin sidebar
+                 (brand, menu text, group labels, chevrons, item height/gap,
+                 width). Independent of the user panel. --}}
+            <div class="zps-panel">
+                <p class="zps-panel-title">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="18" rx="1"/><path d="M13 7h7M13 12h7M13 17h7"/></svg>
+                    سایدبار پنل مدیریت
+                </p>
+                <p class="zps-panel-sub">اندازه‌های منوی کنار پنل ادمین. این تنظیمات فقط روی /zed-admin اعمال می‌شوند.</p>
+                <div class="zps-controls-grid">
+                    <div class="zps-field">
+                        <label>اندازه برند/لوگو</label>
+                        <select class="zps-select" x-model="state.admin_sidebar_brand_size" x-on:change="applyLive(); dirty=true">
+                            <option value="18px">خیلی کوچک</option><option value="20px">کوچک</option><option value="22px">متوسط</option>
+                            <option value="24px">پیش‌فرض</option><option value="28px">بزرگ</option><option value="32px">خیلی بزرگ</option>
+                        </select>
+                    </div>
+                    <div class="zps-field">
+                        <label>اندازه متن منو</label>
+                        <select class="zps-select" x-model="state.admin_sidebar_font_size" x-on:change="applyLive(); dirty=true">
+                            <option value="12px">خیلی کوچک</option><option value="13px">کوچک</option>
+                            <option value="14px">پیش‌فرض</option><option value="15px">بزرگ</option><option value="16px">خیلی بزرگ</option>
+                        </select>
+                    </div>
+                    <div class="zps-field">
+                        <label>اندازه آیکن منو</label>
+                        <select class="zps-select" x-model="state.sidebar_icon_size" x-on:change="applyLive(); dirty=true">
+                            <option value="1rem">کوچک</option><option value="1.25rem">پیش‌فرض</option><option value="1.5rem">بزرگ</option>
+                        </select>
+                    </div>
+                    <div class="zps-field">
+                        <label>اندازه عنوان گروه‌ها</label>
+                        <select class="zps-select" x-model="state.admin_sidebar_group_label_size" x-on:change="applyLive(); dirty=true">
+                            <option value="11px">خیلی کوچک</option><option value="12px">کوچک</option>
+                            <option value="13px">پیش‌فرض</option><option value="14px">بزرگ</option><option value="15px">خیلی بزرگ</option>
+                        </select>
+                    </div>
+                    <div class="zps-field">
+                        <label>اندازه فلش (chevron)</label>
+                        <select class="zps-select" x-model="state.admin_sidebar_chevron_size" x-on:change="applyLive(); dirty=true">
+                            <option value="10px">کوچک</option><option value="12px">پیش‌فرض</option>
+                            <option value="14px">بزرگ</option><option value="16px">خیلی بزرگ</option>
+                        </select>
+                    </div>
+                    <div class="zps-field">
+                        <label>ارتفاع آیتم‌ها</label>
+                        <select class="zps-select" x-model="state.admin_sidebar_item_height" x-on:change="applyLive(); dirty=true">
+                            <option value="34px">فشرده</option><option value="38px">کم</option>
+                            <option value="40px">پیش‌فرض</option><option value="44px">زیاد</option><option value="48px">خیلی زیاد</option>
+                        </select>
+                    </div>
+                    <div class="zps-field">
+                        <label>فاصله بین آیتم‌ها</label>
+                        <select class="zps-select" x-model="state.admin_sidebar_item_gap" x-on:change="applyLive(); dirty=true">
+                            <option value="2px">خیلی کم</option><option value="4px">پیش‌فرض</option>
+                            <option value="6px">متوسط</option><option value="8px">زیاد</option><option value="10px">خیلی زیاد</option>
+                        </select>
+                    </div>
+                    <div class="zps-field">
+                        <label>عرض سایدبار</label>
+                        <select class="zps-select" x-model="state.admin_sidebar_width" x-on:change="applyLive(); dirty=true">
+                            <option value="240px">باریک</option><option value="260px">کم</option>
+                            <option value="280px">پیش‌فرض</option><option value="300px">زیاد</option>
+                            <option value="320px">عریض</option><option value="340px">خیلی عریض</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+
             {{-- ── Visual test sandbox ──────────────────────────────────────
                  Uses the same --zp-admin-* tokens the real Filament chrome
                  uses, so every advanced setting visibly changes it live. --}}
@@ -256,6 +326,24 @@
                 </p>
                 <p class="zps-panel-sub">این نمونه دقیقاً با همان متغیرهای پنل ادمین ساخته شده؛ با تغییر تنظیمات بالا، بلافاصله تغییر می‌کند.</p>
                 <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:.9rem">
+                    {{-- mini sidebar: brand + group label + items + chevron --}}
+                    <div style="border:1px solid var(--zp-border);border-radius:var(--zp-admin-card-radius,14px);padding:.6rem;background:var(--zp-surface);width:min(100%,var(--zp-admin-sidebar-width,280px))">
+                        <div style="font-weight:800;color:var(--zp-text);font-size:var(--zp-admin-sidebar-brand-size,24px);line-height:1.1;margin:.2rem .4rem .6rem">ZedProxy</div>
+                        <div style="font-size:var(--zp-admin-sidebar-group-label-size,13px);color:var(--zp-text-muted);font-weight:700;margin:.3rem .4rem;display:flex;align-items:center;justify-content:space-between">
+                            <span>داشبورد</span>
+                            <svg style="width:var(--zp-admin-sidebar-chevron-size,12px);height:var(--zp-admin-sidebar-chevron-size,12px)" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
+                        </div>
+                        <div style="display:flex;flex-direction:column;gap:var(--zp-admin-sidebar-item-gap,4px)">
+                            <div style="display:flex;align-items:center;gap:.5rem;min-height:var(--zp-admin-sidebar-item-height,40px);padding:0 .5rem;border-radius:var(--zp-admin-button-radius,10px);background:color-mix(in srgb,var(--zp-primary) 16%,transparent)">
+                                <svg style="width:var(--zp-admin-sidebar-icon-size,18px);height:var(--zp-admin-sidebar-icon-size,18px);flex:none" viewBox="0 0 24 24" fill="none" stroke="var(--zp-primary)" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+                                <span style="font-size:var(--zp-admin-sidebar-font-size,14px);color:var(--zp-text);font-weight:600">داشبورد مدیریت</span>
+                            </div>
+                            <div style="display:flex;align-items:center;gap:.5rem;min-height:var(--zp-admin-sidebar-item-height,40px);padding:0 .5rem;border-radius:var(--zp-admin-button-radius,10px)">
+                                <svg style="width:var(--zp-admin-sidebar-icon-size,18px);height:var(--zp-admin-sidebar-icon-size,18px);flex:none" viewBox="0 0 24 24" fill="none" stroke="var(--zp-text-muted)" stroke-width="2"><path d="M16 21v-2a4 4 0 00-4-4H6a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/></svg>
+                                <span style="font-size:var(--zp-admin-sidebar-font-size,14px);color:var(--zp-text-muted)">کاربران</span>
+                            </div>
+                        </div>
+                    </div>
                     {{-- sidebar item + icon --}}
                     <div style="border:1px solid var(--zp-border);border-radius:var(--zp-admin-card-radius,14px);padding:var(--zp-admin-card-padding,16px);background:var(--zp-surface-soft)">
                         <div style="font-size:.7rem;color:var(--zp-text-muted);margin-bottom:.5rem">آیتم منو + آیکن</div>
@@ -345,6 +433,13 @@
                                     ['گردی کارت', $adminResolved['raw']['card_radius'], '--zp-admin-card-radius'],
                                     ['گردی دکمه', $adminResolved['raw']['button_radius'], '--zp-admin-button-radius'],
                                     ['انیمیشن', $adminResolved['raw']['animation_intensity'], '--zp-admin-animation-speed'],
+                                    ['برند سایدبار', $adminResolved['raw']['admin_sidebar_brand_size'], '--zp-admin-sidebar-brand-size'],
+                                    ['متن سایدبار', $adminResolved['raw']['admin_sidebar_font_size'], '--zp-admin-sidebar-font-size'],
+                                    ['عنوان گروه سایدبار', $adminResolved['raw']['admin_sidebar_group_label_size'], '--zp-admin-sidebar-group-label-size'],
+                                    ['فلش سایدبار', $adminResolved['raw']['admin_sidebar_chevron_size'], '--zp-admin-sidebar-chevron-size'],
+                                    ['ارتفاع آیتم سایدبار', $adminResolved['raw']['admin_sidebar_item_height'], '--zp-admin-sidebar-item-height'],
+                                    ['فاصله آیتم سایدبار', $adminResolved['raw']['admin_sidebar_item_gap'], '--zp-admin-sidebar-item-gap'],
+                                    ['عرض سایدبار', $adminResolved['raw']['admin_sidebar_width'], '--zp-admin-sidebar-width'],
                                 ])
                                 @foreach($diagRows as [$label, $dbVal, $varName])
                                     <tr style="border-top:1px solid var(--zp-border)">
@@ -502,6 +597,16 @@ function themeStudio(state, presets, groups, groupLabels) {
             S('--zp-admin-table-row-height', tbl[0] + 'px');
             S('--zp-admin-table-cell-py', tbl[1] + 'px');
             S('--zp-admin-table-cell-px', tbl[2] + 'px');
+            // Admin sidebar controls (clamped to the resolver ranges).
+            const sbW = clamp(px(this.state.admin_sidebar_width || '280px'), 240, 340);
+            S('--zp-admin-sidebar-brand-size', clamp(px(this.state.admin_sidebar_brand_size || '24px'), 18, 32) + 'px');
+            S('--zp-admin-sidebar-font-size', clamp(px(this.state.admin_sidebar_font_size || '14px'), 12, 16) + 'px');
+            S('--zp-admin-sidebar-group-label-size', clamp(px(this.state.admin_sidebar_group_label_size || '13px'), 11, 15) + 'px');
+            S('--zp-admin-sidebar-chevron-size', clamp(px(this.state.admin_sidebar_chevron_size || '12px'), 10, 16) + 'px');
+            S('--zp-admin-sidebar-item-height', clamp(px(this.state.admin_sidebar_item_height || '40px'), 34, 48) + 'px');
+            S('--zp-admin-sidebar-item-gap', clamp(px(this.state.admin_sidebar_item_gap || '4px'), 2, 10) + 'px');
+            S('--zp-admin-sidebar-width', sbW + 'px');
+            S('--sidebar-width', sbW + 'px');
         },
         bump() { this.fade = false; requestAnimationFrame(() => requestAnimationFrame(() => this.fade = true)); },
 
