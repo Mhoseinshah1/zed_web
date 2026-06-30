@@ -12,14 +12,26 @@ class VpnPanel extends Model
     const TYPE_SANAEI_XUI = 'sanaei_3xui';
     const TYPE_OTHER      = 'other';
 
+    // 3X-UI / Sanaei authentication methods.
+    const AUTH_API_TOKEN = 'api_token';
+    const AUTH_API_LOGIN = 'api_login';
+
     protected $fillable = [
         'name',
         'type',
         'base_url',
+        'panel_path',
+        'auth_method',
         'api_docs_url',
         'username',
         'password',
         'token',
+        'api_token',
+        'default_inbound_id',
+        'subscription_base_url',
+        'subscription_path',
+        'verify_ssl',
+        'timeout_seconds',
         'is_active',
         'is_default',
         'notes',
@@ -52,6 +64,10 @@ class VpnPanel extends Model
         'system_info'                      => 'array',
         'password'                         => 'encrypted',
         'token'                            => 'encrypted',
+        'api_token'                        => 'encrypted',
+        'verify_ssl'                       => 'boolean',
+        'timeout_seconds'                  => 'integer',
+        'default_inbound_id'               => 'integer',
         'allow_user_sync_service'          => 'boolean',
         'allow_user_revoke_subscription'   => 'boolean',
         'allow_user_reset_traffic'         => 'boolean',
@@ -77,7 +93,47 @@ class VpnPanel extends Model
         'allow_user_view_all_config_links'  => true,
     ];
 
-    protected $hidden = ['password', 'token'];
+    protected $hidden = ['password', 'token', 'api_token'];
+
+    public static function authMethods(): array
+    {
+        return [
+            self::AUTH_API_TOKEN => 'API Token',
+            self::AUTH_API_LOGIN => 'ورود از طریق API',
+        ];
+    }
+
+    public function isSanaei(): bool
+    {
+        return $this->type === self::TYPE_SANAEI_XUI;
+    }
+
+    public function isMarzban(): bool
+    {
+        return $this->type === self::TYPE_MARZBAN;
+    }
+
+    /**
+     * The API base, combining base_url + panel_path with safe slash handling.
+     * e.g. https://host:2053 + /M.hosein1384 → https://host:2053/M.hosein1384
+     */
+    public function apiBaseUrl(): string
+    {
+        $base = rtrim(trim((string) $this->base_url), '/');
+        $path = trim((string) $this->panel_path);
+        if ($path === '') {
+            return $base;
+        }
+        return $base . '/' . trim($path, '/');
+    }
+
+    /** Effective auth method (defaults to API token). */
+    public function effectiveAuthMethod(): string
+    {
+        return $this->auth_method === self::AUTH_API_LOGIN
+            ? self::AUTH_API_LOGIN
+            : self::AUTH_API_TOKEN;
+    }
 
     public function inbounds(): HasMany
     {

@@ -75,6 +75,68 @@ class VpnPanelResource extends Resource
                     ->helperText('سرویس‌های جدید روی این پنل ساخته می‌شوند'),
             ])->columns(2),
 
+            Forms\Components\Section::make('تنظیمات سنایی / 3X-UI')
+                ->description('فقط برای پنل‌های نوع سنایی / 3X-UI. احراز هویت تنها از طریق API رسمی انجام می‌شود؛ توکن API روش توصیه‌شده است.')
+                ->visible(fn (Forms\Get $get) => $get('type') === VpnPanel::TYPE_SANAEI_XUI)
+                ->schema([
+                    Forms\Components\TextInput::make('panel_path')
+                        ->label('مسیر پنل')
+                        ->placeholder('/M.hosein1384')
+                        ->helperText('مسیر اختصاصی پنل که در آدرس ورود استفاده می‌شود.'),
+
+                    Forms\Components\Select::make('auth_method')
+                        ->label('روش احراز هویت')
+                        ->options(VpnPanel::authMethods())
+                        ->default(VpnPanel::AUTH_API_TOKEN)
+                        ->live()
+                        ->helperText('روش توصیه‌شده: API Token.'),
+
+                    Forms\Components\TextInput::make('api_token')
+                        ->label('توکن API')
+                        ->password()->revealable()
+                        ->visible(fn (Forms\Get $get) => $get('auth_method') !== VpnPanel::AUTH_API_LOGIN)
+                        ->required(fn (Forms\Get $get) => $get('type') === VpnPanel::TYPE_SANAEI_XUI && $get('auth_method') !== VpnPanel::AUTH_API_LOGIN)
+                        ->helperText('ذخیره به‌صورت رمزگذاری‌شده. در جدول‌ها نمایش داده نمی‌شود.')
+                        ->columnSpanFull(),
+
+                    Forms\Components\TextInput::make('username')
+                        ->label('نام کاربری پنل')
+                        ->visible(fn (Forms\Get $get) => $get('auth_method') === VpnPanel::AUTH_API_LOGIN)
+                        ->required(fn (Forms\Get $get) => $get('type') === VpnPanel::TYPE_SANAEI_XUI && $get('auth_method') === VpnPanel::AUTH_API_LOGIN),
+
+                    Forms\Components\TextInput::make('password')
+                        ->label('رمز عبور پنل')
+                        ->password()->revealable()
+                        ->visible(fn (Forms\Get $get) => $get('auth_method') === VpnPanel::AUTH_API_LOGIN)
+                        ->required(fn (Forms\Get $get) => $get('type') === VpnPanel::TYPE_SANAEI_XUI && $get('auth_method') === VpnPanel::AUTH_API_LOGIN),
+
+                    Forms\Components\TextInput::make('default_inbound_id')
+                        ->label('Inbound پیش‌فرض')
+                        ->numeric()
+                        ->helperText('با دکمه «دریافت لیست Inboundها» شناسه را پیدا کنید.'),
+
+                    Forms\Components\TextInput::make('subscription_base_url')
+                        ->label('آدرس پایه لینک اشتراک')
+                        ->placeholder('https://example.com:2096'),
+
+                    Forms\Components\TextInput::make('subscription_path')
+                        ->label('مسیر لینک اشتراک')
+                        ->placeholder('sub'),
+
+                    Forms\Components\Toggle::make('verify_ssl')
+                        ->label('بررسی SSL')
+                        ->default(true)
+                        ->helperText('برای پنل‌های با گواهی self-signed می‌توانید غیرفعال کنید.'),
+
+                    Forms\Components\TextInput::make('timeout_seconds')
+                        ->label('زمان انتظار اتصال (ثانیه)')
+                        ->numeric()->default(15)->minValue(1)->maxValue(120),
+
+                    Forms\Components\Textarea::make('notes')
+                        ->label('توضیحات ادمین')
+                        ->rows(2)->columnSpanFull(),
+                ])->columns(2),
+
             Forms\Components\Section::make('وضعیت اتصال')
                 ->schema([
                     Forms\Components\Placeholder::make('last_checked_at')
@@ -220,6 +282,57 @@ class VpnPanelResource extends Resource
             ])
             ->filters([])
             ->actions([
+                // ── 3X-UI / Sanaei: test connection via official API ──
+                Tables\Actions\Action::make('sanaei_test_connection')
+                    ->label('تست اتصال')
+                    ->icon('heroicon-o-signal')
+                    ->color('info')
+                    ->visible(fn (VpnPanel $record) => $record->type === VpnPanel::TYPE_SANAEI_XUI)
+                    ->action(function (VpnPanel $record): void {
+                        $result = (new \App\Services\VpnPanels\Sanaei3xUiProvider())->testConnection($record);
+                        $record->update([
+                            'last_checked_at'        => now(),
+                            'last_error'             => $result->ok ? null : $result->message,
+                            'last_health_checked_at' => now(),
+                            'health_status'          => $result->ok ? VpnPanel::HEALTH_ONLINE : VpnPanel::HEALTH_OFFLINE,
+                            'health_error'           => $result->ok ? null : $result->message,
+                        ]);
+                        Notification::make()
+                            ->title($result->ok ? 'اتصال موفق' : 'اتصال ناموفق')
+                            ->body($result->message)
+                            ->{$result->ok ? 'success' : 'danger'}()
+                            ->send();
+                    }),
+
+                // ── 3X-UI / Sanaei: fetch inbound list ──
+                Tables\Actions\Action::make('sanaei_inbounds')
+                    ->label('دریافت لیست Inboundها')
+                    ->icon('heroicon-o-queue-list')
+                    ->color('gray')
+                    ->visible(fn (VpnPanel $record) => $record->type === VpnPanel::TYPE_SANAEI_XUI)
+                    ->modalSubmitAction(false)
+                    ->modalHeading('Inboundهای پنل سنایی')
+                    ->modalContent(function (VpnPanel $record) {
+                        try {
+                            $inbounds = (new \App\Services\VpnPanels\Sanaei\Sanaei3xUiClient($record))->getInbounds();
+                            $rows = collect($inbounds)->map(fn ($i) => [
+                                'id'       => $i['id'] ?? '—',
+                                'remark'   => $i['remark'] ?? '—',
+                                'protocol' => $i['protocol'] ?? '—',
+                                'port'     => $i['port'] ?? '—',
+                            ]);
+                            $html = '<table style="width:100%;font-size:13px"><thead><tr style="text-align:right">'
+                                . '<th>ID</th><th>نام</th><th>پروتکل</th><th>پورت</th></tr></thead><tbody>';
+                            foreach ($rows as $r) {
+                                $html .= "<tr><td>{$r['id']}</td><td>" . e($r['remark']) . "</td><td>{$r['protocol']}</td><td>{$r['port']}</td></tr>";
+                            }
+                            $html .= '</tbody></table>';
+                            return new \Illuminate\Support\HtmlString($html);
+                        } catch (\Throwable $e) {
+                            return new \Illuminate\Support\HtmlString('<p style="color:#f43f5e">دریافت لیست Inboundها ناموفق بود.</p>');
+                        }
+                    }),
+
                 Tables\Actions\Action::make('test_connection')
                     ->label('تست اتصال')
                     ->icon('heroicon-o-signal')

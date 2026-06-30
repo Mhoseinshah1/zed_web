@@ -52,15 +52,17 @@ class ProvisioningService
             ]);
         }
 
-        // Resolve panel: prefer one already linked to the service
+        // Resolve panel: prefer one already linked to the service, then the
+        // default Marzban panel, then any active default panel (e.g. 3X-UI).
         $panel = ($service->vpn_panel_id ? VpnPanel::find($service->vpn_panel_id) : null)
             ?? VpnPanel::where('type', VpnPanel::TYPE_MARZBAN)
                    ->where('is_active', true)
                    ->where('is_default', true)
-                   ->first();
+                   ->first()
+            ?? VpnPanel::where('is_active', true)->where('is_default', true)->first();
 
         if (! $panel) {
-            throw new \RuntimeException('هیچ پنل Marzban فعال پیش‌فرضی پیدا نشد.');
+            throw new \RuntimeException('هیچ پنل فعال پیش‌فرضی پیدا نشد.');
         }
 
         // Transition order to provisioning
@@ -79,6 +81,51 @@ class ProvisioningService
         ]);
 
         try {
+            // ── Sanaei / 3X-UI panels: provision via the 3X-UI provider ──
+            if ($panel->isSanaei()) {
+                $service->vpn_panel_id = $panel->id;
+                $service->save();
+
+                $result = (new \App\Services\VpnPanels\Sanaei3xUiProvider())->provision($service->fresh());
+                if (! $result->ok) {
+                    throw new \RuntimeException($result->message);
+                }
+
+                $service->refresh();
+                $startsAt  = $service->starts_at ?? now();
+                $expiresAt = $service->expires_at
+                    ?? ($service->duration_days ? $startsAt->copy()->addDays($service->duration_days) : null);
+                $service->update([
+                    'status'           => UserService::STATUS_ACTIVE,
+                    'provision_status' => UserService::PROVISION_PROVISIONED,
+                    'starts_at'        => $startsAt,
+                    'activated_at'     => $service->activated_at ?? now(),
+                    'expires_at'       => $expiresAt,
+                ]);
+
+                $attempt->update([
+                    'status'           => ProvisioningAttempt::STATUS_SUCCESS,
+                    'response_payload' => ['username' => $service->remote_username, 'panel_type' => $panel->type],
+                    'finished_at'      => now(),
+                ]);
+                $order->update(['status' => Order::STATUS_COMPLETED, 'completed_at' => now()]);
+
+                if ($order->user) {
+                    app(\App\Services\Notifications\NotificationService::class)->notify(
+                        \App\Models\Notification::TYPE_NEW_SERVICE_CREATED,
+                        $order->user,
+                        [
+                            'user_name'    => $order->user->name ?? $order->user->username,
+                            'service_name' => $service->plan_name ?? $service->service_number,
+                            'order_id'     => $order->order_number,
+                        ],
+                        'new_service_created:service:' . $service->id,
+                    );
+                }
+
+                return $service->fresh();
+            }
+
             $client   = new MarzbanClient($panel);
             $username = $service->remote_username ?? $this->generateUsername($service);
             $payload  = array_merge(['username' => $username], $this->buildPayload($service));
