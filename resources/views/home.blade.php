@@ -4,12 +4,13 @@
     $templateLayout = match ($activeTemplate) {
         'modern' => 'layouts.modern',
         'shop'   => 'layouts.shop',
+        'matrix' => 'layouts.matrix',
         default  => 'layouts.app',
     };
 @endphp
 {{-- Homepage template dispatcher: chooses the layout + body for the active
-     homepage template (classic | modern | shop). The colour theme is handled
-     separately by ThemeManager and applies to all templates. --}}
+     homepage template (classic | modern | shop | matrix). The colour theme is
+     handled separately by ThemeManager and applies to all templates. --}}
 @extends($templateLayout)
 
 @section('title', site_setting('home_meta_title') ?: 'خانه')
