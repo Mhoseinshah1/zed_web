@@ -28,11 +28,11 @@ class SmsSettingsPage extends Page implements HasForms, HasActions
     protected static string $view = 'filament.pages.sms-settings';
 
     protected static ?string $navigationIcon   = 'heroicon-o-chat-bubble-bottom-center-text';
-    protected static ?string $navigationGroup   = 'سیستم و یکپارچه‌سازی';
+    protected static ?string $navigationGroup   = 'کاربران';
     protected static ?string $navigationLabel   = 'تنظیمات پیامک و تایید شماره';
     protected static ?string $title             = 'تنظیمات پیامک و تایید شماره موبایل';
     protected static ?string $slug              = 'settings/sms';
-    protected static ?int    $navigationSort    = 22;
+    protected static ?int    $navigationSort    = 20;
 
     /** @var array<string, mixed> */
     public array $data = [];

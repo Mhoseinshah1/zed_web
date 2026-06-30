@@ -23,11 +23,11 @@ class DiscountCodeResource extends Resource
     protected static ?string $model = DiscountCode::class;
 
     protected static ?string $navigationIcon   = 'heroicon-o-tag';
-    protected static ?string $navigationGroup  = 'مالی';
+    protected static ?string $navigationGroup  = 'سفارش‌ها و مالی';
     protected static ?string $navigationLabel  = 'کدهای تخفیف';
     protected static ?string $modelLabel       = 'کد تخفیف';
     protected static ?string $pluralModelLabel = 'کدهای تخفیف';
-    protected static ?int    $navigationSort   = 60;
+    protected static ?int    $navigationSort   = 70;
 
     public static function form(Form $form): Form
     {

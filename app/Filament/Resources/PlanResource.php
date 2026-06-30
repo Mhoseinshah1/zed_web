@@ -17,11 +17,11 @@ class PlanResource extends Resource
     protected static ?string $model = Plan::class;
 
     protected static ?string $navigationIcon  = 'heroicon-o-credit-card';
-    protected static ?string $navigationGroup = 'کاربران و سفارش‌ها';
+    protected static ?string $navigationGroup = 'فروشگاه و پلن‌ها';
     protected static ?string $navigationLabel = 'پلن‌ها';
     protected static ?string $modelLabel      = 'پلن';
     protected static ?string $pluralModelLabel = 'پلن‌ها';
-    protected static ?int $navigationSort     = 2;
+    protected static ?int $navigationSort     = 10;
 
     public static function form(Form $form): Form
     {

@@ -19,7 +19,7 @@ class SupportTicketResource extends Resource
     protected static ?string $navigationLabel   = 'تیکت‌ها';
     protected static ?string $modelLabel        = 'تیکت';
     protected static ?string $pluralModelLabel  = 'تیکت‌ها';
-    protected static ?int    $navigationSort    = 1;
+    protected static ?int    $navigationSort    = 10;
 
     public static function getNavigationBadge(): ?string
     {

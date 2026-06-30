@@ -17,11 +17,11 @@ class CommissionResource extends Resource
     protected static ?string $model = Commission::class;
 
     protected static ?string $navigationIcon   = 'heroicon-o-banknotes';
-    protected static ?string $navigationGroup   = 'بازاریابی';
+    protected static ?string $navigationGroup   = 'نمایندگان و بازاریابی';
     protected static ?string $navigationLabel   = 'پورسانت‌ها';
     protected static ?string $modelLabel        = 'پورسانت';
     protected static ?string $pluralModelLabel  = 'پورسانت‌ها';
-    protected static ?int    $navigationSort    = 3;
+    protected static ?int    $navigationSort    = 30;
 
     public static function table(Table $table): Table
     {

@@ -814,7 +814,7 @@ class RenewalTest extends TestCase
         $prop->setAccessible(true);
 
         $instance = $ref->newInstanceWithoutConstructor();
-        $this->assertSame('کاربران و سفارش‌ها', $prop->getValue($instance));
+        $this->assertSame('فروشگاه و پلن‌ها', $prop->getValue($instance));
     }
 
     public function test_renewal_package_resource_hidden_from_navigation(): void

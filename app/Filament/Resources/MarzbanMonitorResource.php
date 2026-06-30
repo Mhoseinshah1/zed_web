@@ -24,11 +24,11 @@ class MarzbanMonitorResource extends Resource
     protected static ?string $model = UserService::class;
 
     protected static ?string $navigationIcon   = 'heroicon-o-signal';
-    protected static ?string $navigationGroup   = 'سرویس‌ها';
-    protected static ?string $navigationLabel   = 'مانیتورینگ Marzban';
+    protected static ?string $navigationGroup   = 'سرویس‌ها و پنل‌های VPN';
+    protected static ?string $navigationLabel   = 'مانیتورینگ پنل‌ها';
     protected static ?string $modelLabel        = 'سرویس Marzban';
     protected static ?string $pluralModelLabel  = 'مانیتورینگ Marzban';
-    protected static ?int    $navigationSort    = 10;
+    protected static ?int    $navigationSort    = 40;
 
     public static function table(Table $table): Table
     {

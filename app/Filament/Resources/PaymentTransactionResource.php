@@ -24,11 +24,11 @@ class PaymentTransactionResource extends Resource
     protected static ?string $model = PaymentTransaction::class;
 
     protected static ?string $navigationIcon   = 'heroicon-o-credit-card';
-    protected static ?string $navigationGroup  = 'مالی';
+    protected static ?string $navigationGroup  = 'سفارش‌ها و مالی';
     protected static ?string $navigationLabel  = 'تراکنش‌های پرداخت';
     protected static ?string $modelLabel       = 'تراکنش';
     protected static ?string $pluralModelLabel = 'تراکنش‌ها';
-    protected static ?int    $navigationSort   = 20;
+    protected static ?int    $navigationSort   = 30;
 
     public static function form(Form $form): Form
     {

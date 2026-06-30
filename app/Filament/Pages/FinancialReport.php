@@ -22,11 +22,11 @@ class FinancialReport extends Page implements HasForms
     protected static string $view = 'filament.pages.financial-report';
 
     protected static ?string $navigationIcon  = 'heroicon-o-chart-bar-square';
-    protected static ?string $navigationGroup = 'مالی';
+    protected static ?string $navigationGroup = 'سفارش‌ها و مالی';
     protected static ?string $navigationLabel = 'گزارش مالی';
     protected static ?string $title           = 'داشبورد مالی';
     protected static ?string $slug            = 'reports/financial';
-    protected static ?int    $navigationSort  = 10;
+    protected static ?int    $navigationSort  = 20;
 
     public string $dateFrom = '';
     public string $dateTo   = '';

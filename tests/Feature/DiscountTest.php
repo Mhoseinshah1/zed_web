@@ -85,7 +85,7 @@ class DiscountTest extends TestCase
 
     public function test_discount_code_resource_is_in_mali_group(): void
     {
-        $this->assertEquals('مالی', \App\Filament\Resources\DiscountCodeResource::getNavigationGroup());
+        $this->assertEquals('سفارش‌ها و مالی', \App\Filament\Resources\DiscountCodeResource::getNavigationGroup());
     }
 
     // ── Task 3: Percent discount calculates correctly ─────────────────────────

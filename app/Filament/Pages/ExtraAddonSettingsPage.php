@@ -23,11 +23,11 @@ class ExtraAddonSettingsPage extends Page implements HasForms
     protected static string $view = 'filament.pages.extra-addon-settings';
 
     protected static ?string $navigationIcon  = 'heroicon-o-plus-circle';
-    protected static ?string $navigationGroup = 'سرویس‌ها';
+    protected static ?string $navigationGroup = 'فروشگاه و پلن‌ها';
     protected static ?string $navigationLabel = 'تنظیمات خرید حجم و زمان اضافه';
     protected static ?string $title           = 'تنظیمات خرید حجم و زمان اضافه';
     protected static ?string $slug            = 'settings/extra-addons';
-    protected static ?int    $navigationSort  = 90;
+    protected static ?int    $navigationSort  = 50;
 
     /** @var array<string, mixed> */
     public array $data = [];

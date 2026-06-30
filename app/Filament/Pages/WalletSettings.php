@@ -14,10 +14,10 @@ class WalletSettings extends Page
     use Forms\Concerns\InteractsWithForms;
 
     protected static ?string $navigationIcon  = 'heroicon-o-wallet';
-    protected static ?string $navigationGroup = 'مالی';
+    protected static ?string $navigationGroup = 'سفارش‌ها و مالی';
     protected static ?string $navigationLabel = 'تنظیمات کیف پول';
     protected static ?string $title           = 'تنظیمات کیف پول';
-    protected static ?int    $navigationSort  = 40;
+    protected static ?int    $navigationSort  = 50;
     protected static ?string $slug            = 'settings/wallet';
     protected static string  $view            = 'filament.pages.wallet-settings';
 

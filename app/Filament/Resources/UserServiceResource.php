@@ -25,11 +25,11 @@ class UserServiceResource extends Resource
     protected static ?string $model = UserService::class;
 
     protected static ?string $navigationIcon   = 'heroicon-o-signal';
-    protected static ?string $navigationGroup  = 'کاربران و سفارش‌ها';
+    protected static ?string $navigationGroup  = 'سرویس‌ها و پنل‌های VPN';
     protected static ?string $navigationLabel  = 'سرویس‌ها';
     protected static ?string $modelLabel       = 'سرویس';
     protected static ?string $pluralModelLabel = 'سرویس‌ها';
-    protected static ?int    $navigationSort   = 2;
+    protected static ?int    $navigationSort   = 10;
 
     public static function form(Form $form): Form
     {

@@ -10,7 +10,7 @@ use Illuminate\Support\Facades\Storage;
 class SystemStatus extends Page
 {
     protected static ?string $navigationIcon  = 'heroicon-o-server';
-    protected static ?string $navigationGroup = 'سیستم و یکپارچه‌سازی';
+    protected static ?string $navigationGroup = 'سیستم';
     protected static ?string $navigationLabel = 'وضعیت سیستم';
     protected static ?string $title           = 'وضعیت سیستم';
     protected static ?int $navigationSort     = 10;

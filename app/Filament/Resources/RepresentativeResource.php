@@ -22,11 +22,11 @@ class RepresentativeResource extends Resource
     protected static ?string $model = User::class;
 
     protected static ?string $navigationIcon   = 'heroicon-o-user-group';
-    protected static ?string $navigationGroup   = 'بازاریابی';
+    protected static ?string $navigationGroup   = 'نمایندگان و بازاریابی';
     protected static ?string $navigationLabel   = 'نمایندگان';
     protected static ?string $modelLabel        = 'نماینده';
     protected static ?string $pluralModelLabel  = 'نمایندگان';
-    protected static ?int    $navigationSort    = 2;
+    protected static ?int    $navigationSort    = 20;
 
     /** Only users who are representatives or have a pending/processed request. */
     public static function getEloquentQuery(): Builder

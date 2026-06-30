@@ -18,12 +18,12 @@ class RenewalPackageResource extends Resource
     protected static ?string $model = RenewalPackage::class;
 
     protected static ?string $navigationIcon   = 'heroicon-o-arrow-path';
-    protected static ?string $navigationGroup  = 'سرویس‌ها';
+    protected static ?string $navigationGroup  = 'فروشگاه و پلن‌ها';
     protected static bool   $shouldRegisterNavigation = false;
     protected static ?string $navigationLabel  = 'بسته‌های تمدید';
     protected static ?string $modelLabel       = 'بسته تمدید';
     protected static ?string $pluralModelLabel = 'بسته‌های تمدید';
-    protected static ?int    $navigationSort   = 10;
+    protected static ?int    $navigationSort   = 60;
 
     public static function form(Form $form): Form
     {

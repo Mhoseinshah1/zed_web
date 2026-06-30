@@ -26,7 +26,7 @@ class SiteSettingsPage extends Page implements HasForms
     protected static ?string $navigationLabel = 'تنظیمات سایت';
     protected static ?string $title           = 'تنظیمات سایت';
     protected static ?string $slug            = 'content/site-settings';
-    protected static ?int    $navigationSort  = 1;
+    protected static ?int    $navigationSort  = 10;
 
     /** @var array<string,mixed> */
     public array $data = [];

@@ -17,10 +17,10 @@ class TemplateStudio extends Page
 
     protected static ?string $navigationIcon  = 'heroicon-o-rectangle-group';
     protected static ?string $navigationGroup = 'ظاهر سایت';
-    protected static ?string $navigationLabel = 'قالب‌ها';
+    protected static ?string $navigationLabel = 'قالب‌های سایت';
     protected static ?string $title           = 'قالب‌های صفحه اصلی';
     protected static ?string $slug            = 'templates';
-    protected static ?int    $navigationSort  = 2;
+    protected static ?int    $navigationSort  = 20;
 
     /** Data handed to the Alpine front-end. */
     public function getViewData(): array

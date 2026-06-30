@@ -22,11 +22,11 @@ class FailedOperationResource extends Resource
     protected static ?string $model = Order::class;
 
     protected static ?string $navigationIcon   = 'heroicon-o-exclamation-triangle';
-    protected static ?string $navigationGroup   = 'سرویس‌ها';
+    protected static ?string $navigationGroup   = 'سرویس‌ها و پنل‌های VPN';
     protected static ?string $navigationLabel   = 'عملیات‌های ناموفق';
     protected static ?string $modelLabel        = 'عملیات ناموفق';
     protected static ?string $pluralModelLabel  = 'عملیات‌های ناموفق';
-    protected static ?int    $navigationSort    = 11;
+    protected static ?int    $navigationSort    = 50;
 
     public static function getEloquentQuery(): Builder
     {

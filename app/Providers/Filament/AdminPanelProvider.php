@@ -43,20 +43,22 @@ class AdminPanelProvider extends PanelProvider
                 'warning' => Color::Amber,
             ])
             ->navigationGroups([
-                'کاربران و سفارش‌ها',
-                'فروشگاه',
-                'مالی',
+                'داشبورد',
+                'کاربران',
+                'فروشگاه و پلن‌ها',
+                'سرویس‌ها و پنل‌های VPN',
+                'سفارش‌ها و مالی',
                 'پشتیبانی',
-                'بازاریابی',
+                'نمایندگان و بازاریابی',
                 'مدیریت محتوا',
-                'سیستم و یکپارچه‌سازی',
-                'تنظیمات',
+                'اعلان‌ها و پیام‌ها',
                 'ظاهر سایت',
+                'سیستم',
             ])
             ->discoverResources(in: app_path('Filament/Resources'), for: 'App\\Filament\\Resources')
             ->discoverPages(in: app_path('Filament/Pages'), for: 'App\\Filament\\Pages')
             ->pages([
-                Pages\Dashboard::class,
+                \App\Filament\Pages\Dashboard::class,
             ])
             ->discoverWidgets(in: app_path('Filament/Widgets'), for: 'App\\Filament\\Widgets')
             ->widgets([
