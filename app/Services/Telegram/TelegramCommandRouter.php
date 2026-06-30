@@ -9,6 +9,7 @@ use App\Models\User;
 use App\Models\UserService;
 use App\Models\VpnPanel;
 use App\Models\WalletTransaction;
+use App\Services\Telegram\DailyReportService;
 use Illuminate\Support\Facades\DB;
 
 /**
@@ -69,8 +70,8 @@ class TelegramCommandRouter
             'failed_operations' => $this->failedOperations(),
             'panels'            => $this->panels(),
             'daily_report'      => $this->dailyReport(),
-            'backup'            => "💾 <b>بکاپ</b>\nاین قابلیت در فاز بعدی فعال می‌شود.",
-            'backup_status'     => "💾 <b>وضعیت بکاپ</b>\nاین قابلیت در فاز بعدی فعال می‌شود.",
+            'backup'            => $this->backup(),
+            'backup_status'     => $this->backupStatus(),
             default             => '',
         };
     }
@@ -218,18 +219,33 @@ class TelegramCommandRouter
 
     private function dailyReport(): string
     {
-        $today = now()->startOfDay();
+        // Also push it to the dedicated daily-report topic, and reply inline.
+        app(DailyReportService::class)->send();
+        return app(DailyReportService::class)->buildText();
+    }
 
-        $newUsers   = User::where('created_at', '>=', $today)->count();
-        $newTickets = SupportTicket::where('created_at', '>=', $today)->count();
-        $newServices = UserService::where('created_at', '>=', $today)->count();
+    private function backup(): string
+    {
+        $settings = app(\App\Services\Backup\BackupSettings::class);
+        if (! $settings->enabled()) {
+            return "💾 <b>بکاپ</b>\nقابلیت بکاپ غیرفعال است. از پنل مدیریت آن را فعال کنید.";
+        }
+        \App\Jobs\RunBackupJob::dispatch(\App\Models\BackupLog::TYPE_MANUAL);
+        return "💾 <b>بکاپ شروع شد</b>\nنتیجه در تاپیک «بکاپ و سرور» ارسال می‌شود.";
+    }
 
-        return "🗓 <b>گزارش روزانه</b> — " . now()->format('Y/m/d') . "\n\n"
-            . $this->financeToday() . "\n\n"
-            . $this->ordersToday() . "\n\n"
-            . "👥 کاربر جدید: {$newUsers}\n"
-            . "🚀 سرویس ساخته‌شده: {$newServices}\n"
-            . "🎫 تیکت جدید: {$newTickets}";
+    private function backupStatus(): string
+    {
+        $last = \App\Models\BackupLog::latestLog();
+        if (! $last) {
+            return "💾 <b>وضعیت بکاپ</b>\nهنوز بکاپی انجام نشده است.";
+        }
+        $status = match ($last->status) {
+            \App\Models\BackupLog::STATUS_SUCCESS => '🟢 موفق (' . $last->sizeMb() . ' MB)',
+            \App\Models\BackupLog::STATUS_FAILED  => '🔴 ناموفق',
+            default                               => '⏳ در حال اجرا',
+        };
+        return "💾 <b>وضعیت آخرین بکاپ</b>\nوضعیت: {$status}\n🕒 زمان: " . $last->updated_at->format('Y/m/d H:i');
     }
 
     // ── helpers ──────────────────────────────────────────────────────────────

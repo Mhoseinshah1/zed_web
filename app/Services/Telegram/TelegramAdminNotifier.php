@@ -46,6 +46,9 @@ class TelegramAdminNotifier
         'representative_request' => ['representatives', 'representatives'],
         'admin_change'           => ['admin', 'admin'],
         'system_alert'           => ['system', 'system'],
+        'backup_success'         => ['backup_server', 'backup_server'],
+        'backup_failed'          => ['backup_server', 'backup_server'],
+        'daily_report'           => ['daily_report', 'daily_report'],
     ];
 
     /** Noisy categories that are throttled harder when rate-limiting is on. */

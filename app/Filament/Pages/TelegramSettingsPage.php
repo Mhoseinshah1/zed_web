@@ -215,6 +215,55 @@ class TelegramSettingsPage extends Page implements HasForms, HasActions
             });
     }
 
+    public function autoCreateTopicsAction(): Action
+    {
+        return Action::make('autoCreateTopics')
+            ->label('ساخت خودکار تاپیک‌ها در تلگرام')->color('gray')->icon('heroicon-o-hashtag')
+            ->requiresConfirmation()
+            ->modalDescription('برای هر تاپیک فعالِ بدون شناسه، یک تاپیک در گروه ساخته و شناسه آن ذخیره می‌شود. بات باید ادمین گروه با دسترسی «مدیریت تاپیک‌ها» باشد و گروه باید حالت Topics فعال داشته باشد.')
+            ->action(function () {
+                $client  = app(TelegramClient::class);
+                $pending = TelegramAdminTopic::where('is_active', true)->whereNull('message_thread_id')->get();
+
+                if ($pending->isEmpty()) {
+                    Notification::make()->title('همه تاپیک‌های فعال شناسه دارند.')->info()->send();
+                    return;
+                }
+
+                $created = 0;
+                foreach ($pending as $topic) {
+                    try {
+                        $res = $client->createForumTopic($topic->title);
+                        if (! empty($res['message_thread_id'])) {
+                            $topic->update(['message_thread_id' => $res['message_thread_id']]);
+                            $created++;
+                        }
+                    } catch (\Throwable $e) {
+                        Notification::make()->title($this->topicErrorMessage($e->getMessage()))->danger()->send();
+                        return; // stop on the first hard error (usually rights/forum)
+                    }
+                }
+
+                Notification::make()->title("ساخت تاپیک‌ها انجام شد ({$created} مورد).")->success()->send();
+            });
+    }
+
+    /** Map a raw Telegram error into a clear Persian message (no raw leak). */
+    private function topicErrorMessage(string $raw): string
+    {
+        $low = strtolower($raw);
+        if (str_contains($low, 'right') || str_contains($low, 'admin')) {
+            return 'بات باید ادمین گروه با دسترسی «مدیریت تاپیک‌ها» باشد.';
+        }
+        if (str_contains($low, 'forum') || str_contains($low, 'topic')) {
+            return 'گروه باید حالت Topics (فروم) فعال داشته باشد.';
+        }
+        if (str_contains($low, 'chat not found') || str_contains($low, 'chat_id')) {
+            return 'شناسه گروه مدیریت نادرست است یا بات عضو گروه نیست.';
+        }
+        return 'ساخت تاپیک ناموفق بود. تنظیمات بات و دسترسی‌ها را بررسی کنید.';
+    }
+
     public function registerWebhookAction(): Action
     {
         return Action::make('registerWebhook')
