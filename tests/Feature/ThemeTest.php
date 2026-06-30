@@ -2,7 +2,7 @@
 
 namespace Tests\Feature;
 
-use App\Filament\Pages\AppearanceSettings;
+use App\Filament\Pages\ThemeStudio;
 use App\Models\SiteSetting;
 use App\Models\User;
 use App\Services\Theme\ThemeManager;
@@ -135,42 +135,75 @@ class ThemeTest extends TestCase
             ->assertCookie('zed_theme', 'zed-sunset');
     }
 
-    // ── Appearance settings (admin) ──────────────────────────────────────────
+    // ── Theme panel (پنل تم) ─────────────────────────────────────────────────
 
-    public function test_appearance_page_loads(): void
-    {
-        $this->actingAs($this->admin())
-            ->get('/zed-admin/appearance')
-            ->assertSuccessful()
-            ->assertSee('تنظیمات ظاهر')
-            ->assertSee('رنگ‌بندی سایت');
-    }
-
-    public function test_old_theme_studio_redirects_to_appearance(): void
+    public function test_theme_panel_loads(): void
     {
         $this->actingAs($this->admin())
             ->get('/zed-admin/theme-studio')
-            ->assertRedirect('/zed-admin/appearance');
+            ->assertSuccessful()
+            ->assertSee('پنل تم')
+            ->assertSee('پیش‌نمایش زنده');
     }
 
-    public function test_appearance_settings_persist(): void
+    public function test_old_appearance_url_redirects_to_theme_panel(): void
     {
-        Livewire::actingAs($this->admin())
-            ->test(AppearanceSettings::class)
-            ->set('data.appearance_mode', 'light')
-            ->set('data.site_theme_preset', 'luxury_gold')
-            ->set('data.primary_color', '#d4af37')
-            ->set('data.admin_density', 'compact')
-            ->set('data.admin_sidebar_size', 'small')
-            ->set('data.admin_brand_text', 'Panel X')
-            ->call('save');
+        $this->actingAs($this->admin())
+            ->get('/zed-admin/appearance')
+            ->assertRedirect('/zed-admin/theme-studio');
+    }
 
-        $this->assertSame('light', SiteSetting::get('appearance_mode'));
-        $this->assertSame('light', SiteSetting::get('default_appearance')); // synced
-        $this->assertSame('luxury_gold', SiteSetting::get('site_theme_preset'));
+    /** Persisting writes the right keys and never wipes Advanced/other keys. */
+    public function test_theme_panel_persists_and_preserves_keys(): void
+    {
+        // A key NOT exposed by this panel must survive a save untouched.
+        SiteSetting::set('admin_density', 'compact');
+
+        Livewire::actingAs($this->admin())
+            ->test(ThemeStudio::class)
+            ->call('persist', [
+                'scope'                 => 'public',
+                'default_theme_public'  => 'zed-aurora',
+                'default_theme_user'    => 'zed-emerald',
+                'default_theme_admin'   => 'zed-graphite',
+                'enabled_themes'        => ['zed-aurora'],
+                'accent'                => '#ff0000',
+                'accent2'               => '#00ff00',
+                'appearance'            => 'light',
+                'radius'                => 16,
+                'font_scale'            => 110,
+                'allow_user_theme_switch'      => true,
+                'allow_user_appearance_switch' => false,
+                'force_global_theme'    => true,
+                'animation_intensity'   => 'high',
+                'icon_size'             => '1.5rem',
+                'table_density'         => 'compact',
+                // logo_size/sidebar_icon_size/image_size/card_density omitted on purpose
+            ]);
+
+        $this->assertSame('zed-aurora', SiteSetting::get('default_theme_public'));
+        $this->assertSame('zed-emerald', SiteSetting::get('default_theme_user'));
+        $this->assertSame('zed-graphite', SiteSetting::get('default_theme_admin'));
+        $this->assertSame('light', SiteSetting::get('default_appearance'));
+        $this->assertSame('#ff0000', SiteSetting::get('primary_color'));
+        $this->assertSame('#00ff00', SiteSetting::get('accent_color'));
+        $this->assertSame('16px', SiteSetting::get('card_radius'));
+        $this->assertSame('12px', SiteSetting::get('button_radius'));
+        $this->assertSame(110, SiteSetting::get('font_scale'));
+        $this->assertSame('high', SiteSetting::get('animation_intensity'));
+        $this->assertSame('1.5rem', SiteSetting::get('icon_size'));
+
+        // Omitted Advanced keys keep their previous/default value (not wiped).
+        $this->assertSame('1.15rem', SiteSetting::get('logo_size'));
+        $this->assertSame('2.5rem', SiteSetting::get('image_size'));
+
+        // And the unrelated key this panel does not manage is untouched.
         $this->assertSame('compact', SiteSetting::get('admin_density'));
-        $this->assertSame('small', SiteSetting::get('admin_sidebar_size'));
-        $this->assertSame('Panel X', SiteSetting::get('admin_brand_text'));
+
+        // Required default themes stay enabled (guard).
+        $enabled = explode(',', (string) SiteSetting::get('enabled_themes'));
+        $this->assertContains('zed-emerald', $enabled);
+        $this->assertContains('zed-graphite', $enabled);
     }
 
     public function test_preset_applies_to_user_surface(): void

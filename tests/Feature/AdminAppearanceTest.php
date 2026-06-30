@@ -99,22 +99,22 @@ class AdminAppearanceTest extends TestCase
         $this->assertStringContainsString('data-zp-admin-density', $html);
     }
 
-    /** The new appearance page renders, including the preview. */
-    public function test_appearance_page_renders(): void
+    /** The theme panel renders, including the sandboxed live preview. */
+    public function test_theme_panel_renders(): void
     {
         $admin = User::factory()->create(['is_admin' => true]);
-        $html  = $this->actingAs($admin)->get('/zed-admin/appearance')->getContent();
+        $html  = $this->actingAs($admin)->get('/zed-admin/theme-studio')->getContent();
 
-        $this->assertStringContainsString('رنگ‌بندی سایت', $html);
-        $this->assertStringContainsString('پیش‌نمایش سریع', $html);
-        $this->assertStringContainsString('پنل مدیریت', $html);
+        $this->assertStringContainsString('پنل تم', $html);
+        $this->assertStringContainsString('پیش‌نمایش زنده', $html);
+        $this->assertStringContainsString('تم آماده', $html);
     }
 
-    /** The old Theme Studio URL redirects to the new appearance page. */
-    public function test_old_theme_studio_redirects(): void
+    /** The old standalone appearance URL redirects to the theme panel. */
+    public function test_old_appearance_url_redirects(): void
     {
         $admin = User::factory()->create(['is_admin' => true]);
-        $this->actingAs($admin)->get('/zed-admin/theme-studio')
-            ->assertRedirect('/zed-admin/appearance');
+        $this->actingAs($admin)->get('/zed-admin/appearance')
+            ->assertRedirect('/zed-admin/theme-studio');
     }
 }
