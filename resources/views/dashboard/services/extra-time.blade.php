@@ -32,7 +32,7 @@
     {{-- ── Current expiry ── --}}
     <div class="bg-gray-900 border border-gray-800 rounded-xl p-5 space-y-3">
         <h3 class="text-sm font-medium text-gray-300">وضعیت اعتبار فعلی</h3>
-        <div class="grid grid-cols-2 gap-3 text-sm">
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
             <div>
                 <p class="text-xs text-gray-500">تاریخ انقضا</p>
                 <p class="mt-0.5 {{ $isExpired ? 'text-red-400' : 'text-white' }}">

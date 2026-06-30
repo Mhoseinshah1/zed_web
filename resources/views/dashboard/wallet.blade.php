@@ -74,7 +74,29 @@
             <p class="text-sm">هیچ تراکنشی ثبت نشده است</p>
         </div>
     @else
-        <div class="overflow-x-auto">
+        {{-- Mobile: card per transaction --}}
+        <div class="md:hidden divide-y divide-gray-800">
+            @foreach($transactions as $tx)
+            <div class="p-4">
+                <div class="flex items-center justify-between gap-3">
+                    <span class="text-sm text-white">{{ $tx->typeLabel() }}</span>
+                    @if($tx->direction === 'credit')
+                        <span class="text-sm text-green-400 whitespace-nowrap">+{{ number_format($tx->amount_toman) }} تومان</span>
+                    @else
+                        <span class="text-sm text-red-400 whitespace-nowrap">-{{ number_format($tx->amount_toman) }} تومان</span>
+                    @endif
+                </div>
+                <div class="flex items-center justify-between gap-2 mt-1 text-xs text-gray-400">
+                    <span class="truncate">{{ $tx->description ?? '—' }}</span>
+                    <span class="whitespace-nowrap">{{ $tx->created_at->format('Y/m/d H:i') }}</span>
+                </div>
+                <div class="text-xs text-gray-500 mt-1">موجودی بعد: {{ number_format($tx->balance_after_toman) }} تومان</div>
+            </div>
+            @endforeach
+        </div>
+
+        {{-- Desktop: full table --}}
+        <div class="hidden md:block overflow-x-auto">
             <table class="w-full text-sm">
                 <thead>
                     <tr class="text-gray-400 text-xs border-b border-gray-800">
