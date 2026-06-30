@@ -135,10 +135,28 @@ class AdminPanelProvider extends PanelProvider
             $anim        = ThemeManager::animationSpeed();
             $iconSize    = (string) SiteSetting::get('icon_size', '1.25rem');
             $sidebarIcon = (string) SiteSetting::get('sidebar_icon_size', '1.25rem');
+            $logoSize    = (string) SiteSetting::get('logo_size', '1.15rem');
+            $cardDensity = (string) SiteSetting::get('card_density', 'comfortable');
             $animOff     = ThemeManager::animationIntensity() === 'off' ? '1' : '0';
         } catch (\Throwable $e) {
             return '';
         }
+
+        // Derive COMPACT, INDEPENDENT admin sizing tokens from the shared
+        // settings. These feed --zp-admin-* (consumed only by Filament chrome),
+        // so the admin stays dense while the user-side --zp-icon-size is left
+        // untouched. Everything is clamped to a professional admin range.
+        $iconPx    = $this->clampPx($this->toPx($iconSize) * 0.8, 14, 20);
+        $sideIconPx = $this->clampPx($this->toPx($sidebarIcon) * 0.85, 16, 24);
+        $logoPx    = $this->clampPx($this->toPx($logoSize) / $this->toPx('1.15rem') * 32, 24, 56);
+        $caretPx   = $this->clampPx($iconPx - 1, 12, 18);
+
+        // Card-density presets (px) — درست مطابق spec: فشرده / عادی / راحت.
+        [$rowH, $cardPad, $ctrlH, $gap] = match ($cardDensity) {
+            'compact'     => [40, 12, 38, 10],
+            'comfortable' => [56, 20, 46, 18],
+            default       => [48, 16, 42, 14], // normal
+        };
 
         $theme = e($theme);
         return <<<HTML
@@ -150,8 +168,37 @@ el.style.setProperty('--zp-button-radius','{$btnRadius}');
 el.style.setProperty('--zp-animation-speed','{$anim}');
 el.style.setProperty('--zp-icon-size','{$iconSize}');
 el.style.setProperty('--zp-sidebar-icon-size','{$sidebarIcon}');
+el.style.setProperty('--zp-admin-icon-size','{$iconPx}px');
+el.style.setProperty('--zp-admin-action-icon-size','{$iconPx}px');
+el.style.setProperty('--zp-admin-form-icon-size','{$iconPx}px');
+el.style.setProperty('--zp-admin-sidebar-icon-size','{$sideIconPx}px');
+el.style.setProperty('--zp-admin-select-caret-size','{$caretPx}px');
+el.style.setProperty('--zp-admin-logo-size','{$logoPx}px');
+el.style.setProperty('--zp-admin-card-radius','{$cardRadius}');
+el.style.setProperty('--zp-admin-button-radius','{$btnRadius}');
+el.style.setProperty('--zp-admin-table-row-height','{$rowH}px');
+el.style.setProperty('--zp-admin-card-padding','{$cardPad}px');
+el.style.setProperty('--zp-admin-form-control-height','{$ctrlH}px');
+el.style.setProperty('--zp-admin-density-gap','{$gap}px');
 }catch(e){}})();</script>
 HTML;
+    }
+
+    /** Parse a CSS length ("1.25rem" | "20px" | "1.5") to pixels (rem = 16px). */
+    protected function toPx(string $value): float
+    {
+        $value = trim($value);
+        if (! preg_match('/-?\d*\.?\d+/', $value, $m)) {
+            return 16.0;
+        }
+        $num = (float) $m[0];
+        return str_contains($value, 'rem') ? $num * 16.0 : ($num <= 4 && ! str_contains($value, 'px') ? $num * 16.0 : $num);
+    }
+
+    /** Clamp a pixel value into [$min,$max], rounded to 1 decimal. */
+    protected function clampPx(float $px, float $min, float $max): float
+    {
+        return round(max($min, min($max, $px)), 1);
     }
 
     /**

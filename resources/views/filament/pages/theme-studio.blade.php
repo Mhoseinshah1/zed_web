@@ -233,7 +233,7 @@
                     </div>
                     <div class="zps-field">
                         <label>تراکم کارت‌ها</label>
-                        <select class="zps-select" x-model="state.card_density" x-on:change="dirty=true">
+                        <select class="zps-select" x-model="state.card_density" x-on:change="applyLive(); dirty=true">
                             <option value="compact">فشرده</option><option value="normal">عادی</option><option value="comfortable">راحت</option>
                         </select>
                     </div>
@@ -346,6 +346,24 @@ function themeStudio(state, presets, groups, groupLabels) {
             el.style.setProperty('--zp-animation-speed', this.speed(this.state.animation_intensity));
             el.style.setProperty('--zp-icon-size', this.state.icon_size);
             el.style.setProperty('--zp-sidebar-icon-size', this.state.sidebar_icon_size);
+            // Mirror the compact, independent admin tokens so the live preview
+            // reflects exactly what /zed-admin will look like after save.
+            const px = (v) => { const n = parseFloat(v) || 1; return /rem/.test(v) ? n * 16 : (n <= 4 ? n * 16 : n); };
+            const clamp = (n, a, b) => Math.round(Math.max(a, Math.min(b, n)) * 10) / 10;
+            const iconPx = clamp(px(this.state.icon_size) * 0.8, 14, 20);
+            const sidePx = clamp(px(this.state.sidebar_icon_size) * 0.85, 16, 24);
+            const logoPx = clamp(px(this.state.logo_size) / 18.4 * 32, 24, 56);
+            el.style.setProperty('--zp-admin-icon-size', iconPx + 'px');
+            el.style.setProperty('--zp-admin-action-icon-size', iconPx + 'px');
+            el.style.setProperty('--zp-admin-form-icon-size', iconPx + 'px');
+            el.style.setProperty('--zp-admin-sidebar-icon-size', sidePx + 'px');
+            el.style.setProperty('--zp-admin-select-caret-size', clamp(iconPx - 1, 12, 18) + 'px');
+            el.style.setProperty('--zp-admin-logo-size', logoPx + 'px');
+            const dens = ({ compact: [40, 12, 38, 10], comfortable: [56, 20, 46, 18] })[this.state.card_density] || [48, 16, 42, 14];
+            el.style.setProperty('--zp-admin-table-row-height', dens[0] + 'px');
+            el.style.setProperty('--zp-admin-card-padding', dens[1] + 'px');
+            el.style.setProperty('--zp-admin-form-control-height', dens[2] + 'px');
+            el.style.setProperty('--zp-admin-density-gap', dens[3] + 'px');
         },
         bump() { this.fade = false; requestAnimationFrame(() => requestAnimationFrame(() => this.fade = true)); },
 
