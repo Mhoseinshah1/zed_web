@@ -19,6 +19,7 @@
 /* ── Motion / focus tokens reused below ─────────────────────────────────── */
 .fi-body {
     --zp-ring: var(--zp-admin-ring, color-mix(in srgb, var(--zp-primary) 35%, transparent));
+    --zp-primary-soft: color-mix(in srgb, var(--zp-primary) 13%, transparent);
 }
 
 /* ==========================================================================
@@ -38,13 +39,20 @@
 .fi-body .fi-section-content-ctn {
     padding: var(--zp-admin-card-padding, 16px) !important;
 }
-/* Stat widgets: a touch of lift on hover. */
+/* Stat widgets: a touch of lift on hover + a soft primary icon chip. */
 .fi-body .fi-wi-stats-overview-stat {
     transition: transform var(--zp-admin-animation-speed, 180ms) ease,
                 box-shadow var(--zp-admin-animation-speed, 180ms) ease;
 }
 .fi-body .fi-wi-stats-overview-stat:hover {
     transform: translateY(-2px);
+}
+.fi-body .fi-wi-stats-overview-stat-icon {
+    color: var(--zp-primary) !important;
+    background-color: var(--zp-primary-soft) !important;
+    border-radius: var(--zp-admin-button-radius, 10px) !important;
+    padding: .35rem !important;
+    box-sizing: content-box;
 }
 
 /* ==========================================================================
@@ -172,25 +180,33 @@
 /* ==========================================================================
    7) SIDEBAR / NAV — rounded items, primary active pill, soft hover, spacing.
    ========================================================================== */
+.fi-body .fi-sidebar,
+.fi-body .fi-sidebar-header { background-color: var(--zp-bg-soft) !important; }
 .fi-body .fi-sidebar-nav { padding-inline: .5rem; }
 .fi-body .fi-sidebar-item-button {
     border-radius: var(--zp-admin-button-radius, 10px) !important;
     margin-inline: .15rem;
     transition: background-color var(--zp-admin-animation-speed, 180ms) ease,
-                color var(--zp-admin-animation-speed, 180ms) ease !important;
+                color var(--zp-admin-animation-speed, 180ms) ease,
+                box-shadow var(--zp-admin-animation-speed, 180ms) ease !important;
 }
 .fi-body .fi-sidebar-item-button:hover {
-    background-color: var(--zp-surface-hover) !important;
+    background-color: var(--zp-surface-soft) !important;
+    color: var(--zp-text) !important;
 }
+/* Active item: solid primary pill with white text + soft coloured shadow. */
 .fi-body .fi-sidebar-item.fi-active .fi-sidebar-item-button,
 .fi-body .fi-sidebar-item-active .fi-sidebar-item-button {
-    background-color: color-mix(in srgb, var(--zp-primary) 16%, transparent) !important;
-    color: var(--zp-primary) !important;
+    background-color: var(--zp-primary) !important;
+    color: #fff !important;
     font-weight: 700 !important;
+    box-shadow: 0 6px 16px -7px var(--zp-primary) !important;
 }
 .fi-body .fi-sidebar-item.fi-active .fi-sidebar-item-icon,
-.fi-body .fi-sidebar-item-active .fi-sidebar-item-icon {
-    color: var(--zp-primary) !important;
+.fi-body .fi-sidebar-item-active .fi-sidebar-item-icon,
+.fi-body .fi-sidebar-item.fi-active .fi-sidebar-item-label,
+.fi-body .fi-sidebar-item-active .fi-sidebar-item-label {
+    color: #fff !important;
 }
 .fi-body .fi-sidebar-group-label { letter-spacing: .01em; }
 
@@ -199,11 +215,18 @@
    ========================================================================== */
 .fi-body .fi-topbar > nav,
 .fi-body .fi-topbar nav {
-    background-color: color-mix(in srgb, var(--zp-surface) 88%, transparent) !important;
+    background-color: color-mix(in srgb, var(--zp-bg-soft) 90%, transparent) !important;
     border-bottom: 1px solid var(--zp-border) !important;
     backdrop-filter: blur(8px);
     -webkit-backdrop-filter: blur(8px);
 }
+/* Topbar action buttons: surface chip with a subtle border (per mockup). */
+.fi-body .fi-topbar .fi-icon-btn {
+    background-color: var(--zp-surface) !important;
+    border: 1px solid var(--zp-border) !important;
+    color: var(--zp-text-muted) !important;
+}
+.fi-body .fi-topbar .fi-icon-btn:hover { color: var(--zp-text) !important; }
 
 /* ==========================================================================
    9) TABS / DROPDOWNS / PAGINATION / AVATARS / NOTIFICATIONS — same language.
@@ -248,10 +271,9 @@
     border-radius: var(--zp-admin-button-radius, 10px) !important;
 }
 
-/* Avatars — soft rounded square or circle, never distorted. */
+/* Avatars — soft rounded square (per mockup), never distorted. */
 .fi-body .fi-avatar {
-    border-radius: 9999px !important;
-    box-shadow: 0 0 0 2px var(--zp-border);
+    border-radius: var(--zp-admin-button-radius, 10px) !important;
 }
 
 /* Notifications (toasts) */
