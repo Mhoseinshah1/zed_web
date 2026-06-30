@@ -84,6 +84,75 @@ class TelegramClient
     }
 
     /**
+     * Create a forum topic in the management group. Requires the bot to be an
+     * admin with the "Manage Topics" right and the group to be a forum.
+     *
+     * @return array{message_thread_id:int, name:string}
+     */
+    public function createForumTopic(string $name, ?int $iconColor = null, ?string $chatId = null): array
+    {
+        $params = ['chat_id' => $chatId ?? $this->settings->chatId(), 'name' => $name];
+        if ($iconColor !== null) {
+            $params['icon_color'] = $iconColor;
+        }
+        $result = $this->call('createForumTopic', $params);
+
+        return [
+            'message_thread_id' => (int) ($result['message_thread_id'] ?? 0),
+            'name'              => (string) ($result['name'] ?? $name),
+        ];
+    }
+
+    /**
+     * Send a file to the management group (sendDocument, multipart). Used to
+     * deliver a backup archive. The token lives only in the URL.
+     *
+     * @return array{message_id:int}
+     *
+     * @throws \RuntimeException on any API/transport failure (token-free message)
+     */
+    public function sendDocument(
+        string $filePath,
+        ?string $caption = null,
+        ?int $messageThreadId = null,
+        ?string $chatId = null,
+    ): array {
+        $token = $this->settings->token();
+        if ($token === '') {
+            throw new \RuntimeException('Telegram bot token is not configured.');
+        }
+        if (! is_file($filePath)) {
+            throw new \RuntimeException('Backup file not found for upload.');
+        }
+
+        $payload = ['chat_id' => $chatId ?? $this->settings->chatId()];
+        if ($caption !== null) {
+            $payload['caption'] = mb_substr($caption, 0, 1024);
+            $payload['parse_mode'] = $this->settings->parseMode();
+        }
+        if ($messageThreadId !== null) {
+            $payload['message_thread_id'] = $messageThreadId;
+        }
+
+        try {
+            $response = Http::asMultipart()
+                ->timeout(120)
+                ->attach('document', fopen($filePath, 'r'), basename($filePath))
+                ->post(self::BASE . $token . '/sendDocument', $payload);
+        } catch (\Throwable $e) {
+            throw new \RuntimeException('Telegram transport error: ' . class_basename($e));
+        }
+
+        $body = $response->json();
+        if (! is_array($body) || empty($body['ok'])) {
+            $desc = is_array($body) ? (string) ($body['description'] ?? 'unknown error') : 'invalid response';
+            throw new \RuntimeException('Telegram API error: ' . $desc);
+        }
+
+        return ['message_id' => (int) ($body['result']['message_id'] ?? 0)];
+    }
+
+    /**
      * Perform an API call and return the `result` payload.
      *
      * @throws \RuntimeException with a generic, token-free message

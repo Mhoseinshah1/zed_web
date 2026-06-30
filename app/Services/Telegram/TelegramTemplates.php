@@ -154,6 +154,21 @@ class TelegramTemplates
                 'message' => "🚨 <b>هشدار سیستم</b>\n{message}",
                 'variables' => '{message}',
             ],
+            'backup_success' => [
+                'title' => '💾 بکاپ موفق',
+                'message' => "💾 <b>بکاپ با موفقیت انجام شد</b>\n📦 حجم: {size} مگابایت\n⏱ مدت: {duration} ثانیه\n🗂 مسیر: {path}\n🧹 پاک‌سازی قدیمی: {cleaned}",
+                'variables' => '{size}, {duration}, {path}, {cleaned}',
+            ],
+            'backup_failed' => [
+                'title' => '❌ بکاپ ناموفق',
+                'message' => "❌ <b>بکاپ ناموفق بود</b>\n📝 خطا: {error}",
+                'variables' => '{error}',
+            ],
+            'daily_report' => [
+                'title' => '🗓 گزارش روزانه',
+                'message' => "{message}",
+                'variables' => '{message}',
+            ],
         ];
     }
 

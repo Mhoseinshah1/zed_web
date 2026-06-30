@@ -18,6 +18,7 @@
             {{ $this->getChatAction }}
             {{ $this->sendTestAction }}
             {{ $this->sendTestPerTopicAction }}
+            {{ $this->autoCreateTopicsAction }}
         </div>
 
         <div class="mt-4 border-t border-line pt-4">

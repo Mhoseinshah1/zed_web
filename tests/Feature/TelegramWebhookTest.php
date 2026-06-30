@@ -133,13 +133,14 @@ class TelegramWebhookTest extends TestCase
         });
     }
 
-    public function test_backup_command_is_placeholder(): void
+    public function test_backup_command_replies_when_backup_disabled(): void
     {
+        // Phase 3 completed /backup; with backup disabled it tells the admin so.
         $this->configureBot();
         Http::fake(['*' => Http::response(['ok' => true, 'result' => ['message_id' => 1]], 200)]);
 
         $this->callWebhook($this->update('/backup'))->assertOk();
-        Http::assertSent(fn ($req) => str_contains((string) ($req['text'] ?? ''), 'فاز بعدی'));
+        Http::assertSent(fn ($req) => str_contains((string) ($req['text'] ?? ''), 'غیرفعال'));
     }
 
     public function test_secret_is_stored_encrypted_and_hidden(): void
