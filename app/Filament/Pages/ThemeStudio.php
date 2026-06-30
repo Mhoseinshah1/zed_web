@@ -23,7 +23,7 @@ class ThemeStudio extends Page
     protected static ?string $navigationLabel = 'استودیو تم';
     protected static ?string $title           = 'استودیو تم ZedProxy';
     protected static ?string $slug            = 'theme-studio';
-    protected static ?int    $navigationSort  = 1;
+    protected static ?int    $navigationSort  = 10;
 
     /** Initial state handed to the Alpine front-end. */
     public function getViewData(): array

@@ -23,11 +23,11 @@ class ShopSettingsPage extends Page implements HasForms
     protected static string $view = 'filament.pages.cms-settings';
 
     protected static ?string $navigationIcon  = 'heroicon-o-shopping-bag';
-    protected static ?string $navigationGroup = 'مدیریت محتوا';
+    protected static ?string $navigationGroup = 'فروشگاه و پلن‌ها';
     protected static ?string $navigationLabel = 'تنظیمات فروشگاه';
     protected static ?string $title           = 'تنظیمات فروشگاه';
     protected static ?string $slug            = 'content/shop-settings';
-    protected static ?int    $navigationSort  = 105;
+    protected static ?int    $navigationSort  = 30;
 
     /** @var array<string,mixed> */
     public array $data = [];

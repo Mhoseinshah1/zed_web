@@ -16,11 +16,11 @@ class PaymentMethodResource extends Resource
     protected static ?string $model = PaymentMethod::class;
 
     protected static ?string $navigationIcon   = 'heroicon-o-credit-card';
-    protected static ?string $navigationGroup  = 'مالی';
+    protected static ?string $navigationGroup  = 'سفارش‌ها و مالی';
     protected static ?string $navigationLabel  = 'روش‌های پرداخت';
     protected static ?string $modelLabel       = 'روش پرداخت';
     protected static ?string $pluralModelLabel = 'روش‌های پرداخت';
-    protected static ?int    $navigationSort   = 50;
+    protected static ?int    $navigationSort   = 60;
 
     public static function form(Form $form): Form
     {

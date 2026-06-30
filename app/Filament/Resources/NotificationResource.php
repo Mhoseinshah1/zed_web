@@ -19,11 +19,11 @@ class NotificationResource extends Resource
     protected static ?string $model = NotificationModel::class;
 
     protected static ?string $navigationIcon   = 'heroicon-o-bell-alert';
-    protected static ?string $navigationGroup   = 'سیستم و یکپارچه‌سازی';
+    protected static ?string $navigationGroup   = 'اعلان‌ها و پیام‌ها';
     protected static ?string $navigationLabel   = 'اعلان‌های سیستم';
     protected static ?string $modelLabel        = 'اعلان';
     protected static ?string $pluralModelLabel  = 'اعلان‌ها';
-    protected static ?int    $navigationSort    = 20;
+    protected static ?int    $navigationSort    = 10;
 
     public static function getNavigationBadge(): ?string
     {

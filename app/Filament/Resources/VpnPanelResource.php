@@ -18,11 +18,11 @@ class VpnPanelResource extends Resource
     protected static ?string $model = VpnPanel::class;
 
     protected static ?string $navigationIcon   = 'heroicon-o-server';
-    protected static ?string $navigationGroup  = 'مدیریت VPN';
+    protected static ?string $navigationGroup  = 'سرویس‌ها و پنل‌های VPN';
     protected static ?string $navigationLabel  = 'پنل‌های VPN';
     protected static ?string $modelLabel       = 'پنل VPN';
     protected static ?string $pluralModelLabel = 'پنل‌های VPN';
-    protected static ?int    $navigationSort   = 1;
+    protected static ?int    $navigationSort   = 20;
 
     public static function form(Form $form): Form
     {

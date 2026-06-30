@@ -128,48 +128,48 @@ class PaymentTransactionResourceTest extends TestCase
     public function test_payment_transaction_resource_uses_mali_navigation_group(): void
     {
         $group = \App\Filament\Resources\PaymentTransactionResource::getNavigationGroup();
-        $this->assertEquals('مالی', $group);
+        $this->assertEquals('سفارش‌ها و مالی', $group);
     }
 
     public function test_wallet_transaction_resource_uses_mali_navigation_group(): void
     {
         $group = \App\Filament\Resources\WalletTransactionResource::getNavigationGroup();
-        $this->assertEquals('مالی', $group);
+        $this->assertEquals('سفارش‌ها و مالی', $group);
     }
 
     public function test_payment_method_resource_uses_mali_navigation_group(): void
     {
         $group = \App\Filament\Resources\PaymentMethodResource::getNavigationGroup();
-        $this->assertEquals('مالی', $group);
+        $this->assertEquals('سفارش‌ها و مالی', $group);
     }
 
     public function test_discount_code_resource_uses_mali_navigation_group(): void
     {
         $group = \App\Filament\Resources\DiscountCodeResource::getNavigationGroup();
-        $this->assertEquals('مالی', $group);
+        $this->assertEquals('سفارش‌ها و مالی', $group);
     }
 
     public function test_financial_report_page_uses_mali_navigation_group(): void
     {
         $group = \App\Filament\Pages\FinancialReport::getNavigationGroup();
-        $this->assertEquals('مالی', $group);
+        $this->assertEquals('سفارش‌ها و مالی', $group);
     }
 
     public function test_wallet_settings_page_uses_mali_navigation_group(): void
     {
         $group = \App\Filament\Pages\WalletSettings::getNavigationGroup();
-        $this->assertEquals('مالی', $group);
+        $this->assertEquals('سفارش‌ها و مالی', $group);
     }
 
     // ── Navigation sort order ─────────────────────────────────────────────────
 
     public function test_mali_navigation_sort_order_is_correct(): void
     {
-        $this->assertEquals(10, \App\Filament\Pages\FinancialReport::getNavigationSort());
-        $this->assertEquals(20, \App\Filament\Resources\PaymentTransactionResource::getNavigationSort());
-        $this->assertEquals(30, \App\Filament\Resources\WalletTransactionResource::getNavigationSort());
-        $this->assertEquals(40, \App\Filament\Pages\WalletSettings::getNavigationSort());
-        $this->assertEquals(50, \App\Filament\Resources\PaymentMethodResource::getNavigationSort());
-        $this->assertEquals(60, \App\Filament\Resources\DiscountCodeResource::getNavigationSort());
+        $this->assertEquals(20, \App\Filament\Pages\FinancialReport::getNavigationSort());
+        $this->assertEquals(30, \App\Filament\Resources\PaymentTransactionResource::getNavigationSort());
+        $this->assertEquals(40, \App\Filament\Resources\WalletTransactionResource::getNavigationSort());
+        $this->assertEquals(50, \App\Filament\Pages\WalletSettings::getNavigationSort());
+        $this->assertEquals(60, \App\Filament\Resources\PaymentMethodResource::getNavigationSort());
+        $this->assertEquals(70, \App\Filament\Resources\DiscountCodeResource::getNavigationSort());
     }
 }

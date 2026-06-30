@@ -15,11 +15,11 @@ class VpnInboundResource extends Resource
     protected static ?string $model = VpnInbound::class;
 
     protected static ?string $navigationIcon   = 'heroicon-o-arrows-right-left';
-    protected static ?string $navigationGroup  = 'مدیریت VPN';
-    protected static ?string $navigationLabel  = 'اینباندها';
+    protected static ?string $navigationGroup  = 'سرویس‌ها و پنل‌های VPN';
+    protected static ?string $navigationLabel  = 'Inboundها';
     protected static ?string $modelLabel       = 'اینباند';
     protected static ?string $pluralModelLabel = 'اینباندها';
-    protected static ?int    $navigationSort   = 2;
+    protected static ?int    $navigationSort   = 30;
 
     public static function form(Form $form): Form
     {

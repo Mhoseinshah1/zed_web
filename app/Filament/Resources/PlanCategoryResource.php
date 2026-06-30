@@ -16,11 +16,11 @@ class PlanCategoryResource extends Resource
     protected static ?string $model = PlanCategory::class;
 
     protected static ?string $navigationIcon   = 'heroicon-o-tag';
-    protected static ?string $navigationGroup   = 'مدیریت محتوا';
+    protected static ?string $navigationGroup   = 'فروشگاه و پلن‌ها';
     protected static ?string $navigationLabel   = 'دسته‌بندی پلن‌ها';
     protected static ?string $modelLabel        = 'دسته‌بندی پلن';
     protected static ?string $pluralModelLabel  = 'دسته‌بندی پلن‌ها';
-    protected static ?int    $navigationSort    = 110;
+    protected static ?int    $navigationSort    = 20;
 
     public static function form(Form $form): Form
     {

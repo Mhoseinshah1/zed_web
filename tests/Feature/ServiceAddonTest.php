@@ -160,7 +160,7 @@ class ServiceAddonTest extends TestCase
 
     public function test_admin_settings_page_navigation_registered(): void
     {
-        $this->assertSame('سرویس‌ها', ExtraAddonSettingsPage::getNavigationGroup());
+        $this->assertSame('فروشگاه و پلن‌ها', ExtraAddonSettingsPage::getNavigationGroup());
     }
 
     // ── Dashboard pages ──────────────────────────────────────────────────────

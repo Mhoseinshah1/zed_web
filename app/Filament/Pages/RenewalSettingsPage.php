@@ -18,11 +18,11 @@ class RenewalSettingsPage extends Page implements HasForms
     protected static string $view = 'filament.pages.renewal-settings';
 
     protected static ?string $navigationIcon  = 'heroicon-o-cog-6-tooth';
-    protected static ?string $navigationGroup = 'کاربران و سفارش‌ها';
+    protected static ?string $navigationGroup = 'فروشگاه و پلن‌ها';
     protected static ?string $navigationLabel = 'تنظیمات تمدید';
     protected static ?string $title           = 'تنظیمات تمدید سرویس';
     protected static ?string $slug            = 'settings/renewal';
-    protected static ?int    $navigationSort  = 99;
+    protected static ?int    $navigationSort  = 40;
 
     public bool $renewal_enabled = true;
 

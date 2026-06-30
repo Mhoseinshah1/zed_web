@@ -16,11 +16,11 @@ class NotificationTemplateResource extends Resource
     protected static ?string $model = NotificationTemplate::class;
 
     protected static ?string $navigationIcon   = 'heroicon-o-chat-bubble-left-right';
-    protected static ?string $navigationGroup   = 'سیستم و یکپارچه‌سازی';
+    protected static ?string $navigationGroup   = 'اعلان‌ها و پیام‌ها';
     protected static ?string $navigationLabel   = 'قالب پیام‌ها';
     protected static ?string $modelLabel        = 'قالب پیام';
     protected static ?string $pluralModelLabel  = 'قالب پیام‌ها';
-    protected static ?int    $navigationSort    = 21;
+    protected static ?int    $navigationSort    = 20;
 
     public static function form(Form $form): Form
     {

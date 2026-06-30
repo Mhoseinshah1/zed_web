@@ -26,7 +26,7 @@ class SocialLinksPage extends Page implements HasForms
     protected static ?string $navigationLabel = 'لینک‌ها و شبکه‌های اجتماعی';
     protected static ?string $title           = 'لینک‌ها و شبکه‌های اجتماعی';
     protected static ?string $slug            = 'content/social-links';
-    protected static ?int    $navigationSort  = 95;
+    protected static ?int    $navigationSort  = 100;
 
     /** @var array<string,mixed> */
     public array $data = [];

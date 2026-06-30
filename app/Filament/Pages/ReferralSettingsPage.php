@@ -22,11 +22,11 @@ class ReferralSettingsPage extends Page implements HasForms
     protected static string $view = 'filament.pages.referral-settings';
 
     protected static ?string $navigationIcon   = 'heroicon-o-megaphone';
-    protected static ?string $navigationGroup   = 'بازاریابی';
+    protected static ?string $navigationGroup   = 'نمایندگان و بازاریابی';
     protected static ?string $navigationLabel   = 'تنظیمات نمایندگان';
     protected static ?string $title             = 'تنظیمات نمایندگان و پورسانت';
     protected static ?string $slug              = 'settings/referral';
-    protected static ?int    $navigationSort    = 1;
+    protected static ?int    $navigationSort    = 10;
 
     /** @var array<string,mixed> */
     public array $data = [];
