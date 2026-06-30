@@ -55,6 +55,12 @@ class TemplateManager
                 'preview'     => 'map',
                 'accent'      => 'linear-gradient(135deg,#2563eb,#22d3ee 60%,#34d399)',
             ],
+            'woodmart' => [
+                'title'       => 'قالب وودمارت',
+                'description' => 'سبک فروشگاهی · کارت‌های محصول · دسته‌بندی · روشن و تیره',
+                'preview'     => 'woodmart',
+                'accent'      => 'linear-gradient(135deg,#e8552a,#ff7a4d)',
+            ],
         ];
     }
 
