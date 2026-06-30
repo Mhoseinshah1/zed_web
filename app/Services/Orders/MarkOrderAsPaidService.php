@@ -73,6 +73,23 @@ class MarkOrderAsPaidService
         $order = $order->fresh();
         $this->discountService->markUsed($order);
 
+        // Admin Telegram — paid order + successful payment. Fire-and-forget:
+        // the notifier never throws, so Telegram can never break this flow.
+        $buyer = $order->user?->name ?? $order->user?->username ?? '—';
+        $tg = app(\App\Services\Telegram\TelegramAdminNotifier::class);
+        $tg->event('order_paid', [
+            'user'   => $buyer,
+            'order'  => $order->order_number,
+            'plan'   => $order->plan_name,
+            'amount' => number_format($order->final_price_toman),
+        ], $order);
+        $tg->event('payment_success', [
+            'user'   => $buyer,
+            'order'  => $order->order_number,
+            'amount' => number_format($order->final_price_toman),
+            'method' => $tx->payment_method ?? 'درگاه',
+        ], $order);
+
         // Notify the buyer that payment succeeded (new-service flow). Idempotent
         // via dedupe key so a duplicate IPN/callback does not re-notify.
         if (! $order->isRenewal() && ! $order->isAddon() && $order->user) {

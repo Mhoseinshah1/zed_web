@@ -123,6 +123,12 @@ class ProvisioningService
                     );
                 }
 
+                app(\App\Services\Telegram\TelegramAdminNotifier::class)->event('service_provisioned', [
+                    'user'    => $order->user?->name ?? $order->user?->username ?? '—',
+                    'service' => $service->plan_name ?? $service->service_number,
+                    'order'   => $order->order_number,
+                ], $service);
+
                 return $service->fresh();
             }
 
@@ -243,6 +249,12 @@ class ProvisioningService
                 ],
                 'provisioning_failed:order:' . $order->id,
             );
+
+            app(\App\Services\Telegram\TelegramAdminNotifier::class)->event('service_failed', [
+                'user'  => $order->user?->name ?? $order->user?->username ?? '—',
+                'order' => $order->order_number,
+                'error' => $safeMessage,
+            ], $order);
 
             throw new \RuntimeException('ساخت سرویس در Marzban با خطا مواجه شد: ' . $safeMessage);
         }

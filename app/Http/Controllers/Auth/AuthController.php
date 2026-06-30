@@ -144,6 +144,12 @@ class AuthController extends Controller
         app(\App\Services\Referrals\ReferralService::class)->attachReferrer($user, $referralCode);
         \Illuminate\Support\Facades\Cookie::queue(\Illuminate\Support\Facades\Cookie::forget('referral_code'));
 
+        // Admin Telegram — new registration (safe summary only; no credentials).
+        app(\App\Services\Telegram\TelegramAdminNotifier::class)->event('user_registered', [
+            'user'    => $user->name ?? $user->username,
+            'account' => (string) $user->id,
+        ], $user);
+
         Auth::login($user);
 
         // When OTP verification is mandatory at registration, send the code and
