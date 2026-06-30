@@ -215,6 +215,59 @@ class TelegramSettingsPage extends Page implements HasForms, HasActions
             });
     }
 
+    public function registerWebhookAction(): Action
+    {
+        return Action::make('registerWebhook')
+            ->label('ثبت Webhook')->color('primary')->icon('heroicon-o-link')
+            ->requiresConfirmation()
+            ->modalDescription('یک توکن مخفی جدید ساخته و Webhook روی آدرس سایت ثبت می‌شود.')
+            ->action(function () {
+                try {
+                    $secret = $this->settings()->rotateWebhookSecret();
+                    app(TelegramClient::class)->setWebhook(route('telegram.webhook'), $secret);
+                    Notification::make()->title('Webhook با موفقیت ثبت شد.')->success()->send();
+                } catch (\Throwable $e) {
+                    Notification::make()->title('ثبت Webhook ناموفق: ' . $e->getMessage())->danger()->send();
+                }
+            });
+    }
+
+    public function deleteWebhookAction(): Action
+    {
+        return Action::make('deleteWebhook')
+            ->label('حذف Webhook')->color('danger')->icon('heroicon-o-trash')
+            ->requiresConfirmation()
+            ->action(function () {
+                try {
+                    app(TelegramClient::class)->deleteWebhook();
+                    Notification::make()->title('Webhook حذف شد.')->success()->send();
+                } catch (\Throwable $e) {
+                    Notification::make()->title('حذف Webhook ناموفق: ' . $e->getMessage())->danger()->send();
+                }
+            });
+    }
+
+    public function webhookStatusAction(): Action
+    {
+        return Action::make('webhookStatus')
+            ->label('وضعیت Webhook')->color('gray')->icon('heroicon-o-information-circle')
+            ->action(function () {
+                try {
+                    $info = app(TelegramClient::class)->getWebhookInfo();
+                    // NEVER show the secret — only safe status fields.
+                    $url     = $info['url'] ?? '—';
+                    $pending = (int) ($info['pending_update_count'] ?? 0);
+                    $lastErr = $info['last_error_message'] ?? '—';
+                    Notification::make()
+                        ->title('وضعیت Webhook')
+                        ->body("آدرس: " . ($url !== '' ? 'ثبت‌شده' : 'ثبت‌نشده') . " — در صف: {$pending} — آخرین خطا: {$lastErr}")
+                        ->info()->send();
+                } catch (\Throwable $e) {
+                    Notification::make()->title('دریافت وضعیت ناموفق: ' . $e->getMessage())->danger()->send();
+                }
+            });
+    }
+
     private function categoryLabel(string $cat): string
     {
         return [

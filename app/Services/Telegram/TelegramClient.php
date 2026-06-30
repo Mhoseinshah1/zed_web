@@ -58,6 +58,32 @@ class TelegramClient
     }
 
     /**
+     * Register the webhook. The secret is sent to Telegram and echoed back on
+     * every update via the X-Telegram-Bot-Api-Secret-Token header. We only
+     * subscribe to message updates.
+     */
+    public function setWebhook(string $url, string $secret): array
+    {
+        return $this->call('setWebhook', [
+            'url'             => $url,
+            'secret_token'    => $secret,
+            'allowed_updates' => ['message'],
+            'max_connections' => 20,
+        ]);
+    }
+
+    public function deleteWebhook(bool $dropPending = false): array
+    {
+        return $this->call('deleteWebhook', ['drop_pending_updates' => $dropPending]);
+    }
+
+    /** Webhook status (getWebhookInfo). Never contains the secret. */
+    public function getWebhookInfo(): array
+    {
+        return $this->call('getWebhookInfo');
+    }
+
+    /**
      * Perform an API call and return the `result` payload.
      *
      * @throws \RuntimeException with a generic, token-free message

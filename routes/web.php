@@ -19,6 +19,7 @@ use App\Http\Controllers\RenewalController;
 use App\Http\Controllers\RepresentativeController;
 use App\Http\Controllers\ServiceAddonController;
 use App\Http\Controllers\SupportTicketController;
+use App\Http\Controllers\TelegramWebhookController;
 use App\Http\Controllers\ServiceController;
 use App\Http\Controllers\StatusController;
 use App\Http\Controllers\ThemeController;
@@ -35,6 +36,11 @@ Route::post('/webhooks/nowpayments', [NowPaymentsController::class, 'ipn'])
 // Always verify server-to-server inside the callback before trusting the outcome
 Route::get('/payments/centralpay/callback', [CentralPayController::class, 'callback'])
     ->name('payments.centralpay.callback');
+
+// Telegram admin-bot webhook — no auth, no CSRF (verified by the secret-token
+// header inside the controller; only allowed admins in the management group).
+Route::post('/telegram/webhook', [TelegramWebhookController::class, 'handle'])
+    ->name('telegram.webhook');
 
 // Health check (unauthenticated)
 Route::get('/health', [HealthController::class, 'check'])->name('health');
