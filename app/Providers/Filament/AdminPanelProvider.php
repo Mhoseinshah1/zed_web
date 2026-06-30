@@ -188,6 +188,15 @@ HTML;
             // If the resolver/view fails, the base token defaults still apply.
         }
 
+        // Admin SHELL theme — the polish layer that wires Filament's fi-*
+        // components to the --zp-admin-* variables (rounded cards, soft shadows,
+        // consistent buttons/forms/tables/modals/badges/sidebar). Injected last
+        // and admin-only (never imported into app.css), scoped under .fi-body.
+        $shell = $this->adminShellCss();
+        if ($shell !== '') {
+            $out .= '<style id="zp-admin-shell">' . $shell . '</style>';
+        }
+
         return $out;
     }
 
@@ -199,6 +208,17 @@ HTML;
             return $cache;
         }
         $path = resource_path('css/theme-tokens.css');
+        return $cache = is_file($path) ? (string) file_get_contents($path) : '';
+    }
+
+    /** Read + cache the admin-only Filament shell stylesheet. */
+    protected function adminShellCss(): string
+    {
+        static $cache = null;
+        if ($cache !== null) {
+            return $cache;
+        }
+        $path = resource_path('css/admin-theme.css');
         return $cache = is_file($path) ? (string) file_get_contents($path) : '';
     }
 }
