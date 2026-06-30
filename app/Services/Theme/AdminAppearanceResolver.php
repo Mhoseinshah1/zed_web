@@ -40,6 +40,12 @@ class AdminAppearanceResolver
         $density = self::density();
         $sidebar = self::sidebarSize();
 
+        // Corner radius comes from the theme-panel settings (card_radius /
+        // button_radius). Sanitised to a safe CSS length so the value can be
+        // dropped straight into the variable declarations.
+        $cardRadius   = self::cssLen((string) ThemeSettingsService::get('card_radius', '0.9rem'), '0.9rem');
+        $buttonRadius = self::cssLen((string) ThemeSettingsService::get('button_radius', '0.6rem'), '0.6rem');
+
         [$itemH, $groupFont, $rowH, $cardPad, $ctrlH] = self::DENSITY[$density];
         [$sbWidth, $brandSize, $menuFont, $iconSize]  = self::SIDEBAR[$sidebar];
 
@@ -83,9 +89,19 @@ class AdminAppearanceResolver
             '--zp-admin-logo-size'                => self::px(max(24, min(56, $brandSize + 8))),
             '--zp-admin-font-scale'               => '1',
             '--zp-admin-animation-speed'          => '180ms',
-            // Radius pulled from the global tokens (kept in one place).
-            '--zp-admin-card-radius'              => 'var(--zp-card-radius, 0.9rem)',
-            '--zp-admin-button-radius'            => 'var(--zp-button-radius, 0.6rem)',
+            // Radius — read straight from the theme-panel settings so the panel's
+            // corner-radius slider drives the entire admin shell. Also aliased to
+            // the base tokens (admin-scoped) so any rule using them follows too.
+            '--zp-admin-card-radius'              => $cardRadius,
+            '--zp-admin-button-radius'            => $buttonRadius,
+            '--zp-card-radius'                    => $cardRadius,
+            '--zp-button-radius'                  => $buttonRadius,
+            // Shell polish — soft shadow (follows light/dark via --zp-card-shadow),
+            // larger modal radius and a primary focus ring. Kept as variables so
+            // the theme panel keeps controlling the look.
+            '--zp-admin-card-shadow'              => 'var(--zp-card-shadow, 0 10px 30px -12px rgb(0 0 0 / .45))',
+            '--zp-admin-modal-radius'             => "calc({$cardRadius} + 8px)",
+            '--zp-admin-ring'                     => 'color-mix(in srgb, var(--zp-primary, #3b82f6) 35%, transparent)',
         ];
 
         return [
@@ -153,5 +169,12 @@ class AdminAppearanceResolver
     private static function px(int|float $v): string
     {
         return ((int) round($v)) . 'px';
+    }
+
+    /** Accept a simple CSS length ("16px" | "0.9rem" | "9999px"); else fallback. */
+    private static function cssLen(string $value, string $fallback): string
+    {
+        $value = trim($value);
+        return preg_match('/^\d+(\.\d+)?(px|rem|em)?$/', $value) === 1 ? $value : $fallback;
     }
 }

@@ -99,6 +99,34 @@ class AdminAppearanceTest extends TestCase
         $this->assertStringContainsString('data-zp-admin-density', $html);
     }
 
+    /** The admin shell sheet is injected and the panel's radius flows into it. */
+    public function test_admin_shell_css_injected_and_radius_wired(): void
+    {
+        SiteSetting::set('card_radius', '16px');
+        SiteSetting::set('button_radius', '12px');
+
+        $admin = User::factory()->create(['is_admin' => true]);
+        $html  = $this->actingAs($admin)->get('/zed-admin')->getContent();
+
+        // Shell sheet present and scoped to .fi-body.
+        $this->assertStringContainsString('id="zp-admin-shell"', $html);
+        $this->assertStringContainsString('.fi-body .fi-badge', $html);
+        $this->assertStringContainsString('.fi-body .fi-modal-window', $html);
+        // The corner-radius slider value is wired into the admin variables.
+        $this->assertStringContainsString('--zp-admin-card-radius: 16px', $html);
+        $this->assertStringContainsString('--zp-admin-button-radius: 12px', $html);
+        $this->assertStringContainsString('--zp-card-radius: 16px', $html);
+    }
+
+    /** Resolver exposes the new shell polish variables. */
+    public function test_resolver_exposes_shell_vars(): void
+    {
+        $vars = AdminAppearanceResolver::resolve()['vars'];
+        $this->assertArrayHasKey('--zp-admin-card-shadow', $vars);
+        $this->assertArrayHasKey('--zp-admin-modal-radius', $vars);
+        $this->assertArrayHasKey('--zp-admin-ring', $vars);
+    }
+
     /** The theme panel renders, including the sandboxed live preview. */
     public function test_theme_panel_renders(): void
     {

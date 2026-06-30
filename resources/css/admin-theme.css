@@ -1,0 +1,274 @@
+/* ==========================================================================
+   ZedProxy — Filament admin SHELL theme (plain CSS).
+
+   A polish layer that gives the whole /zed-admin shell the "theme panel" look:
+   rounded corners, soft cards with subtle shadows, clean spacing and consistent
+   buttons / forms / tables / modals / badges / sidebar — in BOTH light and dark.
+
+   Rules followed:
+     • Injected ONLY into the admin <head> (never imported into app.css), and
+       every selector is prefixed with `.fi-body`, so nothing leaks to the
+       public site or the user panel.
+     • No hardcoded colours — everything reads the existing --zp-* / --zp-admin-*
+       variables (so the theme panel keeps controlling it) and Filament's own
+       --primary-* palette. Light/dark are handled by those variables.
+     • RTL-correct: directional spacing uses logical (inline-start/end) props.
+     • !important only where Filament's component utilities must be overridden.
+   ========================================================================== */
+
+/* ── Motion / focus tokens reused below ─────────────────────────────────── */
+.fi-body {
+    --zp-ring: var(--zp-admin-ring, color-mix(in srgb, var(--zp-primary) 35%, transparent));
+}
+
+/* ==========================================================================
+   1) CARDS / SECTIONS / WIDGETS — soft surface, subtle shadow, clean padding.
+   ========================================================================== */
+.fi-body .fi-section,
+.fi-body .fi-wi,
+.fi-body .fi-wi-stats-overview-stat,
+.fi-body .fi-ta,
+.fi-body .fi-fo-section,
+.fi-body .fi-sc-card {
+    border-radius: var(--zp-admin-card-radius, 14px) !important;
+    box-shadow: var(--zp-admin-card-shadow, 0 10px 30px -12px rgb(0 0 0 / .45)) !important;
+    border: 1px solid var(--zp-border) !important;
+}
+.fi-body .fi-section-content,
+.fi-body .fi-section-content-ctn {
+    padding: var(--zp-admin-card-padding, 16px) !important;
+}
+/* Stat widgets: a touch of lift on hover. */
+.fi-body .fi-wi-stats-overview-stat {
+    transition: transform var(--zp-admin-animation-speed, 180ms) ease,
+                box-shadow var(--zp-admin-animation-speed, 180ms) ease;
+}
+.fi-body .fi-wi-stats-overview-stat:hover {
+    transform: translateY(-2px);
+}
+
+/* ==========================================================================
+   2) BUTTONS — rounded, soft hover/active, focus ring.
+   ========================================================================== */
+.fi-body .fi-btn {
+    border-radius: var(--zp-admin-button-radius, 10px) !important;
+    transition: transform var(--zp-admin-animation-speed, 180ms) ease,
+                filter var(--zp-admin-animation-speed, 180ms) ease,
+                box-shadow var(--zp-admin-animation-speed, 180ms) ease,
+                background-color var(--zp-admin-animation-speed, 180ms) ease !important;
+}
+.fi-body .fi-btn:hover { filter: brightness(1.06); transform: translateY(-1px); }
+.fi-body .fi-btn:active { transform: translateY(0); filter: brightness(.98); }
+/* Primary/solid buttons get a soft coloured shadow. */
+.fi-body .fi-btn.fi-color-primary,
+.fi-body .fi-btn[class*="fi-btn-color-primary"] {
+    box-shadow: 0 6px 18px -8px color-mix(in srgb, var(--zp-primary) 70%, transparent) !important;
+}
+.fi-body .fi-icon-btn,
+.fi-body .fi-dropdown-trigger > .fi-btn {
+    border-radius: var(--zp-admin-button-radius, 10px) !important;
+    transition: background-color var(--zp-admin-animation-speed, 180ms) ease,
+                transform var(--zp-admin-animation-speed, 180ms) ease !important;
+}
+.fi-body .fi-icon-btn:hover { background-color: var(--zp-surface-hover) !important; }
+/* Consistent keyboard focus ring everywhere. */
+.fi-body .fi-btn:focus-visible,
+.fi-body .fi-icon-btn:focus-visible,
+.fi-body .fi-link:focus-visible {
+    outline: none !important;
+    box-shadow: 0 0 0 3px var(--zp-ring) !important;
+}
+
+/* ==========================================================================
+   3) FORMS — rounded controls, consistent height, primary focus state.
+   ========================================================================== */
+.fi-body .fi-input,
+.fi-body .fi-select-input,
+.fi-body .fi-textarea,
+.fi-body input.fi-input,
+.fi-body .fi-fo-field-wrp .fi-input {
+    background-color: var(--zp-surface-soft) !important;
+    border-radius: var(--zp-admin-button-radius, 10px) !important;
+    border: 1px solid var(--zp-border) !important;
+    transition: border-color var(--zp-admin-animation-speed, 180ms) ease,
+                box-shadow var(--zp-admin-animation-speed, 180ms) ease !important;
+}
+/* The wrapper Filament wraps inputs in — round it + show the focus ring. */
+.fi-body .fi-input-wrp {
+    border-radius: var(--zp-admin-button-radius, 10px) !important;
+    transition: box-shadow var(--zp-admin-animation-speed, 180ms) ease,
+                border-color var(--zp-admin-animation-speed, 180ms) ease !important;
+}
+.fi-body .fi-input-wrp:focus-within {
+    border-color: var(--zp-primary) !important;
+    box-shadow: 0 0 0 3px var(--zp-ring) !important;
+}
+.fi-body .fi-input:focus,
+.fi-body .fi-select-input:focus,
+.fi-body .fi-textarea:focus {
+    border-color: var(--zp-primary) !important;
+    box-shadow: 0 0 0 3px var(--zp-ring) !important;
+    outline: none !important;
+}
+/* Toggle / checkbox / radio accent follows the primary colour. */
+.fi-body .fi-fo-toggle,
+.fi-body .fi-checkbox-input,
+.fi-body .fi-radio-input { accent-color: var(--zp-primary); }
+
+/* ==========================================================================
+   4) TABLES — rounded container, clean header, zebra rows, neat spacing.
+   ========================================================================== */
+.fi-body .fi-ta {
+    overflow: hidden;                 /* clip rows to the rounded container */
+}
+.fi-body .fi-ta-header {
+    padding-inline: var(--zp-admin-card-padding, 16px) !important;
+}
+.fi-body .fi-ta-header-cell {
+    background-color: var(--zp-surface-soft) !important;
+    color: var(--zp-text-muted) !important;
+    font-weight: 700 !important;
+}
+.fi-body .fi-ta-row {
+    transition: background-color var(--zp-admin-animation-speed, 180ms) ease !important;
+}
+/* Zebra striping (kept subtle); hover already set in the base layer. */
+.fi-body .fi-ta-table tbody .fi-ta-row:nth-child(even) {
+    background-color: color-mix(in srgb, var(--zp-surface-soft) 55%, transparent) !important;
+}
+.fi-body .fi-ta-row:hover {
+    background-color: var(--zp-surface-hover) !important;
+}
+.fi-body .fi-ta-cell,
+.fi-body .fi-ta-header-cell {
+    border-color: var(--zp-border) !important;
+}
+
+/* ==========================================================================
+   5) MODALS — larger radius, deeper shadow, blurred backdrop.
+   ========================================================================== */
+.fi-body .fi-modal-window {
+    border-radius: var(--zp-admin-modal-radius, 22px) !important;
+    box-shadow: 0 30px 80px -20px rgb(0 0 0 / .55) !important;
+    border: 1px solid var(--zp-border) !important;
+}
+.fi-body .fi-modal-close-overlay,
+.fi-body .fi-modal > .fi-modal-close-overlay {
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+    background-color: color-mix(in srgb, var(--zp-bg) 55%, transparent) !important;
+}
+
+/* ==========================================================================
+   6) BADGES — pill shape, soft tonal fill (faint bg + bold same-colour text).
+   ========================================================================== */
+.fi-body .fi-badge {
+    border-radius: 9999px !important;
+    font-weight: 700 !important;
+    padding-block: .2rem !important;
+    padding-inline: .6rem !important;
+}
+
+/* ==========================================================================
+   7) SIDEBAR / NAV — rounded items, primary active pill, soft hover, spacing.
+   ========================================================================== */
+.fi-body .fi-sidebar-nav { padding-inline: .5rem; }
+.fi-body .fi-sidebar-item-button {
+    border-radius: var(--zp-admin-button-radius, 10px) !important;
+    margin-inline: .15rem;
+    transition: background-color var(--zp-admin-animation-speed, 180ms) ease,
+                color var(--zp-admin-animation-speed, 180ms) ease !important;
+}
+.fi-body .fi-sidebar-item-button:hover {
+    background-color: var(--zp-surface-hover) !important;
+}
+.fi-body .fi-sidebar-item.fi-active .fi-sidebar-item-button,
+.fi-body .fi-sidebar-item-active .fi-sidebar-item-button {
+    background-color: color-mix(in srgb, var(--zp-primary) 16%, transparent) !important;
+    color: var(--zp-primary) !important;
+    font-weight: 700 !important;
+}
+.fi-body .fi-sidebar-item.fi-active .fi-sidebar-item-icon,
+.fi-body .fi-sidebar-item-active .fi-sidebar-item-icon {
+    color: var(--zp-primary) !important;
+}
+.fi-body .fi-sidebar-group-label { letter-spacing: .01em; }
+
+/* ==========================================================================
+   8) TOPBAR — matching surface, subtle bottom border, no harsh line.
+   ========================================================================== */
+.fi-body .fi-topbar > nav,
+.fi-body .fi-topbar nav {
+    background-color: color-mix(in srgb, var(--zp-surface) 88%, transparent) !important;
+    border-bottom: 1px solid var(--zp-border) !important;
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+}
+
+/* ==========================================================================
+   9) TABS / DROPDOWNS / PAGINATION / AVATARS / NOTIFICATIONS — same language.
+   ========================================================================== */
+/* Tabs */
+.fi-body .fi-tabs {
+    background-color: var(--zp-surface-soft) !important;
+    border: 1px solid var(--zp-border) !important;
+    border-radius: var(--zp-admin-button-radius, 10px) !important;
+    padding: .25rem !important;
+    gap: .25rem;
+}
+.fi-body .fi-tabs-item {
+    border-radius: calc(var(--zp-admin-button-radius, 10px) - 2px) !important;
+    transition: background-color var(--zp-admin-animation-speed, 180ms) ease !important;
+}
+.fi-body .fi-tabs-item.fi-active,
+.fi-body .fi-tabs-item[aria-selected="true"] {
+    background-color: var(--zp-surface) !important;
+    color: var(--zp-primary) !important;
+    box-shadow: var(--zp-admin-card-shadow, 0 6px 18px -10px rgb(0 0 0 / .4)) !important;
+}
+
+/* Dropdowns */
+.fi-body .fi-dropdown-panel {
+    border-radius: var(--zp-admin-card-radius, 14px) !important;
+    box-shadow: var(--zp-admin-card-shadow, 0 10px 30px -12px rgb(0 0 0 / .45)) !important;
+    border: 1px solid var(--zp-border) !important;
+    overflow: hidden;
+}
+.fi-body .fi-dropdown-list-item {
+    border-radius: var(--zp-admin-button-radius, 10px) !important;
+    transition: background-color var(--zp-admin-animation-speed, 180ms) ease !important;
+}
+.fi-body .fi-dropdown-list-item:hover {
+    background-color: var(--zp-surface-hover) !important;
+}
+
+/* Pagination */
+.fi-body .fi-pagination .fi-btn,
+.fi-body .fi-pagination .fi-icon-btn {
+    border-radius: var(--zp-admin-button-radius, 10px) !important;
+}
+
+/* Avatars — soft rounded square or circle, never distorted. */
+.fi-body .fi-avatar {
+    border-radius: 9999px !important;
+    box-shadow: 0 0 0 2px var(--zp-border);
+}
+
+/* Notifications (toasts) */
+.fi-body .fi-no-notification,
+.fi-body .fi-notification {
+    border-radius: var(--zp-admin-card-radius, 14px) !important;
+    box-shadow: var(--zp-admin-card-shadow, 0 10px 30px -12px rgb(0 0 0 / .45)) !important;
+    border: 1px solid var(--zp-border) !important;
+}
+
+/* ── Scrollbars (subtle, on-theme) ──────────────────────────────────────── */
+.fi-body .fi-sidebar-nav::-webkit-scrollbar,
+.fi-body .fi-main::-webkit-scrollbar { width: 10px; height: 10px; }
+.fi-body .fi-sidebar-nav::-webkit-scrollbar-thumb,
+.fi-body .fi-main::-webkit-scrollbar-thumb {
+    background: var(--zp-surface-hover);
+    border-radius: 9999px;
+    border: 2px solid transparent;
+    background-clip: padding-box;
+}
