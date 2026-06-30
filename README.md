@@ -1343,3 +1343,52 @@ The admin verify action is visible for CentralPay transactions that are not yet 
 
 **`duplicate_orderId` error from CentralPay**
 → This should not occur — ZedProxy uses `payment_transactions.id` as orderId, which is unique per payment attempt. If it does occur, check for stale pending transactions and mark them failed before retrying.
+
+## VPN Panels: Marzban & Sanaei / 3X-UI
+
+ZedProxy supports two VPN panel provider types side by side:
+
+- **Marzban** (`marzban`)
+- **سنایی / 3X-UI** (`sanaei_3xui`)
+
+Both are configured in `/zed-admin` → VPN Panels. Adding a 3X-UI panel never
+affects existing Marzban panels or services.
+
+### 3X-UI / Sanaei — authentication (official API only)
+
+ZedProxy talks to 3X-UI **exclusively through its official API**. It never uses
+browser automation, never scrapes panel HTML, never simulates UI clicks, and
+never performs a manual web login.
+
+- **API Token (recommended):** set `auth_method = API Token` and paste the panel
+  API token. Requests are sent with `Authorization: Bearer {token}`.
+- **API Login (fallback):** set `auth_method = ورود از طریق API` and provide the
+  panel username/password. ZedProxy calls the official `POST {panel}/login`
+  endpoint and uses the returned session cookie for API requests (auto re-login
+  once on 401). Use this only if an API token is unavailable.
+
+Credentials (`api_token`, `password`) are stored **encrypted** and are never
+shown in admin tables, never returned to users, and never logged.
+
+### 3X-UI fields
+
+- **آدرس اصلی پنل (base_url):** e.g. `https://example.com:2053`
+- **مسیر پنل (panel_path):** the panel's secret path, e.g. `/M.hosein1384`.
+  API URLs are built as `base_url + panel_path + /panel/api/...`.
+- **بررسی SSL (verify_ssl):** disable for panels using a self-signed/IP
+  certificate.
+- **Inbound پیش‌فرض (default_inbound_id):** the inbound new clients are created
+  in. Use the **«دریافت لیست Inboundها»** action to discover inbound ids.
+- **آدرس/مسیر لینک اشتراک:** used to build the subscription link from the client
+  `subId` when the panel doesn't return a direct link.
+
+### Supported actions (3X-UI)
+
+Create service, sync (traffic/expiry/status), subscription link + QR, renewal,
+extra traffic, extra time, enable/disable, reset traffic, and revoke/regenerate
+subscription — each implemented against the documented client endpoints and
+gated safely (an unsupported capability shows «این قابلیت برای این نوع پنل
+پشتیبانی نمی‌شود.» rather than crashing).
+
+> Sensitive data (tokens, passwords, cookies, sessions, subscription links) is
+> never written to logs.

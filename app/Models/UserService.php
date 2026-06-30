@@ -54,8 +54,14 @@ class UserService extends Model
         'qr_code_path',
         'vpn_panel_id',
         'vpn_inbound_id',
+        'remote_inbound_id',
         'remote_client_id',
         'remote_username',
+        'remote_uuid',
+        'remote_sub_id',
+        'remote_status',
+        'links_json',
+        'remote_raw',
         'admin_notes',
         'user_notes',
         'sync_status',
@@ -85,6 +91,9 @@ class UserService extends Model
         'marzban_used_traffic' => 'integer',
         'marzban_data_limit'   => 'integer',
         'marzban_raw'          => 'array',
+        'remote_inbound_id'    => 'integer',
+        'links_json'           => 'array',
+        'remote_raw'           => 'array',
     ];
 
     protected static function booted(): void
