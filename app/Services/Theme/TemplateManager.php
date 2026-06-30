@@ -49,6 +49,12 @@ class TemplateManager
                 'preview'     => 'matrix',
                 'accent'      => 'linear-gradient(135deg,#10b981,#22d3ee)',
             ],
+            'map' => [
+                'title'       => 'قالب نقشه‌ای',
+                'description' => 'نقشه‌ی تعاملی سرورها · آمار زنده · لوکیشن‌محور',
+                'preview'     => 'map',
+                'accent'      => 'linear-gradient(135deg,#2563eb,#22d3ee 60%,#34d399)',
+            ],
         ];
     }
 
