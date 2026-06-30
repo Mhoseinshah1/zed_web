@@ -42,7 +42,7 @@
         </div>
 
         <div class="p-6 space-y-4">
-            <div class="grid grid-cols-2 gap-4 text-sm">
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
                 <div>
                     <span class="text-gray-400 block mb-1">شماره سفارش</span>
                     <span class="text-white font-mono text-xs">{{ $order->order_number }}</span>

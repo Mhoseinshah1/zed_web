@@ -20,7 +20,38 @@
             </a>
         </div>
     @else
-        <div class="overflow-x-auto">
+        {{-- Mobile: card per order (readable, no horizontal scroll) --}}
+        <div class="md:hidden divide-y divide-gray-800">
+            @foreach($orders as $order)
+            @php
+                $statusColor = match($order->status) {
+                    'completed'          => 'text-green-400',
+                    'cancelled','failed' => 'text-red-400',
+                    'paid','processing'  => 'text-blue-400',
+                    default              => 'text-yellow-400',
+                };
+            @endphp
+            <a href="{{ route('dashboard.orders.show', $order) }}" class="block p-4 hover:bg-gray-800/40 transition">
+                <div class="flex items-start justify-between gap-3">
+                    <div class="min-w-0">
+                        <div class="text-sm font-medium text-white truncate">{{ $order->plan_name }}</div>
+                        <div class="text-xs text-gray-500 mt-0.5 font-mono truncate">{{ $order->order_number }}</div>
+                    </div>
+                    <div class="text-left shrink-0">
+                        <div class="text-sm text-white whitespace-nowrap">{{ number_format($order->final_price_toman) }} تومان</div>
+                        <div class="text-xs mt-0.5 {{ $statusColor }}">{{ $order->statusLabel() }}</div>
+                    </div>
+                </div>
+                <div class="flex items-center justify-between gap-2 mt-2 text-xs text-gray-400">
+                    <span>{{ $order->paymentStatusLabel() }}</span>
+                    <span>{{ $order->created_at->format('Y/m/d') }}</span>
+                </div>
+            </a>
+            @endforeach
+        </div>
+
+        {{-- Desktop: full table --}}
+        <div class="hidden md:block overflow-x-auto">
             <table class="w-full text-sm">
                 <thead>
                     <tr class="text-gray-400 text-xs border-b border-gray-800">

@@ -21,13 +21,28 @@
 <body class="bg-base text-content antialiased">
 
 <div class="flex min-h-screen">
-    <!-- Sidebar -->
-    <aside class="w-64 bg-surface border-l border-line flex flex-col shrink-0">
-        <div class="p-6 border-b border-line">
-            <a href="{{ route('home') }}" class="text-lg font-bold text-content">
-                <span class="text-indigo-400">Zed</span>Proxy
-            </a>
-            <p class="text-xs text-content-muted mt-1">پنل کاربری</p>
+    <!-- Mobile drawer backdrop -->
+    <div id="panel-backdrop" class="fixed inset-0 z-40 bg-black/50 hidden lg:hidden" aria-hidden="true"></div>
+
+    <!-- Sidebar: docked on lg+, off-canvas drawer (from the right, RTL) below lg -->
+    <aside id="panel-sidebar"
+           class="fixed inset-y-0 right-0 z-50 w-64 bg-surface border-l border-line flex flex-col shrink-0 overflow-y-auto
+                  transform translate-x-full transition-transform duration-300 ease-out
+                  lg:static lg:z-auto lg:translate-x-0 lg:transition-none"
+           aria-label="منوی پنل کاربری">
+        <div class="p-6 border-b border-line flex items-start justify-between gap-2">
+            <div>
+                <a href="{{ route('home') }}" class="text-lg font-bold text-content">
+                    <span class="text-indigo-400">Zed</span>Proxy
+                </a>
+                <p class="text-xs text-content-muted mt-1">پنل کاربری</p>
+            </div>
+            <!-- Close (mobile only) -->
+            <button id="panel-close-btn" type="button"
+                    class="lg:hidden -mt-1 -ml-1 p-2 rounded-lg text-content-muted hover:text-content hover:bg-surface-soft focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 transition"
+                    aria-label="بستن منو">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+            </button>
         </div>
 
         <nav class="flex-1 p-4 space-y-1 text-sm">
@@ -104,13 +119,21 @@
 
     <!-- Main content -->
     <div class="flex-1 flex flex-col min-w-0">
-        <header class="bg-surface border-b border-line px-6 py-4 flex items-center justify-between">
-            <h1 class="text-lg font-semibold text-content">@yield('title', 'داشبورد')</h1>
-            <div class="text-sm text-content-muted">
+        <header class="bg-surface border-b border-line px-4 py-3 lg:px-6 lg:py-4 flex items-center justify-between gap-3">
+            <div class="flex items-center gap-3 min-w-0">
+                <!-- Hamburger (mobile only) -->
+                <button id="panel-menu-btn" type="button"
+                        class="lg:hidden -mr-1 p-2 rounded-lg text-content-muted hover:text-content hover:bg-surface-soft focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 transition"
+                        aria-label="باز کردن منو" aria-controls="panel-sidebar" aria-expanded="false">
+                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/></svg>
+                </button>
+                <h1 class="text-base lg:text-lg font-semibold text-content truncate">@yield('title', 'داشبورد')</h1>
+            </div>
+            <div class="text-sm text-content-muted hidden sm:block shrink-0">
                 خوش آمدید، <span class="text-content font-medium">{{ auth()->user()->name ?? 'کاربر' }}</span>
             </div>
         </header>
-        <main class="flex-1 p-6">
+        <main class="flex-1 p-4 lg:p-6">
             @if(session('success'))
                 <div class="mb-6 bg-green-500/10 border border-green-500/30 rounded-lg p-4 text-sm text-green-300">
                     {{ session('success') }}
@@ -126,6 +149,49 @@
     </div>
 </div>
 
+{{-- Lightweight RTL drawer toggle (Alpine isn't loaded on the user panel). --}}
+<script>
+(function () {
+    var btn   = document.getElementById('panel-menu-btn'),
+        side  = document.getElementById('panel-sidebar'),
+        back  = document.getElementById('panel-backdrop'),
+        close = document.getElementById('panel-close-btn'),
+        mqDesktop = window.matchMedia('(min-width: 1024px)');
+
+    if (!side) return;
+
+    function openDrawer() {
+        side.classList.remove('translate-x-full');
+        side.classList.add('translate-x-0');
+        back && back.classList.remove('hidden');
+        document.body.classList.add('overflow-hidden');
+        btn && btn.setAttribute('aria-expanded', 'true');
+        close && close.focus();
+    }
+    function closeDrawer() {
+        side.classList.add('translate-x-full');
+        side.classList.remove('translate-x-0');
+        back && back.classList.add('hidden');
+        document.body.classList.remove('overflow-hidden');
+        btn && btn.setAttribute('aria-expanded', 'false');
+    }
+
+    btn   && btn.addEventListener('click', openDrawer);
+    close && close.addEventListener('click', closeDrawer);
+    back  && back.addEventListener('click', closeDrawer);
+
+    // Close after navigating from any menu link (mobile only).
+    side.querySelectorAll('a[href]').forEach(function (a) {
+        a.addEventListener('click', function () { if (!mqDesktop.matches) closeDrawer(); });
+    });
+
+    // Esc closes; resizing up to desktop clears the mobile state.
+    document.addEventListener('keydown', function (e) { if (e.key === 'Escape') closeDrawer(); });
+    mqDesktop.addEventListener('change', function (e) {
+        if (e.matches) { back && back.classList.add('hidden'); document.body.classList.remove('overflow-hidden'); }
+    });
+})();
+</script>
 @stack('scripts')
 </body>
 </html>
