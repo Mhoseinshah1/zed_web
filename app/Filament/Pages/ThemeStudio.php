@@ -3,6 +3,7 @@
 namespace App\Filament\Pages;
 
 use App\Models\SiteSetting;
+use App\Services\Theme\AdminAppearanceResolver;
 use App\Services\Theme\ThemeManager;
 use Filament\Notifications\Notification;
 use Filament\Pages\Page;
@@ -33,7 +34,22 @@ class ThemeStudio extends Page
             'groups'       => ThemeManager::groups(),
             'groupLabels'  => ThemeManager::groupLabels(),
             'state'        => $this->currentState(),
+            'adminResolved' => AdminAppearanceResolver::resolve(),
         ];
+    }
+
+    /**
+     * Diagnostics action — re-read settings, regenerate the resolved admin
+     * appearance and reload the page so the freshly-injected variables take
+     * effect. Bound to the «بررسی اعمال تنظیمات» button in the diagnostics card.
+     */
+    public function recheckAppearance(): void
+    {
+        // Re-resolve from the database (no stale cache: settings are read live).
+        AdminAppearanceResolver::resolve();
+
+        Notification::make()->title('تنظیمات ظاهر دوباره بارگذاری شد.')->success()->send();
+        $this->redirect(static::getUrl());
     }
 
     /** @return array<string,mixed> */

@@ -10,6 +10,7 @@ use Filament\Pages;
 use Filament\Panel;
 use Filament\PanelProvider;
 use App\Models\SiteSetting;
+use App\Services\Theme\AdminAppearanceResolver;
 use App\Services\Theme\ThemeManager;
 use Filament\Enums\ThemeMode;
 use Filament\Support\Colors\Color;
@@ -129,76 +130,32 @@ class AdminPanelProvider extends PanelProvider
     protected function adminBootScript(): string
     {
         try {
-            $theme       = ThemeManager::defaultTheme(ThemeManager::SURFACE_ADMIN);
-            $cardRadius  = (string) SiteSetting::get('card_radius', '0.9rem');
-            $btnRadius   = (string) SiteSetting::get('button_radius', '0.6rem');
-            $anim        = ThemeManager::animationSpeed();
-            $iconSize    = (string) SiteSetting::get('icon_size', '1.25rem');
-            $sidebarIcon = (string) SiteSetting::get('sidebar_icon_size', '1.25rem');
-            $logoSize    = (string) SiteSetting::get('logo_size', '1.15rem');
-            $cardDensity = (string) SiteSetting::get('card_density', 'comfortable');
-            $animOff     = ThemeManager::animationIntensity() === 'off' ? '1' : '0';
+            $r       = AdminAppearanceResolver::resolve();
+            $animOff = $r['animation_intensity'] === 'off' ? '1' : '0';
         } catch (\Throwable $e) {
             return '';
         }
 
-        // Derive COMPACT, INDEPENDENT admin sizing tokens from the shared
-        // settings. These feed --zp-admin-* (consumed only by Filament chrome),
-        // so the admin stays dense while the user-side --zp-icon-size is left
-        // untouched. Everything is clamped to a professional admin range.
-        $iconPx    = $this->clampPx($this->toPx($iconSize) * 0.8, 14, 20);
-        $sideIconPx = $this->clampPx($this->toPx($sidebarIcon) * 0.85, 16, 24);
-        $logoPx    = $this->clampPx($this->toPx($logoSize) / $this->toPx('1.15rem') * 32, 24, 56);
-        $caretPx   = $this->clampPx($iconPx - 1, 12, 18);
+        // The actual sizing variables are delivered DECLARATIVELY via the
+        // theme-vars <style> block (no JS dependency). This early script only
+        // sets <html> attributes/classes that CSS can't set on its own — the
+        // active theme + density/animation data hooks used by scoped selectors,
+        // applied before first paint to avoid a flash of the wrong theme.
+        $theme   = e($r['theme']);
+        $density = e($r['table_density']);
+        $card    = e($r['card_density']);
+        $anim    = e($r['animation_intensity']);
 
-        // Card-density presets (px) — درست مطابق spec: فشرده / عادی / راحت.
-        [$rowH, $cardPad, $ctrlH, $gap] = match ($cardDensity) {
-            'compact'     => [40, 12, 38, 10],
-            'comfortable' => [56, 20, 46, 18],
-            default       => [48, 16, 42, 14], // normal
-        };
-
-        $theme = e($theme);
         return <<<HTML
 <script>(function(){try{var el=document.documentElement;
 el.setAttribute('data-theme','{$theme}');
+el.setAttribute('data-zp-admin-theme','{$theme}');
+el.setAttribute('data-zp-admin-density','{$density}');
+el.setAttribute('data-zp-admin-card-density','{$card}');
+el.setAttribute('data-zp-admin-animation','{$anim}');
 if({$animOff})el.classList.add('zed-anim-none');
-el.style.setProperty('--zp-card-radius','{$cardRadius}');
-el.style.setProperty('--zp-button-radius','{$btnRadius}');
-el.style.setProperty('--zp-animation-speed','{$anim}');
-el.style.setProperty('--zp-icon-size','{$iconSize}');
-el.style.setProperty('--zp-sidebar-icon-size','{$sidebarIcon}');
-el.style.setProperty('--zp-admin-icon-size','{$iconPx}px');
-el.style.setProperty('--zp-admin-action-icon-size','{$iconPx}px');
-el.style.setProperty('--zp-admin-form-icon-size','{$iconPx}px');
-el.style.setProperty('--zp-admin-sidebar-icon-size','{$sideIconPx}px');
-el.style.setProperty('--zp-admin-select-caret-size','{$caretPx}px');
-el.style.setProperty('--zp-admin-logo-size','{$logoPx}px');
-el.style.setProperty('--zp-admin-card-radius','{$cardRadius}');
-el.style.setProperty('--zp-admin-button-radius','{$btnRadius}');
-el.style.setProperty('--zp-admin-table-row-height','{$rowH}px');
-el.style.setProperty('--zp-admin-card-padding','{$cardPad}px');
-el.style.setProperty('--zp-admin-form-control-height','{$ctrlH}px');
-el.style.setProperty('--zp-admin-density-gap','{$gap}px');
 }catch(e){}})();</script>
 HTML;
-    }
-
-    /** Parse a CSS length ("1.25rem" | "20px" | "1.5") to pixels (rem = 16px). */
-    protected function toPx(string $value): float
-    {
-        $value = trim($value);
-        if (! preg_match('/-?\d*\.?\d+/', $value, $m)) {
-            return 16.0;
-        }
-        $num = (float) $m[0];
-        return str_contains($value, 'rem') ? $num * 16.0 : ($num <= 4 && ! str_contains($value, 'px') ? $num * 16.0 : $num);
-    }
-
-    /** Clamp a pixel value into [$min,$max], rounded to 1 decimal. */
-    protected function clampPx(float $px, float $min, float $max): float
-    {
-        return round(max($min, min($max, $px)), 1);
     }
 
     /**
@@ -223,25 +180,13 @@ HTML;
             . '--zp-card-shadow:0 10px 30px -14px rgb(30 40 80 / .18);}';
         $out .= '<style id="zp-admin-light">' . $lightRamp . '</style>';
 
+        // Declarative, database-driven admin appearance variables. Rendered
+        // AFTER the base tokens so the resolved values win the cascade, and
+        // without relying on JavaScript to apply them.
         try {
-            $fontScale  = (int) SiteSetting::get('font_scale', 100);
-            $tableDense = (string) SiteSetting::get('table_density', 'comfortable');
+            $out .= view('filament.admin.theme-vars')->render();
         } catch (\Throwable $e) {
-            $fontScale = 100;
-            $tableDense = 'comfortable';
-        }
-
-        $extra = '';
-        if ($fontScale !== 100 && $fontScale >= 80 && $fontScale <= 130) {
-            $extra .= 'html{font-size:' . round($fontScale / 100 * 16, 1) . 'px;}';
-        }
-        if ($tableDense === 'compact') {
-            $extra .= '.fi-ta-cell{padding-top:.4rem!important;padding-bottom:.4rem!important;}';
-        } elseif ($tableDense === 'comfortable') {
-            $extra .= '.fi-ta-cell{padding-top:.85rem!important;padding-bottom:.85rem!important;}';
-        }
-        if ($extra !== '') {
-            $out .= '<style>' . $extra . '</style>';
+            // If the resolver/view fails, the base token defaults still apply.
         }
 
         return $out;
