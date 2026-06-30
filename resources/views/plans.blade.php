@@ -4,8 +4,14 @@
 @section('description', site_setting('shop_page_description', 'انتخاب پلن VPN و پروکسی مناسب با نیاز شما'))
 
 @section('content')
+@php
+    // Optional ?cat=<id> pre-selects a category (used by the woodmart nav). It is
+    // validated against the real, active categories and falls back to 'all'.
+    $catIds = isset($categories) ? $categories->pluck('id')->map(fn ($i) => (string) $i)->all() : [];
+    $initialCat = in_array((string) request('cat'), $catIds, true) ? (string) request('cat') : 'all';
+@endphp
 <section class="py-16 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8"
-         x-data="{ cat: 'all' }">
+         x-data="{ cat: '{{ $initialCat }}' }">
     <div class="text-center mb-10">
         <h1 class="text-4xl font-extrabold text-white">{{ site_setting('shop_page_title', site_setting('plans.title', 'انتخاب پلن')) }}</h1>
         <p class="text-gray-400 mt-3 text-lg">{{ site_setting('shop_page_subtitle', site_setting('plans.subtitle', 'یک پلن مناسب انتخاب کنید و همین الان شروع کنید')) }}</p>
