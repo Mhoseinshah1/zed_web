@@ -66,8 +66,11 @@
     --zp-admin-button-radius:      var(--zp-button-radius, 0.6rem);
     --zp-admin-card-padding:       16px;
     --zp-admin-table-row-height:   48px;
+    --zp-admin-table-cell-py:      10px;
+    --zp-admin-table-cell-px:      12px;
     --zp-admin-form-control-height:42px;
     --zp-admin-density-gap:        14px;
+    --zp-admin-animation-speed:    220ms;
 }
 
 /* ---- Neutral ramp: LIGHT ------------------------------------------------- */
@@ -266,17 +269,19 @@ html.zed-anim-none *, html.zed-anim-none *::before, html.zed-anim-none *::after 
     background-color: color-mix(in srgb, var(--zp-primary) 18%, transparent) !important;
 }
 .fi-section, .fi-wi-stats-overview-stat, .fi-ta, .fi-fo-component-ctn .fi-section,
-.fi-modal-window, .fi-dropdown-panel {
+.fi-modal-window, .fi-dropdown-panel, .fi-wi, .fi-fo-section, .fi-card {
     background-color: var(--zp-surface) !important;
     border-color: var(--zp-border) !important;
-    border-radius: var(--zp-card-radius) !important;
+    border-radius: var(--zp-admin-card-radius, var(--zp-card-radius)) !important;
 }
 .fi-input, .fi-select-input, .fi-textarea, input.fi-input, .fi-fo-field-wrp .fi-input {
     background-color: var(--zp-surface-soft) !important;
-    border-radius: var(--zp-button-radius) !important;
+    border-radius: var(--zp-admin-button-radius, var(--zp-button-radius)) !important;
 }
 .fi-ta-row:hover { background-color: var(--zp-surface-hover) !important; }
-.fi-btn { border-radius: var(--zp-button-radius) !important; }
+.fi-btn, .fi-icon-btn, .fi-ac-btn, .fi-dropdown-trigger > .fi-btn {
+    border-radius: var(--zp-admin-button-radius, var(--zp-button-radius)) !important;
+}
 
 /* ==========================================================================
    FILAMENT icon sizing — SCOPED to Filament icon classes only. We deliberately
@@ -347,17 +352,46 @@ html.zed-anim-none *, html.zed-anim-none *::before, html.zed-anim-none *::after 
    layout gap all driven by the --zp-admin-* density tokens (set per-request
    from card_density in AdminPanelProvider). Each carries a px fallback.
    ========================================================================== */
-.fi-body .fi-input, .fi-body .fi-select-input, .fi-body .fi-input-wrp {
+.fi-body .fi-input, .fi-body .fi-select-input, .fi-body .fi-input-wrp,
+.fi-body .fi-fo-text-input input, .fi-body .fi-fo-select select {
     min-height: var(--zp-admin-form-control-height, 42px) !important;
 }
-.fi-body .fi-section .fi-section-content {
+/* Textarea must keep growing — only set a sensible minimum, never a fixed height. */
+.fi-body .fi-fo-textarea textarea { min-height: calc(var(--zp-admin-form-control-height, 42px) * 1.6) !important; }
+.fi-body .fi-section .fi-section-content, .fi-body .fi-section-content-ctn {
     padding: var(--zp-admin-card-padding, 16px) !important;
 }
+/* Table density — row height + matching cell padding (padding is what actually
+   compresses/expands the visible row; height alone cannot shrink it). */
+.fi-body .fi-ta-row { height: var(--zp-admin-table-row-height, 48px) !important; }
 .fi-body .fi-ta-cell, .fi-body .fi-ta-header-cell {
-    height: var(--zp-admin-table-row-height, 48px) !important;
+    padding-top:    var(--zp-admin-table-cell-py, 10px) !important;
+    padding-bottom: var(--zp-admin-table-cell-py, 10px) !important;
+    padding-left:   var(--zp-admin-table-cell-px, 12px) !important;
+    padding-right:  var(--zp-admin-table-cell-px, 12px) !important;
 }
-.fi-body .fi-fo-component-ctn {
+.fi-body .fi-fo-component-ctn, .fi-body .fi-section-content .fi-fo-component-ctn {
     gap: var(--zp-admin-density-gap, 14px) !important;
+}
+
+/* ==========================================================================
+   ANIMATION intensity — drive Filament transition durations from the resolved
+   admin speed. `off` (zed-anim-none class) hard-disables motion; we also honour
+   the OS reduced-motion preference. Scoped to the admin body.
+   ========================================================================== */
+.fi-body .fi-btn, .fi-body .fi-icon-btn, .fi-body .fi-sidebar-item-button,
+.fi-body .fi-input, .fi-body .fi-select-input, .fi-body .fi-ta-row {
+    transition-duration: var(--zp-admin-animation-speed, 220ms) !important;
+}
+html.zed-anim-none .fi-body *, html.zed-anim-none .fi-body *::before, html.zed-anim-none .fi-body *::after {
+    transition-duration: 0ms !important;
+    animation-duration: 0ms !important;
+}
+@media (prefers-reduced-motion: reduce) {
+    .fi-body *, .fi-body *::before, .fi-body *::after {
+        transition-duration: 0ms !important;
+        animation-duration: 0ms !important;
+    }
 }
 
 /* ==========================================================================

@@ -227,7 +227,7 @@
                     </div>
                     <div class="zps-field">
                         <label>تراکم جدول‌ها</label>
-                        <select class="zps-select" x-model="state.table_density" x-on:change="dirty=true">
+                        <select class="zps-select" x-model="state.table_density" x-on:change="applyLive(); dirty=true">
                             <option value="compact">فشرده</option><option value="normal">عادی</option><option value="comfortable">راحت</option>
                         </select>
                     </div>
@@ -246,11 +246,135 @@
                 </div>
             </div>
 
+            {{-- ── Visual test sandbox ──────────────────────────────────────
+                 Uses the same --zp-admin-* tokens the real Filament chrome
+                 uses, so every advanced setting visibly changes it live. --}}
+            <div class="zps-panel">
+                <p class="zps-panel-title">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>
+                    نمونهٔ زندهٔ پنل مدیریت
+                </p>
+                <p class="zps-panel-sub">این نمونه دقیقاً با همان متغیرهای پنل ادمین ساخته شده؛ با تغییر تنظیمات بالا، بلافاصله تغییر می‌کند.</p>
+                <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:.9rem">
+                    {{-- sidebar item + icon --}}
+                    <div style="border:1px solid var(--zp-border);border-radius:var(--zp-admin-card-radius,14px);padding:var(--zp-admin-card-padding,16px);background:var(--zp-surface-soft)">
+                        <div style="font-size:.7rem;color:var(--zp-text-muted);margin-bottom:.5rem">آیتم منو + آیکن</div>
+                        <div style="display:flex;align-items:center;gap:.5rem;padding:.4rem .55rem;border-radius:var(--zp-admin-button-radius,10px);background:var(--zp-surface)">
+                            <svg style="width:var(--zp-admin-sidebar-icon-size,18px);height:var(--zp-admin-sidebar-icon-size,18px);flex:none" viewBox="0 0 24 24" fill="none" stroke="var(--zp-primary)" stroke-width="2"><path d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"/></svg>
+                            <span style="font-size:.8rem;color:var(--zp-text)">داشبورد</span>
+                        </div>
+                    </div>
+                    {{-- button --}}
+                    <div style="border:1px solid var(--zp-border);border-radius:var(--zp-admin-card-radius,14px);padding:var(--zp-admin-card-padding,16px);background:var(--zp-surface-soft)">
+                        <div style="font-size:.7rem;color:var(--zp-text-muted);margin-bottom:.5rem">دکمه</div>
+                        <button type="button" style="display:inline-flex;align-items:center;gap:.4rem;border:0;cursor:default;color:#fff;background:var(--zp-gradient);border-radius:var(--zp-admin-button-radius,10px);min-height:var(--zp-admin-form-control-height,42px);padding:0 .9rem;font-size:.8rem;font-weight:700">
+                            <svg style="width:var(--zp-admin-action-icon-size,16px);height:var(--zp-admin-action-icon-size,16px)" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
+                            افزودن
+                        </button>
+                    </div>
+                    {{-- input + select caret --}}
+                    <div style="border:1px solid var(--zp-border);border-radius:var(--zp-admin-card-radius,14px);padding:var(--zp-admin-card-padding,16px);background:var(--zp-surface-soft)">
+                        <div style="font-size:.7rem;color:var(--zp-text-muted);margin-bottom:.5rem">ورودی و انتخاب</div>
+                        <select class="zps-select" style="min-height:var(--zp-admin-form-control-height,42px);margin-bottom:.5rem"><option>گزینه نمونه</option></select>
+                        <input class="zps-input" style="min-height:var(--zp-admin-form-control-height,42px)" placeholder="متن نمونه">
+                    </div>
+                    {{-- logo --}}
+                    <div style="border:1px solid var(--zp-border);border-radius:var(--zp-admin-card-radius,14px);padding:var(--zp-admin-card-padding,16px);background:var(--zp-surface-soft)">
+                        <div style="font-size:.7rem;color:var(--zp-text-muted);margin-bottom:.5rem">لوگو</div>
+                        <div style="display:flex;align-items:center;gap:.5rem">
+                            <div style="width:var(--zp-admin-logo-size,32px);height:var(--zp-admin-logo-size,32px);border-radius:8px;background:var(--zp-gradient);flex:none"></div>
+                            <span style="font-weight:800;color:var(--zp-text);font-size:calc(.8rem * var(--zp-admin-font-scale,1))">ZedProxy</span>
+                        </div>
+                    </div>
+                </div>
+                {{-- sample table --}}
+                <div style="margin-top:.9rem;border:1px solid var(--zp-border);border-radius:var(--zp-admin-card-radius,14px);overflow:hidden">
+                    <table style="width:100%;border-collapse:collapse;font-size:.78rem;color:var(--zp-text)">
+                        <thead><tr style="background:var(--zp-surface-soft)">
+                            <th style="text-align:right;padding:var(--zp-admin-table-cell-py,10px) var(--zp-admin-table-cell-px,12px)">کاربر</th>
+                            <th style="text-align:right;padding:var(--zp-admin-table-cell-py,10px) var(--zp-admin-table-cell-px,12px)">وضعیت</th>
+                        </tr></thead>
+                        <tbody>
+                            <tr style="height:var(--zp-admin-table-row-height,48px);border-top:1px solid var(--zp-border)">
+                                <td style="padding:var(--zp-admin-table-cell-py,10px) var(--zp-admin-table-cell-px,12px)">نمونه یک</td>
+                                <td style="padding:var(--zp-admin-table-cell-py,10px) var(--zp-admin-table-cell-px,12px)">فعال</td>
+                            </tr>
+                            <tr style="height:var(--zp-admin-table-row-height,48px);border-top:1px solid var(--zp-border)">
+                                <td style="padding:var(--zp-admin-table-cell-py,10px) var(--zp-admin-table-cell-px,12px)">نمونه دو</td>
+                                <td style="padding:var(--zp-admin-table-cell-py,10px) var(--zp-admin-table-cell-px,12px)">در انتظار</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            {{-- ── Diagnostics ──────────────────────────────────────────────
+                 Saved DB value vs resolved CSS value vs the value actually
+                 applied in the browser right now. Collapsible, admin-only. --}}
+            <div class="zps-panel">
+                <div style="display:flex;align-items:center;justify-content:space-between;gap:1rem;cursor:pointer" x-on:click="diagOpen=!diagOpen">
+                    <p class="zps-panel-title" style="margin:0">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.3-4.3"/></svg>
+                        عیب‌یابی تنظیمات ظاهر
+                    </p>
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" :style="diagOpen ? 'transform:rotate(180deg)' : ''"><path d="M6 9l6 6 6-6"/></svg>
+                </div>
+                <div x-show="diagOpen" x-cloak style="margin-top:.85rem">
+                    <div style="display:flex;flex-wrap:wrap;gap:.5rem;margin-bottom:.8rem">
+                        <span class="zps-badge" style="background:color-mix(in srgb,var(--zp-primary) 16%,transparent);color:var(--zp-primary);border-color:transparent">تم ادمین: {{ $adminResolved['theme'] }}</span>
+                        <span class="zps-badge" style="background:color-mix(in srgb,var(--zp-info) 16%,transparent);color:var(--zp-info);border-color:transparent">حالت: {{ $adminResolved['appearance'] }}</span>
+                        <span class="zps-badge" style="background:color-mix(in srgb,var(--zp-warning) 16%,transparent);color:var(--zp-warning);border-color:transparent">انیمیشن: {{ $adminResolved['animation_intensity'] }}</span>
+                        <span class="zps-badge" id="zp-diag-styletag">style tag: زنده</span>
+                    </div>
+                    <div style="overflow-x:auto">
+                        <table style="width:100%;border-collapse:collapse;font-size:.74rem">
+                            <thead><tr style="color:var(--zp-text-muted);text-align:right">
+                                <th style="padding:.4rem .5rem">متغیر</th>
+                                <th style="padding:.4rem .5rem">مقدار ذخیره‌شده (DB)</th>
+                                <th style="padding:.4rem .5rem">مقدار محاسبه‌شده (CSS)</th>
+                                <th style="padding:.4rem .5rem">اعمال‌شده در مرورگر</th>
+                            </tr></thead>
+                            <tbody style="color:var(--zp-text)">
+                                @php($diagRows = [
+                                    ['اندازه آیکن', $adminResolved['raw']['icon_size'], '--zp-admin-icon-size'],
+                                    ['آیکن منو', $adminResolved['raw']['sidebar_icon_size'], '--zp-admin-sidebar-icon-size'],
+                                    ['اندازه لوگو', $adminResolved['raw']['logo_size'], '--zp-admin-logo-size'],
+                                    ['اندازه فونت', $adminResolved['raw']['font_scale'].'%', '--zp-admin-font-scale'],
+                                    ['تراکم جدول', $adminResolved['raw']['table_density'], '--zp-admin-table-row-height'],
+                                    ['تراکم کارت', $adminResolved['raw']['card_density'], '--zp-admin-card-padding'],
+                                    ['گردی کارت', $adminResolved['raw']['card_radius'], '--zp-admin-card-radius'],
+                                    ['گردی دکمه', $adminResolved['raw']['button_radius'], '--zp-admin-button-radius'],
+                                    ['انیمیشن', $adminResolved['raw']['animation_intensity'], '--zp-admin-animation-speed'],
+                                ])
+                                @foreach($diagRows as [$label, $dbVal, $varName])
+                                    <tr style="border-top:1px solid var(--zp-border)">
+                                        <td style="padding:.45rem .5rem">{{ $label }}</td>
+                                        <td style="padding:.45rem .5rem;font-family:monospace;direction:ltr">{{ $dbVal }}</td>
+                                        <td style="padding:.45rem .5rem;font-family:monospace;direction:ltr">{{ $adminResolved['vars'][$varName] ?? '—' }}</td>
+                                        <td style="padding:.45rem .5rem;font-family:monospace;direction:ltr" x-text="(diagTick, liveVar('{{ $varName }}'))"></td>
+                                    </tr>
+                                @endforeach
+                            </tbody>
+                        </table>
+                    </div>
+                    <div style="display:flex;gap:.5rem;margin-top:.85rem;flex-wrap:wrap">
+                        <button type="button" class="zps-btn" x-on:click="refreshDiag()">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.5 9a9 9 0 0114.85-3.36L23 10M1 14l4.65 4.36A9 9 0 0020.5 15"/></svg>
+                            تازه‌سازی مقادیر زنده
+                        </button>
+                        <button type="button" class="zps-btn zps-btn-primary" wire:click="recheckAppearance">
+                            بررسی اعمال تنظیمات
+                        </button>
+                    </div>
+                    <p style="font-size:.7rem;color:var(--zp-text-muted);margin-top:.6rem">اگر ستون «اعمال‌شده» با «محاسبه‌شده» برابر بود، تنظیمات با موفقیت روی پنل اعمال شده‌اند.</p>
+                </div>
+            </div>
+
             {{-- Save bar --}}
             <div class="zps-panel zps-savebar">
                 <div>
                     <span x-show="dirty" class="zps-dirty">تغییرات ذخیره نشده‌اند.</span>
-                    <span x-show="saved" class="zps-saved">تم با موفقیت ذخیره شد.</span>
+                    <span x-show="saved" class="zps-saved">تغییرات ظاهر با موفقیت ذخیره و اعمال شد.</span>
                     <span x-show="!dirty && !saved" style="font-size:.78rem;color:var(--zp-text-muted)">همه تغییرات ذخیره شده‌اند.</span>
                 </div>
                 <button type="button" class="zps-btn zps-btn-primary" x-on:click="save()">ذخیره تغییرات</button>
@@ -318,6 +442,7 @@ function themeStudio(state, presets, groups, groupLabels) {
         state, presets, groups, groupLabels,
         allKeys: Object.keys(presets),
         dirty: false, saved: false, fade: true,
+        diagOpen: false, diagTick: 0,
 
         init() { this.applyLive(); },
 
@@ -346,24 +471,37 @@ function themeStudio(state, presets, groups, groupLabels) {
             el.style.setProperty('--zp-animation-speed', this.speed(this.state.animation_intensity));
             el.style.setProperty('--zp-icon-size', this.state.icon_size);
             el.style.setProperty('--zp-sidebar-icon-size', this.state.sidebar_icon_size);
-            // Mirror the compact, independent admin tokens so the live preview
-            // reflects exactly what /zed-admin will look like after save.
-            const px = (v) => { const n = parseFloat(v) || 1; return /rem/.test(v) ? n * 16 : (n <= 4 ? n * 16 : n); };
+            // Mirror the compact, independent admin tokens — IDENTICAL maths to
+            // AdminAppearanceResolver so the live preview equals what /zed-admin
+            // renders after save (and the diagnostics rows line up).
+            const px = (v) => { const n = parseFloat(v) || 1; return /rem|em/.test(v) ? n * 16 : (/px/.test(v) ? n : (n <= 4 ? n * 16 : n)); };
             const clamp = (n, a, b) => Math.round(Math.max(a, Math.min(b, n)) * 10) / 10;
-            const iconPx = clamp(px(this.state.icon_size) * 0.8, 14, 20);
-            const sidePx = clamp(px(this.state.sidebar_icon_size) * 0.85, 16, 24);
+            const trimNum = (n) => String(Math.round(n * 1000) / 1000);
+            const iconPx = clamp(px(this.state.icon_size) * 0.85, 12, 24);
+            const sidePx = clamp(px(this.state.sidebar_icon_size) * 0.9, 14, 26);
             const logoPx = clamp(px(this.state.logo_size) / 18.4 * 32, 24, 56);
-            el.style.setProperty('--zp-admin-icon-size', iconPx + 'px');
-            el.style.setProperty('--zp-admin-action-icon-size', iconPx + 'px');
-            el.style.setProperty('--zp-admin-form-icon-size', iconPx + 'px');
-            el.style.setProperty('--zp-admin-sidebar-icon-size', sidePx + 'px');
-            el.style.setProperty('--zp-admin-select-caret-size', clamp(iconPx - 1, 12, 18) + 'px');
-            el.style.setProperty('--zp-admin-logo-size', logoPx + 'px');
-            const dens = ({ compact: [40, 12, 38, 10], comfortable: [56, 20, 46, 18] })[this.state.card_density] || [48, 16, 42, 14];
-            el.style.setProperty('--zp-admin-table-row-height', dens[0] + 'px');
-            el.style.setProperty('--zp-admin-card-padding', dens[1] + 'px');
-            el.style.setProperty('--zp-admin-form-control-height', dens[2] + 'px');
-            el.style.setProperty('--zp-admin-density-gap', dens[3] + 'px');
+            const cardR  = clamp(px(this.state.card_radius), 8, 28);
+            const btnR   = clamp(px(this.state.button_radius), 6, 24);
+            const fScale = clamp((parseInt(this.state.font_scale) || 100) / 100, 0.9, 1.15);
+            const S = (k, v) => el.style.setProperty(k, v);
+            S('--zp-admin-icon-size', iconPx + 'px');
+            S('--zp-admin-action-icon-size', clamp(iconPx, 12, 22) + 'px');
+            S('--zp-admin-form-icon-size', clamp(iconPx, 12, 22) + 'px');
+            S('--zp-admin-sidebar-icon-size', sidePx + 'px');
+            S('--zp-admin-select-caret-size', clamp(iconPx - 2, 10, 18) + 'px');
+            S('--zp-admin-logo-size', logoPx + 'px');
+            S('--zp-admin-card-radius', cardR + 'px');
+            S('--zp-admin-button-radius', btnR + 'px');
+            S('--zp-admin-font-scale', trimNum(fScale));
+            S('--zp-admin-animation-speed', this.speed(this.state.animation_intensity));
+            const card = ({ compact: [12, 38, 10], comfortable: [20, 46, 18] })[this.state.card_density] || [16, 42, 14];
+            S('--zp-admin-card-padding', card[0] + 'px');
+            S('--zp-admin-form-control-height', card[1] + 'px');
+            S('--zp-admin-density-gap', card[2] + 'px');
+            const tbl = ({ compact: [40, 8, 10], comfortable: [56, 14, 16] })[this.state.table_density] || [48, 10, 12];
+            S('--zp-admin-table-row-height', tbl[0] + 'px');
+            S('--zp-admin-table-cell-py', tbl[1] + 'px');
+            S('--zp-admin-table-cell-px', tbl[2] + 'px');
         },
         bump() { this.fade = false; requestAnimationFrame(() => requestAnimationFrame(() => this.fade = true)); },
 
@@ -400,9 +538,23 @@ function themeStudio(state, presets, groups, groupLabels) {
         },
 
         save() {
-            this.$wire.persist(this.state).then(() => { this.dirty = false; this.saved = true;
-                setTimeout(() => this.saved = false, 2600); });
+            this.$wire.persist(this.state).then(() => {
+                this.dirty = false; this.saved = true;
+                // Re-apply the resolved tokens to the live document so the whole
+                // admin chrome reflects the saved values immediately (persisted
+                // values are re-injected declaratively on the next page load).
+                this.applyLive();
+                this.refreshDiag();
+                setTimeout(() => this.saved = false, 3200);
+            });
         },
+
+        /** Read the variables actually applied to :root right now (diagnostics). */
+        liveVar(name) {
+            try { return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || '—'; }
+            catch (e) { return '—'; }
+        },
+        refreshDiag() { this.diagTick++; },
     };
 }
 </script>
