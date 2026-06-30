@@ -1,4 +1,16 @@
-{{-- Classic site-wide header (extracted verbatim from the original layouts.app). --}}
+{{-- Classic site-wide header. Unified nav (order + active state) shared by all
+     templates; classic styling preserved. --}}
+@php
+    $navLinks = [
+        ['label' => 'خانه',          'url' => route('home'),      'active' => request()->routeIs('home')],
+        ['label' => 'محصولات',       'url' => route('plans'),     'active' => request()->routeIs('plans')],
+        ['label' => 'آموزش‌ها',      'url' => route('tutorials'), 'active' => request()->routeIs('tutorials*')],
+        ['label' => 'وضعیت سرویس‌ها', 'url' => route('status'),    'active' => request()->routeIs('status')],
+        ['label' => 'درباره ما',     'url' => url('/about'),      'active' => request()->is('about', 'pages/about')],
+        ['label' => 'قوانین',        'url' => url('/terms'),      'active' => request()->is('terms', 'pages/terms')],
+        ['label' => 'پشتیبانی',      'url' => route('contact'),   'active' => request()->routeIs('contact')],
+    ];
+@endphp
 <header class="sticky top-0 z-50 bg-gray-900/95 backdrop-blur border-b border-gray-800">
     <nav class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div class="flex items-center justify-between h-16">
@@ -12,13 +24,13 @@
             </a>
 
             <!-- Desktop menu -->
-            <div class="hidden md:flex items-center gap-6 text-sm font-medium">
-                <a href="{{ route('home') }}" class="text-gray-300 hover:text-white transition">خانه</a>
-                <a href="{{ route('plans') }}" class="text-gray-300 hover:text-white transition">پلن‌ها</a>
-                <a href="{{ route('tutorials') }}" class="text-gray-300 hover:text-white transition">آموزش‌ها</a>
-                <a href="{{ route('status') }}" class="text-gray-300 hover:text-white transition">وضعیت سرویس</a>
-                <a href="{{ route('faq') }}" class="text-gray-300 hover:text-white transition">سوالات متداول</a>
-                <a href="{{ route('contact') }}" class="text-gray-300 hover:text-white transition">پشتیبانی</a>
+            <div class="hidden md:flex items-center gap-1 text-sm font-medium">
+                @foreach($navLinks as $link)
+                    <a href="{{ $link['url'] }}"
+                       class="px-3 py-2 rounded-lg transition {{ $link['active'] ? 'text-white bg-gray-800' : 'text-gray-300 hover:text-white hover:bg-gray-800' }}">
+                        {{ $link['label'] }}
+                    </a>
+                @endforeach
             </div>
 
             <!-- Auth buttons -->
@@ -40,13 +52,10 @@
         </div>
 
         <!-- Mobile menu -->
-        <div id="mobile-menu" class="hidden md:hidden pb-4 space-y-2 text-sm font-medium">
-            <a href="{{ route('home') }}" class="block py-2 text-gray-300 hover:text-white">خانه</a>
-            <a href="{{ route('plans') }}" class="block py-2 text-gray-300 hover:text-white">پلن‌ها</a>
-            <a href="{{ route('tutorials') }}" class="block py-2 text-gray-300 hover:text-white">آموزش‌ها</a>
-            <a href="{{ route('status') }}" class="block py-2 text-gray-300 hover:text-white">وضعیت سرویس</a>
-            <a href="{{ route('faq') }}" class="block py-2 text-gray-300 hover:text-white">سوالات متداول</a>
-            <a href="{{ route('contact') }}" class="block py-2 text-gray-300 hover:text-white">پشتیبانی</a>
+        <div id="mobile-menu" class="hidden md:hidden pb-4 space-y-1 text-sm font-medium">
+            @foreach($navLinks as $link)
+                <a href="{{ $link['url'] }}" class="block py-2 px-2 rounded-lg {{ $link['active'] ? 'text-white bg-gray-800' : 'text-gray-300 hover:text-white hover:bg-gray-800' }}">{{ $link['label'] }}</a>
+            @endforeach
         </div>
     </nav>
 </header>
