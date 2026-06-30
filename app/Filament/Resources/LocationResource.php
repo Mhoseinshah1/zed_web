@@ -46,6 +46,24 @@ class LocationResource extends Resource
                     ->numeric()
                     ->default(0),
 
+                Forms\Components\TextInput::make('latitude')
+                    ->label('عرض جغرافیایی (Latitude)')
+                    ->numeric()->step('0.000001')->minValue(-90)->maxValue(90)
+                    ->placeholder('مثال: 51.1657')
+                    ->helperText('برای نمایش روی نقشه لازم است (به‌همراه طول جغرافیایی).'),
+
+                Forms\Components\TextInput::make('longitude')
+                    ->label('طول جغرافیایی (Longitude)')
+                    ->numeric()->step('0.000001')->minValue(-180)->maxValue(180)
+                    ->placeholder('مثال: 10.4515')
+                    ->helperText('برای نمایش روی نقشه لازم است (به‌همراه عرض جغرافیایی).'),
+
+                Forms\Components\TextInput::make('ping_ms')
+                    ->label('پینگ (میلی‌ثانیه)')
+                    ->numeric()->minValue(0)->maxValue(100000)
+                    ->placeholder('مثال: 18')
+                    ->helperText('اختیاری — اگر خالی باشد، روی نقشه «آنلاین» نمایش داده می‌شود.'),
+
                 Forms\Components\Textarea::make('description')
                     ->label('توضیحات')
                     ->rows(2)
