@@ -1,21 +1,26 @@
 {{--
-    Declarative admin appearance variables for /zed-admin.
+    Declarative appearance variables for /zed-admin.
 
     Rendered into the Filament <head> on EVERY admin page (see
-    AdminPanelProvider). The resolved, clamped, database-driven values are
-    written straight into CSS custom properties — so the saved Theme Studio
-    settings apply with no dependency on JavaScript. Injected after the base
-    token stylesheet so these declarations win the cascade.
-
-    Scoped to admin only; it is never included on the user dashboard / website.
+    AdminPanelProvider). Emits both the global colour palette (from the active
+    preset + brand overrides) and the admin sizing variables (from admin_density
+    + admin_sidebar_size). Values are written straight into CSS custom
+    properties, so the saved settings apply with no dependency on JavaScript.
+    Injected after the base token stylesheet so these declarations win.
 --}}
-@php($zp = \App\Services\Theme\AdminAppearanceResolver::resolve())
-<style id="zedproxy-admin-theme-vars">
+@php($admin = \App\Services\Theme\AdminAppearanceResolver::resolve())
+@php($colors = \App\Services\Theme\AppearanceManager::colorVars())
+<style id="zedproxy-appearance-vars">
 :root, html, body, .fi-body {
-@foreach ($zp['vars'] as $name => $value){{ $name }}: {{ $value }};
+@foreach ($colors as $name => $value){{ $name }}: {{ $value }};
+@endforeach
+@foreach ($admin['vars'] as $name => $value){{ $name }}: {{ $value }};
 @endforeach
 }
-/* Font scale — scale the document root so every rem-based Filament size follows.
-   Applied once on <html>; do not re-scale .fi-body or text would compound. */
-html { font-size: calc(100% * var(--zp-admin-font-scale, 1)); }
+/* Brand display modes (admin_brand_display). */
+@if($admin['brand_display'] === 'logo')
+.fi-sidebar-header .fi-logo:not(:has(img)){ font-size:0 !important; }
+@elseif($admin['brand_display'] === 'text')
+.fi-sidebar-header .fi-logo img{ display:none !important; }
+@endif
 </style>

@@ -52,16 +52,34 @@ class ThemeArchitectureTest extends TestCase
         $this->assertSame('18px', ThemeSettingsService::firstOf(['admin_icon_size', 'icon_size'], 'x'));
     }
 
-    /** admin_* override wins over the legacy shared key in the resolver. */
-    public function test_admin_override_beats_legacy_in_resolver(): void
+    /** AppearanceManager exposes exactly the 5 practical presets. */
+    public function test_appearance_manager_has_five_presets(): void
     {
-        SiteSetting::set('icon_size', '1rem');                       // legacy/user
-        $this->assertSame('13.6px', AdminAppearanceResolver::resolve()['vars']['--zp-admin-icon-size']); // 16*0.85
+        $keys = \App\Services\Theme\AppearanceManager::presetKeys();
+        $this->assertSame(
+            ['default_dark', 'minimal_light', 'luxury_gold', 'professional_blue', 'graphite_admin'],
+            $keys
+        );
+    }
 
-        SiteSetting::set('admin_icon_size', '22px');                 // admin override
-        $this->assertSame('22px', AdminAppearanceResolver::resolve()['vars']['--zp-admin-icon-size']);
-        // …and the user-side key is untouched.
-        $this->assertSame('1rem', SiteSetting::get('icon_size'));
+    /** Preset selection drives the global colour variables. */
+    public function test_preset_changes_color_vars(): void
+    {
+        SiteSetting::set('site_theme_preset', 'minimal_light');
+        $vars = \App\Services\Theme\AppearanceManager::colorVars();
+        $this->assertSame('#2563eb', $vars['--zp-primary']);
+        $this->assertSame('#ffffff', $vars['--zp-surface']);
+    }
+
+    /** primary_color / accent_color override the preset colours. */
+    public function test_brand_colors_override_preset(): void
+    {
+        SiteSetting::set('site_theme_preset', 'default_dark');
+        SiteSetting::set('primary_color', '#ff0000');
+        SiteSetting::set('accent_color', '00ff00');
+        $vars = \App\Services\Theme\AppearanceManager::colorVars();
+        $this->assertSame('#ff0000', $vars['--zp-primary']);
+        $this->assertSame('#00ff00', $vars['--zp-accent']);
     }
 
     /** CssVariableBuilder strips injection characters and normalises names. */
