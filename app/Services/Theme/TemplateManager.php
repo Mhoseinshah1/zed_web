@@ -43,6 +43,12 @@ class TemplateManager
                 'preview'     => 'shop',
                 'accent'      => 'linear-gradient(135deg,#0ea5e9,#22d3ee 55%,#34d399)',
             ],
+            'matrix' => [
+                'title'       => 'قالب هکری',
+                'description' => 'سبک ماتریکس · ترمینال زنده و نمودار تونل رمزنگاری',
+                'preview'     => 'matrix',
+                'accent'      => 'linear-gradient(135deg,#10b981,#22d3ee)',
+            ],
         ];
     }
 

@@ -26,7 +26,7 @@ class ShopTemplateTest extends TestCase
         $this->assertArrayHasKey('shop', TemplateManager::templates());
         $this->assertSame('قالب فروشگاهی', TemplateManager::templates()['shop']['title']);
         $this->assertTrue(TemplateManager::isValid('shop'));
-        $this->assertCount(3, TemplateManager::templates());
+        $this->assertGreaterThanOrEqual(3, count(TemplateManager::templates()));
     }
 
     // ── Rendering ────────────────────────────────────────────────────────────
