@@ -242,6 +242,68 @@ class SanaeiPanelTest extends TestCase
         $this->assertTrue($service->expires_at->greaterThan($before));
     }
 
+    // ── Order-level provisioning (paid order → 3X-UI client) ─────────────────
+
+    private function paidOrderOnSanaei(VpnPanel $panel): \App\Models\Order
+    {
+        $user = User::factory()->create();
+        $plan = Plan::factory()->create(['traffic_gb' => 10, 'duration_days' => 30]);
+        return \App\Models\Order::create([
+            'user_id'           => $user->id,
+            'plan_id'           => $plan->id,
+            'plan_name'         => $plan->name,
+            'price_toman'       => $plan->price_toman,
+            'final_price_toman' => $plan->price_toman,
+            'traffic_gb'        => 10,
+            'duration_days'     => 30,
+            'status'            => \App\Models\Order::STATUS_PAID,
+            'payment_status'    => \App\Models\Order::PAYMENT_PAID,
+            'paid_at'           => now(),
+        ]);
+    }
+
+    public function test_paid_order_provisions_sanaei_client(): void
+    {
+        Http::fake([
+            '*/panel/api/clients/get/*'   => Http::response(['success' => false], 200),
+            '*/panel/api/clients/add'     => Http::response(['success' => true], 200),
+            '*/panel/api/clients/links/*' => Http::response(['success' => true, 'obj' => ['vless://abc']], 200),
+        ]);
+
+        $panel = $this->panel(['is_default' => true]);
+        $order = $this->paidOrderOnSanaei($panel);
+
+        $service = app(\App\Services\Provisioning\ProvisioningService::class)->provisionOrder($order);
+
+        $this->assertSame(UserService::STATUS_ACTIVE, $service->status);
+        $this->assertSame($panel->id, $service->vpn_panel_id);
+        $this->assertNotEmpty($service->remote_username);
+        $this->assertSame(\App\Models\Order::STATUS_COMPLETED, $order->fresh()->status);
+    }
+
+    public function test_failed_provisioning_keeps_payment_paid_and_marks_order_failed(): void
+    {
+        // create fails → order provisioning_failed, payment stays paid, no duplicate service.
+        Http::fake([
+            '*/panel/api/clients/get/*' => Http::response(['success' => false], 200),
+            '*/panel/api/clients/add'   => Http::response(['success' => false], 500),
+        ]);
+
+        $panel = $this->panel(['is_default' => true]);
+        $order = $this->paidOrderOnSanaei($panel);
+
+        try {
+            app(\App\Services\Provisioning\ProvisioningService::class)->provisionOrder($order);
+        } catch (\Throwable $e) {
+            // provisioning failure is surfaced as an exception by design
+        }
+
+        $this->assertSame(\App\Models\Order::STATUS_PROVISIONING_FAILED, $order->fresh()->status);
+        $this->assertSame(\App\Models\Order::PAYMENT_PAID, $order->fresh()->payment_status);
+        $this->assertSame(1, UserService::where('order_id', $order->id)->count());
+        $this->assertSame(UserService::PROVISION_FAILED, UserService::where('order_id', $order->id)->value('provision_status'));
+    }
+
     // ── Capability gating ────────────────────────────────────────────────────
 
     public function test_unsupported_panel_type_is_flagged(): void
