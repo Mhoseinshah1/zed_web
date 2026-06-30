@@ -61,6 +61,12 @@ class SupportTicketService
             'ticket_created:' . $ticket->id,
         );
 
+        app(\App\Services\Telegram\TelegramAdminNotifier::class)->event('ticket_created', [
+            'user'    => $user->name ?? $user->username,
+            'ticket'  => $ticket->ticket_number,
+            'subject' => $ticket->subject,
+        ], $ticket);
+
         return $ticket;
     }
 
@@ -99,6 +105,11 @@ class SupportTicketService
             ],
             'ticket_user_reply:' . $message->id,
         );
+
+        app(\App\Services\Telegram\TelegramAdminNotifier::class)->event('ticket_replied', [
+            'user'   => $user->name ?? $user->username,
+            'ticket' => $ticket->ticket_number,
+        ], $ticket);
 
         return $message;
     }
