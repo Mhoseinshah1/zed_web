@@ -49,6 +49,25 @@
     --zp-logo-size:        1.15rem;
     --zp-font-scale:       1;
     --zp-image-size:       2.5rem;
+
+    /* ---- ADMIN-ONLY sizing tokens (Filament chrome) ----------------------
+       Deliberately separate from the user-side --zp-icon-size etc. so the
+       admin panel stays compact/professional and can be sized independently.
+       Defaults are tuned for a dense admin; overridden per-request from
+       SiteSetting in AdminPanelProvider. Every consumer uses a px fallback. */
+    --zp-admin-icon-size:          16px;
+    --zp-admin-sidebar-icon-size:  18px;
+    --zp-admin-action-icon-size:   16px;
+    --zp-admin-form-icon-size:     16px;
+    --zp-admin-select-caret-size:  15px;
+    --zp-admin-logo-size:          32px;
+    --zp-admin-font-scale:         1;
+    --zp-admin-card-radius:        var(--zp-card-radius, 0.9rem);
+    --zp-admin-button-radius:      var(--zp-button-radius, 0.6rem);
+    --zp-admin-card-padding:       16px;
+    --zp-admin-table-row-height:   48px;
+    --zp-admin-form-control-height:42px;
+    --zp-admin-density-gap:        14px;
 }
 
 /* ---- Neutral ramp: LIGHT ------------------------------------------------- */
@@ -258,6 +277,88 @@ html.zed-anim-none *, html.zed-anim-none *::before, html.zed-anim-none *::after 
 }
 .fi-ta-row:hover { background-color: var(--zp-surface-hover) !important; }
 .fi-btn { border-radius: var(--zp-button-radius) !important; }
+
+/* ==========================================================================
+   FILAMENT icon sizing — SCOPED to Filament icon classes only. We deliberately
+   never touch bare `svg`, images, avatars, logos, QR codes or charts, so this
+   cannot bleed onto the user side (this file is also imported by the user CSS)
+   or shrink content imagery. width/height + max-* keeps heroicons crisp.
+   ========================================================================== */
+.fi-sidebar-item-icon, .fi-sidebar-group-icon {
+    width:  var(--zp-admin-sidebar-icon-size, 18px) !important;
+    height: var(--zp-admin-sidebar-icon-size, 18px) !important;
+    max-width:  var(--zp-admin-sidebar-icon-size, 18px);
+    max-height: var(--zp-admin-sidebar-icon-size, 18px);
+}
+.fi-btn-icon, .fi-icon-btn svg, .fi-ac-icon, .fi-dropdown-list-item-icon {
+    width:  var(--zp-admin-action-icon-size, 16px) !important;
+    height: var(--zp-admin-action-icon-size, 16px) !important;
+    max-width:  var(--zp-admin-action-icon-size, 16px);
+    max-height: var(--zp-admin-action-icon-size, 16px);
+}
+.fi-ta-icon, .fi-badge svg, .fi-section-header-icon {
+    width:  var(--zp-admin-icon-size, 16px) !important;
+    height: var(--zp-admin-icon-size, 16px) !important;
+    max-width:  var(--zp-admin-icon-size, 16px);
+    max-height: var(--zp-admin-icon-size, 16px);
+}
+.fi-fo-field-wrp .fi-input-wrp-prefix svg,
+.fi-fo-field-wrp .fi-input-wrp-suffix svg {
+    width:  var(--zp-admin-form-icon-size, 16px) !important;
+    height: var(--zp-admin-form-icon-size, 16px) !important;
+    max-width:  var(--zp-admin-form-icon-size, 16px);
+    max-height: var(--zp-admin-form-icon-size, 16px);
+}
+/* Modal feature icon kept a touch larger than chrome icons but still compact. */
+.fi-modal-icon {
+    width:  calc(var(--zp-admin-icon-size, 16px) + 6px) !important;
+    height: calc(var(--zp-admin-icon-size, 16px) + 6px) !important;
+}
+/* Brand logo / avatars: bounded, never icon-sized. */
+.fi-logo { font-size: var(--zp-admin-logo-size, 32px) !important; }
+.fi-logo img, .fi-sidebar-header img { max-height: var(--zp-admin-logo-size, 32px) !important; width: auto !important; }
+.fi-avatar { width: 32px !important; height: 32px !important; }
+
+/* ==========================================================================
+   SELECT / DROPDOWN caret — small, single, RTL-correct. Scoped to actual admin
+   <select> elements (and the Theme Studio .zps-select) so the native browser
+   arrow is replaced by one compact chevron with no duplication. Never applied
+   to text inputs or to bare `select` on the user side.
+   ========================================================================== */
+.fi-body select, .fi-body .fi-select-input, .fi-body .fi-fo-select select, .zps-select {
+    -webkit-appearance: none;
+    -moz-appearance: none;
+    appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%239aa3bd' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: left 0.7rem center; /* RTL: caret sits on the left */
+    background-size: var(--zp-admin-select-caret-size, 15px) var(--zp-admin-select-caret-size, 15px);
+    padding-left: 2rem;  /* room for caret on the RTL/left side */
+}
+/* LTR safety: if a select is explicitly LTR, move the caret to the right. */
+.fi-body select[dir="ltr"], .zps-select[dir="ltr"] {
+    background-position: right 0.7rem center;
+    padding-left: 0.7rem;
+    padding-right: 2rem;
+}
+
+/* ==========================================================================
+   ADMIN density — form-control height, card padding, table row height and
+   layout gap all driven by the --zp-admin-* density tokens (set per-request
+   from card_density in AdminPanelProvider). Each carries a px fallback.
+   ========================================================================== */
+.fi-body .fi-input, .fi-body .fi-select-input, .fi-body .fi-input-wrp {
+    min-height: var(--zp-admin-form-control-height, 42px) !important;
+}
+.fi-body .fi-section .fi-section-content {
+    padding: var(--zp-admin-card-padding, 16px) !important;
+}
+.fi-body .fi-ta-cell, .fi-body .fi-ta-header-cell {
+    height: var(--zp-admin-table-row-height, 48px) !important;
+}
+.fi-body .fi-fo-component-ctn {
+    gap: var(--zp-admin-density-gap, 14px) !important;
+}
 
 /* ==========================================================================
    THEME STUDIO — self-contained layout classes (.zps-*) so the premium admin
