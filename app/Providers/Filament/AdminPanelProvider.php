@@ -11,6 +11,7 @@ use Filament\Panel;
 use Filament\PanelProvider;
 use App\Models\SiteSetting;
 use App\Services\Theme\AdminAppearanceResolver;
+use App\Services\Theme\AppearanceManager;
 use App\Services\Theme\ThemeManager;
 use Filament\Enums\ThemeMode;
 use Filament\Support\Colors\Color;
@@ -28,14 +29,14 @@ class AdminPanelProvider extends PanelProvider
 {
     public function panel(Panel $panel): Panel
     {
-        [$primaryColor, $themeMode] = $this->resolveAdminTheme();
+        [$primaryColor, $themeMode, $brandText] = $this->resolveAdminTheme();
 
         return $panel
             ->default()
             ->id('zed-admin')
             ->path('zed-admin')
             ->login(\App\Filament\Pages\Auth\Login::class)
-            ->brandName('ZedProxy Admin')
+            ->brandName($brandText)
             ->defaultThemeMode($themeMode)
             ->colors([
                 'primary' => $primaryColor,
@@ -95,31 +96,32 @@ class AdminPanelProvider extends PanelProvider
      * Wrapped defensively so a missing settings table (fresh install/migrate)
      * never breaks the panel boot.
      *
-     * @return array{0: array<int,string>, 1: ThemeMode}
+     * @return array{0: array<int,string>, 1: ThemeMode, 2: string}
      */
     protected function resolveAdminTheme(): array
     {
         $primary   = Color::Indigo;
         $themeMode = ThemeMode::Dark;
+        $brandText = 'ZedProxy Admin';
 
         try {
-            $themeKey = ThemeManager::defaultTheme(ThemeManager::SURFACE_ADMIN);
-            $hex      = ThemeManager::presets()[$themeKey]['dots'][0] ?? null;
+            $hex = AppearanceManager::activePalette()['primary'] ?? null;
             if ($hex) {
                 $primary = Color::hex($hex);
             }
 
-            $appearance = (string) SiteSetting::get('default_appearance', 'dark');
-            $themeMode  = match ($appearance) {
+            $themeMode = match (AppearanceManager::appearanceMode()) {
                 'light'  => ThemeMode::Light,
                 'system' => ThemeMode::System,
                 default  => ThemeMode::Dark,
             };
+
+            $brandText = AdminAppearanceResolver::brandText();
         } catch (\Throwable $e) {
             // Fall back to defaults if settings aren't available yet.
         }
 
-        return [$primary, $themeMode];
+        return [$primary, $themeMode, $brandText];
     }
 
     /**
@@ -130,30 +132,27 @@ class AdminPanelProvider extends PanelProvider
     protected function adminBootScript(): string
     {
         try {
-            $r       = AdminAppearanceResolver::resolve();
-            $animOff = $r['animation_intensity'] === 'off' ? '1' : '0';
+            $r = AdminAppearanceResolver::resolve();
         } catch (\Throwable $e) {
             return '';
         }
 
-        // The actual sizing variables are delivered DECLARATIVELY via the
+        // The actual sizing/colour variables are delivered DECLARATIVELY via the
         // theme-vars <style> block (no JS dependency). This early script only
-        // sets <html> attributes/classes that CSS can't set on its own — the
-        // active theme + density/animation data hooks used by scoped selectors,
-        // applied before first paint to avoid a flash of the wrong theme.
-        $theme   = e($r['theme']);
-        $density = e($r['table_density']);
-        $card    = e($r['card_density']);
-        $anim    = e($r['animation_intensity']);
+        // sets <html> attributes that CSS hooks onto — the active preset and
+        // density/sidebar/brand selectors — before first paint.
+        $preset  = e($r['preset']);
+        $density = e($r['density']);
+        $sidebar = e($r['sidebar_size']);
+        $brand   = e($r['brand_display']);
 
         return <<<HTML
 <script>(function(){try{var el=document.documentElement;
-el.setAttribute('data-theme','{$theme}');
-el.setAttribute('data-zp-admin-theme','{$theme}');
+el.setAttribute('data-theme','{$preset}');
+el.setAttribute('data-zp-admin-preset','{$preset}');
 el.setAttribute('data-zp-admin-density','{$density}');
-el.setAttribute('data-zp-admin-card-density','{$card}');
-el.setAttribute('data-zp-admin-animation','{$anim}');
-if({$animOff})el.classList.add('zed-anim-none');
+el.setAttribute('data-zp-admin-sidebar','{$sidebar}');
+el.setAttribute('data-zp-admin-brand','{$brand}');
 }catch(e){}})();</script>
 HTML;
     }

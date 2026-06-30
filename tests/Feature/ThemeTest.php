@@ -135,75 +135,86 @@ class ThemeTest extends TestCase
             ->assertCookie('zed_theme', 'zed-sunset');
     }
 
-    // ── Theme Studio (admin) ─────────────────────────────────────────────────
+    // ── Theme panel (پنل تم) ─────────────────────────────────────────────────
 
-    public function test_theme_studio_page_loads(): void
+    public function test_theme_panel_loads(): void
     {
         $this->actingAs($this->admin())
             ->get('/zed-admin/theme-studio')
             ->assertSuccessful()
-            ->assertSee('استودیو تم')
-            ->assertSee('گالری تم‌ها');
+            ->assertSee('پنل تم')
+            ->assertSee('پیش‌نمایش زنده');
     }
 
-    public function test_theme_studio_persists_state(): void
+    public function test_old_appearance_url_redirects_to_theme_panel(): void
     {
+        $this->actingAs($this->admin())
+            ->get('/zed-admin/appearance')
+            ->assertRedirect('/zed-admin/theme-studio');
+    }
+
+    /** Persisting writes the right keys and never wipes Advanced/other keys. */
+    public function test_theme_panel_persists_and_preserves_keys(): void
+    {
+        // A key NOT exposed by this panel must survive a save untouched.
+        SiteSetting::set('admin_density', 'compact');
+
         Livewire::actingAs($this->admin())
             ->test(ThemeStudio::class)
             ->call('persist', [
-                'activeTheme'          => 'zed-aurora',
-                'default_theme_public' => 'zed-ocean',
-                'default_theme_user'   => 'zed-emerald',
-                'default_theme_admin'  => 'zed-aurora',
-                'appearance'           => 'dark',
-                'enabled_themes'       => ['zed-ocean', 'zed-aurora'],
-                'allow_user_theme_switch' => true,
-                'force_global_theme'   => false,
-                'animation_intensity'  => 'high',
-                'card_radius'          => '1.2rem',
-                'font_scale'           => 110,
+                'scope'                 => 'public',
+                'default_theme_public'  => 'zed-aurora',
+                'default_theme_user'    => 'zed-emerald',
+                'default_theme_admin'   => 'zed-graphite',
+                'enabled_themes'        => ['zed-aurora'],
+                'accent'                => '#ff0000',
+                'accent2'               => '#00ff00',
+                'appearance'            => 'light',
+                'radius'                => 16,
+                'font_scale'            => 110,
+                'allow_user_theme_switch'      => true,
+                'allow_user_appearance_switch' => false,
+                'force_global_theme'    => true,
+                'animation_intensity'   => 'high',
+                'icon_size'             => '1.5rem',
+                'table_density'         => 'compact',
+                // logo_size/sidebar_icon_size/image_size/card_density omitted on purpose
             ]);
 
-        $this->assertSame('zed-aurora', SiteSetting::get('default_theme_admin'));
+        $this->assertSame('zed-aurora', SiteSetting::get('default_theme_public'));
         $this->assertSame('zed-emerald', SiteSetting::get('default_theme_user'));
+        $this->assertSame('zed-graphite', SiteSetting::get('default_theme_admin'));
+        $this->assertSame('light', SiteSetting::get('default_appearance'));
+        $this->assertSame('#ff0000', SiteSetting::get('primary_color'));
+        $this->assertSame('#00ff00', SiteSetting::get('accent_color'));
+        $this->assertSame('16px', SiteSetting::get('card_radius'));
+        $this->assertSame('12px', SiteSetting::get('button_radius'));
+        $this->assertSame(110, SiteSetting::get('font_scale'));
         $this->assertSame('high', SiteSetting::get('animation_intensity'));
-        $this->assertSame('1.2rem', SiteSetting::get('card_radius'));
-        // Required defaults are force-enabled even if omitted from the list.
+        $this->assertSame('1.5rem', SiteSetting::get('icon_size'));
+
+        // Omitted Advanced keys keep their previous/default value (not wiped).
+        $this->assertSame('1.15rem', SiteSetting::get('logo_size'));
+        $this->assertSame('2.5rem', SiteSetting::get('image_size'));
+
+        // And the unrelated key this panel does not manage is untouched.
+        $this->assertSame('compact', SiteSetting::get('admin_density'));
+
+        // Required default themes stay enabled (guard).
         $enabled = explode(',', (string) SiteSetting::get('enabled_themes'));
         $this->assertContains('zed-emerald', $enabled);
+        $this->assertContains('zed-graphite', $enabled);
     }
 
-    public function test_old_appearance_settings_page_is_gone(): void
+    public function test_preset_applies_to_user_surface(): void
     {
-        // Merged into Theme Studio — the standalone settings page must not exist.
-        $this->actingAs($this->admin())
-            ->get('/zed-admin/settings/appearance')
-            ->assertNotFound();
-    }
+        SiteSetting::set('site_theme_preset', 'minimal_light');
 
-    public function test_gallery_selection_applies_to_user_surface(): void
-    {
-        // Persisting an active theme (as the gallery does) updates the user
-        // dashboard default so the user panel re-themes too.
-        Livewire::actingAs($this->admin())
-            ->test(ThemeStudio::class)
-            ->call('persist', [
-                'activeTheme'          => 'zed-sunset',
-                'default_theme_public' => 'zed-sunset',
-                'default_theme_user'   => 'zed-sunset',
-                'default_theme_admin'  => 'zed-sunset',
-                'appearance'           => 'dark',
-                'enabled_themes'       => ['zed-sunset'],
-            ]);
-
-        $this->assertSame('zed-sunset', ThemeManager::defaultTheme(ThemeManager::SURFACE_USER));
-        $this->assertSame('zed-sunset', ThemeManager::defaultTheme(ThemeManager::SURFACE_PUBLIC));
-
-        // And it shows up on the actually-rendered user dashboard.
+        // The chosen preset's palette is injected on the user dashboard.
         $user = User::factory()->create();
         $this->actingAs($user)->get(route('dashboard.index'))
             ->assertSuccessful()
-            ->assertSee('data-theme="zed-sunset"', false);
+            ->assertSee('--zp-primary:#2563eb', false);
     }
 
     // ── Key pages still render with theme wiring ─────────────────────────────

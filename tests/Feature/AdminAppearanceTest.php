@@ -12,91 +12,109 @@ class AdminAppearanceTest extends TestCase
 {
     use RefreshDatabase;
 
-    /** The resolver returns the saved values, not shipped defaults. */
-    public function test_resolver_reflects_saved_settings(): void
+    /** admin_density maps onto the real density variables. */
+    public function test_density_changes_resolved_vars(): void
     {
-        SiteSetting::set('icon_size', '1.5rem');
-        SiteSetting::set('logo_size', '1.4rem');
-        SiteSetting::set('card_density', 'compact');
-        SiteSetting::set('table_density', 'comfortable');
-        SiteSetting::set('font_scale', '120');
-
-        $r = AdminAppearanceResolver::resolve();
-
-        $this->assertSame('compact', $r['card_density']);
-        $this->assertSame('comfortable', $r['table_density']);
-        // 1.5rem * 16 * 0.85 = 20.4px (within 12–24 clamp)
-        $this->assertSame('20.4px', $r['vars']['--zp-admin-icon-size']);
-        // compact card padding preset
-        $this->assertSame('12px', $r['vars']['--zp-admin-card-padding']);
-        // comfortable table row preset
-        $this->assertSame('56px', $r['vars']['--zp-admin-table-row-height']);
-        // font scale 120% clamped to 1.15
-        $this->assertSame('1.15', $r['vars']['--zp-admin-font-scale']);
-    }
-
-    /** Out-of-range / garbage values are clamped to safe CSS, never broken. */
-    public function test_resolver_clamps_extreme_values(): void
-    {
-        SiteSetting::set('icon_size', '9999px');
-        SiteSetting::set('logo_size', '0px');
-        SiteSetting::set('card_radius', '500rem');
-        SiteSetting::set('font_scale', '900');
-
-        $r = AdminAppearanceResolver::resolve();
-
-        $this->assertSame('24px', $r['vars']['--zp-admin-icon-size']);   // max 24
-        $this->assertSame('24px', $r['vars']['--zp-admin-logo-size']);   // min 24
-        $this->assertSame('28px', $r['vars']['--zp-admin-card-radius']); // max 28
-        $this->assertSame('1.15', $r['vars']['--zp-admin-font-scale']);  // max 1.15
-    }
-
-    /** Every documented admin variable is present and non-empty. */
-    public function test_resolver_emits_all_admin_variables(): void
-    {
+        SiteSetting::set('admin_density', 'compact');
         $vars = AdminAppearanceResolver::resolve()['vars'];
-        foreach ([
-            '--zp-admin-icon-size', '--zp-admin-sidebar-icon-size', '--zp-admin-action-icon-size',
-            '--zp-admin-form-icon-size', '--zp-admin-select-caret-size', '--zp-admin-logo-size',
-            '--zp-admin-font-scale', '--zp-admin-card-radius', '--zp-admin-button-radius',
-            '--zp-admin-card-padding', '--zp-admin-table-row-height', '--zp-admin-form-control-height',
-            '--zp-admin-density-gap', '--zp-admin-animation-speed',
-        ] as $name) {
-            $this->assertArrayHasKey($name, $vars, "missing {$name}");
-            $this->assertNotSame('', $vars[$name]);
-        }
+        $this->assertSame('40px', $vars['--zp-admin-table-row-height']);
+        $this->assertSame('36px', $vars['--zp-admin-sidebar-item-height']);
+        $this->assertSame('12px', $vars['--zp-admin-card-padding']);
+        $this->assertSame('38px', $vars['--zp-admin-form-control-height']);
+
+        SiteSetting::set('admin_density', 'comfortable');
+        $vars = AdminAppearanceResolver::resolve()['vars'];
+        $this->assertSame('56px', $vars['--zp-admin-table-row-height']);
+        $this->assertSame('46px', $vars['--zp-admin-sidebar-item-height']);
+        $this->assertSame('20px', $vars['--zp-admin-card-padding']);
     }
 
-    /** /zed-admin renders the declarative style tag carrying the saved values. */
-    public function test_admin_page_injects_resolved_theme_vars(): void
+    /** admin_sidebar_size maps onto the real sidebar variables. */
+    public function test_sidebar_size_changes_resolved_vars(): void
     {
-        SiteSetting::set('icon_size', '1.5rem');
-        SiteSetting::set('table_density', 'compact');
+        SiteSetting::set('admin_sidebar_size', 'small');
+        $vars = AdminAppearanceResolver::resolve()['vars'];
+        $this->assertSame('250px', $vars['--zp-admin-sidebar-width']);
+        $this->assertSame('250px', $vars['--sidebar-width']);
+        $this->assertSame('20px', $vars['--zp-admin-sidebar-brand-size']);
+        $this->assertSame('13px', $vars['--zp-admin-sidebar-font-size']);
+        $this->assertSame('15px', $vars['--zp-admin-sidebar-icon-size']);
+
+        SiteSetting::set('admin_sidebar_size', 'large');
+        $vars = AdminAppearanceResolver::resolve()['vars'];
+        $this->assertSame('320px', $vars['--zp-admin-sidebar-width']);
+        $this->assertSame('28px', $vars['--zp-admin-sidebar-brand-size']);
+        $this->assertSame('18px', $vars['--zp-admin-sidebar-icon-size']);
+    }
+
+    /** Defaults are normal/normal and the select caret is fixed + small. */
+    public function test_defaults_are_sensible(): void
+    {
+        $r = AdminAppearanceResolver::resolve();
+        $this->assertSame('normal', $r['density']);
+        $this->assertSame('normal', $r['sidebar_size']);
+        $this->assertSame('280px', $r['vars']['--zp-admin-sidebar-width']);
+        $this->assertSame('14px', $r['vars']['--zp-admin-select-caret-size']);
+        $this->assertSame('16px', $r['vars']['--zp-admin-icon-size']);
+    }
+
+    /** Old fine-grained settings migrate onto the two practical presets. */
+    public function test_legacy_settings_migrate(): void
+    {
+        SiteSetting::set('card_density', 'compact');         // legacy density
+        SiteSetting::set('admin_sidebar_width', '320px');    // legacy explicit width
+        $r = AdminAppearanceResolver::resolve();
+        $this->assertSame('compact', $r['density']);
+        $this->assertSame('large', $r['sidebar_size']);
+    }
+
+    /** Brand text + display resolve. */
+    public function test_brand_options(): void
+    {
+        SiteSetting::set('admin_brand_text', 'My Panel');
+        SiteSetting::set('admin_brand_display', 'logo_text');
+        $r = AdminAppearanceResolver::resolve();
+        $this->assertSame('My Panel', $r['brand_text']);
+        $this->assertSame('logo_text', $r['brand_display']);
+    }
+
+    /** /zed-admin injects the appearance style tag with colour + admin vars. */
+    public function test_admin_page_injects_appearance_vars(): void
+    {
+        SiteSetting::set('admin_density', 'compact');
+        SiteSetting::set('admin_sidebar_size', 'small');
 
         $admin = User::factory()->create(['is_admin' => true]);
         $html  = $this->actingAs($admin)->get('/zed-admin')->getContent();
 
-        $this->assertStringContainsString('zedproxy-admin-theme-vars', $html);
+        $this->assertStringContainsString('zedproxy-appearance-vars', $html);
         foreach ([
-            '--zp-admin-icon-size', '--zp-admin-sidebar-icon-size', '--zp-admin-logo-size',
-            '--zp-admin-font-scale', '--zp-admin-table-row-height', '--zp-admin-card-padding',
+            '--zp-primary', '--zp-bg', '--zp-surface',
+            '--zp-admin-sidebar-width', '--zp-admin-sidebar-brand-size',
+            '--zp-admin-table-row-height', '--zp-admin-card-padding',
         ] as $name) {
             $this->assertStringContainsString($name, $html, "admin page missing {$name}");
         }
-        // The resolved icon value for 1.5rem (20.4px) must appear in the page.
-        $this->assertStringContainsString('--zp-admin-icon-size: 20.4px', $html);
-        // data attributes for scoped selectors.
+        $this->assertStringContainsString('--zp-admin-sidebar-width: 250px', $html);
         $this->assertStringContainsString('data-zp-admin-density', $html);
     }
 
-    /** Theme Studio renders the diagnostics panel and the visual sandbox. */
-    public function test_theme_studio_has_diagnostics_and_sandbox(): void
+    /** The theme panel renders, including the sandboxed live preview. */
+    public function test_theme_panel_renders(): void
     {
         $admin = User::factory()->create(['is_admin' => true]);
         $html  = $this->actingAs($admin)->get('/zed-admin/theme-studio')->getContent();
 
-        $this->assertStringContainsString('عیب‌یابی تنظیمات ظاهر', $html);
-        $this->assertStringContainsString('نمونهٔ زندهٔ پنل مدیریت', $html);
-        $this->assertStringContainsString('بررسی اعمال تنظیمات', $html);
+        $this->assertStringContainsString('پنل تم', $html);
+        $this->assertStringContainsString('پیش‌نمایش زنده', $html);
+        $this->assertStringContainsString('تم آماده', $html);
+    }
+
+    /** The old standalone appearance URL redirects to the theme panel. */
+    public function test_old_appearance_url_redirects(): void
+    {
+        $admin = User::factory()->create(['is_admin' => true]);
+        $this->actingAs($admin)->get('/zed-admin/appearance')
+            ->assertRedirect('/zed-admin/theme-studio');
     }
 }

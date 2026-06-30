@@ -1,434 +1,248 @@
 <x-filament-panels::page>
-@php
-    $allKeys = array_keys($presets);
-@endphp
+{{--
+    پنل تم — modern theme panel. The live preview is FULLY SANDBOXED: every theme
+    CSS variable is bound (via Alpine :style) on the `.ztp-stage` container only,
+    so CSS-variable inheritance restyles just that subtree. Nothing is written to
+    :root/document; the real surfaces only change after «Save» → persist().
+--}}
+<style>
+    .ztp{--ztp-accent:var(--zp-primary,#3b82f6)}
+    .ztp *{box-sizing:border-box}
+    .ztp-grid{display:grid;grid-template-columns:340px 1fr;gap:1.25rem;align-items:start}
+    @media(max-width:900px){.ztp-grid{grid-template-columns:1fr}}
+    .ztp-card{background:var(--zp-surface,#141a2b);border:1px solid var(--zp-border,#283047);border-radius:14px;padding:1.25rem}
+    .ztp-controls{position:sticky;top:1rem}
+    @media(max-width:900px){.ztp-controls{position:static}}
+    .ztp-sec{margin-bottom:1.4rem}
+    .ztp-sec:last-child{margin-bottom:0}
+    .ztp-lbl{font-size:12px;font-weight:700;color:var(--zp-text-muted,#9aa3bd);margin-bottom:.7rem;display:flex;justify-content:space-between;align-items:center}
+    .ztp-lbl .val{color:var(--ztp-accent);font-weight:700}
 
-<div class="zps" dir="rtl"
-     x-data="themeStudio(@js($state), @js($presets), @js($groups), @js($groupLabels))"
-     x-init="init()">
+    .ztp-scopes{display:flex;gap:6px}
+    .ztp-scopes button{flex:1;background:var(--zp-surface-soft,#1c2438);border:1px solid var(--zp-border,#283047);color:var(--zp-text-muted,#9aa3bd);font-family:inherit;font-size:12px;font-weight:700;padding:8px;border-radius:9px;cursor:pointer;transition:.15s}
+    .ztp-scopes button.on{color:var(--zp-text,#e8ebf5);border-color:var(--ztp-accent);background:color-mix(in srgb,var(--ztp-accent) 14%,transparent)}
 
-    {{-- ── Hero header ─────────────────────────────────────────────────── --}}
-    <div class="zps-hero zps-animate" style="margin-bottom:1.25rem">
-        <div class="zps-hero-inner">
-            <div style="min-width:16rem">
-                <div style="display:flex;align-items:center;gap:.6rem;flex-wrap:wrap">
-                    <h1>استودیو تم ZedProxy</h1>
-                    <span class="zps-badge">
-                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M5 13l4 4L19 7" stroke-linecap="round" stroke-linejoin="round"/></svg>
-                        <span x-text="dirty ? 'اعمال شده' : 'فعال'"></span>
-                    </span>
-                </div>
-                <p>ظاهر سایت، داشبورد کاربر و پنل مدیریت را از یک‌جا کنترل کنید.</p>
+    .ztp-themes{display:grid;grid-template-columns:repeat(2,1fr);gap:9px;max-height:230px;overflow:auto;padding:2px}
+    .ztp-theme{border:1.5px solid var(--zp-border,#283047);border-radius:11px;padding:10px;cursor:pointer;transition:.15s;background:var(--zp-surface-soft,#1c2438)}
+    .ztp-theme:hover{border-color:var(--zp-surface-hover,#232c44)}
+    .ztp-theme.on{border-color:var(--ztp-accent);box-shadow:0 0 0 3px color-mix(in srgb,var(--ztp-accent) 20%,transparent)}
+    .ztp-theme .sw{display:flex;gap:4px;margin-bottom:7px}
+    .ztp-theme .sw i{width:17px;height:17px;border-radius:5px;display:block}
+    .ztp-theme .nm{font-size:11.5px;font-weight:700;color:var(--zp-text,#e8ebf5)}
 
-                <div style="display:flex;align-items:center;gap:.9rem;flex-wrap:wrap;margin-top:1rem">
-                    <div>
-                        <div style="font-size:.7rem;color:var(--zp-text-muted)">تم فعال</div>
-                        <div style="font-weight:800;font-size:.95rem" x-text="presets[state.activeTheme].title"></div>
-                    </div>
-                    <span class="zps-dots">
-                        <template x-for="(c, i) in presets[state.activeTheme].dots" :key="i">
-                            <span class="zps-dot" :style="`background:${c}`"></span>
-                        </template>
-                    </span>
-                    <div>
-                        <div style="font-size:.7rem;color:var(--zp-text-muted)">حالت نمایش</div>
-                        <div style="font-weight:800;font-size:.95rem" x-text="appearanceLabel()"></div>
-                    </div>
+    .ztp-accents{display:flex;gap:9px;flex-wrap:wrap}
+    .ztp-ac{width:32px;height:32px;border-radius:9px;cursor:pointer;border:2px solid transparent;transition:.15s;position:relative}
+    .ztp-ac.on{border-color:var(--zp-text,#fff);box-shadow:0 0 0 2px var(--zp-surface,#141a2b)}
+    .ztp-ac.custom{display:flex;align-items:center;justify-content:center;background:var(--zp-surface-soft,#1c2438);border:1.5px dashed var(--zp-border,#283047);overflow:hidden}
+    .ztp-ac.custom input{position:absolute;inset:0;opacity:0;cursor:pointer}
+    .ztp-ac.custom svg{width:15px;height:15px;color:var(--zp-text-muted,#9aa3bd)}
+
+    .ztp-seg{display:flex;background:var(--zp-surface-soft,#1c2438);border:1px solid var(--zp-border,#283047);border-radius:11px;padding:4px;gap:4px}
+    .ztp-seg button{flex:1;border:none;background:none;color:var(--zp-text-muted,#9aa3bd);font-family:inherit;font-weight:700;font-size:12px;padding:8px;border-radius:8px;cursor:pointer;transition:.15s;display:flex;align-items:center;justify-content:center;gap:5px}
+    .ztp-seg button svg{width:14px;height:14px}
+    .ztp-seg button.on{background:var(--ztp-accent);color:#fff}
+
+    .ztp input[type=range]{width:100%;height:6px;border-radius:3px;background:var(--zp-surface-soft,#1c2438);appearance:none;-webkit-appearance:none;outline:none;cursor:pointer}
+    .ztp input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:18px;height:18px;border-radius:50%;background:var(--ztp-accent);cursor:pointer;border:3px solid var(--zp-surface,#141a2b)}
+    .ztp input[type=range]::-moz-range-thumb{width:16px;height:16px;border:0;border-radius:50%;background:var(--ztp-accent);cursor:pointer}
+
+    .ztp-toggle-row{display:flex;justify-content:space-between;align-items:center;gap:1rem;padding:9px 0}
+    .ztp-toggle-row .tt{font-size:13px;color:var(--zp-text,#e8ebf5);font-weight:600}
+    .ztp-toggle-row .td{font-size:11px;color:var(--zp-text-muted,#9aa3bd)}
+    .ztp-sw{width:40px;height:23px;border-radius:999px;background:var(--zp-surface-soft,#1c2438);border:1px solid var(--zp-border,#283047);position:relative;cursor:pointer;transition:.15s;flex-shrink:0}
+    .ztp-sw.on{background:var(--ztp-accent)}
+    .ztp-sw::after{content:"";position:absolute;top:2px;right:2px;width:17px;height:17px;border-radius:50%;background:#fff;transition:.15s}
+    .ztp-sw.on::after{right:auto;left:2px}
+
+    .ztp-adv-head{display:flex;justify-content:space-between;align-items:center;cursor:pointer;user-select:none}
+    .ztp-adv-grid{display:grid;grid-template-columns:1fr 1fr;gap:.7rem;margin-top:.9rem}
+    .ztp-field label{display:block;font-size:11px;color:var(--zp-text-muted,#9aa3bd);margin-bottom:.3rem;font-weight:600}
+    .ztp-select{width:100%;background:var(--zp-surface-soft,#1c2438);border:1px solid var(--zp-border,#283047);color:var(--zp-text,#e8ebf5);border-radius:8px;padding:7px 9px;font-family:inherit;font-size:12px;appearance:none;-webkit-appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%239aa3bd' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:left .55rem center;background-size:13px;padding-left:1.7rem}
+
+    .ztp-actions{display:flex;gap:10px;margin-top:1.1rem}
+    .ztp-btn{border:none;border-radius:10px;padding:11px;font-family:inherit;font-weight:700;font-size:13px;cursor:pointer;transition:.15s}
+    .ztp-save{flex:1;background:var(--ztp-accent);color:#fff}
+    .ztp-reset{background:var(--zp-surface-soft,#1c2438);color:var(--zp-text-muted,#9aa3bd);border:1px solid var(--zp-border,#283047);padding:11px 16px}
+
+    /* live preview — reads ONLY from .ztp-stage (sandboxed) */
+    .ztp-pv-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:4px}
+    .ztp-pv-head h3{font-size:14px;font-weight:700;color:var(--zp-text-muted,#9aa3bd)}
+    .ztp-pv-badge{font-size:11px;color:var(--ztp-accent);background:color-mix(in srgb,var(--ztp-accent) 12%,transparent);padding:4px 11px;border-radius:999px;font-weight:700}
+    .ztp-pv-sub{color:var(--zp-text-muted,#9aa3bd);font-size:12px;margin-bottom:1rem}
+
+    .ztp-stage{background:var(--zp-bg);border:1px solid var(--zp-border);border-radius:calc(var(--zp-card-radius) + 4px);padding:22px;color:var(--zp-text)}
+    .ztp-stage .top{display:flex;justify-content:space-between;align-items:center;padding-bottom:16px;border-bottom:1px solid var(--zp-border);margin-bottom:18px}
+    .ztp-stage .brand{display:flex;align-items:center;gap:9px;font-weight:800;font-size:16px}
+    .ztp-stage .brand .m{width:30px;height:30px;border-radius:9px;background:var(--zp-gradient);display:flex;align-items:center;justify-content:center}
+    .ztp-stage .brand .m svg{width:16px;height:16px;color:#fff}
+    .ztp-stage .cta{background:var(--zp-primary);color:#fff;border:none;border-radius:var(--zp-button-radius);padding:9px 16px;font-family:inherit;font-weight:700;font-size:13px;cursor:default}
+    .ztp-stage .cards{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:16px}
+    .ztp-stage .scard{background:var(--zp-surface);border:1px solid var(--zp-border);border-radius:var(--zp-card-radius);padding:15px}
+    .ztp-stage .scard .ic{width:34px;height:34px;border-radius:10px;background:color-mix(in srgb,var(--zp-primary) 15%,transparent);display:flex;align-items:center;justify-content:center;margin-bottom:10px;color:var(--zp-primary)}
+    .ztp-stage .scard .ic svg{width:17px;height:17px}
+    .ztp-stage .scard .v{font-size:20px;font-weight:800}
+    .ztp-stage .scard .l{font-size:12px;color:var(--zp-text-muted);margin-top:2px}
+    .ztp-stage .row{display:flex;gap:12px;align-items:stretch}
+    @media(max-width:560px){.ztp-stage .cards{grid-template-columns:1fr}.ztp-stage .row{flex-direction:column}}
+    .ztp-stage .pane{flex:1;background:var(--zp-surface);border:1px solid var(--zp-border);border-radius:var(--zp-card-radius);padding:16px}
+    .ztp-stage .pane h4{font-size:13px;margin-bottom:12px}
+    .ztp-stage .in{width:100%;background:var(--zp-bg);border:1px solid var(--zp-border);border-radius:calc(var(--zp-card-radius) - 4px);padding:9px 11px;color:var(--zp-text);font-family:inherit;font-size:13px;margin-bottom:9px;outline:none}
+    .ztp-stage .chips{display:flex;gap:7px;flex-wrap:wrap;margin-top:4px}
+    .ztp-stage .chip{font-size:12px;padding:5px 12px;border-radius:999px;font-weight:700}
+    .ztp-stage .chip-a{background:var(--zp-primary);color:#fff}
+    .ztp-stage .chip-s{background:var(--zp-surface-soft);color:var(--zp-text-muted)}
+    .ztp-stage .chip-ok{background:color-mix(in srgb,#34d399 16%,transparent);color:#34d399}
+    .ztp-stage .prog{height:9px;border-radius:999px;background:var(--zp-surface-soft);overflow:hidden;margin:12px 0 8px}
+    .ztp-stage .prog i{display:block;height:100%;width:62%;border-radius:999px;background:var(--zp-gradient)}
+    .ztp-stage .link{color:var(--zp-primary);font-size:13px;font-weight:700}
+</style>
+
+<div class="ztp" x-data="themePanel(@js($state), @js($presets), @js($accentSwatches))" :style="`--ztp-accent:${accent}`">
+    <div class="ztp-grid">
+
+        {{-- ── CONTROLS ─────────────────────────────────────────────── --}}
+        <div class="ztp-card ztp-controls">
+            {{-- scope --}}
+            <div class="ztp-sec">
+                <div class="ztp-lbl">اعمال روی</div>
+                <div class="ztp-scopes">
+                    <button type="button" :class="scope==='public' && 'on'" x-on:click="scope='public'">سایت</button>
+                    <button type="button" :class="scope==='user' && 'on'" x-on:click="scope='user'">پنل کاربر</button>
+                    <button type="button" :class="scope==='admin' && 'on'" x-on:click="scope='admin'">ادمین</button>
                 </div>
             </div>
 
-            <div class="zps-actions">
-                <button type="button" class="zps-btn zps-btn-primary" x-on:click="save()">
-                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 13l4 4L19 7" stroke-linecap="round" stroke-linejoin="round"/></svg>
-                    ذخیره تغییرات
-                </button>
-                <button type="button" class="zps-btn" x-on:click="quickPreview()">
-                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
-                    پیش‌نمایش سریع
-                </button>
-                <button type="button" class="zps-btn zps-btn-ghost" wire:click="resetDefaults"
-                        wire:confirm="بازنشانی همه تنظیمات ظاهر به حالت پیش‌فرض؟">
-                    بازنشانی پیش‌فرض‌ها
-                </button>
-            </div>
-        </div>
-    </div>
-
-    <div class="zps-layout">
-        {{-- ── LEFT: appearance + gallery ──────────────────────────────── --}}
-        <div class="zps-stack">
-
-            {{-- Appearance mode --}}
-            <div class="zps-panel">
-                <p class="zps-panel-title">حالت نمایش</p>
-                <p class="zps-panel-sub">روشن، تاریک یا هماهنگ با مرورگر.</p>
-                <div class="zps-seg">
-                    <button type="button" :class="state.appearance==='light' && 'is-active'" x-on:click="setAppearance('light')">
-                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M5 5l1.5 1.5M17.5 17.5L19 19M19 5l-1.5 1.5M6.5 17.5L5 19" stroke-linecap="round"/></svg>
-                        روشن
-                    </button>
-                    <button type="button" :class="state.appearance==='dark' && 'is-active'" x-on:click="setAppearance('dark')">
-                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.8A9 9 0 1111.2 3a7 7 0 009.8 9.8z" stroke-linejoin="round"/></svg>
-                        تاریک
-                    </button>
-                    <button type="button" :class="state.appearance==='system' && 'is-active'" x-on:click="setAppearance('system')">
-                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4" stroke-linecap="round"/></svg>
-                        سیستم
-                    </button>
-                </div>
-            </div>
-
-            {{-- Theme gallery --}}
-            <div class="zps-panel">
-                <p class="zps-panel-title">گالری تم‌ها</p>
-                <p class="zps-panel-sub">یک تم را انتخاب کنید تا بلافاصله پیش‌نمایش و اعمال شود.</p>
-
-                <template x-for="grp in ['dark','light','special']" :key="grp">
-                    <div>
-                        <div class="zps-group-label" x-text="groupLabels[grp]"></div>
-                        <div class="zps-grid">
-                            <template x-for="key in groups[grp]" :key="key">
-                                <div class="zps-card" :class="state.activeTheme===key && 'is-active'"
-                                     role="button" tabindex="0"
-                                     x-on:click="selectTheme(key)"
-                                     x-on:keydown.enter="selectTheme(key)">
-                                    <div class="zps-card-preview" :style="`background:${presets[key].colors.gradient}`">
-                                        <span class="zps-check">
-                                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M5 13l4 4L19 7" stroke-linecap="round" stroke-linejoin="round"/></svg>
-                                        </span>
-                                        <span class="zps-pill" x-show="key===state.default_theme_admin" x-text="state.activeTheme===key ? 'فعال' : 'پیش‌فرض'"></span>
-                                    </div>
-                                    <div class="zps-card-body">
-                                        <p class="zps-card-title" x-text="presets[key].title"></p>
-                                        <p class="zps-card-desc" x-text="presets[key].description"></p>
-                                        <span class="zps-dots">
-                                            <template x-for="(c,i) in presets[key].dots" :key="i">
-                                                <span class="zps-dot" style="width:.8rem;height:.8rem" :style="`background:${c}`"></span>
-                                            </template>
-                                        </span>
-                                    </div>
-                                </div>
-                            </template>
+            {{-- preset gallery --}}
+            <div class="ztp-sec">
+                <div class="ztp-lbl">تم آماده <span class="val" x-text="presets[activeTheme()]?.title"></span></div>
+                <div class="ztp-themes">
+                    <template x-for="(p,slug) in presets" :key="slug">
+                        <div class="ztp-theme" :class="activeTheme()===slug && 'on'" x-on:click="pickPreset(slug)">
+                            <div class="sw">
+                                <i :style="`background:${p.a}`"></i><i :style="`background:${p.b}`"></i><i :style="`background:${p.c}`"></i>
+                            </div>
+                            <div class="nm" x-text="p.title"></div>
                         </div>
-                    </div>
-                </template>
-            </div>
-
-            {{-- Scope controls --}}
-            <div class="zps-panel">
-                <p class="zps-panel-title">دامنه اعمال تم</p>
-                <p class="zps-panel-sub">با انتخاب تم از گالری، روی هر سه بخش اعمال می‌شود. در صورت نیاز می‌توانید برای هر بخش تم متفاوتی انتخاب کنید.</p>
-                <div class="zps-controls-grid">
-                    <div class="zps-field">
-                        <label>تم پیش‌فرض سایت عمومی</label>
-                        <select class="zps-select" x-model="state.default_theme_public" x-on:change="dirty=true">
-                            <template x-for="key in allKeys" :key="key"><option :value="key" x-text="presets[key].title"></option></template>
-                        </select>
-                    </div>
-                    <div class="zps-field">
-                        <label>تم پیش‌فرض داشبورد کاربر</label>
-                        <select class="zps-select" x-model="state.default_theme_user" x-on:change="dirty=true">
-                            <template x-for="key in allKeys" :key="key"><option :value="key" x-text="presets[key].title"></option></template>
-                        </select>
-                    </div>
-                    <div class="zps-field">
-                        <label>تم پیش‌فرض پنل مدیریت</label>
-                        <select class="zps-select" x-model="state.default_theme_admin" x-on:change="state.activeTheme=state.default_theme_admin; applyLive(); dirty=true">
-                            <template x-for="key in allKeys" :key="key"><option :value="key" x-text="presets[key].title"></option></template>
-                        </select>
-                    </div>
-                </div>
-
-                <div style="margin-top:1rem">
-                    <div class="zps-switch-row">
-                        <div><div style="font-weight:700;font-size:.85rem">اجبار تم سراسری</div><div style="font-size:.72rem;color:var(--zp-text-muted)">انتخاب کاربر نادیده گرفته می‌شود.</div></div>
-                        <div class="zps-switch" :class="state.force_global_theme && 'is-on'" x-on:click="state.force_global_theme=!state.force_global_theme; dirty=true"></div>
-                    </div>
-                    <div class="zps-switch-row">
-                        <div><div style="font-weight:700;font-size:.85rem">اجازه تغییر تم توسط کاربر</div></div>
-                        <div class="zps-switch" :class="state.allow_user_theme_switch && 'is-on'" x-on:click="state.allow_user_theme_switch=!state.allow_user_theme_switch; dirty=true"></div>
-                    </div>
-                    <div class="zps-switch-row">
-                        <div><div style="font-weight:700;font-size:.85rem">اجازه تغییر حالت روشن/تاریک/سیستم توسط کاربر</div></div>
-                        <div class="zps-switch" :class="state.allow_user_appearance_switch && 'is-on'" x-on:click="state.allow_user_appearance_switch=!state.allow_user_appearance_switch; dirty=true"></div>
-                    </div>
-                </div>
-            </div>
-
-            {{-- Enabled themes manager --}}
-            <div class="zps-panel">
-                <p class="zps-panel-title">مدیریت تم‌های قابل نمایش برای کاربران</p>
-                <p class="zps-panel-sub">تنها تم‌های فعال‌شده برای کاربران قابل انتخاب خواهند بود.</p>
-                <div style="display:flex;gap:.5rem;flex-wrap:wrap;margin-bottom:.85rem">
-                    <button type="button" class="zps-btn" x-on:click="enableAll()">فعال‌سازی همه</button>
-                    <button type="button" class="zps-btn zps-btn-ghost" x-on:click="disableExcept()">غیرفعال‌سازی انتخابی</button>
-                </div>
-                <div class="zps-chips">
-                    <template x-for="key in allKeys" :key="key">
-                        <button type="button" class="zps-chip" :class="enabledOn(key) && 'is-on'" x-on:click="toggleEnabled(key)">
-                            <span class="zps-dot" style="width:.7rem;height:.7rem" :style="`background:${presets[key].colors.primary}`"></span>
-                            <span x-text="presets[key].title"></span>
-                            <span style="font-size:.62rem;opacity:.8" x-text="enabledOn(key) ? 'فعال' : 'غیرفعال'"></span>
-                        </button>
                     </template>
                 </div>
             </div>
 
-            {{-- Advanced customization --}}
-            <div class="zps-panel">
-                <p class="zps-panel-title">تنظیمات پیشرفته ظاهر</p>
-                <p class="zps-panel-sub">این تنظیمات از طریق متغیرهای CSS روی کل پلتفرم اعمال می‌شوند.</p>
-                <div class="zps-controls-grid">
-                    <div class="zps-field">
-                        <label>شدت انیمیشن‌ها</label>
-                        <select class="zps-select" x-model="state.animation_intensity" x-on:change="applyLive(); dirty=true">
-                            <option value="off">خاموش</option><option value="low">کم</option>
-                            <option value="medium">متوسط</option><option value="high">زیاد</option>
-                        </select>
-                    </div>
-                    <div class="zps-field">
-                        <label>گردی کارت‌ها</label>
-                        <select class="zps-select" x-model="state.card_radius" x-on:change="applyLive(); dirty=true">
-                            <option value="0.35rem">کم</option><option value="0.6rem">متوسط</option>
-                            <option value="0.9rem">پیش‌فرض</option><option value="1.2rem">زیاد</option><option value="1.6rem">خیلی زیاد</option>
-                        </select>
-                    </div>
-                    <div class="zps-field">
-                        <label>گردی دکمه‌ها</label>
-                        <select class="zps-select" x-model="state.button_radius" x-on:change="applyLive(); dirty=true">
-                            <option value="0.3rem">کم</option><option value="0.5rem">متوسط</option>
-                            <option value="0.6rem">پیش‌فرض</option><option value="0.9rem">زیاد</option><option value="9999px">کاملاً گرد</option>
-                        </select>
-                    </div>
-                    <div class="zps-field">
-                        <label>اندازه آیکن‌ها</label>
-                        <select class="zps-select" x-model="state.icon_size" x-on:change="applyLive(); dirty=true">
-                            <option value="1rem">کوچک</option><option value="1.25rem">پیش‌فرض</option><option value="1.5rem">بزرگ</option>
-                        </select>
-                    </div>
-                    <div class="zps-field">
-                        <label>اندازه آیکن‌های منو</label>
-                        <select class="zps-select" x-model="state.sidebar_icon_size" x-on:change="applyLive(); dirty=true">
-                            <option value="1rem">کوچک</option><option value="1.25rem">پیش‌فرض</option><option value="1.5rem">بزرگ</option>
-                        </select>
-                    </div>
-                    <div class="zps-field">
-                        <label>اندازه لوگو</label>
-                        <select class="zps-select" x-model="state.logo_size" x-on:change="applyLive(); dirty=true">
-                            <option value="1rem">کوچک</option><option value="1.15rem">پیش‌فرض</option><option value="1.4rem">بزرگ</option>
-                        </select>
-                    </div>
-                    <div class="zps-field">
-                        <label>اندازه فونت</label>
-                        <select class="zps-select" x-model.number="state.font_scale" x-on:change="applyLive(); dirty=true">
-                            <option :value="90">کوچک</option><option :value="100">پیش‌فرض</option>
-                            <option :value="110">بزرگ</option><option :value="120">خیلی بزرگ</option>
-                        </select>
-                    </div>
-                    <div class="zps-field">
-                        <label>تراکم جدول‌ها</label>
-                        <select class="zps-select" x-model="state.table_density" x-on:change="applyLive(); dirty=true">
-                            <option value="compact">فشرده</option><option value="normal">عادی</option><option value="comfortable">راحت</option>
-                        </select>
-                    </div>
-                    <div class="zps-field">
-                        <label>تراکم کارت‌ها</label>
-                        <select class="zps-select" x-model="state.card_density" x-on:change="applyLive(); dirty=true">
-                            <option value="compact">فشرده</option><option value="normal">عادی</option><option value="comfortable">راحت</option>
-                        </select>
-                    </div>
-                    <div class="zps-field">
-                        <label>اندازه تصاویر و آواتارها</label>
-                        <select class="zps-select" x-model="state.image_size" x-on:change="applyLive(); dirty=true">
-                            <option value="2rem">کوچک</option><option value="2.5rem">پیش‌فرض</option><option value="3rem">بزرگ</option>
-                        </select>
-                    </div>
+            {{-- accent --}}
+            <div class="ztp-sec">
+                <div class="ztp-lbl">رنگ شاخص</div>
+                <div class="ztp-accents">
+                    <template x-for="c in accentSwatches" :key="c">
+                        <span class="ztp-ac" :class="accent.toLowerCase()===c.toLowerCase() && 'on'" :style="`background:${c}`" x-on:click="accent=c"></span>
+                    </template>
+                    <label class="ztp-ac custom">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.9 0 1.5-.7 1.5-1.5 0-.4-.2-.8-.4-1-.3-.3-.4-.6-.4-1 0-.8.7-1.5 1.5-1.5H16c3.3 0 6-2.7 6-6 0-4.9-4.5-9-10-9z"/></svg>
+                        <input type="color" :value="accent" x-on:input="accent=$event.target.value">
+                    </label>
                 </div>
             </div>
 
-            {{-- ── Visual test sandbox ──────────────────────────────────────
-                 Uses the same --zp-admin-* tokens the real Filament chrome
-                 uses, so every advanced setting visibly changes it live. --}}
-            <div class="zps-panel">
-                <p class="zps-panel-title">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>
-                    نمونهٔ زندهٔ پنل مدیریت
-                </p>
-                <p class="zps-panel-sub">این نمونه دقیقاً با همان متغیرهای پنل ادمین ساخته شده؛ با تغییر تنظیمات بالا، بلافاصله تغییر می‌کند.</p>
-                <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:.9rem">
-                    {{-- sidebar item + icon --}}
-                    <div style="border:1px solid var(--zp-border);border-radius:var(--zp-admin-card-radius,14px);padding:var(--zp-admin-card-padding,16px);background:var(--zp-surface-soft)">
-                        <div style="font-size:.7rem;color:var(--zp-text-muted);margin-bottom:.5rem">آیتم منو + آیکن</div>
-                        <div style="display:flex;align-items:center;gap:.5rem;padding:.4rem .55rem;border-radius:var(--zp-admin-button-radius,10px);background:var(--zp-surface)">
-                            <svg style="width:var(--zp-admin-sidebar-icon-size,18px);height:var(--zp-admin-sidebar-icon-size,18px);flex:none" viewBox="0 0 24 24" fill="none" stroke="var(--zp-primary)" stroke-width="2"><path d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"/></svg>
-                            <span style="font-size:.8rem;color:var(--zp-text)">داشبورد</span>
-                        </div>
-                    </div>
-                    {{-- button --}}
-                    <div style="border:1px solid var(--zp-border);border-radius:var(--zp-admin-card-radius,14px);padding:var(--zp-admin-card-padding,16px);background:var(--zp-surface-soft)">
-                        <div style="font-size:.7rem;color:var(--zp-text-muted);margin-bottom:.5rem">دکمه</div>
-                        <button type="button" style="display:inline-flex;align-items:center;gap:.4rem;border:0;cursor:default;color:#fff;background:var(--zp-gradient);border-radius:var(--zp-admin-button-radius,10px);min-height:var(--zp-admin-form-control-height,42px);padding:0 .9rem;font-size:.8rem;font-weight:700">
-                            <svg style="width:var(--zp-admin-action-icon-size,16px);height:var(--zp-admin-action-icon-size,16px)" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
-                            افزودن
-                        </button>
-                    </div>
-                    {{-- input + select caret --}}
-                    <div style="border:1px solid var(--zp-border);border-radius:var(--zp-admin-card-radius,14px);padding:var(--zp-admin-card-padding,16px);background:var(--zp-surface-soft)">
-                        <div style="font-size:.7rem;color:var(--zp-text-muted);margin-bottom:.5rem">ورودی و انتخاب</div>
-                        <select class="zps-select" style="min-height:var(--zp-admin-form-control-height,42px);margin-bottom:.5rem"><option>گزینه نمونه</option></select>
-                        <input class="zps-input" style="min-height:var(--zp-admin-form-control-height,42px)" placeholder="متن نمونه">
-                    </div>
-                    {{-- logo --}}
-                    <div style="border:1px solid var(--zp-border);border-radius:var(--zp-admin-card-radius,14px);padding:var(--zp-admin-card-padding,16px);background:var(--zp-surface-soft)">
-                        <div style="font-size:.7rem;color:var(--zp-text-muted);margin-bottom:.5rem">لوگو</div>
-                        <div style="display:flex;align-items:center;gap:.5rem">
-                            <div style="width:var(--zp-admin-logo-size,32px);height:var(--zp-admin-logo-size,32px);border-radius:8px;background:var(--zp-gradient);flex:none"></div>
-                            <span style="font-weight:800;color:var(--zp-text);font-size:calc(.8rem * var(--zp-admin-font-scale,1))">ZedProxy</span>
-                        </div>
-                    </div>
-                </div>
-                {{-- sample table --}}
-                <div style="margin-top:.9rem;border:1px solid var(--zp-border);border-radius:var(--zp-admin-card-radius,14px);overflow:hidden">
-                    <table style="width:100%;border-collapse:collapse;font-size:.78rem;color:var(--zp-text)">
-                        <thead><tr style="background:var(--zp-surface-soft)">
-                            <th style="text-align:right;padding:var(--zp-admin-table-cell-py,10px) var(--zp-admin-table-cell-px,12px)">کاربر</th>
-                            <th style="text-align:right;padding:var(--zp-admin-table-cell-py,10px) var(--zp-admin-table-cell-px,12px)">وضعیت</th>
-                        </tr></thead>
-                        <tbody>
-                            <tr style="height:var(--zp-admin-table-row-height,48px);border-top:1px solid var(--zp-border)">
-                                <td style="padding:var(--zp-admin-table-cell-py,10px) var(--zp-admin-table-cell-px,12px)">نمونه یک</td>
-                                <td style="padding:var(--zp-admin-table-cell-py,10px) var(--zp-admin-table-cell-px,12px)">فعال</td>
-                            </tr>
-                            <tr style="height:var(--zp-admin-table-row-height,48px);border-top:1px solid var(--zp-border)">
-                                <td style="padding:var(--zp-admin-table-cell-py,10px) var(--zp-admin-table-cell-px,12px)">نمونه دو</td>
-                                <td style="padding:var(--zp-admin-table-cell-py,10px) var(--zp-admin-table-cell-px,12px)">در انتظار</td>
-                            </tr>
-                        </tbody>
-                    </table>
+            {{-- appearance --}}
+            <div class="ztp-sec">
+                <div class="ztp-lbl">حالت نمایش</div>
+                <div class="ztp-seg">
+                    <button type="button" :class="appearance==='light' && 'on'" x-on:click="appearance='light'">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4 12H2M22 12h-2M5 5 4 4M20 20l-1-1M5 19l-1 1M20 4l-1 1"/></svg> روشن
+                    </button>
+                    <button type="button" :class="appearance==='dark' && 'on'" x-on:click="appearance='dark'">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg> تیره
+                    </button>
+                    <button type="button" :class="appearance==='system' && 'on'" x-on:click="appearance='system'">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg> سیستم
+                    </button>
                 </div>
             </div>
 
-            {{-- ── Diagnostics ──────────────────────────────────────────────
-                 Saved DB value vs resolved CSS value vs the value actually
-                 applied in the browser right now. Collapsible, admin-only. --}}
-            <div class="zps-panel">
-                <div style="display:flex;align-items:center;justify-content:space-between;gap:1rem;cursor:pointer" x-on:click="diagOpen=!diagOpen">
-                    <p class="zps-panel-title" style="margin:0">
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.3-4.3"/></svg>
-                        عیب‌یابی تنظیمات ظاهر
-                    </p>
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" :style="diagOpen ? 'transform:rotate(180deg)' : ''"><path d="M6 9l6 6 6-6"/></svg>
+            {{-- radius --}}
+            <div class="ztp-sec">
+                <div class="ztp-lbl">گردی گوشه‌ها <span class="val" x-text="fa(radius)+'px'"></span></div>
+                <input type="range" min="0" max="28" x-model.number="radius">
+            </div>
+
+            {{-- font --}}
+            <div class="ztp-sec">
+                <div class="ztp-lbl">اندازه فونت <span class="val" x-text="fa(font_scale)+'٪'"></span></div>
+                <input type="range" min="85" max="120" x-model.number="font_scale">
+            </div>
+
+            {{-- toggles --}}
+            <div class="ztp-sec">
+                <div class="ztp-lbl">دسترسی کاربران</div>
+                <div class="ztp-toggle-row">
+                    <div><div class="tt">تغییر تم توسط کاربر</div><div class="td">کاربر می‌تواند تم دلخواهش را انتخاب کند</div></div>
+                    <div class="ztp-sw" :class="allow_user_theme_switch && 'on'" x-on:click="allow_user_theme_switch=!allow_user_theme_switch"></div>
                 </div>
-                <div x-show="diagOpen" x-cloak style="margin-top:.85rem">
-                    <div style="display:flex;flex-wrap:wrap;gap:.5rem;margin-bottom:.8rem">
-                        <span class="zps-badge" style="background:color-mix(in srgb,var(--zp-primary) 16%,transparent);color:var(--zp-primary);border-color:transparent">تم ادمین: {{ $adminResolved['theme'] }}</span>
-                        <span class="zps-badge" style="background:color-mix(in srgb,var(--zp-info) 16%,transparent);color:var(--zp-info);border-color:transparent">حالت: {{ $adminResolved['appearance'] }}</span>
-                        <span class="zps-badge" style="background:color-mix(in srgb,var(--zp-warning) 16%,transparent);color:var(--zp-warning);border-color:transparent">انیمیشن: {{ $adminResolved['animation_intensity'] }}</span>
-                        <span class="zps-badge" id="zp-diag-styletag">style tag: زنده</span>
-                    </div>
-                    <div style="overflow-x:auto">
-                        <table style="width:100%;border-collapse:collapse;font-size:.74rem">
-                            <thead><tr style="color:var(--zp-text-muted);text-align:right">
-                                <th style="padding:.4rem .5rem">متغیر</th>
-                                <th style="padding:.4rem .5rem">مقدار ذخیره‌شده (DB)</th>
-                                <th style="padding:.4rem .5rem">مقدار محاسبه‌شده (CSS)</th>
-                                <th style="padding:.4rem .5rem">اعمال‌شده در مرورگر</th>
-                            </tr></thead>
-                            <tbody style="color:var(--zp-text)">
-                                @php($diagRows = [
-                                    ['اندازه آیکن', $adminResolved['raw']['icon_size'], '--zp-admin-icon-size'],
-                                    ['آیکن منو', $adminResolved['raw']['sidebar_icon_size'], '--zp-admin-sidebar-icon-size'],
-                                    ['اندازه لوگو', $adminResolved['raw']['logo_size'], '--zp-admin-logo-size'],
-                                    ['اندازه فونت', $adminResolved['raw']['font_scale'].'%', '--zp-admin-font-scale'],
-                                    ['تراکم جدول', $adminResolved['raw']['table_density'], '--zp-admin-table-row-height'],
-                                    ['تراکم کارت', $adminResolved['raw']['card_density'], '--zp-admin-card-padding'],
-                                    ['گردی کارت', $adminResolved['raw']['card_radius'], '--zp-admin-card-radius'],
-                                    ['گردی دکمه', $adminResolved['raw']['button_radius'], '--zp-admin-button-radius'],
-                                    ['انیمیشن', $adminResolved['raw']['animation_intensity'], '--zp-admin-animation-speed'],
-                                ])
-                                @foreach($diagRows as [$label, $dbVal, $varName])
-                                    <tr style="border-top:1px solid var(--zp-border)">
-                                        <td style="padding:.45rem .5rem">{{ $label }}</td>
-                                        <td style="padding:.45rem .5rem;font-family:monospace;direction:ltr">{{ $dbVal }}</td>
-                                        <td style="padding:.45rem .5rem;font-family:monospace;direction:ltr">{{ $adminResolved['vars'][$varName] ?? '—' }}</td>
-                                        <td style="padding:.45rem .5rem;font-family:monospace;direction:ltr" x-text="(diagTick, liveVar('{{ $varName }}'))"></td>
-                                    </tr>
-                                @endforeach
-                            </tbody>
-                        </table>
-                    </div>
-                    <div style="display:flex;gap:.5rem;margin-top:.85rem;flex-wrap:wrap">
-                        <button type="button" class="zps-btn" x-on:click="refreshDiag()">
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.5 9a9 9 0 0114.85-3.36L23 10M1 14l4.65 4.36A9 9 0 0020.5 15"/></svg>
-                            تازه‌سازی مقادیر زنده
-                        </button>
-                        <button type="button" class="zps-btn zps-btn-primary" wire:click="recheckAppearance">
-                            بررسی اعمال تنظیمات
-                        </button>
-                    </div>
-                    <p style="font-size:.7rem;color:var(--zp-text-muted);margin-top:.6rem">اگر ستون «اعمال‌شده» با «محاسبه‌شده» برابر بود، تنظیمات با موفقیت روی پنل اعمال شده‌اند.</p>
+                <div class="ztp-toggle-row">
+                    <div><div class="tt">تغییر حالت روشن/تیره</div><div class="td">اجازهٔ سوییچ بین روشن و تیره</div></div>
+                    <div class="ztp-sw" :class="allow_user_appearance_switch && 'on'" x-on:click="allow_user_appearance_switch=!allow_user_appearance_switch"></div>
+                </div>
+                <div class="ztp-toggle-row">
+                    <div><div class="tt">تم سراسری اجباری</div><div class="td">تم را روی همهٔ کاربران تحمیل کن</div></div>
+                    <div class="ztp-sw" :class="force_global_theme && 'on'" x-on:click="force_global_theme=!force_global_theme"></div>
                 </div>
             </div>
 
-            {{-- Save bar --}}
-            <div class="zps-panel zps-savebar">
-                <div>
-                    <span x-show="dirty" class="zps-dirty">تغییرات ذخیره نشده‌اند.</span>
-                    <span x-show="saved" class="zps-saved">تغییرات ظاهر با موفقیت ذخیره و اعمال شد.</span>
-                    <span x-show="!dirty && !saved" style="font-size:.78rem;color:var(--zp-text-muted)">همه تغییرات ذخیره شده‌اند.</span>
+            {{-- advanced accordion --}}
+            <div class="ztp-sec">
+                <div class="ztp-adv-head" x-on:click="advOpen=!advOpen">
+                    <div class="ztp-lbl" style="margin:0">تنظیمات پیشرفته</div>
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--zp-text-muted,#9aa3bd)" stroke-width="2" :style="advOpen && 'transform:rotate(180deg)'" style="transition:.15s"><path d="M6 9l6 6 6-6"/></svg>
                 </div>
-                <button type="button" class="zps-btn zps-btn-primary" x-on:click="save()">ذخیره تغییرات</button>
+                <div x-show="advOpen" x-cloak class="ztp-adv-grid">
+                    <div class="ztp-field"><label>اندازه آیکن‌ها</label>
+                        <select class="ztp-select" x-model="icon_size"><option value="1rem">کوچک</option><option value="1.25rem">پیش‌فرض</option><option value="1.5rem">بزرگ</option></select></div>
+                    <div class="ztp-field"><label>آیکن منو</label>
+                        <select class="ztp-select" x-model="sidebar_icon_size"><option value="1rem">کوچک</option><option value="1.25rem">پیش‌فرض</option><option value="1.5rem">بزرگ</option></select></div>
+                    <div class="ztp-field"><label>اندازه لوگو</label>
+                        <select class="ztp-select" x-model="logo_size"><option value="1rem">کوچک</option><option value="1.15rem">پیش‌فرض</option><option value="1.4rem">بزرگ</option></select></div>
+                    <div class="ztp-field"><label>تصاویر/آواتار</label>
+                        <select class="ztp-select" x-model="image_size"><option value="2rem">کوچک</option><option value="2.5rem">پیش‌فرض</option><option value="3rem">بزرگ</option></select></div>
+                    <div class="ztp-field"><label>شدت انیمیشن</label>
+                        <select class="ztp-select" x-model="animation_intensity"><option value="off">خاموش</option><option value="low">کم</option><option value="medium">متوسط</option><option value="high">زیاد</option></select></div>
+                    <div class="ztp-field"><label>تراکم جدول</label>
+                        <select class="ztp-select" x-model="table_density"><option value="compact">فشرده</option><option value="normal">عادی</option><option value="comfortable">راحت</option></select></div>
+                    <div class="ztp-field"><label>تراکم کارت</label>
+                        <select class="ztp-select" x-model="card_density"><option value="compact">فشرده</option><option value="normal">عادی</option><option value="comfortable">راحت</option></select></div>
+                </div>
+            </div>
+
+            <div class="ztp-actions">
+                <button type="button" class="ztp-btn ztp-save" x-on:click="save()">ذخیره تغییرات</button>
+                <button type="button" class="ztp-btn ztp-reset" wire:click="resetDefaults" wire:confirm="بازنشانی همهٔ تنظیمات ظاهر به حالت پیش‌فرض؟">بازنشانی</button>
             </div>
         </div>
 
-        {{-- ── RIGHT: live preview ─────────────────────────────────────── --}}
-        <div>
-            <div class="zps-panel zps-sticky" :style="previewVars()">
-                <p class="zps-panel-title">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
-                    پیش‌نمایش زنده
-                </p>
-                <p class="zps-panel-sub">انتخاب شما به‌صورت زنده پیش‌نمایش داده می‌شود و پس از ذخیره، روی بخش‌های انتخاب‌شده اعمال خواهد شد.</p>
+        {{-- ── LIVE PREVIEW (sandboxed) ─────────────────────────────── --}}
+        <div class="ztp-card">
+            <div class="ztp-pv-head"><h3>پیش‌نمایش زنده</h3><span class="ztp-pv-badge">به‌روزرسانی لحظه‌ای</span></div>
+            <div class="ztp-pv-sub">تغییرات فقط در این کادر دیده می‌شوند و تا زمان ذخیره، روی هیچ بخشی از سایت اعمال نمی‌گردند.</div>
 
-                <div class="zps-preview-fade" :class="fade ? '' : 'is-out'"
-                     :style="`opacity:${fade?1:0};transform:scale(${fade?1:.98})`">
-                    <div style="border-radius:var(--zp-card-radius);overflow:hidden;border:1px solid var(--zpv-border)">
-                        <div :style="`background:${presets[state.activeTheme].colors.gradient};padding:.9rem 1rem;color:#fff`">
-                            <div style="font-weight:800;font-size:.95rem">ZedProxy</div>
-                            <div style="font-size:.72rem;opacity:.9">متن برند</div>
-                        </div>
-                        <div :style="`background:var(--zpv-bg);padding:1rem;display:flex;flex-direction:column;gap:.8rem`">
-                            {{-- buttons --}}
-                            <div style="display:flex;gap:.5rem;flex-wrap:wrap">
-                                <button class="zps-prev-btn" :style="`background:${pc('primary')};color:#fff`">دکمه اصلی</button>
-                                <button class="zps-prev-btn" :style="`background:transparent;border:1px solid ${pc('border')};color:var(--zpv-text)`">دکمه دوم</button>
-                                <span class="zps-prev-btn" :style="`background:${pc('accent')}22;color:${pc('accent')};font-size:.7rem`">برچسب</span>
-                            </div>
-                            {{-- card sample --}}
-                            <div class="zps-prev-card">
-                                <div style="display:flex;align-items:center;gap:.6rem">
-                                    <div :style="`width:2.2rem;height:2.2rem;border-radius:9999px;background:${presets[state.activeTheme].colors.gradient}`"></div>
-                                    <div>
-                                        <div style="font-weight:700;font-size:.82rem;color:var(--zpv-text)">کارت نمونه</div>
-                                        <div style="font-size:.7rem;color:var(--zpv-muted)">رنگ اصلی و متن کم‌رنگ</div>
-                                    </div>
-                                    <span style="margin-right:auto;font-size:.66rem;font-weight:700;padding:.15rem .55rem;border-radius:9999px"
-                                          :style="`background:${pc('primary')}22;color:${pc('primary')}`">وضعیت فعال</span>
-                                </div>
-                                <input class="zps-input" style="margin-top:.7rem" :style="`background:var(--zpv-soft);border-color:var(--zpv-border);color:var(--zpv-text)`" placeholder="ورودی نمونه">
-                            </div>
-                            {{-- mini dashboard stat --}}
-                            <div style="display:grid;grid-template-columns:1fr 1fr;gap:.6rem">
-                                <div class="zps-prev-card" style="padding:.7rem">
-                                    <div style="font-size:.66rem;color:var(--zpv-muted)">کیف پول</div>
-                                    <div style="font-weight:800;font-size:1rem;color:var(--zpv-text)">۱٬۲۵۰٬۰۰۰</div>
-                                </div>
-                                <div class="zps-prev-card" style="padding:.7rem">
-                                    <div style="font-size:.66rem;color:var(--zpv-muted)">سرویس فعال</div>
-                                    <div style="font-weight:800;font-size:1rem" :style="`color:${pc('accent')}`">۳</div>
-                                </div>
-                            </div>
-                        </div>
+            <div class="ztp-stage" :style="previewStyle()">
+                <div class="top">
+                    <div class="brand"><span class="m"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 2 4 6v6c0 5 3.4 7.7 8 10 4.6-2.3 8-5 8-10V6l-8-4z"/></svg></span> ZedProxy</div>
+                    <button class="cta">خرید سرویس</button>
+                </div>
+                <div class="cards">
+                    <div class="scard"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2 4 6v6c0 5 3.4 7.7 8 10 4.6-2.3 8-5 8-10V6l-8-4z"/></svg></div><div class="v">۳</div><div class="l">سرویس فعال</div></div>
+                    <div class="scard"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2 3 14h7l-1 8 10-12h-7l1-8z"/></svg></div><div class="v">۶۲ گیگ</div><div class="l">باقی‌مانده</div></div>
+                    <div class="scard"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12V7H5a2 2 0 0 1 0-4h14v4"/><path d="M3 5v14a2 2 0 0 0 2 2h16v-5"/><path d="M18 12a2 2 0 0 0 0 4h4v-4z"/></svg></div><div class="v">۴۲۰هزار</div><div class="l">کیف پول</div></div>
+                </div>
+                <div class="row">
+                    <div class="pane">
+                        <h4>فرم نمونه</h4>
+                        <input class="in" placeholder="نام کاربری">
+                        <input class="in" type="password" value="123456">
+                        <div class="chips"><span class="chip chip-a">فعال</span><span class="chip chip-ok">پرداخت‌شده</span><span class="chip chip-s">در انتظار</span></div>
+                    </div>
+                    <div class="pane">
+                        <h4>سرویس آلمان</h4>
+                        <div style="font-size:12px;color:var(--zp-text-muted)">مصرف: ۳۸ از ۱۰۰ گیگ</div>
+                        <div class="prog"><i></i></div>
+                        <div style="display:flex;justify-content:space-between;font-size:12px"><span style="color:var(--zp-text-muted)">۶۲٪ باقی‌مانده</span><a class="link">لینک اشتراک ←</a></div>
                     </div>
                 </div>
             </div>
@@ -437,124 +251,86 @@
 </div>
 
 <script>
-function themeStudio(state, presets, groups, groupLabels) {
+function themePanel(state, presets, accentSwatches) {
     return {
-        state, presets, groups, groupLabels,
-        allKeys: Object.keys(presets),
-        dirty: false, saved: false, fade: true,
-        diagOpen: false, diagTick: 0,
+        presets, accentSwatches,
+        scope: state.scope,
+        default_theme_public: state.default_theme_public,
+        default_theme_user:   state.default_theme_user,
+        default_theme_admin:  state.default_theme_admin,
+        enabled_themes:       state.enabled_themes || [],
+        accent:  state.accent,
+        accent2: state.accent2,
+        appearance: state.appearance,
+        radius: state.radius,
+        font_scale: state.font_scale,
+        allow_user_theme_switch: state.allow_user_theme_switch,
+        allow_user_appearance_switch: state.allow_user_appearance_switch,
+        force_global_theme: state.force_global_theme,
+        animation_intensity: state.animation_intensity,
+        icon_size: state.icon_size,
+        sidebar_icon_size: state.sidebar_icon_size,
+        logo_size: state.logo_size,
+        image_size: state.image_size,
+        table_density: state.table_density,
+        card_density: state.card_density,
+        advOpen: false,
 
-        init() { this.applyLive(); },
+        dark:  {bg:'#0a0e1a',bgSoft:'#0e1322',surface:'#141a2b',soft:'#1c2438',hover:'#232c44',text:'#e8ebf5',muted:'#9aa3bd',border:'#283047'},
+        light: {bg:'#f6f8fc',bgSoft:'#eef2f9',surface:'#ffffff',soft:'#f1f5fb',hover:'#e7edf6',text:'#0f172a',muted:'#64748b',border:'#e2e8f0'},
 
-        isLight(theme) {
-            if (this.state.appearance === 'light') return true;
-            if (this.state.appearance === 'dark') return false;
-            return (this.presets[theme]?.appearance) === 'light';
-        },
-        appearanceLabel() {
-            return { light: 'روشن', dark: 'تاریک', system: 'سیستم' }[this.state.appearance] || 'تاریک';
-        },
-        speed(intensity) {
-            return ({ off: '0ms', low: '160ms', high: '320ms' })[intensity] || '220ms';
-        },
-        pc(name) { return this.presets[this.state.activeTheme].colors[name]; },
+        fa(n){ return Number(n).toLocaleString('fa-IR'); },
 
-        applyLive() {
-            const el = document.documentElement;
-            el.setAttribute('data-theme', this.state.activeTheme);
-            const light = this.isLight(this.state.activeTheme);
-            el.classList.toggle('zed-light', light);
-            el.classList.toggle('dark', !light);
-            el.classList.toggle('zed-anim-none', this.state.animation_intensity === 'off');
-            el.style.setProperty('--zp-card-radius', this.state.card_radius);
-            el.style.setProperty('--zp-button-radius', this.state.button_radius);
-            el.style.setProperty('--zp-animation-speed', this.speed(this.state.animation_intensity));
-            el.style.setProperty('--zp-icon-size', this.state.icon_size);
-            el.style.setProperty('--zp-sidebar-icon-size', this.state.sidebar_icon_size);
-            // Mirror the compact, independent admin tokens — IDENTICAL maths to
-            // AdminAppearanceResolver so the live preview equals what /zed-admin
-            // renders after save (and the diagnostics rows line up).
-            const px = (v) => { const n = parseFloat(v) || 1; return /rem|em/.test(v) ? n * 16 : (/px/.test(v) ? n : (n <= 4 ? n * 16 : n)); };
-            const clamp = (n, a, b) => Math.round(Math.max(a, Math.min(b, n)) * 10) / 10;
-            const trimNum = (n) => String(Math.round(n * 1000) / 1000);
-            const iconPx = clamp(px(this.state.icon_size) * 0.85, 12, 24);
-            const sidePx = clamp(px(this.state.sidebar_icon_size) * 0.9, 14, 26);
-            const logoPx = clamp(px(this.state.logo_size) / 18.4 * 32, 24, 56);
-            const cardR  = clamp(px(this.state.card_radius), 8, 28);
-            const btnR   = clamp(px(this.state.button_radius), 6, 24);
-            const fScale = clamp((parseInt(this.state.font_scale) || 100) / 100, 0.9, 1.15);
-            const S = (k, v) => el.style.setProperty(k, v);
-            S('--zp-admin-icon-size', iconPx + 'px');
-            S('--zp-admin-action-icon-size', clamp(iconPx, 12, 22) + 'px');
-            S('--zp-admin-form-icon-size', clamp(iconPx, 12, 22) + 'px');
-            S('--zp-admin-sidebar-icon-size', sidePx + 'px');
-            S('--zp-admin-select-caret-size', clamp(iconPx - 2, 10, 18) + 'px');
-            S('--zp-admin-logo-size', logoPx + 'px');
-            S('--zp-admin-card-radius', cardR + 'px');
-            S('--zp-admin-button-radius', btnR + 'px');
-            S('--zp-admin-font-scale', trimNum(fScale));
-            S('--zp-admin-animation-speed', this.speed(this.state.animation_intensity));
-            const card = ({ compact: [12, 38, 10], comfortable: [20, 46, 18] })[this.state.card_density] || [16, 42, 14];
-            S('--zp-admin-card-padding', card[0] + 'px');
-            S('--zp-admin-form-control-height', card[1] + 'px');
-            S('--zp-admin-density-gap', card[2] + 'px');
-            const tbl = ({ compact: [40, 8, 10], comfortable: [56, 14, 16] })[this.state.table_density] || [48, 10, 12];
-            S('--zp-admin-table-row-height', tbl[0] + 'px');
-            S('--zp-admin-table-cell-py', tbl[1] + 'px');
-            S('--zp-admin-table-cell-px', tbl[2] + 'px');
-        },
-        bump() { this.fade = false; requestAnimationFrame(() => requestAnimationFrame(() => this.fade = true)); },
+        activeTheme(){ return this['default_theme_' + this.scope]; },
 
-        selectTheme(key) {
-            // Picking a theme in the gallery applies it everywhere by default
-            // (public + user dashboard + admin). Per-surface overrides below can
-            // still diverge afterwards.
-            this.state.activeTheme = key;
-            this.state.default_theme_admin = key;
-            this.state.default_theme_public = key;
-            this.state.default_theme_user = key;
-            if (!this.enabledOn(key)) { this.state.enabled_themes = [...(this.state.enabled_themes || []), key]; }
-            this.bump(); this.applyLive(); this.dirty = true; this.saved = false;
-        },
-        setAppearance(mode) { this.state.appearance = mode; this.applyLive(); this.dirty = true; this.saved = false; },
-
-        enabledOn(key) { return (this.state.enabled_themes || []).includes(key); },
-        toggleEnabled(key) {
-            const arr = this.state.enabled_themes || [];
-            const i = arr.indexOf(key);
-            if (i === -1) { arr.push(key); }
-            else if (key !== this.state.default_theme_admin) { arr.splice(i, 1); }
-            this.state.enabled_themes = [...arr]; this.dirty = true;
-        },
-        enableAll() { this.state.enabled_themes = [...this.allKeys]; this.dirty = true; },
-        disableExcept() { this.state.enabled_themes = [this.state.default_theme_admin]; this.dirty = true; },
-
-        quickPreview() { this.bump(); window.scrollTo({ top: 0, behavior: 'smooth' }); },
-
-        previewVars() {
-            const c = this.presets[this.state.activeTheme].colors;
-            return `--zpv-bg:${c.bg};--zpv-surface:${c.surface};--zpv-soft:${c.surface_soft};`
-                 + `--zpv-text:${c.text};--zpv-muted:${c.muted};--zpv-border:${c.border};`;
+        pickPreset(slug){
+            this['default_theme_' + this.scope] = slug;
+            if (!this.enabled_themes.includes(slug)) this.enabled_themes = [...this.enabled_themes, slug];
+            const p = this.presets[slug];
+            if (p){ this.accent = p.a; this.accent2 = p.b; }
         },
 
-        save() {
-            this.$wire.persist(this.state).then(() => {
-                this.dirty = false; this.saved = true;
-                // Re-apply the resolved tokens to the live document so the whole
-                // admin chrome reflects the saved values immediately (persisted
-                // values are re-injected declaratively on the next page load).
-                this.applyLive();
-                this.refreshDiag();
-                setTimeout(() => this.saved = false, 3200);
+        palette(){
+            if (this.appearance === 'light') return this.light;
+            if (this.appearance === 'system') return (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) ? this.light : this.dark;
+            return this.dark;
+        },
+
+        previewStyle(){
+            const c = this.palette();
+            const r = Number(this.radius) || 0;
+            return `--zp-bg:${c.bg};--zp-bg-soft:${c.bgSoft};--zp-surface:${c.surface};--zp-surface-soft:${c.soft};`
+                 + `--zp-surface-hover:${c.hover};--zp-text:${c.text};--zp-text-muted:${c.muted};--zp-border:${c.border};`
+                 + `--zp-primary:${this.accent};--zp-secondary:${this.accent2};--zp-accent:${this.accent2};`
+                 + `--zp-gradient:linear-gradient(135deg,${this.accent},${this.accent2});`
+                 + `--zp-card-radius:${r}px;--zp-button-radius:${Math.max(0,r-4)}px;`
+                 + `font-size:calc(14px * ${Number(this.font_scale)||100} / 100)`;
+        },
+
+        save(){
+            this.$wire.persist({
+                scope: this.scope,
+                default_theme_public: this.default_theme_public,
+                default_theme_user: this.default_theme_user,
+                default_theme_admin: this.default_theme_admin,
+                enabled_themes: this.enabled_themes,
+                accent: this.accent,
+                accent2: this.accent2,
+                appearance: this.appearance,
+                radius: this.radius,
+                font_scale: this.font_scale,
+                allow_user_theme_switch: this.allow_user_theme_switch,
+                allow_user_appearance_switch: this.allow_user_appearance_switch,
+                force_global_theme: this.force_global_theme,
+                animation_intensity: this.animation_intensity,
+                icon_size: this.icon_size,
+                sidebar_icon_size: this.sidebar_icon_size,
+                logo_size: this.logo_size,
+                image_size: this.image_size,
+                table_density: this.table_density,
+                card_density: this.card_density,
             });
         },
-
-        /** Read the variables actually applied to :root right now (diagnostics). */
-        liveVar(name) {
-            try { return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || '—'; }
-            catch (e) { return '—'; }
-        },
-        refreshDiag() { this.diagTick++; },
     };
 }
 </script>

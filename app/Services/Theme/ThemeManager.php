@@ -312,6 +312,13 @@ class ThemeManager
             $style .= '--zp-font-scale:' . round($fontScale / 100, 3) . ';';
             $style .= 'font-size:' . round($fontScale / 100 * 16, 1) . 'px;';
         }
+
+        // Apply the active preset's colour palette (+ brand overrides) to the
+        // public site and user dashboard, so changing the preset in
+        // «تنظیمات ظاهر» visibly affects them too. The shipped default preset
+        // matches the previous default palette, so nothing changes by default.
+        $style .= AppearanceManager::cssDeclarations();
+
         return $style;
     }
 
