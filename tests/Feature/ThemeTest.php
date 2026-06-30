@@ -210,11 +210,39 @@ class ThemeTest extends TestCase
     {
         SiteSetting::set('site_theme_preset', 'minimal_light');
 
-        // The chosen preset's palette is injected on the user dashboard.
+        // The chosen preset's ACCENT is injected on the user dashboard.
         $user = User::factory()->create();
         $this->actingAs($user)->get(route('dashboard.index'))
             ->assertSuccessful()
             ->assertSee('--zp-primary:#2563eb', false);
+    }
+
+    /**
+     * Root-cause regression: light mode must flip the chrome. The html carries
+     * the zed-light class AND the neutral chrome ramp is NOT inlined on <html>
+     * (otherwise inline style would override html.zed-light and defeat it).
+     */
+    public function test_light_mode_flips_public_chrome(): void
+    {
+        SiteSetting::set('default_appearance', 'light');
+        SiteSetting::set('appearance_mode', 'light');
+
+        $html = $this->get(route('home'))->getContent();
+
+        $this->assertStringContainsString('zed-light', $html);
+        // Neutral ramp must come from html.zed-light, never from inline style.
+        $this->assertStringNotContainsString('--zp-bg:', $html);
+        $this->assertStringNotContainsString('--zp-surface:', $html);
+        $this->assertStringNotContainsString('--zp-text:', $html);
+        // Accent is still injected (appearance-independent).
+        $this->assertStringContainsString('--zp-primary:', $html);
+    }
+
+    public function test_dark_mode_default_has_no_light_class(): void
+    {
+        SiteSetting::set('default_appearance', 'dark');
+        $html = $this->get(route('home'))->getContent();
+        $this->assertStringNotContainsString('zed-light', $html);
     }
 
     // ── Key pages still render with theme wiring ─────────────────────────────

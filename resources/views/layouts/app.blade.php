@@ -2,13 +2,17 @@
     use App\Services\Theme\ThemeManager;
     use App\Services\Theme\TemplateManager;
 
-    $zedTheme      = ThemeManager::resolveTheme(ThemeManager::SURFACE_PUBLIC, auth()->user());
-    $zedAppearance = ThemeManager::resolveAppearance(auth()->user());
-
     // The active homepage template now drives the site-wide shell (header/footer)
     // for every page that extends layouts.app. Classic is the default and is
     // byte-identical to the previous behaviour.
     $tpl = TemplateManager::activeTemplate();
+
+    $zedTheme = ThemeManager::resolveTheme(ThemeManager::SURFACE_PUBLIC, auth()->user());
+    // The matrix template is inherently dark (green-on-black); keep it dark
+    // regardless of the light/dark toggle. Every other template flips normally.
+    $zedAppearance = $tpl === 'matrix'
+        ? 'dark'
+        : ThemeManager::resolveAppearance(auth()->user());
     $tplHeader = view()->exists("templates.$tpl.header") ? "templates.$tpl.header" : 'templates.classic.header';
     $tplFooter = view()->exists("templates.$tpl.footer") ? "templates.$tpl.footer" : 'templates.classic.footer';
 @endphp
@@ -45,7 +49,7 @@
     @includeIf("templates.$tpl.styles")
     @stack('styles')
 </head>
-<body class="bg-gray-950 text-gray-100 antialiased" data-template="{{ $tpl }}">
+<body class="bg-base text-content antialiased" data-template="{{ $tpl }}">
 
     {{-- Optional per-template body prefix (e.g. matrix code-rain canvas). --}}
     @includeIf("templates.$tpl.body_top")
