@@ -55,6 +55,8 @@ class ThemeStudio extends Page
     /** @return array<string,mixed> */
     protected function currentState(): array
     {
+        $norm = AdminAppearanceResolver::resolve()['normalized'];
+
         return [
             'activeTheme'                 => ThemeManager::defaultTheme(ThemeManager::SURFACE_ADMIN),
             'default_theme_public'        => ThemeManager::defaultTheme(ThemeManager::SURFACE_PUBLIC),
@@ -75,6 +77,19 @@ class ThemeStudio extends Page
             'font_scale'                  => (int) SiteSetting::get('font_scale', 100),
             'table_density'               => (string) SiteSetting::get('table_density', 'comfortable'),
             'card_density'                => (string) SiteSetting::get('card_density', 'comfortable'),
+            // Advanced ADMIN appearance (admin_* keys → affect /zed-admin only,
+            // independent of the user side). Seeded from the resolved value so
+            // the selects reflect what is actually applied.
+            'admin_icon_size'             => $this->seedPx('admin_icon_size', $norm['admin_icon_size']),
+            'admin_logo_size'             => $this->seedPx('admin_logo_size', $norm['admin_logo_size']),
+            'admin_font_scale'            => $this->seedScale('admin_font_scale', $norm['admin_font_scale']),
+            'admin_card_radius'           => $this->seedPx('admin_card_radius', $norm['admin_card_radius']),
+            'admin_button_radius'         => $this->seedPx('admin_button_radius', $norm['admin_button_radius']),
+            'admin_select_caret_size'     => $this->seedPx('admin_select_caret_size', $norm['admin_select_caret_size']),
+            'admin_form_control_height'   => $this->seedPx('admin_form_control_height', $norm['admin_form_control_height']),
+            'admin_table_density'         => $this->seedEnum('admin_table_density', 'table_density'),
+            'admin_card_density'          => $this->seedEnum('admin_card_density', 'card_density'),
+            'admin_animation_intensity'   => $this->seedEnum('admin_animation_intensity', 'animation_intensity', ThemeManager::animationIntensity()),
             // Admin sidebar controls.
             'admin_sidebar_brand_size'       => (string) SiteSetting::get('admin_sidebar_brand_size', '24px'),
             'admin_sidebar_font_size'        => (string) SiteSetting::get('admin_sidebar_font_size', '14px'),
@@ -96,6 +111,70 @@ class ThemeStudio extends Page
         'admin_sidebar_item_gap'         => ['2px', '4px', '6px', '8px', '10px'],
         'admin_sidebar_width'            => ['240px', '260px', '280px', '300px', '320px', '340px'],
     ];
+
+    /** Allowed option values for the advanced ADMIN appearance controls. */
+    protected const ADMIN_PX_OPTIONS = [
+        'admin_icon_size'           => ['12px', '14px', '16px', '18px', '20px', '22px', '24px'],
+        'admin_logo_size'           => ['24px', '28px', '32px', '40px', '48px', '56px'],
+        'admin_card_radius'         => ['8px', '10px', '12px', '14px', '16px', '20px', '24px', '28px'],
+        'admin_button_radius'       => ['6px', '8px', '10px', '12px', '16px', '20px', '24px'],
+        'admin_select_caret_size'   => ['10px', '12px', '14px', '16px', '18px'],
+        'admin_form_control_height' => ['34px', '38px', '42px', '46px'],
+    ];
+    protected const ADMIN_SCALE_OPTIONS = ['0.9', '0.95', '1', '1.05', '1.1', '1.15'];
+    protected const DENSITY_OPTIONS = ['compact', 'normal', 'comfortable'];
+    protected const ANIM_OPTIONS = ['off', 'low', 'medium', 'high'];
+
+    /** Seed a px control from the saved admin_* value, else snap the resolved value. */
+    protected function seedPx(string $key, string $resolved): string
+    {
+        $allowed = self::ADMIN_PX_OPTIONS[$key] ?? [];
+        $saved   = (string) SiteSetting::get($key, '');
+        if (in_array($saved, $allowed, true)) {
+            return $saved;
+        }
+        $target = (float) preg_replace('/[^0-9.]/', '', $resolved);
+        $best = $allowed[0] ?? $resolved;
+        $bestDiff = INF;
+        foreach ($allowed as $opt) {
+            $diff = abs(((float) preg_replace('/[^0-9.]/', '', $opt)) - $target);
+            if ($diff < $bestDiff) {
+                $bestDiff = $diff;
+                $best = $opt;
+            }
+        }
+        return $best;
+    }
+
+    /** Seed the font-scale control (unitless) from saved value or resolved. */
+    protected function seedScale(string $key, string $resolved): string
+    {
+        $saved = (string) SiteSetting::get($key, '');
+        if (in_array($saved, self::ADMIN_SCALE_OPTIONS, true)) {
+            return $saved;
+        }
+        $target = (float) $resolved;
+        $best = '1';
+        $bestDiff = INF;
+        foreach (self::ADMIN_SCALE_OPTIONS as $opt) {
+            $diff = abs(((float) $opt) - $target);
+            if ($diff < $bestDiff) {
+                $bestDiff = $diff;
+                $best = $opt;
+            }
+        }
+        return $best;
+    }
+
+    /** Seed an enum control from admin_* override, else the legacy/shared key. */
+    protected function seedEnum(string $adminKey, string $legacyKey, ?string $default = null): string
+    {
+        $saved = (string) SiteSetting::get($adminKey, '');
+        if ($saved !== '') {
+            return $saved;
+        }
+        return $default ?? (string) SiteSetting::get($legacyKey, 'comfortable');
+    }
 
     /**
      * Persist the whole studio state. Called from the Blade "Save" button via
@@ -149,6 +228,28 @@ class ThemeStudio extends Page
         SiteSetting::set('image_size', (string) ($state['image_size'] ?? '2.5rem'));
         SiteSetting::set('table_density', in_array($state['table_density'] ?? null, ['compact', 'normal', 'comfortable'], true) ? $state['table_density'] : 'comfortable');
         SiteSetting::set('card_density', in_array($state['card_density'] ?? null, ['compact', 'normal', 'comfortable'], true) ? $state['card_density'] : 'comfortable');
+
+        // Advanced ADMIN appearance (admin_* keys) — affect /zed-admin only,
+        // leaving the user/public generic keys above untouched. Validated
+        // against the allowed option sets; the resolver clamps as a safety net.
+        foreach (self::ADMIN_PX_OPTIONS as $key => $allowed) {
+            $val = $state[$key] ?? null;
+            if (is_string($val) && in_array($val, $allowed, true)) {
+                SiteSetting::set($key, $val);
+            }
+        }
+        if (in_array($state['admin_font_scale'] ?? null, self::ADMIN_SCALE_OPTIONS, true)) {
+            SiteSetting::set('admin_font_scale', $state['admin_font_scale']);
+        }
+        if (in_array($state['admin_table_density'] ?? null, self::DENSITY_OPTIONS, true)) {
+            SiteSetting::set('admin_table_density', $state['admin_table_density']);
+        }
+        if (in_array($state['admin_card_density'] ?? null, self::DENSITY_OPTIONS, true)) {
+            SiteSetting::set('admin_card_density', $state['admin_card_density']);
+        }
+        if (in_array($state['admin_animation_intensity'] ?? null, self::ANIM_OPTIONS, true)) {
+            SiteSetting::set('admin_animation_intensity', $state['admin_animation_intensity']);
+        }
 
         // Admin sidebar controls — only persist values from the allowed option
         // set; AdminAppearanceResolver clamps anyway as a final safety net.

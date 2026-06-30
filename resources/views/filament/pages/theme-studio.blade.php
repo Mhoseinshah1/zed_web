@@ -174,72 +174,82 @@
                 </div>
             </div>
 
-            {{-- Advanced customization --}}
+            {{-- Advanced ADMIN appearance — applies to /zed-admin only --}}
             <div class="zps-panel">
-                <p class="zps-panel-title">تنظیمات پیشرفته ظاهر</p>
-                <p class="zps-panel-sub">این تنظیمات از طریق متغیرهای CSS روی کل پلتفرم اعمال می‌شوند.</p>
+                <p class="zps-panel-title">تنظیمات پیشرفته پنل مدیریت</p>
+                <p class="zps-panel-sub">این تنظیمات فقط روی پنل مدیریت (/zed-admin) اعمال می‌شوند و پنل کاربری را تغییر نمی‌دهند.</p>
                 <div class="zps-controls-grid">
                     <div class="zps-field">
                         <label>شدت انیمیشن‌ها</label>
-                        <select class="zps-select" x-model="state.animation_intensity" x-on:change="applyLive(); dirty=true">
+                        <select class="zps-select" x-model="state.admin_animation_intensity" x-on:change="applyLive(); dirty=true">
                             <option value="off">خاموش</option><option value="low">کم</option>
                             <option value="medium">متوسط</option><option value="high">زیاد</option>
                         </select>
                     </div>
                     <div class="zps-field">
                         <label>گردی کارت‌ها</label>
-                        <select class="zps-select" x-model="state.card_radius" x-on:change="applyLive(); dirty=true">
-                            <option value="0.35rem">کم</option><option value="0.6rem">متوسط</option>
-                            <option value="0.9rem">پیش‌فرض</option><option value="1.2rem">زیاد</option><option value="1.6rem">خیلی زیاد</option>
+                        <select class="zps-select" x-model="state.admin_card_radius" x-on:change="applyLive(); dirty=true">
+                            <option value="8px">کم</option><option value="10px">متوسط</option><option value="12px">معمولی</option>
+                            <option value="14px">پیش‌فرض</option><option value="16px">زیاد</option><option value="20px">خیلی زیاد</option>
+                            <option value="24px">بسیار زیاد</option><option value="28px">حداکثر</option>
                         </select>
                     </div>
                     <div class="zps-field">
                         <label>گردی دکمه‌ها</label>
-                        <select class="zps-select" x-model="state.button_radius" x-on:change="applyLive(); dirty=true">
-                            <option value="0.3rem">کم</option><option value="0.5rem">متوسط</option>
-                            <option value="0.6rem">پیش‌فرض</option><option value="0.9rem">زیاد</option><option value="9999px">کاملاً گرد</option>
+                        <select class="zps-select" x-model="state.admin_button_radius" x-on:change="applyLive(); dirty=true">
+                            <option value="6px">کم</option><option value="8px">متوسط</option><option value="10px">پیش‌فرض</option>
+                            <option value="12px">زیاد</option><option value="16px">خیلی زیاد</option><option value="20px">بسیار زیاد</option><option value="24px">حداکثر</option>
                         </select>
                     </div>
                     <div class="zps-field">
                         <label>اندازه آیکن‌ها</label>
-                        <select class="zps-select" x-model="state.icon_size" x-on:change="applyLive(); dirty=true">
-                            <option value="1rem">کوچک</option><option value="1.25rem">پیش‌فرض</option><option value="1.5rem">بزرگ</option>
-                        </select>
-                    </div>
-                    <div class="zps-field">
-                        <label>اندازه آیکن‌های منو</label>
-                        <select class="zps-select" x-model="state.sidebar_icon_size" x-on:change="applyLive(); dirty=true">
-                            <option value="1rem">کوچک</option><option value="1.25rem">پیش‌فرض</option><option value="1.5rem">بزرگ</option>
+                        <select class="zps-select" x-model="state.admin_icon_size" x-on:change="applyLive(); dirty=true">
+                            <option value="12px">خیلی کوچک</option><option value="14px">کوچک</option><option value="16px">پیش‌فرض</option>
+                            <option value="18px">بزرگ</option><option value="20px">خیلی بزرگ</option><option value="22px">بسیار بزرگ</option><option value="24px">حداکثر</option>
                         </select>
                     </div>
                     <div class="zps-field">
                         <label>اندازه لوگو</label>
-                        <select class="zps-select" x-model="state.logo_size" x-on:change="applyLive(); dirty=true">
-                            <option value="1rem">کوچک</option><option value="1.15rem">پیش‌فرض</option><option value="1.4rem">بزرگ</option>
+                        <select class="zps-select" x-model="state.admin_logo_size" x-on:change="applyLive(); dirty=true">
+                            <option value="24px">کوچک</option><option value="28px">کم</option><option value="32px">پیش‌فرض</option>
+                            <option value="40px">بزرگ</option><option value="48px">خیلی بزرگ</option><option value="56px">حداکثر</option>
                         </select>
                     </div>
                     <div class="zps-field">
                         <label>اندازه فونت</label>
-                        <select class="zps-select" x-model.number="state.font_scale" x-on:change="applyLive(); dirty=true">
-                            <option :value="90">کوچک</option><option :value="100">پیش‌فرض</option>
-                            <option :value="110">بزرگ</option><option :value="120">خیلی بزرگ</option>
+                        <select class="zps-select" x-model="state.admin_font_scale" x-on:change="applyLive(); dirty=true">
+                            <option value="0.9">کوچک</option><option value="0.95">کم</option><option value="1">پیش‌فرض</option>
+                            <option value="1.05">بزرگ</option><option value="1.1">خیلی بزرگ</option><option value="1.15">حداکثر</option>
+                        </select>
+                    </div>
+                    <div class="zps-field">
+                        <label>اندازه فلش انتخاب‌گرها</label>
+                        <select class="zps-select" x-model="state.admin_select_caret_size" x-on:change="applyLive(); dirty=true">
+                            <option value="10px">خیلی کوچک</option><option value="12px">کوچک</option><option value="14px">پیش‌فرض</option>
+                            <option value="16px">بزرگ</option><option value="18px">خیلی بزرگ</option>
+                        </select>
+                    </div>
+                    <div class="zps-field">
+                        <label>ارتفاع فیلدهای فرم</label>
+                        <select class="zps-select" x-model="state.admin_form_control_height" x-on:change="applyLive(); dirty=true">
+                            <option value="34px">فشرده</option><option value="38px">کم</option><option value="42px">پیش‌فرض</option><option value="46px">زیاد</option>
                         </select>
                     </div>
                     <div class="zps-field">
                         <label>تراکم جدول‌ها</label>
-                        <select class="zps-select" x-model="state.table_density" x-on:change="applyLive(); dirty=true">
+                        <select class="zps-select" x-model="state.admin_table_density" x-on:change="applyLive(); dirty=true">
                             <option value="compact">فشرده</option><option value="normal">عادی</option><option value="comfortable">راحت</option>
                         </select>
                     </div>
                     <div class="zps-field">
                         <label>تراکم کارت‌ها</label>
-                        <select class="zps-select" x-model="state.card_density" x-on:change="applyLive(); dirty=true">
+                        <select class="zps-select" x-model="state.admin_card_density" x-on:change="applyLive(); dirty=true">
                             <option value="compact">فشرده</option><option value="normal">عادی</option><option value="comfortable">راحت</option>
                         </select>
                     </div>
                     <div class="zps-field">
-                        <label>اندازه تصاویر و آواتارها</label>
-                        <select class="zps-select" x-model="state.image_size" x-on:change="applyLive(); dirty=true">
+                        <label>اندازه تصاویر و آواتارها (پنل کاربری)</label>
+                        <select class="zps-select" x-model="state.image_size" x-on:change="dirty=true">
                             <option value="2rem">کوچک</option><option value="2.5rem">پیش‌فرض</option><option value="3rem">بزرگ</option>
                         </select>
                     </div>
@@ -566,34 +576,29 @@ function themeStudio(state, presets, groups, groupLabels) {
             el.style.setProperty('--zp-animation-speed', this.speed(this.state.animation_intensity));
             el.style.setProperty('--zp-icon-size', this.state.icon_size);
             el.style.setProperty('--zp-sidebar-icon-size', this.state.sidebar_icon_size);
-            // Mirror the compact, independent admin tokens — IDENTICAL maths to
-            // AdminAppearanceResolver so the live preview equals what /zed-admin
-            // renders after save (and the diagnostics rows line up).
-            const px = (v) => { const n = parseFloat(v) || 1; return /rem|em/.test(v) ? n * 16 : (/px/.test(v) ? n : (n <= 4 ? n * 16 : n)); };
+            // Admin tokens — read the admin_* controls directly (px / scale /
+            // enum), IDENTICAL to AdminAppearanceResolver so the live preview
+            // equals what /zed-admin renders after save.
+            const px = (v) => { v = String(v); const n = parseFloat(v) || 1; return /rem|em/.test(v) ? n * 16 : (/px/.test(v) ? n : (n <= 4 ? n * 16 : n)); };
             const clamp = (n, a, b) => Math.round(Math.max(a, Math.min(b, n)) * 10) / 10;
             const trimNum = (n) => String(Math.round(n * 1000) / 1000);
-            const iconPx = clamp(px(this.state.icon_size) * 0.85, 12, 24);
-            const sidePx = clamp(px(this.state.sidebar_icon_size) * 0.9, 14, 26);
-            const logoPx = clamp(px(this.state.logo_size) / 18.4 * 32, 24, 56);
-            const cardR  = clamp(px(this.state.card_radius), 8, 28);
-            const btnR   = clamp(px(this.state.button_radius), 6, 24);
-            const fScale = clamp((parseInt(this.state.font_scale) || 100) / 100, 0.9, 1.15);
             const S = (k, v) => el.style.setProperty(k, v);
+            const iconPx = clamp(px(this.state.admin_icon_size || '16px'), 12, 24);
             S('--zp-admin-icon-size', iconPx + 'px');
             S('--zp-admin-action-icon-size', clamp(iconPx, 12, 22) + 'px');
             S('--zp-admin-form-icon-size', clamp(iconPx, 12, 22) + 'px');
-            S('--zp-admin-sidebar-icon-size', sidePx + 'px');
-            S('--zp-admin-select-caret-size', clamp(iconPx - 2, 10, 18) + 'px');
-            S('--zp-admin-logo-size', logoPx + 'px');
-            S('--zp-admin-card-radius', cardR + 'px');
-            S('--zp-admin-button-radius', btnR + 'px');
-            S('--zp-admin-font-scale', trimNum(fScale));
-            S('--zp-admin-animation-speed', this.speed(this.state.animation_intensity));
-            const card = ({ compact: [12, 38, 10], comfortable: [20, 46, 18] })[this.state.card_density] || [16, 42, 14];
+            S('--zp-admin-sidebar-icon-size', clamp(px(this.state.sidebar_icon_size || '1.25rem') * 0.9, 14, 24) + 'px');
+            S('--zp-admin-select-caret-size', clamp(px(this.state.admin_select_caret_size || '14px'), 10, 18) + 'px');
+            S('--zp-admin-logo-size', clamp(px(this.state.admin_logo_size || '32px'), 24, 56) + 'px');
+            S('--zp-admin-card-radius', clamp(px(this.state.admin_card_radius || '14px'), 8, 28) + 'px');
+            S('--zp-admin-button-radius', clamp(px(this.state.admin_button_radius || '10px'), 6, 24) + 'px');
+            S('--zp-admin-font-scale', trimNum(clamp(parseFloat(this.state.admin_font_scale || '1'), 0.9, 1.15)));
+            S('--zp-admin-animation-speed', this.speed(this.state.admin_animation_intensity));
+            const card = ({ compact: [12, 38, 10], comfortable: [20, 46, 18] })[this.state.admin_card_density] || [16, 42, 14];
             S('--zp-admin-card-padding', card[0] + 'px');
-            S('--zp-admin-form-control-height', card[1] + 'px');
+            S('--zp-admin-form-control-height', clamp(px(this.state.admin_form_control_height || (card[1] + 'px')), 30, 64) + 'px');
             S('--zp-admin-density-gap', card[2] + 'px');
-            const tbl = ({ compact: [40, 8, 10], comfortable: [56, 14, 16] })[this.state.table_density] || [48, 10, 12];
+            const tbl = ({ compact: [40, 8, 10], comfortable: [56, 14, 16] })[this.state.admin_table_density] || [48, 10, 12];
             S('--zp-admin-table-row-height', tbl[0] + 'px');
             S('--zp-admin-table-cell-py', tbl[1] + 'px');
             S('--zp-admin-table-cell-px', tbl[2] + 'px');
