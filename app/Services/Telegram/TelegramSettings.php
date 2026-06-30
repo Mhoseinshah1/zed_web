@@ -61,6 +61,42 @@ class TelegramSettings
         SiteSetting::set('telegram_bot_token', '');
     }
 
+    /**
+     * The webhook secret token (decrypted). Telegram echoes it back on every
+     * update via the X-Telegram-Bot-Api-Secret-Token header. Never shown.
+     */
+    public function webhookSecret(): string
+    {
+        $raw = (string) SiteSetting::get('telegram_webhook_secret', '');
+        if ($raw === '') {
+            return '';
+        }
+        try {
+            return (string) Crypt::decryptString($raw);
+        } catch (\Throwable $e) {
+            return '';
+        }
+    }
+
+    public function hasWebhookSecret(): bool
+    {
+        return $this->webhookSecret() !== '';
+    }
+
+    public function storeWebhookSecret(string $secret): void
+    {
+        SiteSetting::set('telegram_webhook_secret', Crypt::encryptString($secret));
+    }
+
+    /** Generate, persist (encrypted) and return a fresh webhook secret. */
+    public function rotateWebhookSecret(): string
+    {
+        // Telegram allows A-Z a-z 0-9 _ - (1..256 chars). Str::random is alnum.
+        $secret = \Illuminate\Support\Str::random(48);
+        $this->storeWebhookSecret($secret);
+        return $secret;
+    }
+
     public function chatId(): string
     {
         return (string) SiteSetting::get('telegram_admin_chat_id', '');

@@ -19,6 +19,16 @@
             {{ $this->sendTestAction }}
             {{ $this->sendTestPerTopicAction }}
         </div>
+
+        <div class="mt-4 border-t border-line pt-4">
+            <div class="text-sm font-semibold text-content mb-2">Webhook (دریافت دستورها)</div>
+            <div class="flex flex-wrap gap-3">
+                {{ $this->registerWebhookAction }}
+                {{ $this->webhookStatusAction }}
+                {{ $this->deleteWebhookAction }}
+            </div>
+            <p class="mt-2 text-xs text-content-muted">آدرس Webhook: <code>{{ route('telegram.webhook') }}</code> — توکن مخفی هرگز نمایش داده نمی‌شود.</p>
+        </div>
     </form>
 
     <x-filament-actions::modals />

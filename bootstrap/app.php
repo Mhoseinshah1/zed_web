@@ -19,9 +19,11 @@ return Application::configure(basePath: dirname(__DIR__))
         // to /zed-admin/login (GET-only) and the server returns 405.
         $middleware->trustProxies(at: '*');
 
-        // NOWPayments IPN webhook must bypass CSRF — signature verified via HMAC-SHA512
+        // NOWPayments IPN webhook must bypass CSRF — signature verified via HMAC-SHA512.
+        // Telegram admin-bot webhook bypasses CSRF — verified by the secret-token header.
         $middleware->validateCsrfTokens(except: [
             'webhooks/nowpayments',
+            'telegram/webhook',
         ]);
 
         // Gate sensitive purchase actions behind a completed profile (phone).
