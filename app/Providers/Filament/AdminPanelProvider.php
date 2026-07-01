@@ -104,10 +104,10 @@ class AdminPanelProvider extends PanelProvider
         $brandText = 'ZedProxy Admin';
 
         try {
-            $hex = AppearanceManager::activePalette()['primary'] ?? null;
-            if ($hex) {
-                $primary = Color::hex($hex);
-            }
+            // Admin brand is indigo by default (matches the reference), driven by
+            // AdminAppearanceResolver so it stays a single source of truth and the
+            // Filament palette + the --zp-* variables agree.
+            $primary = Color::hex(AdminAppearanceResolver::adminPrimary());
 
             $themeMode = match (AppearanceManager::appearanceMode()) {
                 'light'  => ThemeMode::Light,
@@ -172,10 +172,14 @@ HTML;
 
         // Filament toggles `.dark` on <html>; mirror its light mode onto our
         // neutral ramp (admin-scoped so the user side is unaffected).
+        // Admin light-mode neutral ramp — tuned to the approved reference for a
+        // cleaner, higher-contrast light theme (darker text, lighter hairline
+        // borders). Injected only into the admin <head>, so the public site and
+        // user panel are unaffected.
         $lightRamp = 'html:not(.dark){'
-            . '--zp-bg:#eef2fb;--zp-bg-soft:#e6ebf7;--zp-surface:#ffffff;--zp-surface-soft:#f3f6fc;'
-            . '--zp-surface-hover:#e9eef8;--zp-text:#1c2233;--zp-text-muted:#5f6883;--zp-border:#d8deec;'
-            . '--zp-card-shadow:0 10px 30px -14px rgb(30 40 80 / .18);}';
+            . '--zp-bg:#f1f4fa;--zp-bg-soft:#e8edf6;--zp-surface:#ffffff;--zp-surface-soft:#f5f8fc;'
+            . '--zp-surface-hover:#eef2f9;--zp-text:#141a26;--zp-text-muted:#5c6680;--zp-border:#e3e8f1;'
+            . '--zp-card-shadow:0 1px 3px rgb(30 40 70 / .06), 0 8px 24px -14px rgb(30 40 70 / .14);}';
         $out .= '<style id="zp-admin-light">' . $lightRamp . '</style>';
 
         // Declarative, database-driven admin appearance variables. Rendered

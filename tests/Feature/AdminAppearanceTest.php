@@ -58,6 +58,31 @@ class AdminAppearanceTest extends TestCase
         $this->assertSame('16px', $r['vars']['--zp-admin-icon-size']);
     }
 
+    /** The admin brand is indigo by default, wins over the palette, and is overridable. */
+    public function test_admin_primary_is_indigo_and_overridable(): void
+    {
+        $r = AdminAppearanceResolver::resolve();
+        $this->assertSame('#6366f1', AdminAppearanceResolver::adminPrimary());
+        $this->assertSame('#6366f1', $r['vars']['--zp-admin-primary']);
+        // Re-emitted onto --zp-primary so the admin shell rules turn indigo.
+        $this->assertSame('#6366f1', $r['vars']['--zp-primary']);
+
+        // Admins can override it; a bad value falls back safely.
+        SiteSetting::set('admin_primary', '#8b5cf6');
+        $this->assertSame('#8b5cf6', AdminAppearanceResolver::resolve()['vars']['--zp-primary']);
+        SiteSetting::set('admin_primary', 'nope');
+        $this->assertSame('#6366f1', AdminAppearanceResolver::adminPrimary());
+    }
+
+    /** The indigo brand override is admin-only — it must not leak to the user panel. */
+    public function test_admin_primary_does_not_leak_to_user_panel(): void
+    {
+        $user = User::factory()->create();
+        $html = $this->actingAs($user)->get(route('dashboard.index'))->getContent();
+
+        $this->assertStringNotContainsString('--zp-admin-primary', $html);
+    }
+
     /** Old fine-grained settings migrate onto the two practical presets. */
     public function test_legacy_settings_migrate(): void
     {
