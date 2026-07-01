@@ -48,10 +48,11 @@ class MarkOrderAsPaidService
             }
         }
 
-        DB::transaction(function () use ($order, $tx) {
-            // Refresh inside transaction to prevent race conditions
-            $order = $order->fresh();
-            $tx    = $tx->fresh();
+        DB::transaction(function () use (&$order, &$tx) {
+            // Re-read WITH a row lock so two concurrent IPNs/callbacks can't both
+            // pass the "not paid yet" check — the second waits, then sees PAID.
+            $order = Order::whereKey($order->id)->lockForUpdate()->first() ?? $order;
+            $tx    = PaymentTransaction::whereKey($tx->id)->lockForUpdate()->first() ?? $tx;
 
             if ($order->payment_status !== Order::PAYMENT_PAID) {
                 $order->update([

@@ -91,7 +91,9 @@ Route::middleware('auth')->prefix('dashboard')->name('dashboard.')->group(functi
     Route::post('/orders/{order}/discount', [OrderController::class, 'applyDiscount'])->name('orders.discount.apply');
     Route::delete('/orders/{order}/discount', [OrderController::class, 'removeDiscount'])->name('orders.discount.remove');
     Route::get('/orders/{order}/pay', [PaymentController::class, 'show'])->name('orders.pay');
-    Route::post('/orders/{order}/pay', [PaymentController::class, 'submit'])->name('orders.pay.submit');
+    Route::post('/orders/{order}/pay', [PaymentController::class, 'submit'])
+        ->middleware('throttle:10,1')
+        ->name('orders.pay.submit');
     Route::get('/orders/{order}/nowpayments', [NowPaymentsController::class, 'show'])->name('orders.nowpayments');
     Route::post('/orders/{order}/nowpayments/check', [NowPaymentsController::class, 'checkStatus'])->name('orders.nowpayments.check');
     Route::get('/services', [ServiceController::class, 'index'])->name('services');
@@ -140,13 +142,17 @@ Route::middleware('auth')->prefix('dashboard')->name('dashboard.')->group(functi
     Route::get('/profile', [ProfileController::class, 'index'])->name('profile');
     Route::get('/profile/complete', [ProfileController::class, 'complete'])->name('profile.complete');
     Route::post('/profile/phone', [ProfileController::class, 'savePhone'])->name('profile.phone.save');
-    Route::post('/profile/phone/send-otp', [ProfileController::class, 'sendOtp'])->name('profile.phone.send-otp');
+    Route::post('/profile/phone/send-otp', [ProfileController::class, 'sendOtp'])
+        ->middleware('throttle:5,1')
+        ->name('profile.phone.send-otp');
     Route::post('/profile/phone/verify', [ProfileController::class, 'verifyPhone'])->name('profile.phone.verify');
 
     Route::get('/wallet', [WalletController::class, 'index'])->name('wallet');
     Route::middleware('profile.complete')->group(function () {
         Route::get('/wallet/topup', [WalletController::class, 'topupForm'])->name('wallet.topup');
-        Route::post('/wallet/topup', [WalletController::class, 'processTopup'])->name('wallet.topup.submit');
+        Route::post('/wallet/topup', [WalletController::class, 'processTopup'])
+            ->middleware('throttle:10,1')
+            ->name('wallet.topup.submit');
     });
 });
 

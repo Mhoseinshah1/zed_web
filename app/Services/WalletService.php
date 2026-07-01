@@ -28,7 +28,8 @@ class WalletService
             $before = $locked->wallet_balance_toman;
             $after  = $before + $amount;
 
-            $locked->update(['wallet_balance_toman' => $after]);
+            // wallet_balance_toman is not mass-assignable — set it explicitly.
+            $locked->forceFill(['wallet_balance_toman' => $after])->save();
 
             return WalletTransaction::create(array_merge([
                 'user_id'              => $user->id,
@@ -54,7 +55,8 @@ class WalletService
             $before = $locked->wallet_balance_toman;
             $after  = $before - $amount;
 
-            $locked->update(['wallet_balance_toman' => $after]);
+            // wallet_balance_toman is not mass-assignable — set it explicitly.
+            $locked->forceFill(['wallet_balance_toman' => $after])->save();
 
             return WalletTransaction::create(array_merge([
                 'user_id'              => $user->id,
@@ -75,31 +77,69 @@ class WalletService
 
     /**
      * Credit wallet from a completed payment transaction.
-     * Idempotent: a given PaymentTransaction can only credit the wallet once.
+     *
+     * Idempotent: a given PaymentTransaction can credit the wallet EXACTLY once.
+     * Three layers guard this:
+     *   1. The existence check + credit run inside one transaction, with the
+     *      payment-transaction row locked, so two concurrent callers for the same
+     *      tx are serialised (the second sees the credit the first committed).
+     *   2. A DB UNIQUE constraint on payment_transaction_id is the backstop for
+     *      any race the lock can't cover (e.g. separate DB connections).
+     *   3. If that unique constraint fires, we catch it and return the existing
+     *      credit rather than surfacing a 500 — the outcome is still one credit.
      */
     public function creditFromPaymentTransaction(User $user, PaymentTransaction $tx): WalletTransaction
     {
-        $existing = WalletTransaction::where('payment_transaction_id', $tx->id)->first();
-        if ($existing) {
-            return $existing;
+        $created = false;
+
+        try {
+            $walletTx = DB::transaction(function () use ($user, $tx, &$created) {
+                // Serialise concurrent crediting of the SAME payment transaction.
+                PaymentTransaction::whereKey($tx->id)->lockForUpdate()->first();
+
+                $existing = WalletTransaction::where('payment_transaction_id', $tx->id)->first();
+                if ($existing !== null) {
+                    return $existing;
+                }
+
+                $created = true;
+
+                return $this->credit($user, (int) $tx->amount_toman, WalletTransaction::TYPE_TOPUP, [
+                    'payment_transaction_id' => $tx->id,
+                    'description'            => 'شارژ کیف پول از طریق درگاه پرداخت',
+                ]);
+            });
+        } catch (\Illuminate\Database\QueryException $e) {
+            // Lost a concurrent race — the other writer already credited this tx.
+            if ($this->isDuplicatePaymentTransaction($e)) {
+                return WalletTransaction::where('payment_transaction_id', $tx->id)->firstOrFail();
+            }
+            throw $e;
         }
 
-        $walletTx = $this->credit($user, (int) $tx->amount_toman, WalletTransaction::TYPE_TOPUP, [
-            'payment_transaction_id' => $tx->id,
-            'description'            => 'شارژ کیف پول از طریق درگاه پرداخت',
-        ]);
-
-        // Notify the user that their wallet was topped up. Idempotent per tx.
-        app(\App\Services\Notifications\NotificationService::class)->notify(
-            \App\Models\Notification::TYPE_WALLET_TOPUP_SUCCESS,
-            $user,
-            [
-                'user_name'     => $user->name ?? $user->username,
-                'wallet_amount' => number_format((int) $tx->amount_toman),
-            ],
-            'wallet_topup_success:tx:' . $tx->id,
-        );
+        // Notify only on a genuinely new credit (never re-notify a duplicate).
+        if ($created) {
+            app(\App\Services\Notifications\NotificationService::class)->notify(
+                \App\Models\Notification::TYPE_WALLET_TOPUP_SUCCESS,
+                $user,
+                [
+                    'user_name'     => $user->name ?? $user->username,
+                    'wallet_amount' => number_format((int) $tx->amount_toman),
+                ],
+                'wallet_topup_success:tx:' . $tx->id,
+            );
+        }
 
         return $walletTx;
+    }
+
+    /** True when the query error is a UNIQUE violation on payment_transaction_id. */
+    private function isDuplicatePaymentTransaction(\Illuminate\Database\QueryException $e): bool
+    {
+        $sqlState = $e->errorInfo[0] ?? null;
+
+        // 23505 = PostgreSQL unique_violation; 23000 = generic integrity (SQLite/MySQL).
+        return in_array($sqlState, ['23505', '23000'], true)
+            || str_contains(strtolower($e->getMessage()), 'unique');
     }
 }

@@ -282,7 +282,7 @@ class ReferralCommissionTest extends TestCase
     public function test_commission_recorded_via_mark_order_paid(): void
     {
         [$referrer, $buyer] = $this->buyerWithReferrer();
-        $buyer->update(['wallet_balance_toman' => 0]);
+        $buyer->forceFill(['wallet_balance_toman' => 0])->save();
         $order = $this->paidOrder($buyer, Order::TYPE_NEW_SERVICE, 100000, 100000, [
             'status' => Order::STATUS_AWAITING_PAYMENT, 'payment_status' => Order::PAYMENT_UNPAID, 'paid_at' => null,
         ]);

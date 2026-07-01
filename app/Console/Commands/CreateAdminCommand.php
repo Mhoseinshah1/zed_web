@@ -37,21 +37,22 @@ class CreateAdminCommand extends Command
         $user = User::where('email', $email)->orWhere('username', $username)->first();
 
         $attributes = [
-            'username'          => $username,
-            'name'              => $name,
-            'email'             => $email,
-            'password'          => Hash::make($password),
-            'is_admin'          => true,
-            'email_verified_at' => now(),
+            'username' => $username,
+            'name'     => $name,
+            'email'    => $email,
+            'password' => Hash::make($password),
         ];
 
         if ($user) {
             $user->update($attributes);
             $this->info("Admin user updated: {$username} <{$email}>");
         } else {
-            User::create($attributes);
+            $user = User::create($attributes);
             $this->info("Admin user created: {$username} <{$email}>");
         }
+
+        // is_admin is not mass-assignable (privilege field) — set it explicitly.
+        $user->forceFill(['is_admin' => true, 'email_verified_at' => now()])->save();
 
         return self::SUCCESS;
     }
