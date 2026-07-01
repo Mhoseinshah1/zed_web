@@ -90,6 +90,15 @@ class AdminAppearanceResolver
             '--zp-admin-logo-size'                => self::px(max(24, min(56, $brandSize + 8))),
             '--zp-admin-font-scale'               => '1',
             '--zp-admin-animation-speed'          => '180ms',
+            // Brand/primary — the admin shell uses an indigo brand by default
+            // (matching the approved reference), overridable via `admin_primary`.
+            // Re-emitted onto --zp-primary here: the admin theme-vars block is
+            // admin-only and renders AFTER the palette colours, so this wins for
+            // /zed-admin without touching the public site or user panel.
+            '--zp-admin-primary'                 => self::adminPrimary(),
+            '--zp-admin-primary-hover'           => self::adminPrimaryHover(),
+            '--zp-primary'                       => self::adminPrimary(),
+            '--zp-primary-hover'                 => self::adminPrimaryHover(),
             // Radius — read straight from the theme-panel settings so the panel's
             // corner-radius slider drives the entire admin shell. Also aliased to
             // the base tokens (admin-scoped) so any rule using them follows too.
@@ -144,6 +153,18 @@ class AdminAppearanceResolver
         return $oldWidth <= 260 ? 'small' : ($oldWidth >= 300 ? 'large' : 'normal');
     }
 
+    /** Admin brand/primary colour (indigo by default, matching the reference). */
+    public static function adminPrimary(): string
+    {
+        return self::cssColor((string) ThemeSettingsService::get('admin_primary', '#6366f1'), '#6366f1');
+    }
+
+    /** Hover/darker shade of the admin brand colour. */
+    public static function adminPrimaryHover(): string
+    {
+        return self::cssColor((string) ThemeSettingsService::get('admin_primary_hover', '#4f46e5'), '#4f46e5');
+    }
+
     public static function brandDisplay(): string
     {
         $v = (string) ThemeSettingsService::get('admin_brand_display', 'text');
@@ -181,5 +202,12 @@ class AdminAppearanceResolver
     {
         $value = trim($value);
         return preg_match('/^\d+(\.\d+)?(px|rem|em)?$/', $value) === 1 ? $value : $fallback;
+    }
+
+    /** Accept a #rrggbb hex colour; else fallback (guards against bad settings). */
+    private static function cssColor(string $value, string $fallback): string
+    {
+        $value = trim($value);
+        return preg_match('/^#[0-9a-fA-F]{6}$/', $value) === 1 ? $value : $fallback;
     }
 }
