@@ -55,11 +55,53 @@ class PanelTemplateAccentTest extends TestCase
     {
         $html = $this->panel('classic');
 
-        // Classic ships no fixed accent → the woodmart orange must NOT leak in;
-        // the panel inherits the theme's own accent instead.
+        // Classic now ships its own indigo accent (its brand colour) — and the
+        // woodmart orange must NOT leak in.
         $this->assertStringContainsString('data-template="classic"', $html);
+        $this->assertStringContainsString('--zp-tpl-accent:', $html);
+        $this->assertStringContainsString('#6366f1', $html);
         $this->assertStringNotContainsString('--wm-accent', $html);
         $this->assertStringContainsString('zp-user-panel', $html);
+    }
+
+    /**
+     * Every template colours the panel with its OWN accent, and only its own
+     * scoped style block is injected (no cross-template leak).
+     */
+    public function test_each_template_brings_its_own_scoped_accent(): void
+    {
+        $accents = [
+            'classic'  => '#6366f1',
+            'modern'   => '#22d3ee',
+            'shop'     => '#22d3ee',
+            'map'      => '#22d3ee',
+            'matrix'   => '#34d399',
+            'woodmart' => '#e8552a',
+        ];
+
+        foreach ($accents as $template => $hex) {
+            $html = $this->panel($template);
+
+            // The panel carries this template and its scoped accent style block…
+            $this->assertStringContainsString('data-template="' . $template . '"', $html);
+            $this->assertStringContainsString('[data-template="' . $template . '"]', $html);
+            $this->assertStringContainsString('--zp-tpl-accent:', $html);
+
+            // woodmart maps its orange through --wm-accent; the rest set the hex directly.
+            if ($template === 'woodmart') {
+                $this->assertStringContainsString('--wm-accent', $html);
+            } else {
+                $this->assertStringContainsString($hex, $html);
+            }
+
+            // Scope isolation: no OTHER template's style block is present.
+            foreach (array_keys($accents) as $other) {
+                if ($other !== $template) {
+                    $this->assertStringNotContainsString('[data-template="' . $other . '"]', $html,
+                        "{$other}'s accent must not leak into the {$template} panel.");
+                }
+            }
+        }
     }
 
     public function test_panel_structure_is_identical_across_templates(): void
