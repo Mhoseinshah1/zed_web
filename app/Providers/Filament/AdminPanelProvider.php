@@ -63,10 +63,9 @@ class AdminPanelProvider extends PanelProvider
                 \App\Filament\Pages\Dashboard::class,
             ])
             ->discoverWidgets(in: app_path('Filament/Widgets'), for: 'App\\Filament\\Widgets')
-            ->widgets([
-                Widgets\AccountWidget::class,
-                \App\Filament\Widgets\StatsOverviewWidget::class,
-            ])
+            // The dashboard defines its own widget set (see App\Filament\Pages\Dashboard);
+            // the default AccountWidget "welcome" card is intentionally omitted.
+            ->widgets([])
             ->renderHook(
                 PanelsRenderHook::HEAD_START,
                 fn (): HtmlString => new HtmlString($this->adminBootScript()),
