@@ -200,25 +200,42 @@ HTML;
         return $out;
     }
 
-    /** Read + cache the plain-CSS design token file. */
+    /** Read + cache the plain-CSS design token file (re-reads when it changes). */
     protected function themeTokensCss(): string
     {
-        static $cache = null;
-        if ($cache !== null) {
-            return $cache;
-        }
-        $path = resource_path('css/theme-tokens.css');
-        return $cache = is_file($path) ? (string) file_get_contents($path) : '';
+        return $this->readCssCached(resource_path('css/theme-tokens.css'));
     }
 
-    /** Read + cache the admin-only Filament shell stylesheet. */
+    /** Read + cache the admin-only Filament shell stylesheet (re-reads on change). */
     protected function adminShellCss(): string
     {
-        static $cache = null;
-        if ($cache !== null) {
-            return $cache;
+        return $this->readCssCached(resource_path('css/admin-theme.css'));
+    }
+
+    /**
+     * Read a CSS file, caching by modification time.
+     *
+     * A plain `static` cache of the file contents is memoised for the life of
+     * the PHP worker (FPM keeps workers around, and `artisan serve`/Octane keep
+     * one process), so once a worker read the old CSS it kept serving it — even
+     * after `optimize:clear`/`view:clear`, which don't reset in-process statics
+     * or recycle workers. Keying the cache on filemtime (with a fresh stat) makes
+     * an edit to the file take effect on the very next request, no restart needed.
+     */
+    protected function readCssCached(string $path): string
+    {
+        static $cache = [];
+
+        clearstatcache(true, $path);
+        if (! is_file($path)) {
+            return '';
         }
-        $path = resource_path('css/admin-theme.css');
-        return $cache = is_file($path) ? (string) file_get_contents($path) : '';
+
+        $mtime = @filemtime($path) ?: 0;
+        if (! isset($cache[$path]) || $cache[$path]['mtime'] !== $mtime) {
+            $cache[$path] = ['mtime' => $mtime, 'css' => (string) file_get_contents($path)];
+        }
+
+        return $cache[$path]['css'];
     }
 }
