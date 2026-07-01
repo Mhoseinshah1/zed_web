@@ -262,6 +262,30 @@ html.zed-anim-none *, html.zed-anim-none *::before, html.zed-anim-none *::after 
 .zed-btn-primary, .zp-btn-primary { background: var(--zp-gradient); color:#fff; }
 
 /* ==========================================================================
+   USER-PANEL template accent ("clothes, not body shape")
+   --------------------------------------------------------------------------
+   The user panel (layouts/panel, marked .zp-user-panel) borrows ONLY the active
+   site template's ACCENT, never its structure. Each template that has a fixed
+   accent sets the uniform --zp-tpl-accent* variables in its own styles view
+   (scoped to [data-template=…], carried onto the panel <html>). Here we route
+   the panel's brand/accent tokens to that uniform layer.
+
+   • Only accent/brand tokens are touched — chrome (--zp-bg/-surface/-text/
+     -border → bg-base/bg-surface/text-content/border-line) and semantic colours
+     (success/danger/warning) are deliberately left alone, so light/dark and the
+     panel structure are unaffected.
+   • When a template sets no accent (classic, modern, shop, map, matrix),
+     var(--zp-tpl-accent) is guaranteed-invalid, so each property becomes
+     `unset` and INHERITS the theme's own accent — i.e. the default accent.
+   ========================================================================== */
+.zp-user-panel {
+    --zp-primary:       var(--zp-tpl-accent);
+    --zp-primary-hover: var(--zp-tpl-accent-hover);
+    --zp-accent:        var(--zp-tpl-accent-2);
+    --zp-gradient:      var(--zp-tpl-gradient);
+}
+
+/* ==========================================================================
    FILAMENT admin surface override layer — maps Filament structural classes to
    the active theme tokens so /zed-admin (which does NOT load app.css) follows
    the selected admin theme. Injected verbatim into the panel <head>.
