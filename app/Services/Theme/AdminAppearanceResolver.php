@@ -17,14 +17,14 @@ class AdminAppearanceResolver
     /** density => [sidebar_item_height, group_font, table_row, card_pad, form_control] */
     private const DENSITY = [
         'compact'     => [36, 12, 40, 12, 38],
-        'normal'      => [40, 13, 48, 16, 42],
+        'normal'      => [40, 13, 46, 16, 42],
         'comfortable' => [46, 14, 56, 20, 46],
     ];
 
     /** sidebar size => [width, brand_size, menu_font, icon_size] */
     private const SIDEBAR = [
         'small'  => [250, 20, 13, 15],
-        'normal' => [280, 24, 14, 16],
+        'normal' => [280, 24, 14, 17],
         'large'  => [320, 28, 15, 18],
     ];
 
@@ -50,10 +50,11 @@ class AdminAppearanceResolver
         [$sbWidth, $brandSize, $menuFont, $iconSize]  = self::SIDEBAR[$sidebar];
 
         // Table cell padding derived from the row height for a real visual change.
+        // Normal uses roomier 16px horizontal padding for balanced, readable rows.
         [$cellPy, $cellPx] = match ($density) {
             'compact'     => [8, 10],
             'comfortable' => [14, 16],
-            default       => [10, 12],
+            default       => [11, 16],
         };
         $gap = match ($density) {
             'compact'     => 10,
@@ -96,10 +97,14 @@ class AdminAppearanceResolver
             '--zp-admin-button-radius'            => $buttonRadius,
             '--zp-card-radius'                    => $cardRadius,
             '--zp-button-radius'                  => $buttonRadius,
-            // Shell polish — soft shadow (follows light/dark via --zp-card-shadow),
-            // larger modal radius and a primary focus ring. Kept as variables so
-            // the theme panel keeps controlling the look.
-            '--zp-admin-card-shadow'              => 'var(--zp-card-shadow, 0 10px 30px -12px rgb(0 0 0 / .45))',
+            // Shell polish — a BALANCED two-layer soft shadow (crisp 1px hairline
+            // + soft ambient), matching the optimised reference. Dark is the base
+            // value; admin-theme.css swaps in -light under html:not(.dark). Kept as
+            // variables (defined here, not hardcoded in CSS) so the look stays
+            // centralised and controllable.
+            '--zp-admin-shadow-soft'              => '0 1px 3px rgb(0 0 0 / .30), 0 8px 24px -12px rgb(0 0 0 / .50)',
+            '--zp-admin-shadow-soft-light'        => '0 1px 3px rgb(30 40 70 / .06), 0 8px 24px -14px rgb(30 40 70 / .14)',
+            '--zp-admin-card-shadow'              => 'var(--zp-admin-shadow-soft)',
             '--zp-admin-modal-radius'             => "calc({$cardRadius} + 8px)",
             '--zp-admin-ring'                     => 'color-mix(in srgb, var(--zp-primary, #3b82f6) 35%, transparent)',
         ];

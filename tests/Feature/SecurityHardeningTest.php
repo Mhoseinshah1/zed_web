@@ -210,8 +210,10 @@ class SecurityHardeningTest extends TestCase
 
     public function test_admin_panel_can_still_toggle_is_admin(): void
     {
-        $admin  = User::factory()->create(['is_admin' => true]);
-        $target = User::factory()->create(['is_admin' => false]);
+        // Explicit usernames — the admin form validates username against
+        // /^[a-zA-Z0-9_]+$/, and the factory's faker username can contain a dot.
+        $admin  = User::factory()->create(['is_admin' => true, 'username' => 'admin_user']);
+        $target = User::factory()->create(['is_admin' => false, 'username' => 'target_user']);
 
         // Grant admin via the edit page (exercises EditUser::handleRecordUpdate forceFill).
         Livewire::actingAs($admin)->test(EditUser::class, ['record' => $target->id])
