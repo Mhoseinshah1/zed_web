@@ -1,11 +1,16 @@
 @php
     use App\Services\Theme\ThemeManager;
+    use App\Services\Theme\TemplateManager;
     $zedTheme      = ThemeManager::resolveTheme(ThemeManager::SURFACE_USER, auth()->user());
     $zedAppearance = ThemeManager::resolveAppearance(auth()->user());
+    // The active site template only lends the panel its ACCENT ("clothes"), never
+    // its structure. data-template carries the template's scoped accent styles in;
+    // the panel keeps its own fixed sidebar/layout.
+    $tpl = TemplateManager::activeTemplate();
 @endphp
 <!DOCTYPE html>
 <html lang="fa" dir="rtl" class="scroll-smooth {{ ThemeManager::htmlClassFor($zedTheme, $zedAppearance) }}"
-      data-theme="{{ $zedTheme }}" data-appearance="{{ $zedAppearance }}"
+      data-theme="{{ $zedTheme }}" data-appearance="{{ $zedAppearance }}" data-template="{{ $tpl }}"
       style="{{ ThemeManager::inlineStyle() }}">
 <head>
     <meta charset="UTF-8">
@@ -17,8 +22,12 @@
     <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     @vite(['resources/css/app.css', 'resources/js/app.js'])
     <style>body { font-family: 'Vazirmatn', system-ui, sans-serif; }</style>
+    {{-- Active template's scoped accent styles (defines --zp-tpl-accent for the
+         panel). Only templates with a fixed accent ship a styles view; others
+         fall back to the theme's default accent. Never changes chrome/structure. --}}
+    @includeIf("templates.$tpl.styles")
 </head>
-<body class="bg-base text-content antialiased">
+<body class="zp-user-panel bg-base text-content antialiased">
 
 <div class="flex min-h-screen">
     <!-- Mobile drawer backdrop -->
