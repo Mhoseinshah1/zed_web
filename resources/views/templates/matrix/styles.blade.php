@@ -1,4 +1,13 @@
     <style>
+        /* User-panel accent layer — green fits the inherently dark matrix look.
+           Read by .zp-user-panel; scoped so it can't leak into another template. */
+        [data-template="matrix"] {
+            --zp-tpl-accent:       #34d399;
+            --zp-tpl-accent-hover: #10b981;
+            --zp-tpl-accent-2:     #6ee7b7;
+            --zp-tpl-accent-soft:  rgba(52, 211, 153, .10);
+            --zp-tpl-gradient:     linear-gradient(135deg, #10b981, #34d399);
+        }
         body { font-family: 'Vazirmatn', system-ui, sans-serif; }
         .zm-mono { font-family: 'Courier New', monospace; direction: ltr; unicode-bidi: embed; }
         #zm-matrix { position: fixed; inset: 0; z-index: 0; opacity: .16; pointer-events: none; }
