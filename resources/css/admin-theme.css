@@ -21,6 +21,11 @@
     --zp-ring: var(--zp-admin-ring, color-mix(in srgb, var(--zp-primary) 35%, transparent));
     --zp-primary-soft: color-mix(in srgb, var(--zp-primary) 13%, transparent);
 }
+/* Balanced soft shadow: the resolver defines both variants; here we simply swap
+   in the light one under Filament's light mode (html without .dark). Admin-scoped. */
+html:not(.dark) .fi-body {
+    --zp-admin-shadow-soft: var(--zp-admin-shadow-soft-light);
+}
 
 /* ==========================================================================
    1) CARDS / SECTIONS / WIDGETS — soft surface, subtle shadow, clean padding.
@@ -140,10 +145,8 @@
 .fi-body .fi-ta-row {
     transition: background-color var(--zp-admin-animation-speed, 180ms) ease !important;
 }
-/* Zebra striping (kept subtle); hover already set in the base layer. */
-.fi-body .fi-ta-table tbody .fi-ta-row:nth-child(even) {
-    background-color: color-mix(in srgb, var(--zp-surface-soft) 55%, transparent) !important;
-}
+/* Clean rows — no zebra striping (matches the optimised reference); just a soft
+   hover highlight for readability. */
 .fi-body .fi-ta-row:hover {
     background-color: var(--zp-surface-hover) !important;
 }
@@ -209,6 +212,20 @@
     color: #fff !important;
 }
 .fi-body .fi-sidebar-group-label { letter-spacing: .01em; }
+/* Navigation count badge (Filament navigationBadge) — a soft muted pill next to
+   the item, turning translucent-white on the active item (per the reference).
+   Styling only; badges appear if a Resource defines getNavigationBadge(). */
+.fi-body .fi-sidebar-item .fi-badge {
+    background-color: var(--zp-surface-hover) !important;
+    color: var(--zp-text-muted) !important;
+    border-radius: 9999px !important;
+    font-weight: 700 !important;
+}
+.fi-body .fi-sidebar-item.fi-active .fi-badge,
+.fi-body .fi-sidebar-item-active .fi-badge {
+    background-color: color-mix(in srgb, #fff 22%, transparent) !important;
+    color: #fff !important;
+}
 
 /* ==========================================================================
    8) TOPBAR — matching surface, subtle bottom border, no harsh line.
