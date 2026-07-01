@@ -407,7 +407,12 @@ class NowPaymentsController extends Controller
         if (in_array($gatewayStatus, self::FINISHED_STATUSES)) {
             if ($tx->payment_purpose === 'wallet_topup') {
                 $txUser = $tx->user;
-                if ($txUser) {
+                if (! $txUser) {
+                    Log::error('NOWPayments IPN: wallet_topup tx has no user', ['tx_id' => $tx->id]);
+                } elseif ($tx->status === PaymentTransaction::STATUS_APPROVED) {
+                    // Already processed — a duplicate IPN delivery. Do not re-credit.
+                    Log::info('NOWPayments IPN: wallet_topup already approved, skipping', ['tx_id' => $tx->id]);
+                } else {
                     $this->walletService->creditFromPaymentTransaction($txUser, $tx);
                     $tx->update(['status' => PaymentTransaction::STATUS_APPROVED, 'paid_at' => now()]);
                     Log::info('NOWPayments IPN: wallet topped up', [
@@ -415,8 +420,6 @@ class NowPaymentsController extends Controller
                         'tx_id'        => $tx->id,
                         'amount_toman' => $tx->amount_toman,
                     ]);
-                } else {
-                    Log::error('NOWPayments IPN: wallet_topup tx has no user', ['tx_id' => $tx->id]);
                 }
             } else {
                 $order = $tx->order ? $tx->order->fresh() : null;

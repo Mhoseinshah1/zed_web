@@ -16,13 +16,15 @@ class User extends Authenticatable implements FilamentUser
     /** @use HasFactory<UserFactory> */
     use HasFactory, Notifiable;
 
+    // NOTE: is_admin and wallet_balance_toman are intentionally NOT fillable — they
+    // are privilege/money fields and must never be settable via mass assignment.
+    // Legitimate writers set them explicitly via forceFill(): WalletService (balance),
+    // CreateAdminCommand and the Filament UserResource pages (is_admin).
     protected $fillable = [
         'name',
         'username',
         'email',
         'password',
-        'is_admin',
-        'wallet_balance_toman',
         'account_id',
         'phone',
         'normalized_phone',
