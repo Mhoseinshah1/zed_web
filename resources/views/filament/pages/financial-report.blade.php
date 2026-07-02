@@ -333,7 +333,7 @@
             <h3 class="text-sm font-semibold text-gray-700 dark:text-gray-300">تفکیک روش‌های پرداخت</h3>
             <p class="text-xs text-gray-400 dark:text-gray-500 mt-0.5">شارژ کیف پول در این جدول نیست — فقط فروش واقعی</p>
         </div>
-        <div class="overflow-x-auto">
+        <div class="overflow-x-auto zp-scroll-box">
             <table class="w-full text-sm">
                 <thead>
                     <tr class="border-b border-gray-100 bg-gray-50 text-right dark:border-gray-700 dark:bg-gray-900/30">
@@ -422,7 +422,7 @@
                        class="text-xs text-red-600 underline dark:text-red-400">مشاهده همه</a>
                 </div>
             </div>
-            <div class="p-4">
+            <div class="p-4 zp-scroll-box">
                 @forelse ($provFailed as $order)
                     <div class="mb-2 flex items-center justify-between rounded-lg bg-white px-3 py-2 text-xs dark:bg-gray-800">
                         <div>
@@ -448,7 +448,7 @@
                     پرداخت‌های موفق بدون سرویس فعال
                 </span>
             </div>
-            <div class="p-4">
+            <div class="p-4 zp-scroll-box">
                 @forelse ($paidNoSvc as $order)
                     <div class="mb-2 flex items-center justify-between rounded-lg bg-white px-3 py-2 text-xs dark:bg-gray-800">
                         <div>
@@ -478,7 +478,7 @@
                        class="text-xs text-yellow-600 underline dark:text-yellow-400">مشاهده همه</a>
                 </div>
             </div>
-            <div class="p-4">
+            <div class="p-4 zp-scroll-box">
                 @forelse ($oldPending as $tx)
                     <div class="mb-2 flex items-center justify-between rounded-lg bg-white px-3 py-2 text-xs dark:bg-gray-800">
                         <div>
@@ -506,7 +506,7 @@
                     پرداخت‌های ناموفق اخیر (۳ روز گذشته)
                 </span>
             </div>
-            <div class="p-4">
+            <div class="p-4 zp-scroll-box">
                 @forelse ($recentFailed as $tx)
                     <div class="mb-2 flex items-center justify-between rounded-lg bg-white px-3 py-2 text-xs dark:bg-gray-900">
                         <div>

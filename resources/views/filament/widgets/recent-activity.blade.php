@@ -17,7 +17,7 @@
 <x-filament::section>
     <x-slot name="heading">فعالیت اخیر</x-slot>
 
-    <div class="zp-act">
+    <div class="zp-act zp-scroll-box">
         @forelse ($items as $it)
             @php($cvar = ['success' => '--zp-success', 'primary' => '--zp-primary', 'info' => '--zp-accent'][$it['color']] ?? '--zp-primary')
             <div class="zp-act-item">
