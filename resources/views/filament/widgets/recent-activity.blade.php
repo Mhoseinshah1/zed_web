@@ -27,36 +27,28 @@
     </div>
 
     <style>
-        .zp-act { display: flex; flex-direction: column; width: 100%; }
-        /* One non-wrapping row per item: icon (fixed) + body (fills) + time (fixed).
-           Explicit flex values so nothing collapses or overlaps, even against the
-           surrounding Filament section content styles. */
+        .zp-act { display: flex; flex-direction: column; }
         .zp-act-item {
-            display: flex; flex-direction: row; flex-wrap: nowrap; align-items: center;
-            gap: .7rem; padding: .7rem 0; border-bottom: 1px solid var(--zp-border);
+            display: flex; align-items: center; gap: .7rem;
+            padding: .7rem 0; border-bottom: 1px solid var(--zp-border);
         }
         .zp-act-item:last-child { border-bottom: 0; padding-bottom: 0; }
         .zp-act-item:first-child { padding-top: 0; }
         .zp-act-icon {
-            flex: 0 0 auto; width: 2rem; height: 2rem; border-radius: .6rem;
+            flex-shrink: 0; width: 2rem; height: 2rem; border-radius: .6rem;
             display: flex; align-items: center; justify-content: center;
             color: var(--zp-act-c);
             background: color-mix(in srgb, var(--zp-act-c) 13%, transparent);
         }
         .zp-act-svg { width: 1rem; height: 1rem; }
-        /* Fills the middle and stacks title over meta; min-width:0 lets it shrink
-           so its text ellipsises instead of pushing the time out or overlapping. */
-        .zp-act-body { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
-        .zp-act-title {
-            display: block; font-size: .8rem; font-weight: 600; color: var(--zp-text);
-            overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-        }
+        .zp-act-body { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: .1rem; }
+        .zp-act-title { font-size: .8rem; font-weight: 600; color: var(--zp-text); line-height: 1.4; }
         .zp-act-meta {
-            display: block; font-size: .74rem; color: var(--zp-text-muted);
+            font-size: .74rem; color: var(--zp-text-muted); line-height: 1.4;
             overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
         }
         .zp-act-time {
-            flex: 0 0 auto; margin-inline-start: auto;
+            flex-shrink: 0; align-self: flex-start; padding-top: .1rem;
             font-size: .7rem; color: var(--zp-text-muted); white-space: nowrap;
         }
         .zp-act-empty { padding: 1rem 0; font-size: .8rem; color: var(--zp-text-muted); }
