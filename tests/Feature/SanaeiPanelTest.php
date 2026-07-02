@@ -159,8 +159,17 @@ class SanaeiPanelTest extends TestCase
         $this->assertNotEmpty($service->remote_uuid);
         $this->assertNotNull($service->expires_at);
         $this->assertSame(UserService::SYNC_SYNCED, $service->sync_status);
-        Http::assertSent(fn ($r) => str_contains($r->url(), '/panel/api/clients/add')
-            && str_contains((string) $r->body(), 'settings'));
+        // New 3x-ui structure: {client:{…}, inboundIds:[…]} — no stringified settings.
+        Http::assertSent(function ($r) {
+            if (! str_contains($r->url(), '/panel/api/clients/add')) {
+                return false;
+            }
+            $body = $r->data();
+            return is_array($body['client'] ?? null)
+                && ($body['client']['email'] ?? null) !== null
+                && ($body['inboundIds'] ?? null) === [1]
+                && ! str_contains((string) $r->body(), 'settings');
+        });
     }
 
     public function test_provision_is_idempotent_when_client_exists(): void
@@ -240,6 +249,54 @@ class SanaeiPanelTest extends TestCase
         $service->refresh();
         $this->assertEqualsWithDelta(15, now()->diffInDays($service->expires_at, false), 1);
         $this->assertTrue($service->expires_at->greaterThan($before));
+    }
+
+    public function test_update_sends_direct_client_object_with_inbound_query(): void
+    {
+        Http::fake(['*/panel/api/clients/update/*' => Http::response(['success' => true], 200)]);
+
+        (new Sanaei3xUiClient($this->panel()))->updateClient('zed-1', 1, [
+            'id'         => 'uuid-1',
+            'totalGB'    => 1073741824,
+            'expiryTime' => 1767225600000,
+        ]);
+
+        Http::assertSent(function ($r) {
+            // inboundIds is a query param; body is the client object directly.
+            $body = $r->data();
+            return str_contains($r->url(), '/panel/api/clients/update/zed-1')
+                && str_contains($r->url(), 'inboundIds=1')
+                && ($body['email'] ?? null) === 'zed-1'
+                && ($body['totalGB'] ?? null) === 1073741824
+                && ! str_contains((string) $r->body(), 'settings');
+        });
+    }
+
+    public function test_delete_detaches_client_from_inbound(): void
+    {
+        Http::fake(['*/panel/api/clients/zed-1/detach' => Http::response(['success' => true], 200)]);
+
+        $service = $this->service($this->panel(), ['remote_username' => 'zed-1', 'remote_inbound_id' => 1]);
+        $result  = (new Sanaei3xUiProvider())->delete($service);
+
+        $this->assertTrue($result->ok);
+        Http::assertSent(function ($r) {
+            $body = $r->data();
+            return str_contains($r->url(), '/panel/api/clients/zed-1/detach')
+                && ($body['inboundIds'] ?? null) === [1];
+        });
+        // Old del endpoint is never used.
+        Http::assertNotSent(fn ($r) => str_contains($r->url(), '/panel/api/clients/del/'));
+    }
+
+    public function test_delete_is_idempotent_when_client_missing(): void
+    {
+        Http::fake(['*/detach' => Http::response(['success' => false, 'msg' => 'not found'], 200)]);
+
+        $service = $this->service($this->panel(), ['remote_username' => 'gone', 'remote_inbound_id' => 1]);
+        $result  = (new Sanaei3xUiProvider())->delete($service);
+
+        $this->assertTrue($result->ok); // not-found → success
     }
 
     // ── Order-level provisioning (paid order → 3X-UI client) ─────────────────
