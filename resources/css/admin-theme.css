@@ -320,3 +320,53 @@ html:not(.dark) .fi-body {
     border: 2px solid transparent;
     background-clip: padding-box;
 }
+
+/* ==========================================================================
+   IN-PAGE SCROLL BOXES — keep list/table widgets that sit next to other things
+   a fixed height with an internal vertical scroll, so a dashboard/report page
+   stays short instead of growing with the data.
+
+   • Applies ONLY to in-page widgets/boxes: the shared .zp-scroll-box class and
+     table WIDGETS (.fi-wi-table). Resource list pages render .fi-ta OUTSIDE any
+     .fi-wi-table and keep their own pagination — deliberately untouched here.
+   • A scrollbar appears only when content exceeds the max-height (few items →
+     none). Height/colours come from the theme; light & dark both correct.
+   ========================================================================== */
+.fi-body .zp-scroll-box {
+    max-height: 20rem;              /* ~320px — shows a handful of rows/items */
+    overflow-y: auto;
+    overscroll-behavior: contain;
+}
+
+/* Dashboard "latest orders" TABLE widget: cap the scroller, keep the header
+   row pinned while the body scrolls. (Only table widgets, never Resource lists.) */
+.fi-body .fi-wi-table .fi-ta-content {
+    max-height: 22rem;             /* header + ~6 compact rows, then scrolls */
+    overflow-y: auto;
+    overscroll-behavior: contain;
+}
+.fi-body .fi-wi-table .fi-ta-content .fi-ta-header-cell {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    /* keep the distinct header background (set above) so rows don't show through */
+    background-color: var(--zp-surface-soft) !important;
+}
+
+/* Subtle themed thin scrollbar for these boxes (matches the shell). */
+.fi-body .zp-scroll-box,
+.fi-body .fi-wi-table .fi-ta-content {
+    scrollbar-width: thin;
+    scrollbar-color: var(--zp-surface-hover) transparent;
+}
+.fi-body .zp-scroll-box::-webkit-scrollbar,
+.fi-body .fi-wi-table .fi-ta-content::-webkit-scrollbar { width: 8px; height: 8px; }
+.fi-body .zp-scroll-box::-webkit-scrollbar-thumb,
+.fi-body .fi-wi-table .fi-ta-content::-webkit-scrollbar-thumb {
+    background: var(--zp-surface-hover);
+    border-radius: 9999px;
+    border: 2px solid transparent;
+    background-clip: padding-box;
+}
+.fi-body .zp-scroll-box::-webkit-scrollbar-track,
+.fi-body .fi-wi-table .fi-ta-content::-webkit-scrollbar-track { background: transparent; }
