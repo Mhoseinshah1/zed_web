@@ -22,6 +22,80 @@
     <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     @vite(['resources/css/app.css', 'resources/js/app.js'])
     <style>body { font-family: 'Vazirmatn', system-ui, sans-serif; }</style>
+    {{-- User account dropdown menu — scoped .zp-um-* (user panel only, no leak).
+         Chrome from the theme vars; accent follows the active template via
+         --zp-tpl-accent (falls back to the theme primary); logout uses danger. --}}
+    <style>
+        .zp-um-wrap {
+            position: relative;
+            --zp-um-accent: var(--zp-tpl-accent, var(--zp-primary, #6366f1));
+            --zp-um-accent-soft: color-mix(in srgb, var(--zp-um-accent) 12%, transparent);
+            --zp-um-danger: var(--zp-danger, #f43f5e);
+        }
+        .zp-um-trigger {
+            display: flex; align-items: center; gap: .55rem; cursor: pointer;
+            padding: .3rem .5rem .3rem .75rem; border-radius: 999px;
+            border: 1px solid var(--zp-border); background: var(--zp-surface-soft);
+            color: var(--zp-text); transition: background-color .15s;
+        }
+        .zp-um-trigger:hover { background: var(--zp-surface-hover); }
+        .zp-um-trigger:focus-visible { outline: 2px solid var(--zp-um-accent); outline-offset: 2px; }
+        .zp-um-info { text-align: left; line-height: 1.25; }
+        .zp-um-hi { font-size: 11px; color: var(--zp-text-muted); }
+        .zp-um-nm { font-size: 13px; font-weight: 700; color: var(--zp-text); }
+        .zp-um-av {
+            width: 2.25rem; height: 2.25rem; border-radius: 50%; flex-shrink: 0;
+            display: flex; align-items: center; justify-content: center;
+            color: #fff; font-weight: 800; font-size: 15px;
+            background: linear-gradient(135deg, var(--zp-um-accent), color-mix(in srgb, var(--zp-um-accent) 55%, #ffffff));
+        }
+        .zp-um-av-lg { width: 2.85rem; height: 2.85rem; font-size: 18px; }
+        .zp-um-chev { width: 15px; height: 15px; color: var(--zp-text-muted); transition: transform .2s; }
+        .zp-um-trigger[aria-expanded="true"] .zp-um-chev { transform: rotate(180deg); }
+
+        .zp-um-menu {
+            position: absolute; top: calc(100% + .5rem); left: 0;
+            width: 15rem; max-width: calc(100vw - 2rem);
+            background: var(--zp-surface); border: 1px solid var(--zp-border);
+            border-radius: 1rem; overflow: hidden; z-index: 50;
+            box-shadow: 0 10px 40px -10px rgba(0, 0, 0, .35);
+        }
+        .zp-um-head {
+            padding: 1rem; display: flex; align-items: center; gap: .75rem;
+            border-bottom: 1px solid var(--zp-border); background: var(--zp-surface-soft);
+        }
+        .zp-um-sub {
+            font-size: 11.5px; color: var(--zp-text-muted); margin-top: 2px;
+            direction: ltr; text-align: right;
+        }
+        .zp-um-chip {
+            margin: .75rem 1rem; padding: .7rem .9rem; border-radius: .75rem;
+            background: var(--zp-um-accent-soft); display: flex; align-items: center;
+            justify-content: space-between; text-decoration: none;
+        }
+        .zp-um-chip .l { display: flex; align-items: center; gap: .5rem; font-size: 12px; color: var(--zp-text-muted); }
+        .zp-um-chip .l svg { width: 16px; height: 16px; color: var(--zp-um-accent); }
+        .zp-um-chip .v { font-size: 14px; font-weight: 800; color: var(--zp-text); white-space: nowrap; }
+        .zp-um-chip .v small { font-size: 10px; color: var(--zp-text-muted); font-weight: 500; }
+
+        .zp-um-items { padding: .4rem; }
+        .zp-um-item {
+            display: flex; align-items: center; gap: .7rem; width: 100%;
+            padding: .6rem .75rem; border-radius: .6rem; color: var(--zp-text);
+            font-size: 13px; font-weight: 500; text-decoration: none; cursor: pointer;
+            font-family: inherit; background: none; border: 0; text-align: start;
+            transition: background-color .13s;
+        }
+        .zp-um-item:hover { background: var(--zp-surface-hover); }
+        .zp-um-item > svg:first-child { width: 17px; height: 17px; color: var(--zp-text-muted); flex-shrink: 0; }
+        .zp-um-item:hover > svg:first-child { color: var(--zp-um-accent); }
+        .zp-um-item .ar { margin-inline-start: auto; width: 14px; height: 14px; color: var(--zp-text-muted); }
+        .zp-um-sep { height: 1px; background: var(--zp-border); margin: .4rem .75rem; }
+        .zp-um-danger { color: var(--zp-um-danger); }
+        .zp-um-danger > svg:first-child { color: var(--zp-um-danger); }
+        .zp-um-danger:hover { background: color-mix(in srgb, var(--zp-um-danger) 12%, transparent); }
+        .zp-um-danger:hover > svg:first-child { color: var(--zp-um-danger); }
+    </style>
     {{-- Active template's scoped accent styles (defines --zp-tpl-accent for the
          panel). Only templates with a fixed accent ship a styles view; others
          fall back to the theme's default accent. Never changes chrome/structure. --}}
@@ -138,8 +212,70 @@
                 </button>
                 <h1 class="text-base lg:text-lg font-semibold text-content truncate">@yield('title', 'داشبورد')</h1>
             </div>
-            <div class="text-sm text-content-muted hidden sm:block shrink-0">
-                خوش آمدید، <span class="text-content font-medium">{{ auth()->user()->name ?? 'کاربر' }}</span>
+            {{-- ===== User account dropdown menu ===== --}}
+            @php
+                $zpUser    = auth()->user();
+                $zpName    = $zpUser->name ?: 'کاربر';
+                $zpInitial = \Illuminate\Support\Str::upper(mb_substr($zpName, 0, 1));
+            @endphp
+            <div class="zp-um-wrap shrink-0" id="zp-user-menuwrap">
+                <button type="button" id="zp-user-btn" class="zp-um-trigger" aria-haspopup="true" aria-expanded="false" aria-label="منوی حساب کاربری">
+                    <svg class="zp-um-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="m6 9 6 6 6-6"/></svg>
+                    <span class="zp-um-info hidden sm:block">
+                        <span class="zp-um-hi block">خوش آمدید</span>
+                        <span class="zp-um-nm block">{{ $zpName }}</span>
+                    </span>
+                    <span class="zp-um-av">{{ $zpInitial }}</span>
+                </button>
+
+                <div class="zp-um-menu hidden" id="zp-user-menu" role="menu" aria-labelledby="zp-user-btn">
+                    {{-- Identity --}}
+                    <div class="zp-um-head">
+                        <span class="zp-um-av zp-um-av-lg">{{ $zpInitial }}</span>
+                        <div class="min-w-0">
+                            <div class="zp-um-nm truncate">{{ $zpName }}</div>
+                            <div class="zp-um-sub">#{{ $zpUser->account_id }}</div>
+                        </div>
+                    </div>
+
+                    {{-- Wallet balance (real) --}}
+                    <a href="{{ route('dashboard.wallet') }}" class="zp-um-chip" role="menuitem">
+                        <span class="l">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12V7H5a2 2 0 0 1 0-4h14v4M3 5v14a2 2 0 0 0 2 2h16v-5M18 12a2 2 0 0 0 0 4h4v-4z"/></svg>
+                            موجودی کیف پول
+                        </span>
+                        <span class="v">{{ number_format((int) $zpUser->wallet_balance_toman) }} <small>ت</small></span>
+                    </a>
+
+                    {{-- Items --}}
+                    <div class="zp-um-items">
+                        <a href="{{ route('dashboard.profile') }}" class="zp-um-item" role="menuitem">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+                            پروفایل من
+                            <svg class="ar" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m15 18-6-6 6-6"/></svg>
+                        </a>
+                        <a href="{{ route('dashboard.wallet') }}" class="zp-um-item" role="menuitem">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12V7H5a2 2 0 0 1 0-4h14v4M3 5v14a2 2 0 0 0 2 2h16v-5M18 12a2 2 0 0 0 0 4h4v-4z"/></svg>
+                            کیف پول و شارژ
+                            <svg class="ar" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m15 18-6-6 6-6"/></svg>
+                        </a>
+                        <a href="{{ route('dashboard.services') }}" class="zp-um-item" role="menuitem">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>
+                            سرویس‌های من
+                            <svg class="ar" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m15 18-6-6 6-6"/></svg>
+                        </a>
+
+                        <div class="zp-um-sep"></div>
+
+                        <form method="POST" action="{{ route('logout') }}">
+                            @csrf
+                            <button type="submit" class="zp-um-item zp-um-danger" role="menuitem">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/></svg>
+                                خروج از حساب
+                            </button>
+                        </form>
+                    </div>
+                </div>
             </div>
         </header>
         <main class="flex-1 p-4 lg:p-6">
@@ -199,6 +335,24 @@
     mqDesktop.addEventListener('change', function (e) {
         if (e.matches) { back && back.classList.add('hidden'); document.body.classList.remove('overflow-hidden'); }
     });
+})();
+
+/* User account dropdown menu — click toggles, outside-click and Esc close it. */
+(function () {
+    var wrap = document.getElementById('zp-user-menuwrap'),
+        btn  = document.getElementById('zp-user-btn'),
+        menu = document.getElementById('zp-user-menu');
+    if (!wrap || !btn || !menu) return;
+
+    function openMenu()  { menu.classList.remove('hidden'); btn.setAttribute('aria-expanded', 'true'); }
+    function closeMenu() { menu.classList.add('hidden');    btn.setAttribute('aria-expanded', 'false'); }
+
+    btn.addEventListener('click', function (e) {
+        e.stopPropagation();
+        menu.classList.contains('hidden') ? openMenu() : closeMenu();
+    });
+    document.addEventListener('click', function (e) { if (!wrap.contains(e.target)) closeMenu(); });
+    document.addEventListener('keydown', function (e) { if (e.key === 'Escape') closeMenu(); });
 })();
 </script>
 @stack('scripts')
