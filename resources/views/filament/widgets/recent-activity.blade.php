@@ -1,10 +1,19 @@
 {{--
-    «فعالیت اخیر» dashboard widget. Wrapped in <x-filament::section> so it picks
-    up the admin shell's card chrome (radius / soft shadow / border) automatically.
-    Colours come only from the --zp-* theme variables (light/dark aware); the
-    scoped .zp-act* classes are admin-only and never leak elsewhere. RTL-safe via
-    logical properties.
+    «فعالیت اخیر» dashboard widget.
+
+    The view MUST root itself in <x-filament-widgets::widget>: that wrapper is
+    what turns the widget's $columnSpan into grid-column classes on the
+    dashboard's widgets grid. Without it, the Livewire root (the bare section)
+    becomes a 1-column grid child (~162px on a 6-column dashboard), the item row
+    shrinks to icon+time width, .zp-act-body collapses to 0 and its overflowing
+    text paints over the time — the exact "interleaved words" bug.
+
+    Inside it, <x-filament::section> supplies the card chrome (radius / shadow /
+    border). Colours come only from the --zp-* theme variables (light/dark
+    aware); the scoped .zp-act* classes are admin-only. RTL-safe via logical
+    properties.
 --}}
+<x-filament-widgets::widget class="fi-wi-recent-activity">
 <x-filament::section>
     <x-slot name="heading">فعالیت اخیر</x-slot>
 
@@ -54,3 +63,4 @@
         .zp-act-empty { padding: 1rem 0; font-size: .8rem; color: var(--zp-text-muted); }
     </style>
 </x-filament::section>
+</x-filament-widgets::widget>
