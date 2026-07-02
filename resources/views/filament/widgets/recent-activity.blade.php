@@ -41,14 +41,14 @@
             background: color-mix(in srgb, var(--zp-act-c) 13%, transparent);
         }
         .zp-act-svg { width: 1rem; height: 1rem; }
-        .zp-act-body { min-width: 0; }
-        .zp-act-title { font-size: .8rem; font-weight: 600; color: var(--zp-text); }
+        .zp-act-body { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: .1rem; }
+        .zp-act-title { font-size: .8rem; font-weight: 600; color: var(--zp-text); line-height: 1.4; }
         .zp-act-meta {
-            font-size: .74rem; color: var(--zp-text-muted);
+            font-size: .74rem; color: var(--zp-text-muted); line-height: 1.4;
             overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
         }
         .zp-act-time {
-            margin-inline-start: auto; flex-shrink: 0;
+            flex-shrink: 0; align-self: flex-start; padding-top: .1rem;
             font-size: .7rem; color: var(--zp-text-muted); white-space: nowrap;
         }
         .zp-act-empty { padding: 1rem 0; font-size: .8rem; color: var(--zp-text-muted); }
