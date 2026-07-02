@@ -115,7 +115,7 @@ class VpnPanel extends Model
 
     /**
      * The API base, combining base_url + panel_path with safe slash handling.
-     * e.g. https://host:2053 + /M.hosein1384 → https://host:2053/M.hosein1384
+     * e.g. https://host:2053 + /xui-panel-path → https://host:2053/xui-panel-path
      */
     public function apiBaseUrl(): string
     {

@@ -26,7 +26,7 @@ class SanaeiPanelTest extends TestCase
             'name'        => 'سنایی تست',
             'type'        => VpnPanel::TYPE_SANAEI_XUI,
             'base_url'    => 'https://panel.example.com:2053',
-            'panel_path'  => '/M.hosein1384',
+            'panel_path'  => '/xui-panel-path',
             'auth_method' => VpnPanel::AUTH_API_TOKEN,
             'api_token'   => 'secret-token-123',
             'default_inbound_id' => 1,
@@ -99,11 +99,11 @@ class SanaeiPanelTest extends TestCase
     {
         $client = new Sanaei3xUiClient($this->panel());
         $this->assertSame(
-            'https://panel.example.com:2053/M.hosein1384/panel/api/inbounds/list',
+            'https://panel.example.com:2053/xui-panel-path/panel/api/inbounds/list',
             $client->url('/panel/api/inbounds/list'),
         );
         // panel_path is preserved and not stripped.
-        $this->assertStringContainsString('/M.hosein1384/', $client->url('panel/api/inbounds/list'));
+        $this->assertStringContainsString('/xui-panel-path/', $client->url('panel/api/inbounds/list'));
     }
 
     // ── Auth: token + login ──────────────────────────────────────────────────
@@ -115,7 +115,7 @@ class SanaeiPanelTest extends TestCase
         $this->assertTrue((new Sanaei3xUiClient($this->panel()))->testConnection());
 
         Http::assertSent(fn ($request) => $request->hasHeader('Authorization', 'Bearer secret-token-123')
-            && str_contains($request->url(), '/M.hosein1384/panel/api/inbounds/list'));
+            && str_contains($request->url(), '/xui-panel-path/panel/api/inbounds/list'));
     }
 
     public function test_test_connection_with_api_login_fallback(): void
@@ -127,7 +127,7 @@ class SanaeiPanelTest extends TestCase
 
         $panel = $this->panel(['auth_method' => VpnPanel::AUTH_API_LOGIN, 'api_token' => null, 'username' => 'admin', 'password' => 'pass']);
         $this->assertTrue((new Sanaei3xUiClient($panel))->testConnection());
-        Http::assertSent(fn ($r) => str_contains($r->url(), '/M.hosein1384/login'));
+        Http::assertSent(fn ($r) => str_contains($r->url(), '/xui-panel-path/login'));
     }
 
     public function test_get_inbounds_parses_list(): void
@@ -419,7 +419,7 @@ class SanaeiPanelTest extends TestCase
                 'name'        => 'سنایی تست فرم',
                 'type'        => VpnPanel::TYPE_SANAEI_XUI,
                 'base_url'    => 'https://panel.example.com:2053',
-                'panel_path'  => '/M.hosein1384',
+                'panel_path'  => '/xui-panel-path',
                 'auth_method' => VpnPanel::AUTH_API_TOKEN,
                 'api_token'   => 'tok-abc',
                 'default_inbound_id' => 1,
@@ -429,7 +429,7 @@ class SanaeiPanelTest extends TestCase
 
         $panel = VpnPanel::where('name', 'سنایی تست فرم')->firstOrFail();
         $this->assertSame(VpnPanel::TYPE_SANAEI_XUI, $panel->type);
-        $this->assertSame('/M.hosein1384', $panel->panel_path);
+        $this->assertSame('/xui-panel-path', $panel->panel_path);
         $this->assertSame('tok-abc', $panel->api_token);
     }
 
