@@ -37,7 +37,8 @@ class VpnPanelResource extends Resource
                     ->label('نوع پنل')
                     ->options(VpnPanel::allTypes())
                     ->required()
-                    ->default(VpnPanel::TYPE_MARZBAN),
+                    ->default(VpnPanel::TYPE_MARZBAN)
+                    ->live(),
 
                 Forms\Components\TextInput::make('base_url')
                     ->label('آدرس پایه (Base URL)')
@@ -56,14 +57,16 @@ class VpnPanelResource extends Resource
 
                 Forms\Components\TextInput::make('username')
                     ->label('نام کاربری ادمین')
-                    ->nullable(),
+                    ->nullable()
+                    ->visible(fn (Forms\Get $get) => $get('type') === VpnPanel::TYPE_MARZBAN),
 
                 Forms\Components\TextInput::make('password')
                     ->label('رمز عبور ادمین')
                     ->password()
                     ->nullable()
                     ->revealable()
-                    ->helperText('ذخیره شده به صورت رمزگذاری‌شده'),
+                    ->helperText('ذخیره شده به صورت رمزگذاری‌شده')
+                    ->visible(fn (Forms\Get $get) => $get('type') === VpnPanel::TYPE_MARZBAN),
 
                 Forms\Components\Toggle::make('is_active')
                     ->label('فعال')

@@ -10,8 +10,10 @@ use App\Services\VpnPanels\MarzbanProvider;
 use App\Services\VpnPanels\PanelProviderFactory;
 use App\Services\VpnPanels\Sanaei\Sanaei3xUiClient;
 use App\Services\VpnPanels\Sanaei3xUiProvider;
+use App\Filament\Resources\VpnPanelResource\Pages\CreateVpnPanel;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
+use Livewire\Livewire;
 use Tests\TestCase;
 
 class SanaeiPanelTest extends TestCase
@@ -359,6 +361,76 @@ class SanaeiPanelTest extends TestCase
         $this->assertSame(\App\Models\Order::PAYMENT_PAID, $order->fresh()->payment_status);
         $this->assertSame(1, UserService::where('order_id', $order->id)->count());
         $this->assertSame(UserService::PROVISION_FAILED, UserService::where('order_id', $order->id)->value('provision_status'));
+    }
+
+    // ── Admin form: dynamic per-type fields ──────────────────────────────────
+
+    private function admin(): User
+    {
+        return User::factory()->create(['is_admin' => true, 'email_verified_at' => now()]);
+    }
+
+    public function test_form_shows_marzban_fields_and_hides_sanaei_section_for_marzban(): void
+    {
+        Livewire::actingAs($this->admin())
+            ->test(CreateVpnPanel::class)
+            ->fillForm(['type' => VpnPanel::TYPE_MARZBAN])
+            ->assertFormFieldIsVisible('username')
+            ->assertFormFieldIsVisible('password')
+            ->assertFormFieldIsHidden('panel_path')
+            ->assertFormFieldIsHidden('api_token');
+    }
+
+    public function test_form_hides_marzban_fields_and_shows_sanaei_section_for_sanaei(): void
+    {
+        Livewire::actingAs($this->admin())
+            ->test(CreateVpnPanel::class)
+            ->fillForm(['type' => VpnPanel::TYPE_SANAEI_XUI])
+            ->assertFormFieldIsHidden('username')
+            ->assertFormFieldIsHidden('password')
+            ->assertFormFieldIsVisible('panel_path')
+            ->assertFormFieldIsVisible('api_token');
+    }
+
+    public function test_form_saves_marzban_panel_with_its_own_fields(): void
+    {
+        Livewire::actingAs($this->admin())
+            ->test(CreateVpnPanel::class)
+            ->fillForm([
+                'name'     => 'مرزبان تست',
+                'type'     => VpnPanel::TYPE_MARZBAN,
+                'base_url' => 'https://m.example.com',
+                'username' => 'admin',
+                'password' => 'pass',
+            ])
+            ->call('create')
+            ->assertHasNoFormErrors();
+
+        $panel = VpnPanel::where('name', 'مرزبان تست')->firstOrFail();
+        $this->assertSame(VpnPanel::TYPE_MARZBAN, $panel->type);
+        $this->assertSame('admin', $panel->username);
+    }
+
+    public function test_form_saves_sanaei_panel_with_its_own_fields(): void
+    {
+        Livewire::actingAs($this->admin())
+            ->test(CreateVpnPanel::class)
+            ->fillForm([
+                'name'        => 'سنایی تست فرم',
+                'type'        => VpnPanel::TYPE_SANAEI_XUI,
+                'base_url'    => 'https://panel.example.com:2053',
+                'panel_path'  => '/M.hosein1384',
+                'auth_method' => VpnPanel::AUTH_API_TOKEN,
+                'api_token'   => 'tok-abc',
+                'default_inbound_id' => 1,
+            ])
+            ->call('create')
+            ->assertHasNoFormErrors();
+
+        $panel = VpnPanel::where('name', 'سنایی تست فرم')->firstOrFail();
+        $this->assertSame(VpnPanel::TYPE_SANAEI_XUI, $panel->type);
+        $this->assertSame('/M.hosein1384', $panel->panel_path);
+        $this->assertSame('tok-abc', $panel->api_token);
     }
 
     // ── Capability gating ────────────────────────────────────────────────────
