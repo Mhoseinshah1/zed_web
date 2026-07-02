@@ -52,7 +52,7 @@ class VpnPanelResource extends Resource
                     ->url()
                     ->nullable()
                     ->placeholder('https://panel.example.com:2053/docs')
-                    ->helperText('مثال: https://panel.staygreen.top/docs')
+                    ->helperText('مثال: https://panel.example.com:2053/docs')
                     ->columnSpanFull(),
 
                 Forms\Components\TextInput::make('username')
@@ -84,7 +84,7 @@ class VpnPanelResource extends Resource
                 ->schema([
                     Forms\Components\TextInput::make('panel_path')
                         ->label('مسیر پنل')
-                        ->placeholder('/M.hosein1384')
+                        ->placeholder('/xui-panel-path')
                         ->helperText('مسیر اختصاصی پنل که در آدرس ورود استفاده می‌شود.'),
 
                     Forms\Components\Select::make('auth_method')
