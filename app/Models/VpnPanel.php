@@ -10,6 +10,7 @@ class VpnPanel extends Model
     const TYPE_MARZBAN    = 'marzban';
     const TYPE_XUI        = 'xui';
     const TYPE_SANAEI_XUI = 'sanaei_3xui';
+    const TYPE_REMNAWAVE  = 'remnawave';
     const TYPE_OTHER      = 'other';
 
     // 3X-UI / Sanaei authentication methods.
@@ -28,6 +29,7 @@ class VpnPanel extends Model
         'token',
         'api_token',
         'default_inbound_id',
+        'default_squad_uuid',
         'subscription_base_url',
         'subscription_path',
         'verify_ssl',
@@ -113,6 +115,11 @@ class VpnPanel extends Model
         return $this->type === self::TYPE_MARZBAN;
     }
 
+    public function isRemnawave(): bool
+    {
+        return $this->type === self::TYPE_REMNAWAVE;
+    }
+
     /**
      * The API base, combining base_url + panel_path with safe slash handling.
      * e.g. https://host:2053 + /xui-panel-path → https://host:2053/xui-panel-path
@@ -156,6 +163,7 @@ class VpnPanel extends Model
             self::TYPE_MARZBAN    => 'Marzban',
             self::TYPE_XUI        => 'X-UI',
             self::TYPE_SANAEI_XUI => '3X-UI (Sanaei)',
+            self::TYPE_REMNAWAVE  => 'Remnawave',
             self::TYPE_OTHER      => 'سایر',
             default               => $this->type,
         };
@@ -167,6 +175,7 @@ class VpnPanel extends Model
             self::TYPE_MARZBAN    => 'Marzban',
             self::TYPE_XUI        => 'X-UI',
             self::TYPE_SANAEI_XUI => '3X-UI (Sanaei)',
+            self::TYPE_REMNAWAVE  => 'Remnawave',
             self::TYPE_OTHER      => 'سایر',
         ];
     }

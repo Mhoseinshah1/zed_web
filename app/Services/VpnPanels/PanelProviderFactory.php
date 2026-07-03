@@ -16,6 +16,7 @@ class PanelProviderFactory
     {
         return match ($type) {
             VpnPanel::TYPE_SANAEI_XUI => new Sanaei3xUiProvider(),
+            VpnPanel::TYPE_REMNAWAVE  => new RemnawaveProvider(),
             default                   => new MarzbanProvider(),
         };
     }
@@ -33,6 +34,6 @@ class PanelProviderFactory
 
     public static function isSupported(string $type): bool
     {
-        return in_array($type, [VpnPanel::TYPE_MARZBAN, VpnPanel::TYPE_SANAEI_XUI], true);
+        return in_array($type, [VpnPanel::TYPE_MARZBAN, VpnPanel::TYPE_SANAEI_XUI, VpnPanel::TYPE_REMNAWAVE], true);
     }
 }
