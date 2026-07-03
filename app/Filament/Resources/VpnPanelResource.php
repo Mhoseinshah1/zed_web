@@ -140,6 +140,32 @@ class VpnPanelResource extends Resource
                         ->rows(2)->columnSpanFull(),
                 ])->columns(2),
 
+            Forms\Components\Section::make('تنظیمات Remnawave')
+                ->description('فقط برای پنل‌های نوع Remnawave. احراز هویت با توکن JWT از مسیر Remnawave Settings → API Tokens انجام می‌شود.')
+                ->visible(fn (Forms\Get $get) => $get('type') === VpnPanel::TYPE_REMNAWAVE)
+                ->schema([
+                    Forms\Components\TextInput::make('api_token')
+                        ->label('توکن API (JWT)')
+                        ->password()->revealable()
+                        ->required(fn (Forms\Get $get) => $get('type') === VpnPanel::TYPE_REMNAWAVE)
+                        ->helperText('ذخیره به‌صورت رمزگذاری‌شده. در جدول‌ها نمایش داده نمی‌شود.')
+                        ->columnSpanFull(),
+
+                    Forms\Components\TextInput::make('default_squad_uuid')
+                        ->label('شناسه Squad پیش‌فرض')
+                        ->placeholder('00000000-0000-0000-0000-000000000000')
+                        ->helperText('کاربران جدید به این Internal Squad اضافه می‌شوند.'),
+
+                    Forms\Components\Toggle::make('verify_ssl')
+                        ->label('بررسی SSL')
+                        ->default(true)
+                        ->helperText('برای پنل‌های با گواهی self-signed می‌توانید غیرفعال کنید.'),
+
+                    Forms\Components\TextInput::make('timeout_seconds')
+                        ->label('زمان انتظار اتصال (ثانیه)')
+                        ->numeric()->default(15)->minValue(1)->maxValue(120),
+                ])->columns(2),
+
             Forms\Components\Section::make('وضعیت اتصال')
                 ->schema([
                     Forms\Components\Placeholder::make('last_checked_at')
@@ -334,6 +360,28 @@ class VpnPanelResource extends Resource
                         } catch (\Throwable $e) {
                             return new \Illuminate\Support\HtmlString('<p style="color:#f43f5e">دریافت لیست Inboundها ناموفق بود.</p>');
                         }
+                    }),
+
+                // ── Remnawave: test connection via official API ──
+                Tables\Actions\Action::make('remnawave_test_connection')
+                    ->label('تست اتصال')
+                    ->icon('heroicon-o-signal')
+                    ->color('info')
+                    ->visible(fn (VpnPanel $record) => $record->type === VpnPanel::TYPE_REMNAWAVE)
+                    ->action(function (VpnPanel $record): void {
+                        $result = (new \App\Services\VpnPanels\RemnawaveProvider())->testConnection($record);
+                        $record->update([
+                            'last_checked_at'        => now(),
+                            'last_error'             => $result->ok ? null : $result->message,
+                            'last_health_checked_at' => now(),
+                            'health_status'          => $result->ok ? VpnPanel::HEALTH_ONLINE : VpnPanel::HEALTH_OFFLINE,
+                            'health_error'           => $result->ok ? null : $result->message,
+                        ]);
+                        Notification::make()
+                            ->title($result->ok ? 'اتصال موفق' : 'اتصال ناموفق')
+                            ->body($result->message)
+                            ->{$result->ok ? 'success' : 'danger'}()
+                            ->send();
                     }),
 
                 Tables\Actions\Action::make('test_connection')
