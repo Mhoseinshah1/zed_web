@@ -113,6 +113,17 @@ class PlanResource extends Resource
                     ->label('ترتیب نمایش')
                     ->numeric()
                     ->default(0),
+
+                Forms\Components\Select::make('vpn_panel_id')
+                    ->label('سرور / پنل')
+                    ->options(fn () => \App\Models\VpnPanel::where('is_active', true)
+                        ->get()
+                        ->mapWithKeys(fn ($p) => [$p->id => $p->name . ' (' . $p->typeLabel() . ')'])
+                        ->all())
+                    ->searchable()
+                    ->native(false)
+                    ->placeholder('پنل پیش‌فرض')
+                    ->helperText('اگر خالی باشد، سرویس روی پنل پیش‌فرض ساخته می‌شود. جزئیات پنل (Inbound سنایی، Squad رمناویو) روی خود پنل تنظیم می‌شود.'),
             ])->columns(2),
 
             Forms\Components\Section::make('وضعیت')->schema([
