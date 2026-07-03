@@ -44,6 +44,8 @@ class ProvisioningService
                 'order_id'         => $order->id,
                 'plan_id'          => $order->plan_id,
                 'plan_name'        => $order->plan_name,
+                // Pin the plan's chosen panel (null = default fallback below).
+                'vpn_panel_id'     => $order->plan?->vpn_panel_id,
                 'traffic_total_gb' => $order->traffic_gb,
                 'traffic_used_gb'  => 0,
                 'duration_days'    => $order->duration_days,
@@ -81,12 +83,17 @@ class ProvisioningService
         ]);
 
         try {
-            // ── Sanaei / 3X-UI panels: provision via the 3X-UI provider ──
-            if ($panel->isSanaei()) {
+            // ── Provider-based panels (Sanaei / 3X-UI, Remnawave): provision
+            //    via the matching VpnPanelProvider ──
+            if ($panel->isSanaei() || $panel->isRemnawave()) {
                 $service->vpn_panel_id = $panel->id;
                 $service->save();
 
-                $result = (new \App\Services\VpnPanels\Sanaei3xUiProvider())->provision($service->fresh());
+                $provider = $panel->isSanaei()
+                    ? new \App\Services\VpnPanels\Sanaei3xUiProvider()
+                    : new \App\Services\VpnPanels\RemnawaveProvider();
+
+                $result = $provider->provision($service->fresh());
                 if (! $result->ok) {
                     throw new \RuntimeException($result->message);
                 }

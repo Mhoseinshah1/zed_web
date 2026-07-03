@@ -17,6 +17,7 @@ class Plan extends Model
         'price_toman', 'old_price_toman', 'is_active', 'is_featured',
         'is_economic', 'sort_order', 'badge', 'badge_text', 'badge_type',
         'category_id',
+        'vpn_panel_id',
         'renewal_enabled', 'renewal_price', 'renewal_duration_days',
         'renewal_cashback_enabled', 'renewal_cashback_type', 'renewal_cashback_value',
     ];
@@ -42,6 +43,15 @@ class Plan extends Model
     public function category(): \Illuminate\Database\Eloquent\Relations\BelongsTo
     {
         return $this->belongsTo(PlanCategory::class, 'category_id');
+    }
+
+    /**
+     * The VPN panel this plan provisions on. Null = use the default panel
+     * (unchanged legacy behaviour).
+     */
+    public function vpnPanel(): \Illuminate\Database\Eloquent\Relations\BelongsTo
+    {
+        return $this->belongsTo(VpnPanel::class, 'vpn_panel_id');
     }
 
     public function orders(): HasMany

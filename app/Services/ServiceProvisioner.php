@@ -24,6 +24,8 @@ class ServiceProvisioner
                 'order_id'         => $order->id,
                 'plan_id'          => $order->plan_id,
                 'plan_name'        => $order->plan_name,
+                // Pin the plan's chosen panel (null = default fallback below).
+                'vpn_panel_id'     => $order->plan?->vpn_panel_id,
                 'traffic_total_gb' => $order->traffic_gb,
                 'traffic_used_gb'  => 0,
                 'duration_days'    => $order->duration_days,
@@ -31,11 +33,15 @@ class ServiceProvisioner
                 'provision_status' => UserService::PROVISION_MANUAL_REQUIRED,
             ]);
 
-            // Dispatch Marzban provisioning if a default active panel is configured
-            $panel = VpnPanel::where('type', VpnPanel::TYPE_MARZBAN)
-                ->where('is_active', true)
-                ->where('is_default', true)
-                ->first();
+            // Resolve the target panel: the plan's chosen panel first, then the
+            // default Marzban panel, then any active default panel (mirrors
+            // ProvisioningService so all panel types are honoured).
+            $panel = ($service->vpn_panel_id ? VpnPanel::find($service->vpn_panel_id) : null)
+                ?? VpnPanel::where('type', VpnPanel::TYPE_MARZBAN)
+                       ->where('is_active', true)
+                       ->where('is_default', true)
+                       ->first()
+                ?? VpnPanel::where('is_active', true)->where('is_default', true)->first();
 
             if ($panel) {
                 // Transition order to "provisioning" — job will update to completed/provisioning_failed
@@ -46,7 +52,7 @@ class ServiceProvisioner
                     'vpn_panel_id'    => $panel->id,
                     'action'          => 'create_placeholder_service',
                     'status'          => 'success',
-                    'message'         => "Dispatching Marzban provisioning via panel: {$panel->name}",
+                    'message'         => "Dispatching provisioning via panel: {$panel->name} ({$panel->type})",
                 ]);
 
                 ProvisionMarzbanServiceJob::dispatch($service->id, $panel->id)->afterCommit();
@@ -55,7 +61,7 @@ class ServiceProvisioner
                     'user_service_id' => $service->id,
                     'action'          => 'create_placeholder_service',
                     'status'          => 'skipped',
-                    'message'         => 'No active default Marzban panel found. Manual provisioning required.',
+                    'message'         => 'No active default panel found. Manual provisioning required.',
                 ]);
             }
 
