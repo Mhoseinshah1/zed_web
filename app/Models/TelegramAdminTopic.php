@@ -46,10 +46,10 @@ class TelegramAdminTopic extends Model
             ['key' => 'services',       'title' => 'سرویس‌ها',            'description' => 'ساخت، تمدید، حجم/زمان اضافه، سینک'],
             ['key' => 'panels',         'title' => 'پنل‌های VPN',         'description' => 'قطعی/بازیابی پنل، خطای احراز، سلامت'],
             ['key' => 'errors',         'title' => 'خطاها و عملیات ناموفق', 'description' => 'خطاهای اعمال پرداخت/ساخت/تمدید و تلاش مجدد'],
-            ['key' => 'daily_report',   'title' => 'گزارش روزانه',        'description' => 'خلاصه روزانه (فاز بعد)'],
+            ['key' => 'daily_report',   'title' => 'گزارش روزانه',        'description' => 'خلاصه روزانه فروش و عملیات'],
             ['key' => 'representatives','title' => 'نمایندگان',           'description' => 'درخواست، تایید/رد، پورسانت'],
             ['key' => 'admin',          'title' => 'تغییرات ادمین',       'description' => 'تغییرات مهم تنظیمات (درگاه، پنل، کیف پول)'],
-            ['key' => 'backup_server',  'title' => 'بکاپ و سرور',         'description' => 'وضعیت بکاپ سرور (فاز بعد)'],
+            ['key' => 'backup_server',  'title' => 'بکاپ و سرور',         'description' => 'گزارش و وضعیت بکاپ سرور'],
             ['key' => 'system',         'title' => 'اعلان‌های سیستم',     'description' => 'هشدارهای بحرانی سیستم'],
         ];
     }

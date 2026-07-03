@@ -48,6 +48,8 @@ class BackupSettingsPage extends Page implements HasForms, HasActions
         $this->form->fill([
             'backup_enabled'                 => $s->enabled(),
             'backup_auto_enabled'            => $s->autoEnabled(),
+            'backup_schedule_mode'           => $s->scheduleMode(),
+            'backup_interval_minutes'        => $s->intervalMinutes(),
             'backup_schedule_time'           => $s->scheduleTime(),
             'backup_retention_days'          => $s->retentionDays(),
             'backup_storage_path'            => (string) SiteSetting::get('backup_storage_path', ''),
@@ -71,15 +73,39 @@ class BackupSettingsPage extends Page implements HasForms, HasActions
         return BackupLog::latestLog();
     }
 
+    /** Next automatic run for the status panel (null = auto backup off). */
+    public function nextRunAt(): ?\Illuminate\Support\Carbon
+    {
+        return app(\App\Services\Backup\BackupScheduler::class)->nextRunAt();
+    }
+
     public function form(Form $form): Form
     {
         return $form->schema([
             Forms\Components\Section::make('فعال‌سازی و زمان‌بندی')->schema([
-                Forms\Components\Toggle::make('backup_enabled')->label('فعال بودن بکاپ')->default(false),
-                Forms\Components\Toggle::make('backup_auto_enabled')->label('بکاپ خودکار زمان‌بندی‌شده')->default(false),
-                Forms\Components\TextInput::make('backup_schedule_time')->label('ساعت بکاپ روزانه (HH:MM)')->default('03:00'),
-                Forms\Components\TextInput::make('backup_retention_days')->label('نگه‌داری (روز)')->numeric()->minValue(1)->default(7),
-                Forms\Components\TextInput::make('backup_storage_path')->label('مسیر ذخیره (اختیاری)')->placeholder(storage_path('app/backups'))->columnSpanFull(),
+                Forms\Components\Toggle::make('backup_enabled')->label('فعال بودن سیستم بکاپ')->default(false)
+                    ->helperText('کلید اصلی. در حالت غیرفعال، بکاپ دستی و خودکار و دستور تلگرام هیچ‌کدام اجرا نمی‌شوند.'),
+                Forms\Components\Toggle::make('backup_auto_enabled')->label('فعال بودن بکاپ خودکار')->default(false)
+                    ->helperText('فقط بکاپ زمان‌بندی‌شده را کنترل می‌کند؛ بکاپ دستی همچنان ممکن است.'),
+
+                Forms\Components\Select::make('backup_schedule_mode')->label('نوع زمان‌بندی بکاپ')
+                    ->options([
+                        BackupSettings::MODE_FIXED_TIME => 'در ساعت مشخص (روزانه)',
+                        BackupSettings::MODE_INTERVAL   => 'هر چند دقیقه/ساعت یک‌بار',
+                    ])
+                    ->default(BackupSettings::MODE_FIXED_TIME)->native(false)->live(),
+
+                Forms\Components\TextInput::make('backup_schedule_time')->label('ساعت اجرای بکاپ (HH:MM)')->default('03:00')
+                    ->visible(fn (Forms\Get $get) => $get('backup_schedule_mode') !== BackupSettings::MODE_INTERVAL),
+
+                Forms\Components\TextInput::make('backup_interval_minutes')->label('فاصله اجرای بکاپ (دقیقه)')
+                    ->numeric()->minValue($this->settings()->minIntervalMinutes())->default(60)
+                    ->visible(fn (Forms\Get $get) => $get('backup_schedule_mode') === BackupSettings::MODE_INTERVAL)
+                    ->helperText('مثال: ۵، ۱۵، ۳۰، ۶۰، ۳۶۰، ۷۲۰، ۱۴۴۰. حداقل ' . $this->settings()->minIntervalMinutes()
+                        . ' دقیقه. بکاپ با فاصله زمانی خیلی کوتاه ممکن است فشار زیادی به سرور وارد کند.'),
+
+                Forms\Components\TextInput::make('backup_retention_days')->label('روزهای نگهداری بکاپ')->numeric()->minValue(1)->default(7),
+                Forms\Components\TextInput::make('backup_storage_path')->label('مسیر ذخیره بکاپ (اختیاری)')->placeholder(storage_path('app/backups'))->columnSpanFull(),
             ])->columns(2),
 
             Forms\Components\Section::make('محتوای بکاپ')->schema([
@@ -130,6 +156,13 @@ class BackupSettingsPage extends Page implements HasForms, HasActions
         // Sensitive-file exclusion is always enforced.
         SiteSetting::set('backup_exclude_sensitive_files', 'true');
 
+        $mode = ($data['backup_schedule_mode'] ?? '') === BackupSettings::MODE_INTERVAL
+            ? BackupSettings::MODE_INTERVAL : BackupSettings::MODE_FIXED_TIME;
+        SiteSetting::set('backup_schedule_mode', $mode);
+        SiteSetting::set('backup_interval_minutes', (int) max(
+            $this->settings()->minIntervalMinutes(),
+            (int) ($data['backup_interval_minutes'] ?? 60),
+        ));
         SiteSetting::set('backup_schedule_time', $this->validTime($data['backup_schedule_time'] ?? '03:00', '03:00'));
         SiteSetting::set('backup_retention_days', (int) max(1, (int) ($data['backup_retention_days'] ?? 7)));
         SiteSetting::set('backup_storage_path', (string) ($data['backup_storage_path'] ?? ''));
@@ -151,11 +184,38 @@ class BackupSettingsPage extends Page implements HasForms, HasActions
             ->requiresConfirmation()
             ->action(function () {
                 if (! $this->settings()->enabled()) {
-                    Notification::make()->title('ابتدا بکاپ را فعال و ذخیره کنید.')->warning()->send();
+                    Notification::make()->title('سیستم بکاپ در حال حاضر غیرفعال است.')->warning()->send();
                     return;
                 }
                 RunBackupJob::dispatch(BackupLog::TYPE_MANUAL);
                 Notification::make()->title('بکاپ در صف اجرا قرار گرفت. نتیجه در تاپیک تلگرام ارسال می‌شود.')->success()->send();
+            });
+    }
+
+    public function cleanupOldAction(): Action
+    {
+        return Action::make('cleanupOld')
+            ->label('پاکسازی بکاپ‌های قدیمی')->color('warning')->icon('heroicon-o-trash')
+            ->requiresConfirmation()
+            ->modalDescription('بکاپ‌های قدیمی‌تر از دوره نگهداری حذف می‌شوند.')
+            ->action(function () {
+                $removed = app(\App\Services\Backup\BackupService::class)->cleanupOld();
+                Notification::make()->title("پاکسازی انجام شد ({$removed} فایل حذف شد).")->success()->send();
+            });
+    }
+
+    public function sendTestReportAction(): Action
+    {
+        return Action::make('sendTestReport')
+            ->label('ارسال گزارش تست به تلگرام')->color('gray')->icon('heroicon-o-paper-airplane')
+            ->action(function () {
+                $last = BackupLog::latestLog();
+                $text = $last
+                    ? "💾 آخرین بکاپ: {$last->status} — " . $last->updated_at->format('Y/m/d H:i')
+                    : '💾 هنوز بکاپی انجام نشده است.';
+                app(\App\Services\Telegram\TelegramAdminNotifier::class)
+                    ->send('backup_status', 'backup_server', 'وضعیت بکاپ', $text);
+                Notification::make()->title('گزارش تست به تلگرام ارسال شد.')->success()->send();
             });
     }
 

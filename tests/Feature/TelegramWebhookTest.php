@@ -104,7 +104,14 @@ class TelegramWebhookTest extends TestCase
         Http::fake(['*' => Http::response(['ok' => true, 'result' => ['message_id' => 1]], 200)]);
 
         $this->callWebhook($this->update('/help@ZedBot'))->assertOk();
-        Http::assertSent(fn ($req) => str_contains((string) ($req['text'] ?? ''), 'دستورهای بات'));
+        Http::assertSent(function ($req) {
+            $text = (string) ($req['text'] ?? '');
+            // Backup commands are live now — help must describe them, not "فاز بعد".
+            return str_contains($text, 'دستورهای بات')
+                && str_contains($text, '/backup — اجرای بکاپ دستی')
+                && str_contains($text, '/backup_status — وضعیت آخرین بکاپ')
+                && ! str_contains($text, 'فاز بعد');
+        });
     }
 
     public function test_finance_today_returns_today_numbers(): void
@@ -141,6 +148,25 @@ class TelegramWebhookTest extends TestCase
 
         $this->callWebhook($this->update('/backup'))->assertOk();
         Http::assertSent(fn ($req) => str_contains((string) ($req['text'] ?? ''), 'غیرفعال'));
+    }
+
+    public function test_backup_status_command_returns_latest_status(): void
+    {
+        $this->configureBot();
+        Http::fake(['*' => Http::response(['ok' => true, 'result' => ['message_id' => 1]], 200)]);
+
+        \App\Models\BackupLog::create([
+            'type'       => \App\Models\BackupLog::TYPE_MANUAL,
+            'status'     => \App\Models\BackupLog::STATUS_SUCCESS,
+            'file_size'  => 3 * 1048576,
+            'started_at' => now(),
+        ]);
+
+        $this->callWebhook($this->update('/backup_status'))->assertOk();
+        Http::assertSent(function ($req) {
+            $text = (string) ($req['text'] ?? '');
+            return str_contains($text, 'وضعیت آخرین بکاپ') && str_contains($text, 'موفق');
+        });
     }
 
     public function test_secret_is_stored_encrypted_and_hidden(): void

@@ -88,8 +88,8 @@ class TelegramCommandRouter
             . "/failed_operations — عملیات ناموفق\n"
             . "/panels — سلامت پنل‌های VPN\n"
             . "/daily_report — گزارش روزانه\n"
-            . "/backup — بکاپ (فاز بعد)\n"
-            . "/backup_status — وضعیت بکاپ (فاز بعد)\n"
+            . "/backup — اجرای بکاپ دستی\n"
+            . "/backup_status — وضعیت آخرین بکاپ\n"
             . "/help — همین راهنما";
     }
 

@@ -14,11 +14,33 @@ class BackupSettings
     public function enabled(): bool        { return (bool) SiteSetting::get('backup_enabled', false); }
     public function autoEnabled(): bool    { return (bool) SiteSetting::get('backup_auto_enabled', false); }
 
+    public const MODE_FIXED_TIME = 'fixed_time';
+    public const MODE_INTERVAL   = 'interval';
+
+    /** Scheduling mode: fixed_time (daily at HH:MM) or interval (every N minutes). */
+    public function scheduleMode(): string
+    {
+        $mode = (string) SiteSetting::get('backup_schedule_mode', self::MODE_FIXED_TIME);
+        return $mode === self::MODE_INTERVAL ? self::MODE_INTERVAL : self::MODE_FIXED_TIME;
+    }
+
     /** "HH:MM" 24h schedule time. */
     public function scheduleTime(): string
     {
         $t = (string) SiteSetting::get('backup_schedule_time', '03:00');
         return preg_match('/^\d{2}:\d{2}$/', $t) ? $t : '03:00';
+    }
+
+    /** Minutes between interval-mode backups, clamped to the configured minimum. */
+    public function intervalMinutes(): int
+    {
+        return max($this->minIntervalMinutes(), (int) SiteSetting::get('backup_interval_minutes', 60));
+    }
+
+    /** Safety floor for the interval (configurable; default 5 minutes). */
+    public function minIntervalMinutes(): int
+    {
+        return max(1, (int) SiteSetting::get('backup_min_interval_minutes', 5));
     }
 
     public function retentionDays(): int
