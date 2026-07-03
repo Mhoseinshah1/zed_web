@@ -25,13 +25,13 @@ if (Schema::hasTable('site_settings') && SiteSetting::get('marzban_background_sy
         ->withoutOverlapping();
 }
 
-// Automatic server backup — only when the admin enabled auto-backup.
+// Automatic server backup — registered every minute; the command itself
+// decides whether a backup is due (fixed_time vs interval mode, last run),
+// so admins can change scheduling from the panel without touching cron.
+// Not-due runs exit immediately and cost nothing.
 if (Schema::hasTable('site_settings') && SiteSetting::get('backup_enabled', false) && SiteSetting::get('backup_auto_enabled', false)) {
-    $time = (string) SiteSetting::get('backup_schedule_time', '03:00');
-    $time = preg_match('/^\d{2}:\d{2}$/', $time) ? $time : '03:00';
-
     Schedule::command('zedproxy:backup --scheduled')
-        ->dailyAt($time)
+        ->everyMinute()
         ->withoutOverlapping()
         ->runInBackground();
 }

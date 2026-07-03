@@ -152,22 +152,34 @@ class AdminAppearanceTest extends TestCase
         $this->assertArrayHasKey('--zp-admin-ring', $vars);
     }
 
-    /** The theme panel renders, including the sandboxed live preview. */
-    public function test_theme_panel_renders(): void
+    /** The appearance settings page renders with the practical controls. */
+    public function test_appearance_settings_page_renders(): void
     {
         $admin = User::factory()->create(['is_admin' => true]);
-        $html  = $this->actingAs($admin)->get('/zed-admin/theme-studio')->getContent();
+        $html  = $this->actingAs($admin)->get('/zed-admin/appearance')->getContent();
 
-        $this->assertStringContainsString('پنل تم', $html);
-        $this->assertStringContainsString('پیش‌نمایش زنده', $html);
-        $this->assertStringContainsString('تم آماده', $html);
+        $this->assertStringContainsString('تنظیمات ظاهر', $html);
+        $this->assertStringContainsString('تراکم نمایش', $html);
+        $this->assertStringContainsString('اندازه سایدبار', $html);
     }
 
-    /** The old standalone appearance URL redirects to the theme panel. */
-    public function test_old_appearance_url_redirects(): void
+    /** The old Theme Studio URL redirects to the appearance settings page. */
+    public function test_old_theme_studio_url_redirects(): void
     {
         $admin = User::factory()->create(['is_admin' => true]);
-        $this->actingAs($admin)->get('/zed-admin/appearance')
-            ->assertRedirect('/zed-admin/theme-studio');
+        $this->actingAs($admin)->get('/zed-admin/theme-studio')
+            ->assertRedirect('/zed-admin/appearance');
+    }
+
+    /** Theme Studio is gone from navigation; appearance appears exactly once. */
+    public function test_no_duplicate_appearance_navigation(): void
+    {
+        $admin = User::factory()->create(['is_admin' => true]);
+        $html  = $this->actingAs($admin)->get('/zed-admin')->getContent();
+
+        $this->assertStringNotContainsString('استودیو تم', $html);
+        $this->assertStringNotContainsString('پنل تم', $html);
+        // The nav contains the appearance link exactly once.
+        $this->assertSame(1, substr_count($html, 'zed-admin/appearance"'));
     }
 }

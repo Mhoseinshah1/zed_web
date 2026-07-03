@@ -6,6 +6,7 @@ use App\Jobs\SendTelegramDocumentJob;
 use App\Models\BackupLog;
 use App\Models\TelegramAdminTopic;
 use App\Services\Telegram\TelegramAdminNotifier;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Process;
 
 /**
@@ -21,6 +22,12 @@ use Illuminate\Support\Facades\Process;
  */
 class BackupService
 {
+    /** Overlap-protection lock name + max seconds a backup may hold it. */
+    public const LOCK_NAME    = 'zedproxy-backup-running';
+    public const LOCK_SECONDS = 1800;
+
+    public const STATUS_SKIPPED_LOCKED = 'skipped_locked';
+
     public function __construct(
         private readonly BackupSettings $settings,
         private readonly TelegramAdminNotifier $notifier,
@@ -28,10 +35,31 @@ class BackupService
 
     /**
      * Run a backup. Never throws. Returns a result summary.
+     * Overlap-protected: if another backup holds the lock, returns a skipped
+     * result («یک عملیات بکاپ دیگر در حال اجرا است.») without creating a log.
      *
-     * @return array{status:string, log_id:int, path:?string, size:int, duration_ms:int, error:?string}
+     * @return array{status:string, log_id:?int, path:?string, size:int, duration_ms:int, error:?string}
      */
     public function run(string $type = BackupLog::TYPE_MANUAL, ?bool $forceSendFile = null): array
+    {
+        $lock = Cache::lock(self::LOCK_NAME, self::LOCK_SECONDS);
+        if (! $lock->get()) {
+            $msg = 'یک عملیات بکاپ دیگر در حال اجرا است.';
+            if ($type === BackupLog::TYPE_MANUAL && $this->settings->sendReportToTelegram()) {
+                $this->notifier->send('backup_status', $this->settings->topicKey(), 'بکاپ', '💾 ' . $msg);
+            }
+            return ['status' => self::STATUS_SKIPPED_LOCKED, 'log_id' => null, 'path' => null, 'size' => 0, 'duration_ms' => 0, 'error' => $msg];
+        }
+
+        try {
+            return $this->runLocked($type, $forceSendFile);
+        } finally {
+            $lock->release();
+        }
+    }
+
+    /** @return array{status:string, log_id:?int, path:?string, size:int, duration_ms:int, error:?string} */
+    private function runLocked(string $type, ?bool $forceSendFile = null): array
     {
         $log   = BackupLog::create(['type' => $type, 'status' => BackupLog::STATUS_STARTED, 'started_at' => now()]);
         $start = microtime(true);
@@ -188,7 +216,7 @@ class BackupService
     }
 
     /** Delete archives older than the retention window. Returns count removed. */
-    private function cleanupOld(): int
+    public function cleanupOld(): int
     {
         $dir = rtrim($this->settings->storagePath(), '/');
         $cutoff = now()->subDays($this->settings->retentionDays())->getTimestamp();
