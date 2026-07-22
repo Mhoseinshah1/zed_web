@@ -298,15 +298,116 @@ sudo tail -n 120 /var/log/zedproxy-install.log
 
 If a command fails, the log shows the exact line number and command.
 
-### Re-running the installer
+### Fresh installation vs. safe re-run
 
-The installer is safe to re-run:
+`install.sh` runs in one of two modes, chosen automatically. It considers the
+target an **existing installation** when `/var/www/zedproxy` contains all of
+`.env`, `artisan`, and `composer.json`. Otherwise it treats the run as a
+**fresh installation**. On a re-run you will see:
 
-- Existing git repository at `/var/www/zedproxy` is updated (`git fetch; git reset --hard origin/main`)
-- Non-git directories are backed up to `/var/www/zedproxy_backup_YYYYMMDD_HHMMSS` before a fresh clone
-- PostgreSQL user and database are created if missing; password is rotated on re-run
-- Nginx config is only rewritten if no certbot-managed SSL blocks exist — existing SSL config is preserved
-- A valid existing Let's Encrypt certificate is reused; certbot does not request a new one
+```
+نصب قبلی ZedProxy شناسایی شد.
+مقادیر APP_KEY، اطلاعات دیتابیس و تنظیمات فعلی حفظ خواهند شد.
+```
+
+**Fresh installation** — creates the PostgreSQL database + role with a freshly
+generated password, writes a new `.env`, runs `php artisan key:generate --force`
+to mint `APP_KEY`, runs migrations, and creates the initial admin user. The
+generated admin and database passwords are shown once in the final summary.
+
+**Safe re-run / repair / upgrade** — designed to be run repeatedly on a live
+production server without data loss. It:
+
+- **Never overwrites `.env`** — `APP_KEY`, `DB_PASSWORD`, and every custom
+  variable (Redis, mail, payment, Telegram, panel, storage, queue, app) are
+  preserved exactly.
+- **Never rotates the PostgreSQL role password** and never drops/recreates the
+  database. It reads the credentials from the existing `.env` and only tests
+  that the connection works before continuing.
+- **Never runs `key:generate --force`.** `APP_KEY` is only generated when it is
+  genuinely empty, and then without `--force` (written directly, never rotated).
+- **Never auto-creates a second admin** and never resets the admin password.
+  An optional interactive reset is offered (`آیا رمز عبور مدیر فعلی بازنشانی
+  شود؟ [y/N]`) that defaults to **No**.
+- Updates code with `git fetch` + `git reset --hard origin/main` + `git clean
+  -fd` (**without `-x`**), so gitignored runtime files (`.env`, `storage/`,
+  uploaded media, `public/storage`) are never touched. Locally-modified tracked
+  files and untracked non-ignored files are backed up first.
+- After migrations, validates that existing encrypted secrets still decrypt
+  with the current `APP_KEY` (`php artisan zedproxy:verify-encryption`). If
+  decryption fails, the run is **not** reported as successful — it rolls back.
+
+#### What is backed up (re-run)
+
+Everything is timestamped under `/var/backups/zedproxy/reinstall/YYYYMMDD_HHMMSS/`
+(directories `700`, files `600`):
+
+| Item | Path |
+| --- | --- |
+| `.env` (before any change) | `…/reinstall/<ts>/.env` |
+| Database dump (before migrations) | `…/reinstall/<ts>/<db>_<ts>.dump` (custom `pg_dump -Fc`) |
+| Locally-modified/untracked files | `…/reinstall/<ts>/local_changes/…` |
+| Previous deployed commit SHA | printed in the summary + recorded for rollback |
+
+#### What is preserved (re-run)
+
+`.env` and `APP_KEY`, the database and its password, the admin account and
+password, all uploaded files and the `storage/` tree, and every custom
+environment variable.
+
+#### What triggers a rollback
+
+Any of these during a re-run restores the backed-up `.env`, resets the code to
+the previous commit, brings the app out of maintenance mode, and prints DB
+restore instructions (uploads/storage are never modified, `APP_KEY` is never
+changed):
+
+- `.env` backup could not be created
+- database backup (`pg_dump`) failed
+- database migrations failed
+- **encrypted-secret validation failed** — e.g. a wrong/rotated `APP_KEY`, an
+  invalid MAC, or corrupted ciphertext:
+
+  ```
+  خطا در رمزگشایی اطلاعات حساس. APP_KEY یا اطلاعات رمزگذاری‌شده معتبر نیستند.
+  عملیات متوقف و تنظیمات قبلی بازیابی شد.
+  ```
+
+#### Restoring a database backup manually
+
+```bash
+# Credentials come from /var/www/zedproxy/.env (DB_DATABASE, DB_USERNAME, …).
+PGPASSWORD='<DB_PASSWORD>' pg_restore \
+    -h 127.0.0.1 -p 5432 -U <DB_USERNAME> -d <DB_DATABASE> \
+    --clean --if-exists \
+    /var/backups/zedproxy/reinstall/<timestamp>/<db>_<timestamp>.dump
+```
+
+To roll back code manually: `cd /var/www/zedproxy && git reset --hard <previous-commit>`.
+
+Other re-run behavior:
+
+- Nginx config is only rewritten if no certbot-managed SSL blocks exist —
+  existing SSL config is preserved.
+- A valid existing Let's Encrypt certificate is reused; certbot does not request
+  a new one.
+
+> **Note:** the equivalent code-only update flow is `update.sh` (`zedproxy-update`),
+> which performs the same backup/maintenance/migrate/restart steps without
+> re-touching the system packages.
+
+#### Verifying safety yourself
+
+The installer's decision logic (existing-install detection, `APP_KEY`
+validation, dotenv parsing, `.env`/local-change backups) lives in the
+sourceable, side-effect-free library `scripts/lib/installer-lib.sh` and is
+covered by shell tests:
+
+```bash
+bash tests/installer/run-tests.sh
+```
+
+The encrypted-secret check is covered by `tests/Feature/VerifyEncryptionCommandTest.php`.
 
 ### Let's Encrypt rate limit
 

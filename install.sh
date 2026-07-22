@@ -66,10 +66,96 @@ _on_err() {
     echo -e "\n${RED}[ERROR] Command failed (exit ${exit_code}) at line ${line_no}:${NC}" >&2
     echo -e "${RED}[ERROR]   ${cmd}${NC}" >&2
     echo -e "${RED}[ERROR] See full log: sudo tail -n 120 ${LOG_FILE}${NC}" >&2
+    # If a re-run failed while the live app was in maintenance mode, bring it
+    # back up so the site is not left offline. Uploaded data is never touched.
+    if [ "${MAINT_MODE_ON:-false}" = "true" ] && [ -d "${APP_DIR:-}" ]; then
+        ( cd "$APP_DIR" && php artisan up >/dev/null 2>&1 ) || true
+    fi
 }
 
 trap '_on_exit' EXIT
 trap '_on_err' ERR
+
+# ─── Installer helper library ─────────────────────────────────────────────────
+# The pure/testable helpers live in scripts/lib/installer-lib.sh so the shell
+# tests can exercise them. This script must also keep working when fetched
+# standalone (curl → /tmp), so we load the library from a local checkout when
+# present, otherwise download it from the repo.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || echo /tmp)"
+LIB_REL="scripts/lib/installer-lib.sh"
+RAW_BASE="https://raw.githubusercontent.com/${GITHUB_OWNER}/${REPO_NAME}/${BRANCH}"
+
+load_installer_lib() {
+    local candidate tmp_lib
+    for candidate in "${SCRIPT_DIR}/${LIB_REL}" "${APP_DIR}/${LIB_REL}"; do
+        if [ -f "$candidate" ]; then
+            # shellcheck source=/dev/null
+            source "$candidate"
+            return 0
+        fi
+    done
+    tmp_lib=$(mktemp)
+    if curl -fsSL --max-time 20 "${RAW_BASE}/${LIB_REL}" -o "$tmp_lib" 2>/dev/null && [ -s "$tmp_lib" ]; then
+        # shellcheck source=/dev/null
+        source "$tmp_lib"
+        return 0
+    fi
+    error "Could not load installer helper library (${LIB_REL}). Check network access to GitHub and retry."
+}
+load_installer_lib
+
+# ─── Fresh vs. safe re-run state ──────────────────────────────────────────────
+REINSTALL_BACKUP_ROOT="/var/backups/zedproxy/reinstall"
+REINSTALL_TS="$(date +%Y%m%d_%H%M%S)"
+ENV_BACKUP_PATH=""      # set once the existing .env is backed up
+PRE_UPDATE_COMMIT=""    # git SHA before we touch the code
+DB_BACKUP_PATH=""       # pg_dump path before migrations
+MAINT_MODE_ON=false     # whether we put the live app into maintenance mode
+IS_EXISTING=false       # true when an already-configured install is detected
+INSTALL_MODE="fresh"    # "fresh" | "reinstall"
+
+# Existing configuration read from the current .env (populated on a re-run).
+EXISTING_DOMAIN=""
+RESET_ADMIN_PASSWORD=false
+
+detect_install_mode() {
+    if zp_detect_existing_installation "$APP_DIR"; then
+        IS_EXISTING=true
+        INSTALL_MODE="reinstall"
+    else
+        IS_EXISTING=false
+        INSTALL_MODE="fresh"
+    fi
+}
+
+# Undo a failed re-run: restore .env + code, exit maintenance mode, print DB
+# restore instructions. Uploaded files and storage are never touched, and the
+# original APP_KEY is preserved (it lives inside the restored .env).
+rollback_existing() {
+    warn "بازیابی تنظیمات قبلی..."
+    if [ -n "$ENV_BACKUP_PATH" ] && [ -f "$ENV_BACKUP_PATH" ]; then
+        cp "$ENV_BACKUP_PATH" "${APP_DIR}/.env" 2>/dev/null || true
+        chmod 600 "${APP_DIR}/.env" 2>/dev/null || true
+        ok ".env از نسخه پشتیبان بازیابی شد."
+    fi
+    if [ -n "$PRE_UPDATE_COMMIT" ] && zp_is_git_repo "$APP_DIR"; then
+        git -C "$APP_DIR" reset --hard "$PRE_UPDATE_COMMIT" 2>/dev/null || true
+        ok "کد به نسخهٔ قبلی بازگردانده شد (${PRE_UPDATE_COMMIT})."
+    fi
+    ( cd "$APP_DIR" && php artisan up >/dev/null 2>&1 ) || true
+    MAINT_MODE_ON=false
+    if [ -n "$DB_BACKUP_PATH" ]; then
+        echo ""
+        warn "اگر مهاجرت‌ها اجرا شده‌اند، دیتابیس را از این نسخهٔ پشتیبان بازیابی کنید:"
+        echo -e "    PGPASSWORD=… pg_restore -h <host> -p <port> -U <user> -d <db> --clean --if-exists ${DB_BACKUP_PATH}"
+    fi
+}
+
+# Controlled failure during a re-run: roll back, then abort with a message.
+fail_reinstall() {
+    rollback_existing
+    error "$1"
+}
 
 # ─── OS Detection ────────────────────────────────────────────────────────────
 OS_ID=""
@@ -480,27 +566,94 @@ _prompt_ssl() {
     fi
 }
 
+# ─── Optional admin password reset (re-run only) ──────────────────────────────
+_prompt_admin_password_reset() {
+    echo -e "\n${BLUE}آیا رمز عبور مدیر فعلی بازنشانی شود؟ [y/N]${NC}"
+    read -r INPUT_RESET </dev/tty
+    INPUT_RESET="${INPUT_RESET//[[:space:]]/}"
+    INPUT_RESET="${INPUT_RESET,,}"
+    if [[ "$INPUT_RESET" == "y" || "$INPUT_RESET" == "yes" ]]; then
+        RESET_ADMIN_PASSWORD=true
+        # Target the EXISTING admin explicitly (no random default) so we update
+        # the right record instead of creating a second admin.
+        echo -e "${BLUE}نام کاربری مدیری که رمز آن بازنشانی می‌شود:${NC}"
+        read -r ADMIN_NAME </dev/tty
+        ADMIN_NAME="${ADMIN_NAME//[[:space:]]/}"
+        while [[ -z "$ADMIN_NAME" ]]; do
+            warn "نام کاربری نمی‌تواند خالی باشد."
+            read -r ADMIN_NAME </dev/tty
+            ADMIN_NAME="${ADMIN_NAME//[[:space:]]/}"
+        done
+        echo -e "${BLUE}ایمیل همان مدیر (Enter برای ${YELLOW}admin@${DOMAIN}${BLUE}):${NC}"
+        read -r INPUT_ADMIN_EMAIL </dev/tty
+        INPUT_ADMIN_EMAIL="${INPUT_ADMIN_EMAIL//[[:space:]]/}"
+        ADMIN_EMAIL="${INPUT_ADMIN_EMAIL:-admin@${DOMAIN}}"
+        _prompt_admin_password
+        ok "رمز عبور مدیر «${ADMIN_NAME}» پس از بروزرسانی بازنشانی خواهد شد."
+    else
+        RESET_ADMIN_PASSWORD=false
+        ok "رمز عبور مدیر فعلی حفظ می‌شود."
+    fi
+}
+
 # ─── Run OS detection first ───────────────────────────────────────────────────
 detect_os
 
-# ─── Run interactive prompts ──────────────────────────────────────────────────
+# ─── Determine install mode (fresh vs. safe re-run) ───────────────────────────
+detect_install_mode
+
 echo ""
 echo -e "${GREEN}════════════════════════════════════════════════════════════${NC}"
 echo -e "${GREEN}  ZedProxy Interactive Setup${NC}"
 echo -e "${GREEN}════════════════════════════════════════════════════════════${NC}"
 
-_prompt_domain
-_prompt_admin_email
-_prompt_admin_name
-_prompt_admin_password
-_prompt_ssl
+if [ "$IS_EXISTING" = "true" ]; then
+    # ── Safe re-run / repair / upgrade of an existing installation ──
+    echo ""
+    echo -e "${YELLOW}نصب قبلی ZedProxy شناسایی شد.${NC}"
+    echo -e "${YELLOW}مقادیر APP_KEY، اطلاعات دیتابیس و تنظیمات فعلی حفظ خواهند شد.${NC}"
+    echo ""
+
+    # Reuse the domain from the existing .env (APP_URL) instead of re-prompting.
+    EXISTING_APP_URL=$(zp_env_get "${APP_DIR}/.env" "APP_URL" || true)
+    EXISTING_DOMAIN=$(printf '%s' "$EXISTING_APP_URL" | sed -E 's#^https?://##; s#/.*$##')
+    if [[ -n "$EXISTING_DOMAIN" ]]; then
+        DOMAIN="$EXISTING_DOMAIN"
+        ok "دامنهٔ فعلی: ${DOMAIN}"
+    else
+        _prompt_domain
+    fi
+
+    ADMIN_EMAIL="admin@${DOMAIN}"   # used only for certbot on re-run
+    ADMIN_NAME=""
+    ADMIN_PASS=""
+
+    _prompt_admin_password_reset
+    _prompt_ssl
+else
+    # ── Fresh installation ──
+    _prompt_domain
+    _prompt_admin_email
+    _prompt_admin_name
+    _prompt_admin_password
+    _prompt_ssl
+fi
 
 echo ""
 echo -e "${BLUE}────────────────────────────────────────────────────────────${NC}"
+if [ "$IS_EXISTING" = "true" ]; then
+    echo -e "  Mode:        ${YELLOW}safe re-run (existing installation)${NC}"
+else
+    echo -e "  Mode:        ${YELLOW}fresh installation${NC}"
+fi
 echo -e "  Domain:      ${YELLOW}${DOMAIN}${NC}"
-echo -e "  Admin email: ${YELLOW}${ADMIN_EMAIL}${NC}"
-echo -e "  Admin user:  ${YELLOW}${ADMIN_NAME}${NC}"
-echo -e "  Password:    ${YELLOW}(configured — shown in final summary)${NC}"
+if [ "$IS_EXISTING" != "true" ]; then
+    echo -e "  Admin email: ${YELLOW}${ADMIN_EMAIL}${NC}"
+    echo -e "  Admin user:  ${YELLOW}${ADMIN_NAME}${NC}"
+    echo -e "  Password:    ${YELLOW}(configured — shown in final summary)${NC}"
+else
+    echo -e "  Admin:       ${YELLOW}preserved (no changes)${NC}"
+fi
 if [ "$INSTALL_SSL" = "true" ]; then
     if [ "$SSL_STAGING" = "true" ]; then
         echo -e "  SSL:         ${YELLOW}yes — Let's Encrypt STAGING (test only)${NC}"
@@ -516,10 +669,27 @@ sleep 3
 
 # ─── Static configuration ─────────────────────────────────────────────────────
 NODE_VERSION="22"
-DB_NAME="zedproxy"
-DB_USER="zedproxy_user"
-DB_PASS=$(openssl rand -base64 32 | tr -dc 'A-Za-z0-9!@#$%^&*' | head -c 32)
 NGINX_CONF="/etc/nginx/sites-available/zedproxy"
+
+if [ "$IS_EXISTING" = "true" ]; then
+    # Re-run: reuse the existing database credentials verbatim. The role
+    # password is NEVER rotated and the database is NEVER recreated.
+    DB_NAME=$(zp_env_get "${APP_DIR}/.env" "DB_DATABASE" || true)
+    DB_USER=$(zp_env_get "${APP_DIR}/.env" "DB_USERNAME" || true)
+    DB_PASS=$(zp_env_get "${APP_DIR}/.env" "DB_PASSWORD" || true)
+    DB_HOST=$(zp_env_get "${APP_DIR}/.env" "DB_HOST" || true); DB_HOST="${DB_HOST:-127.0.0.1}"
+    DB_PORT=$(zp_env_get "${APP_DIR}/.env" "DB_PORT" || true); DB_PORT="${DB_PORT:-5432}"
+    if [ -z "$DB_NAME" ] || [ -z "$DB_USER" ]; then
+        error "اطلاعات دیتابیس در .env موجود نیست. نصب متوقف شد تا از تخریب داده جلوگیری شود."
+    fi
+else
+    # Fresh: create the database + role with a freshly generated password.
+    DB_NAME="zedproxy"
+    DB_USER="zedproxy_user"
+    DB_PASS=$(openssl rand -base64 32 | tr -dc 'A-Za-z0-9!@#$%^&*' | head -c 32)
+    DB_HOST="127.0.0.1"
+    DB_PORT="5432"
+fi
 
 # APP_URL starts as HTTP — setup_ssl() upgrades it to HTTPS on success
 APP_URL="http://${DOMAIN}"
@@ -584,8 +754,18 @@ apt-get install -y -qq \
 systemctl enable postgresql
 systemctl start postgresql
 
-log "Creating PostgreSQL database and user..."
-sudo -u postgres psql <<SQL
+if [ "$IS_EXISTING" = "true" ]; then
+    # Re-run: DO NOT create/drop the database or rotate the role password.
+    # Only verify that the stored credentials still connect before continuing.
+    log "Verifying existing database connection (no changes made)..."
+    if PGPASSWORD="$DB_PASS" psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -tAc 'SELECT 1' >/dev/null 2>&1; then
+        ok "اتصال به دیتابیس موجود ('${DB_NAME}') برقرار است."
+    else
+        error "اتصال به دیتابیس با اطلاعات موجود در .env ناموفق بود. نصب متوقف شد؛ هیچ تغییری اعمال نشد.\n  دیتابیس: ${DB_NAME} — کاربر: ${DB_USER} — میزبان: ${DB_HOST}:${DB_PORT}"
+    fi
+else
+    log "Creating PostgreSQL database and user..."
+    sudo -u postgres psql <<SQL
 DO \$\$
 BEGIN
     IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = '${DB_USER}') THEN
@@ -603,7 +783,8 @@ WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = '${DB_NAME}')
 GRANT ALL PRIVILEGES ON DATABASE ${DB_NAME} TO ${DB_USER};
 SQL
 
-ok "PostgreSQL database '${DB_NAME}' and user '${DB_USER}' ready"
+    ok "PostgreSQL database '${DB_NAME}' and user '${DB_USER}' ready"
+fi
 
 # ─── Redis ───────────────────────────────────────────────────────────────────
 log "Installing Redis..."
@@ -654,6 +835,50 @@ prepare_project_directory() {
     # Allow git to operate on APP_DIR when owned by www-data (re-run scenario)
     git config --global --add safe.directory "$APP_DIR" 2>/dev/null || true
 
+    # ── Existing installation: never clone-fresh. Back up .env, record the
+    #    deployed commit, protect local changes, enter maintenance mode, then
+    #    do a safe code update. .env and gitignored runtime files (storage,
+    #    uploaded media) are untracked/ignored and are never touched by
+    #    reset --hard or clean -fd (clean runs WITHOUT -x). ──
+    if [ "$IS_EXISTING" = "true" ]; then
+        ENV_BACKUP_PATH=$(zp_backup_env "${APP_DIR}/.env" "$REINSTALL_BACKUP_ROOT" "$REINSTALL_TS") \
+            || fail_reinstall "تهیهٔ نسخهٔ پشتیبان از .env ناموفق بود. عملیات متوقف شد."
+        ok "نسخهٔ پشتیبان .env: ${ENV_BACKUP_PATH} (۶۰۰)"
+
+        # Enter maintenance mode so the live site serves 503 during the update.
+        ( cd "$APP_DIR" && php artisan down --render="errors::503" >/dev/null 2>&1 ) \
+            || ( cd "$APP_DIR" && php artisan down >/dev/null 2>&1 ) || true
+        MAINT_MODE_ON=true
+
+        if zp_is_git_repo "$APP_DIR"; then
+            PRE_UPDATE_COMMIT=$(git -C "$APP_DIR" rev-parse HEAD 2>/dev/null || echo "")
+            [ -n "$PRE_UPDATE_COMMIT" ] && ok "کامیت فعلی برای بازگردانی ثبت شد: ${PRE_UPDATE_COMMIT}"
+
+            if zp_git_has_local_changes "$APP_DIR"; then
+                local lc
+                lc=$(zp_git_backup_local_changes "$APP_DIR" "$REINSTALL_BACKUP_ROOT" "$REINSTALL_TS" || true)
+                [ -n "$lc" ] && warn "تغییرات محلی پیش از بروزرسانی در ${lc} پشتیبان‌گیری شد."
+            fi
+
+            log "بروزرسانی امن کد به origin/${BRANCH}..."
+            git -C "$APP_DIR" fetch origin "$BRANCH"
+            git -C "$APP_DIR" reset --hard "origin/${BRANCH}"
+            git -C "$APP_DIR" clean -fd      # no -x: ignored runtime files kept
+
+            # Safety net — restore .env if a hook/edge case removed it.
+            if [ ! -f "${APP_DIR}/.env" ] && [ -f "$ENV_BACKUP_PATH" ]; then
+                cp "$ENV_BACKUP_PATH" "${APP_DIR}/.env"; chmod 600 "${APP_DIR}/.env"
+                warn ".env پس از بروزرسانی کد از نسخهٔ پشتیبان بازیابی شد."
+            fi
+            ok "کد بروزرسانی شد؛ .env، storage و فایل‌های بارگذاری‌شده حفظ شدند."
+        else
+            warn "نصب موجود بدون مخزن Git است — بروزرسانی کد نادیده گرفته شد."
+            warn "فقط وابستگی‌ها، مهاجرت‌ها و کش‌ها روی کد فعلی اجرا می‌شوند."
+        fi
+        return 0
+    fi
+
+    # ── Fresh installation ──
     if [ ! -d "$APP_DIR" ]; then
         log "Cloning ${REPO_URL} (branch: ${BRANCH}) into ${APP_DIR}..."
         git clone -b "$BRANCH" "$REPO_URL" "$APP_DIR"
@@ -725,6 +950,14 @@ verify_laravel_project
 cd "$APP_DIR"
 
 # ─── .env ────────────────────────────────────────────────────────────────────
+if [ "$IS_EXISTING" = "true" ]; then
+    # Re-run: the existing .env is authoritative. It is NOT rewritten — APP_KEY,
+    # DB_PASSWORD and every custom variable (Redis, mail, payment, Telegram,
+    # panel, storage, queue, …) are preserved exactly as configured.
+    log "‏.env موجود حفظ شد (بدون بازنویسی)."
+    chmod 600 .env 2>/dev/null || true
+    ok "تنظیمات فعلی .env دست‌نخورده باقی ماند."
+else
 log "Creating .env file..."
 
 cat > .env <<ENV
@@ -781,6 +1014,7 @@ ENV
 
 chmod 600 .env
 ok ".env created (APP_URL=${APP_URL})"
+fi
 
 # ─── PHP-FPM pool config ─────────────────────────────────────────────────────
 log "Configuring PHP-FPM (${PHP_FPM_SERVICE})..."
@@ -846,19 +1080,74 @@ npm run build
 ok "Frontend assets built"
 
 # ─── Laravel setup ───────────────────────────────────────────────────────────
-log "Generating application key..."
-php artisan key:generate --force
+if [ "$IS_EXISTING" = "true" ]; then
+    # Preserve APP_KEY. Generate one ONLY when it is genuinely empty, and never
+    # with --force (which would rotate a live key and make every encrypted
+    # value undecryptable). A new key is written directly via --show.
+    if zp_appkey_present_and_valid "${APP_DIR}/.env"; then
+        ok "APP_KEY موجود معتبر است و بدون تغییر حفظ شد."
+    elif [ -z "$(zp_env_get "${APP_DIR}/.env" APP_KEY || true)" ]; then
+        warn "APP_KEY خالی است — کلید جدید تولید می‌شود (بدون --force)."
+        NEW_KEY=$(php artisan key:generate --show)
+        _esc=$(printf '%s' "$NEW_KEY" | sed -e 's/[&|\\]/\\&/g')
+        if grep -qE '^APP_KEY=' .env; then
+            sed -i "s|^APP_KEY=.*|APP_KEY=${_esc}|" .env
+        else
+            printf 'APP_KEY=%s\n' "$NEW_KEY" >> .env
+        fi
+        ok "APP_KEY جدید تنظیم شد."
+    else
+        # Non-empty but not the expected base64 shape — never rotate on a re-run.
+        warn "APP_KEY در قالب base64 استاندارد نیست؛ بدون تغییر باقی ماند."
+    fi
+else
+    log "Generating application key..."
+    php artisan key:generate --force
+fi
 
+# ─── Database migrations ─────────────────────────────────────────────────────
 log "Running database migrations..."
-php artisan migrate --force || error "Migration failed. Check database credentials."
+if [ "$IS_EXISTING" = "true" ]; then
+    # A successful database backup MUST exist before migrations run on a live DB.
+    log "تهیهٔ نسخهٔ پشتیبان دیتابیس پیش از مهاجرت‌ها..."
+    mkdir -p "${REINSTALL_BACKUP_ROOT}/${REINSTALL_TS}"
+    chmod 700 "$REINSTALL_BACKUP_ROOT" "${REINSTALL_BACKUP_ROOT}/${REINSTALL_TS}" 2>/dev/null || true
+    DB_BACKUP_PATH="${REINSTALL_BACKUP_ROOT}/${REINSTALL_TS}/${DB_NAME}_${REINSTALL_TS}.dump"
+    if PGPASSWORD="$DB_PASS" pg_dump -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -Fc -f "$DB_BACKUP_PATH" 2>/dev/null; then
+        chmod 600 "$DB_BACKUP_PATH"
+        ok "نسخهٔ پشتیبان دیتابیس: ${DB_BACKUP_PATH}"
+    else
+        DB_BACKUP_PATH=""
+        fail_reinstall "تهیهٔ نسخهٔ پشتیبان دیتابیس ناموفق بود. برای محافظت از داده، بروزرسانی متوقف شد."
+    fi
+    php artisan migrate --force || fail_reinstall "اجرای مهاجرت‌ها ناموفق بود. تنظیمات و کد قبلی بازیابی شد."
+    ok "مهاجرت‌ها با موفقیت اجرا شدند."
+else
+    php artisan migrate --force || error "Migration failed. Check database credentials."
+fi
 
-# ─── Admin user creation ──────────────────────────────────────────────────────
-log "Creating admin user (username: ${ADMIN_NAME}, email: ${ADMIN_EMAIL})..."
-ZEDPROXY_ADMIN_PASS="$ADMIN_PASS" php artisan zedproxy:create-admin \
-    --email="$ADMIN_EMAIL" \
-    --username="$ADMIN_NAME" \
-    || error "Failed to create admin user. Check: tail -f ${APP_DIR}/storage/logs/laravel.log"
-ok "Admin user ready: ${ADMIN_NAME} <${ADMIN_EMAIL}>"
+# ─── Admin user ───────────────────────────────────────────────────────────────
+if [ "$IS_EXISTING" = "true" ]; then
+    # Re-run: never auto-create a second admin and never reset the existing
+    # password. Only touch the admin when the operator explicitly opted in.
+    if [ "$RESET_ADMIN_PASSWORD" = "true" ]; then
+        log "بازنشانی رمز عبور مدیر بنا به درخواست..."
+        ZEDPROXY_ADMIN_PASS="$ADMIN_PASS" php artisan zedproxy:create-admin \
+            --email="$ADMIN_EMAIL" \
+            --username="$ADMIN_NAME" \
+            || fail_reinstall "بازنشانی رمز عبور مدیر ناموفق بود."
+        ok "رمز عبور مدیر بازنشانی شد: ${ADMIN_NAME} <${ADMIN_EMAIL}>"
+    else
+        ok "مدیر فعلی بدون تغییر حفظ شد (رمز عبور دست‌نخورده)."
+    fi
+else
+    log "Creating admin user (username: ${ADMIN_NAME}, email: ${ADMIN_EMAIL})..."
+    ZEDPROXY_ADMIN_PASS="$ADMIN_PASS" php artisan zedproxy:create-admin \
+        --email="$ADMIN_EMAIL" \
+        --username="$ADMIN_NAME" \
+        || error "Failed to create admin user. Check: tail -f ${APP_DIR}/storage/logs/laravel.log"
+    ok "Admin user ready: ${ADMIN_NAME} <${ADMIN_EMAIL}>"
+fi
 
 log "Optimizing application..."
 php artisan config:cache
@@ -866,6 +1155,22 @@ php artisan route:cache
 php artisan view:cache
 
 ok "Laravel optimized"
+
+# ─── Encrypted-secret validation + exit maintenance (re-run only) ─────────────
+if [ "$IS_EXISTING" = "true" ]; then
+    log "بررسی رمزگشایی اطلاعات حساس با APP_KEY فعلی..."
+    if php artisan zedproxy:verify-encryption; then
+        ok "اعتبارسنجی رمزگشایی اطلاعات حساس با موفقیت انجام شد."
+    else
+        # Encryption is broken (bad/rotated key) — do NOT report success.
+        fail_reinstall "خطا در رمزگشایی اطلاعات حساس. APP_KEY یا اطلاعات رمزگذاری‌شده معتبر نیستند. عملیات متوقف و تنظیمات قبلی بازیابی شد."
+    fi
+
+    # Update succeeded — bring the site back online.
+    php artisan up >/dev/null 2>&1 || true
+    MAINT_MODE_ON=false
+    ok "برنامه از حالت تعمیر و نگهداری خارج شد."
+fi
 
 # ─── Permissions ─────────────────────────────────────────────────────────────
 log "Setting file permissions..."
@@ -1038,9 +1343,18 @@ echo ""
 if [ "$HEALTH_OK" = "true" ]; then
     INSTALL_SUCCESS=true
     echo -e "${GREEN}════════════════════════════════════════════════════════════${NC}"
-    echo -e "${GREEN}  ZedProxy installation completed successfully!${NC}"
+    if [ "$IS_EXISTING" = "true" ]; then
+        echo -e "${GREEN}  ZedProxy safe re-run completed successfully!${NC}"
+    else
+        echo -e "${GREEN}  ZedProxy installation completed successfully!${NC}"
+    fi
     echo -e "${GREEN}════════════════════════════════════════════════════════════${NC}"
     echo ""
+    if [ "$IS_EXISTING" = "true" ]; then
+        echo -e "  Mode:              ${YELLOW}safe re-run (existing installation)${NC}"
+    else
+        echo -e "  Mode:              ${YELLOW}fresh installation${NC}"
+    fi
     echo -e "  OS:                ${BLUE}${OS_PRETTY}${NC}"
     echo -e "  PHP version:       ${BLUE}PHP ${PHP_VERSION}${NC}"
 
@@ -1063,18 +1377,40 @@ if [ "$HEALTH_OK" = "true" ]; then
     echo -e "  Admin panel URL:   ${BLUE}${APP_URL}/zed-admin${NC}"
     echo -e "  Health check URL:  ${BLUE}${APP_URL}/health${NC}"
     echo ""
-    echo -e "  Admin login URL:   ${YELLOW}${APP_URL}/zed-admin/login${NC}"
-    echo -e "  Admin username:    ${YELLOW}${ADMIN_NAME}${NC}"
-    echo -e "  Admin email:       ${YELLOW}${ADMIN_EMAIL}${NC}"
-    echo -e "  Admin password:    ${YELLOW}${ADMIN_PASS}${NC}"
-    echo ""
-    echo -e "  DB name:           ${YELLOW}${DB_NAME}${NC}"
-    echo -e "  DB user:           ${YELLOW}${DB_USER}${NC}"
-    echo -e "  DB password:       ${YELLOW}${DB_PASS}${NC}"
-    echo ""
-    echo -e "  Install log:       ${BLUE}${LOG_FILE}${NC}"
-    echo -e "  ${RED}IMPORTANT: Save the passwords above. They will not be shown again.${NC}"
-    echo -e "  ${YELLOW}NOTE: The install log (${LOG_FILE}) also contains these credentials.${NC}"
+    if [ "$IS_EXISTING" = "true" ]; then
+        # Re-run: preserve secrets. Never re-print APP_KEY / DB / admin passwords.
+        echo -e "  Admin login URL:   ${YELLOW}${APP_URL}/zed-admin/login${NC}"
+        echo -e "  APP_KEY:           ${GREEN}preserved (unchanged)${NC}"
+        echo -e "  Database:          ${GREEN}preserved (password unchanged)${NC}"
+        echo -e "  Encrypted secrets: ${GREEN}validated — decrypt OK${NC}"
+        if [ "$RESET_ADMIN_PASSWORD" = "true" ]; then
+            echo ""
+            echo -e "  Admin username:    ${YELLOW}${ADMIN_NAME}${NC}"
+            echo -e "  Admin password:    ${YELLOW}${ADMIN_PASS}${NC}  ${RED}(newly set — save it)${NC}"
+        else
+            echo -e "  Admin account:     ${GREEN}preserved (password unchanged)${NC}"
+        fi
+        echo ""
+        echo -e "  Backups (this run):"
+        [ -n "$ENV_BACKUP_PATH" ] && echo -e "    .env:            ${BLUE}${ENV_BACKUP_PATH}${NC}"
+        [ -n "$DB_BACKUP_PATH" ]  && echo -e "    database:        ${BLUE}${DB_BACKUP_PATH}${NC}"
+        [ -n "$PRE_UPDATE_COMMIT" ] && echo -e "    previous commit: ${BLUE}${PRE_UPDATE_COMMIT}${NC}"
+        echo ""
+        echo -e "  Install log:       ${BLUE}${LOG_FILE}${NC}"
+    else
+        echo -e "  Admin login URL:   ${YELLOW}${APP_URL}/zed-admin/login${NC}"
+        echo -e "  Admin username:    ${YELLOW}${ADMIN_NAME}${NC}"
+        echo -e "  Admin email:       ${YELLOW}${ADMIN_EMAIL}${NC}"
+        echo -e "  Admin password:    ${YELLOW}${ADMIN_PASS}${NC}"
+        echo ""
+        echo -e "  DB name:           ${YELLOW}${DB_NAME}${NC}"
+        echo -e "  DB user:           ${YELLOW}${DB_USER}${NC}"
+        echo -e "  DB password:       ${YELLOW}${DB_PASS}${NC}"
+        echo ""
+        echo -e "  Install log:       ${BLUE}${LOG_FILE}${NC}"
+        echo -e "  ${RED}IMPORTANT: Save the passwords above. They will not be shown again.${NC}"
+        echo -e "  ${YELLOW}NOTE: The install log (${LOG_FILE}) also contains these credentials.${NC}"
+    fi
     echo ""
     echo -e "  To update ZedProxy in the future:"
     echo -e "    ${GREEN}zedproxy-update${NC}  (shortcut installed at /usr/local/bin/zedproxy-update)"
