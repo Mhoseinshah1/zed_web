@@ -7,23 +7,42 @@ use App\Models\UserService;
 use App\Models\VpnPanel;
 use App\Services\Provisioning\ProvisioningService;
 use Illuminate\Bus\Queueable;
+use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Facades\Log;
 
-class ProvisionMarzbanServiceJob implements ShouldQueue
+/**
+ * Provisions the remote VPN user for one UserService.
+ *
+ * ShouldBeUnique keyed on the service id: while a job for a given service is
+ * queued/running, a second dispatch for the SAME service is dropped — so a
+ * duplicate payment webhook/callback/retry can never spawn two provisioning
+ * jobs (and thus never two remote VPN users). Combined with the idempotent
+ * provider create + the unique order_id index, provisioning runs at most once.
+ */
+class ProvisionMarzbanServiceJob implements ShouldQueue, ShouldBeUnique
 {
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
     public int   $tries  = 3;
     public array $backoff = [30, 60, 120];
 
+    /** Release the uniqueness lock after 10 minutes as a safety net. */
+    public int $uniqueFor = 600;
+
     public function __construct(
         private int $serviceId,
         private int $panelId,
     ) {}
+
+    /** One in-flight provisioning job per service. */
+    public function uniqueId(): string
+    {
+        return 'provision-service:' . $this->serviceId;
+    }
 
     public function handle(ProvisioningService $provisioner): void
     {

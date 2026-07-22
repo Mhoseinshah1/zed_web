@@ -21,20 +21,7 @@ class NotificationService
      */
     public function notify(string $type, ?User $user, array $context = [], ?string $dedupeKey = null): ?Notification
     {
-        if ($dedupeKey !== null && $this->exists($dedupeKey)) {
-            return null;
-        }
-
-        [$title, $message] = $this->render($type, $context);
-
-        return Notification::create([
-            'user_id'    => $user?->id,
-            'type'       => $type,
-            'title'      => $title,
-            'message'    => $message,
-            'data'       => $this->buildData($context),
-            'dedupe_key' => $dedupeKey,
-        ]);
+        return $this->createDeduped($type, $user?->id, $context, $dedupeKey);
     }
 
     /**
@@ -42,20 +29,39 @@ class NotificationService
      */
     public function notifyAdmins(string $type, array $context = [], ?string $dedupeKey = null): ?Notification
     {
+        return $this->createDeduped($type, null, $context, $dedupeKey);
+    }
+
+    /**
+     * Create a notification, skipping duplicates by dedupe_key. The pre-check
+     * avoids the common case; the unique index on dedupe_key is the final guard
+     * under concurrency — a racing insert throws a unique violation which we
+     * swallow and treat as "already created".
+     */
+    private function createDeduped(string $type, ?int $userId, array $context, ?string $dedupeKey): ?Notification
+    {
         if ($dedupeKey !== null && $this->exists($dedupeKey)) {
             return null;
         }
 
         [$title, $message] = $this->render($type, $context);
 
-        return Notification::create([
-            'user_id'    => null,
-            'type'       => $type,
-            'title'      => $title,
-            'message'    => $message,
-            'data'       => $this->buildData($context),
-            'dedupe_key' => $dedupeKey,
-        ]);
+        try {
+            return Notification::create([
+                'user_id'    => $userId,
+                'type'       => $type,
+                'title'      => $title,
+                'message'    => $message,
+                'data'       => $this->buildData($context),
+                'dedupe_key' => $dedupeKey,
+            ]);
+        } catch (\Illuminate\Database\QueryException $e) {
+            // Concurrent insert with the same dedupe_key won the race.
+            if ($dedupeKey !== null) {
+                return null;
+            }
+            throw $e;
+        }
     }
 
     /**

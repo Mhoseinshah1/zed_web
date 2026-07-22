@@ -424,6 +424,13 @@ class OrderResource extends Resource
                         Order::STATUS_COMPLETED,
                     ]) && $record->service === null)
                     ->action(function (Order $record) {
+                        // Guard against a duplicate service for this order. The
+                        // creation is atomic regardless, but surface a clear
+                        // Persian message instead of silently returning.
+                        if ($record->fresh()->service !== null) {
+                            Notification::make()->title(\App\Models\UserService::MSG_DUPLICATE_SERVICE)->warning()->send();
+                            return;
+                        }
                         try {
                             app(ServiceProvisioner::class)->createFromOrder($record);
                             Notification::make()->title('سرویس با موفقیت ایجاد شد.')->success()->send();

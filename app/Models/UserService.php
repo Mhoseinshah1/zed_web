@@ -17,6 +17,9 @@ class UserService extends Model
     const STATUS_CANCELLED         = 'cancelled';
     const STATUS_FAILED            = 'failed';
 
+    /** User-facing Persian message when a duplicate service creation is blocked. */
+    const MSG_DUPLICATE_SERVICE = 'سرویس این سفارش قبلاً ایجاد شده و امکان ایجاد سرویس تکراری وجود ندارد.';
+
     // Provision statuses
     const PROVISION_PENDING         = 'pending';
     const PROVISION_MANUAL_REQUIRED = 'manual_required';

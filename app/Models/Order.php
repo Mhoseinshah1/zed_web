@@ -39,6 +39,9 @@ class Order extends Model
     const PAYMENT_FAILED    = 'failed';
     const PAYMENT_REFUNDED  = 'refunded';
 
+    /** User-facing Persian message when an already-processed order is re-submitted. */
+    const MSG_ALREADY_PROCESSED = 'این سفارش قبلاً پردازش شده است.';
+
     protected $fillable = [
         'order_number',
         'order_type',
