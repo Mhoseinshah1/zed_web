@@ -14,6 +14,8 @@ use Illuminate\Support\Str;
 
 class ProvisioningService
 {
+    use CreatesUserServiceForOrder;
+
     /**
      * Provision a Marzban VPN account for a paid order.
      *
@@ -37,11 +39,12 @@ class ProvisioningService
             return $service;
         }
 
-        // Get or create the UserService placeholder
+        // Get or create the UserService placeholder — ATOMIC (lock + re-check +
+        // unique index) so two concurrent provision paths can't create two
+        // services for one order.
         if (! $service) {
-            $service = UserService::create([
+            [$service, ] = $this->firstOrCreateServiceForOrder($order, [
                 'user_id'          => $order->user_id,
-                'order_id'         => $order->id,
                 'plan_id'          => $order->plan_id,
                 'plan_name'        => $order->plan_name,
                 // Pin the plan's chosen panel (null = default fallback below).
@@ -52,6 +55,11 @@ class ProvisioningService
                 'status'           => UserService::STATUS_PENDING_PROVISION,
                 'provision_status' => UserService::PROVISION_PENDING,
             ]);
+
+            // Another path may have already finished provisioning this service.
+            if ($service->status === UserService::STATUS_ACTIVE) {
+                return $service;
+            }
         }
 
         // Resolve panel: prefer one already linked to the service, then the

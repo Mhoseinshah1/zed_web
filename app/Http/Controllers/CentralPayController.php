@@ -281,10 +281,10 @@ class CentralPayController extends Controller
                 ->with('error', 'سفارش مربوطه یافت نشد.');
         }
 
-        // Idempotency: already paid
+        // Idempotency: already paid — a duplicate browser callback lands here.
         if ($order->payment_status === Order::PAYMENT_PAID) {
             return redirect()->route('dashboard.orders.show', $order)
-                ->with('success', 'پرداخت قبلاً تایید شده است.');
+                ->with('success', Order::MSG_ALREADY_PROCESSED);
         }
 
         $method = $tx->paymentMethod
