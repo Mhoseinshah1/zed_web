@@ -41,15 +41,27 @@ class PageResource extends Resource
             ])->columns(2),
 
             Forms\Components\Section::make('سئو و اشتراک‌گذاری')->collapsed()->schema([
-                Forms\Components\TextInput::make('meta_title')->label('عنوان سئو')->maxLength(255),
+                Forms\Components\TextInput::make('meta_title')->label('عنوان سئو')->maxLength(70)
+                    ->helperText('طول پیشنهادی: ۵۰ تا ۶۰ کاراکتر. خالی بگذارید تا از عنوان صفحه استفاده شود.'),
                 Forms\Components\TextInput::make('meta_keywords')->label('کلمات کلیدی')->maxLength(255),
-                Forms\Components\Textarea::make('meta_description')->label('توضیحات سئو')->rows(2)->columnSpanFull(),
+                Forms\Components\Textarea::make('meta_description')->label('توضیحات سئو')->rows(2)->maxLength(180)->columnSpanFull()
+                    ->helperText('طول پیشنهادی: ۱۲۰ تا ۱۶۰ کاراکتر. خالی بگذارید تا از خلاصه صفحه استفاده شود.'),
+                Forms\Components\TextInput::make('canonical_url')->label('آدرس کنونیکال')->url()->maxLength(255)
+                    ->placeholder('خالی = ساخت خودکار')->columnSpanFull(),
+                Forms\Components\Toggle::make('robots_index')->label('اجازه ایندکس')->default(true),
+                Forms\Components\Toggle::make('robots_follow')->label('اجازه دنبال‌کردن لینک‌ها')->default(true),
                 Forms\Components\TextInput::make('og_title')->label('عنوان اشتراک‌گذاری')->maxLength(255),
                 Forms\Components\Textarea::make('og_description')->label('توضیحات اشتراک‌گذاری')->rows(2),
                 Forms\Components\FileUpload::make('og_image')->label('تصویر اشتراک‌گذاری')
                     ->image()->disk('public')->directory('pages')
                     ->acceptedFileTypes(['image/jpeg', 'image/png', 'image/webp'])->maxSize(2048),
+                Forms\Components\TextInput::make('twitter_title')->label('عنوان توییتر')->maxLength(255),
+                Forms\Components\Textarea::make('twitter_description')->label('توضیحات توییتر')->rows(2),
+                Forms\Components\TextInput::make('schema_type')->label('نوع اسکیما')->placeholder('WebPage, Article, …')->maxLength(60),
             ])->columns(2),
+
+            Forms\Components\Section::make('سایت‌مپ')->collapsed()
+                ->schema(\App\Filament\Support\SeoFormFields::sitemapFields())->columns(3),
 
             Forms\Components\Section::make('نمایش')->schema([
                 Forms\Components\TextInput::make('sort_order')->label('ترتیب نمایش')->numeric()->default(0),

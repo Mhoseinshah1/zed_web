@@ -30,20 +30,29 @@ use Illuminate\Support\Facades\Route;
 
 // NOWPayments IPN webhook — no auth, no CSRF (verified by HMAC-SHA512 signature)
 Route::post('/webhooks/nowpayments', [NowPaymentsController::class, 'ipn'])
+    ->middleware('noindex')
     ->name('webhooks.nowpayments');
 
 // CentralPay return URL — GET, no CSRF, user is redirected back after payment
 // Always verify server-to-server inside the callback before trusting the outcome
 Route::get('/payments/centralpay/callback', [CentralPayController::class, 'callback'])
+    ->middleware('noindex')
     ->name('payments.centralpay.callback');
 
 // Telegram admin-bot webhook — no auth, no CSRF (verified by the secret-token
 // header inside the controller; only allowed admins in the management group).
 Route::post('/telegram/webhook', [TelegramWebhookController::class, 'handle'])
+    ->middleware('noindex')
     ->name('telegram.webhook');
 
 // Health check (unauthenticated)
-Route::get('/health', [HealthController::class, 'check'])->name('health');
+Route::get('/health', [HealthController::class, 'check'])->middleware('noindex')->name('health');
+
+// ── SEO: XML sitemaps + robots.txt ───────────────────────────────────────────
+Route::get('/sitemap.xml', [\App\Http\Controllers\SitemapController::class, 'index'])->name('sitemap.index');
+Route::get('/sitemap-pages.xml', [\App\Http\Controllers\SitemapController::class, 'pages'])->name('sitemap.pages');
+Route::get('/sitemap-tutorials.xml', [\App\Http\Controllers\SitemapController::class, 'tutorials'])->name('sitemap.tutorials');
+Route::get('/robots.txt', \App\Http\Controllers\RobotsController::class)->name('robots');
 
 // Public pages
 Route::get('/', [HomeController::class, 'index'])->name('home');
@@ -62,8 +71,8 @@ Route::get('/about', fn () => redirect()->route('pages.show', 'about'));
 // CMS static pages (keep last so it doesn't shadow named routes above)
 Route::get('/pages/{slug}', [PageController::class, 'show'])->name('pages.show');
 
-// Authentication — guest-only
-Route::middleware('guest')->group(function () {
+// Authentication — guest-only. noindex: login/register must never be indexed.
+Route::middleware(['noindex', 'guest'])->group(function () {
     Route::get('/login', [AuthController::class, 'showLogin'])->name('login');
     // Per-username+IP brute-force protection is enforced inside the controller.
     Route::post('/login', [AuthController::class, 'login']);
@@ -84,7 +93,8 @@ Route::post('/plans/{plan}/buy', [CheckoutController::class, 'buy'])
     ->name('plans.buy');
 
 // User dashboard (prefix: /dashboard, name: dashboard.*)
-Route::middleware('auth')->prefix('dashboard')->name('dashboard.')->group(function () {
+// noindex: all private user pages return X-Robots-Tag: noindex, nofollow, noarchive.
+Route::middleware(['noindex', 'auth'])->prefix('dashboard')->name('dashboard.')->group(function () {
     Route::get('/', [DashboardController::class, 'index'])->name('index');
     Route::get('/orders', [OrderController::class, 'index'])->name('orders');
     Route::get('/orders/{order}', [OrderController::class, 'show'])->name('orders.show');
@@ -157,7 +167,7 @@ Route::middleware('auth')->prefix('dashboard')->name('dashboard.')->group(functi
 });
 
 // Legacy /panel redirects → /dashboard
-Route::middleware('auth')->prefix('panel')->group(function () {
+Route::middleware(['noindex', 'auth'])->prefix('panel')->group(function () {
     Route::redirect('/', '/dashboard', 301);
     Route::redirect('/orders', '/dashboard/orders', 301);
     Route::redirect('/services', '/dashboard/services', 301);

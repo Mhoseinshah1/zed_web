@@ -22,6 +22,7 @@ class DatabaseSeeder extends Seeder
             ShopTemplateSeeder::class,
             WoodmartTemplateSeeder::class,
             TelegramAdminSeeder::class,
+            SeoPageSeeder::class,
         ]);
     }
 }
