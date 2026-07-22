@@ -969,11 +969,13 @@ class CentralPayTest extends TestCase
             'sort_order' => 3,
         ]);
 
-        $_ENV['CENTRALPAY_API_KEY']      = 'env-imported-key';
-        $_ENV['CENTRALPAY_BASE_URL']     = 'https://env-base.example.com/api';
-        $_ENV['CENTRALPAY_TYPE']         = 'deposit';
-        $_ENV['CENTRALPAY_AMOUNT_UNIT']  = 'TOMAN';
-        $_ENV['CENTRALPAY_CALLBACK_PATH'] = '/payments/centralpay/callback';
+        // Set via every channel env() consults ($_SERVER is read before $_ENV),
+        // so the override wins even when .env preloaded an empty CENTRALPAY_API_KEY.
+        $this->setEnvVar('CENTRALPAY_API_KEY', 'env-imported-key');
+        $this->setEnvVar('CENTRALPAY_BASE_URL', 'https://env-base.example.com/api');
+        $this->setEnvVar('CENTRALPAY_TYPE', 'deposit');
+        $this->setEnvVar('CENTRALPAY_AMOUNT_UNIT', 'TOMAN');
+        $this->setEnvVar('CENTRALPAY_CALLBACK_PATH', '/payments/centralpay/callback');
 
         try {
             (new PaymentMethodSeeder())->run();
@@ -986,14 +988,24 @@ class CentralPayTest extends TestCase
             $this->assertEquals('https://env-base.example.com/api', $method->getConfig('base_url'));
             $this->assertEquals('deposit', $method->getConfig('type'));
         } finally {
-            unset(
-                $_ENV['CENTRALPAY_API_KEY'],
-                $_ENV['CENTRALPAY_BASE_URL'],
-                $_ENV['CENTRALPAY_TYPE'],
-                $_ENV['CENTRALPAY_AMOUNT_UNIT'],
-                $_ENV['CENTRALPAY_CALLBACK_PATH'],
-            );
+            foreach (['CENTRALPAY_API_KEY', 'CENTRALPAY_BASE_URL', 'CENTRALPAY_TYPE', 'CENTRALPAY_AMOUNT_UNIT', 'CENTRALPAY_CALLBACK_PATH'] as $key) {
+                $this->clearEnvVar($key);
+            }
         }
+    }
+
+    /** Set an env var so Laravel's env() resolves it regardless of a prior .env load. */
+    private function setEnvVar(string $key, string $value): void
+    {
+        $_ENV[$key]    = $value;
+        $_SERVER[$key] = $value;
+        putenv("{$key}={$value}");
+    }
+
+    private function clearEnvVar(string $key): void
+    {
+        unset($_ENV[$key], $_SERVER[$key]);
+        putenv($key);
     }
 
     public function test_existing_admin_config_not_overwritten_by_env(): void
