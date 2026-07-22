@@ -249,19 +249,20 @@ sleep 2
 APP_URL=$(_env_val "APP_URL")
 APP_URL="${APP_URL:-http://localhost}"
 
+HOST_HEADER="$(echo "$APP_URL" | sed 's|https\?://||')"
+# Rely only on the safe public fields: HTTP 200 + "status":"ok".
+HEALTH_BODY=$(curl -s --max-time 10 "http://localhost/health" -H "Host: ${HOST_HEADER}" 2>/dev/null || echo "")
 HEALTH_RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 \
-    "http://localhost/health" \
-    -H "Host: $(echo "$APP_URL" | sed 's|https\?://||')" \
-    2>/dev/null || echo "000")
+    "http://localhost/health" -H "Host: ${HOST_HEADER}" 2>/dev/null || echo "000")
 
-if [ "$HEALTH_RESPONSE" = "200" ]; then
-    ok "Health check PASSED (HTTP 200)"
-    curl -s "http://localhost/health" | python3 -m json.tool 2>/dev/null || curl -s "http://localhost/health"
+if [ "$HEALTH_RESPONSE" = "200" ] && echo "$HEALTH_BODY" | grep -q '"status":[[:space:]]*"ok"'; then
+    ok "Health check PASSED (HTTP 200, status ok)"
+    echo "$HEALTH_BODY" | python3 -m json.tool 2>/dev/null || echo "$HEALTH_BODY"
     echo ""
 else
     warn "Health check returned HTTP ${HEALTH_RESPONSE}"
     warn "Check: curl ${APP_URL}/health"
-    warn "Logs:  tail -f ${PROJECT_DIR}/storage/logs/laravel.log"
+    warn "Details: cd ${PROJECT_DIR} && php artisan zedproxy:health"
 fi
 
 # Check HTTPS if APP_URL starts with https

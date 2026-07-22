@@ -45,8 +45,14 @@ Route::post('/telegram/webhook', [TelegramWebhookController::class, 'handle'])
     ->middleware('noindex')
     ->name('telegram.webhook');
 
-// Health check (unauthenticated)
-Route::get('/health', [HealthController::class, 'check'])->middleware('noindex')->name('health');
+// Public health probes (unauthenticated, rate-limited, non-indexable).
+// Readiness returns only safe booleans; liveness never touches dependencies.
+Route::get('/health', [HealthController::class, 'check'])
+    ->middleware(['noindex', 'throttle:health'])
+    ->name('health');
+Route::get('/health/live', [HealthController::class, 'live'])
+    ->middleware(['noindex', 'throttle:health'])
+    ->name('health.live');
 
 // ── SEO: XML sitemaps + robots.txt ───────────────────────────────────────────
 Route::get('/sitemap.xml', [\App\Http\Controllers\SitemapController::class, 'index'])->name('sitemap.index');

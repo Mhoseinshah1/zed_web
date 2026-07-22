@@ -1309,18 +1309,21 @@ ok "Daily backup scheduled at 3:00 AM"
 log "Running HTTP health check..."
 sleep 2
 
-HEALTH_RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost/health 2>/dev/null || echo "000")
+# Depend only on the safe public fields: HTTP 200 + "status":"ok". The response
+# never contains error messages, so it is safe to print.
+HEALTH_BODY=$(curl -s --max-time 10 http://localhost/health 2>/dev/null || echo "")
+HEALTH_RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 http://localhost/health 2>/dev/null || echo "000")
 HEALTH_OK=false
 
-if [ "$HEALTH_RESPONSE" = "200" ]; then
-    ok "Health check PASSED (HTTP 200)"
-    curl -s http://localhost/health
+if [ "$HEALTH_RESPONSE" = "200" ] && echo "$HEALTH_BODY" | grep -q '"status":[[:space:]]*"ok"'; then
+    ok "Health check PASSED (HTTP 200, status ok)"
+    echo "$HEALTH_BODY"
     echo ""
     HEALTH_OK=true
 else
     warn "Health check returned HTTP $HEALTH_RESPONSE"
     warn "The app may still be warming up. Run: curl http://localhost/health"
-    warn "Check logs: tail -f ${APP_DIR}/storage/logs/laravel.log"
+    warn "For details run: cd ${APP_DIR} && php artisan zedproxy:health"
 fi
 
 # ─── SSL / Let's Encrypt (only after HTTP health check passes) ────────────────
