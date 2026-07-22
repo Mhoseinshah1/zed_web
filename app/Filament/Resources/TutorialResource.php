@@ -47,14 +47,36 @@ class TutorialResource extends Resource
             ])->columns(2),
 
             Forms\Components\Section::make('سئو و نمایش')->collapsed()->schema([
-                Forms\Components\TextInput::make('meta_title')->label('عنوان سئو')->maxLength(255),
-                Forms\Components\Textarea::make('meta_description')->label('توضیحات سئو')->rows(2),
+                Forms\Components\TextInput::make('meta_title')->label('عنوان سئو')->maxLength(70)
+                    ->helperText('خالی = عنوان آموزش. طول پیشنهادی ۵۰ تا ۶۰ کاراکتر.'),
+                Forms\Components\Textarea::make('meta_description')->label('توضیحات سئو')->rows(2)->maxLength(180),
+                Forms\Components\TextInput::make('canonical_url')->label('آدرس کنونیکال')->url()->maxLength(255)
+                    ->placeholder('خالی = ساخت خودکار')->columnSpanFull(),
+                Forms\Components\Toggle::make('robots_index')->label('اجازه ایندکس')->default(true),
+                Forms\Components\Toggle::make('robots_follow')->label('اجازه دنبال‌کردن لینک‌ها')->default(true),
+                Forms\Components\TextInput::make('og_title')->label('عنوان اشتراک‌گذاری')->maxLength(255),
+                Forms\Components\Textarea::make('og_description')->label('توضیحات اشتراک‌گذاری')->rows(2),
                 Forms\Components\FileUpload::make('og_image')->label('تصویر اشتراک‌گذاری')
                     ->image()->disk('public')->directory('tutorials')
                     ->acceptedFileTypes(['image/jpeg', 'image/png', 'image/webp'])->maxSize(2048),
+                Forms\Components\TextInput::make('twitter_title')->label('عنوان توییتر')->maxLength(255),
+                Forms\Components\Textarea::make('twitter_description')->label('توضیحات توییتر')->rows(2),
+                Forms\Components\Select::make('schema_type')->label('نوع اسکیما')
+                    ->options([
+                        'Article'     => 'مقاله (Article)',
+                        'TechArticle' => 'مقاله فنی (TechArticle)',
+                        'HowTo'       => 'راهنمای گام‌به‌گام (HowTo)',
+                    ])->default('Article')->native(false)
+                    ->helperText('HowTo فقط زمانی استفاده می‌شود که مراحل واقعی وجود داشته باشد؛ در غیر این صورت به TechArticle تبدیل می‌شود.'),
+                Forms\Components\TextInput::make('author_name')->label('نام نویسنده')->maxLength(120)
+                    ->helperText('اختیاری — تنها در صورت وجود، در اسکیما درج می‌شود.'),
+                Forms\Components\DateTimePicker::make('published_at')->label('تاریخ انتشار'),
                 Forms\Components\TextInput::make('sort_order')->label('ترتیب نمایش')->numeric()->default(0),
                 Forms\Components\Toggle::make('is_active')->label('فعال')->default(true),
             ])->columns(2),
+
+            Forms\Components\Section::make('سایت‌مپ')->collapsed()
+                ->schema(\App\Filament\Support\SeoFormFields::sitemapFields())->columns(3),
         ]);
     }
 

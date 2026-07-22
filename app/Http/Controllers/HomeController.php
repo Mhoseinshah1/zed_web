@@ -8,12 +8,16 @@ use App\Models\Feature;
 use App\Models\LandingSection;
 use App\Models\Location;
 use App\Models\Plan;
+use App\Services\Seo\SeoManager;
 use Illuminate\View\View;
 
 class HomeController extends Controller
 {
-    public function index(): View
+    public function index(SeoManager $seo): View
     {
+        // Home SEO (title/desc/canonical/Organization+WebSite+WebPage schema).
+        $seo->forKey('home');
+
         $plans     = Plan::active()->ordered()->with('features')->get();
         $features  = Feature::active()->ordered()->get();
         $locations = Location::active()->ordered()->get();

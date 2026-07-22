@@ -18,6 +18,7 @@ class AuthController extends Controller
 {
     public function showLogin()
     {
+        app(\App\Services\Seo\SeoManager::class)->forKey('login');
         return view('auth.login');
     }
 
@@ -100,6 +101,7 @@ class AuthController extends Controller
             );
         }
 
+        app(\App\Services\Seo\SeoManager::class)->forKey('register');
         return view('auth.register');
     }
 

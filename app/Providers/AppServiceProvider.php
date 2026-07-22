@@ -11,7 +11,9 @@ class AppServiceProvider extends ServiceProvider
      */
     public function register(): void
     {
-        //
+        // One SeoManager per request: controllers enrich it and <x-seo-head>
+        // renders the resolved SeoData exactly once.
+        $this->app->scoped(\App\Services\Seo\SeoManager::class);
     }
 
     /**

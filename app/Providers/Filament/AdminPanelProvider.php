@@ -84,6 +84,8 @@ class AdminPanelProvider extends PanelProvider
                 SubstituteBindings::class,
                 DisableBladeIconComponents::class,
                 DispatchServingFilamentEvent::class,
+                // Admin panel must never be indexed.
+                \App\Http\Middleware\NoIndexHeaders::class,
             ])
             ->authMiddleware([
                 Authenticate::class,
