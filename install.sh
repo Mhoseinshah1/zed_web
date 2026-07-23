@@ -1286,16 +1286,33 @@ supervisorctl reread
 supervisorctl update
 ok "Queue workers configured"
 
-# ─── Update shortcut ─────────────────────────────────────────────────────────
-log "Installing zedproxy-update shortcut..."
-cat > /usr/local/bin/zedproxy-update <<'UPDATESCRIPT'
+# ─── Deployment command shortcuts ────────────────────────────────────────────
+# zedproxy-update / zedproxy-rollback / zedproxy-deploy-status wrap the atomic
+# release-based deployment scripts shipped in the repo (scripts/deploy/*). They
+# resolve the deploy scripts from the active release so they always run the
+# version that matches the deployed code.
+log "Installing deployment command shortcuts..."
+
+cat > /usr/local/bin/zedproxy-update <<UPDATESCRIPT
 #!/usr/bin/env bash
-curl -fsSL https://raw.githubusercontent.com/mhoseinshah1/zed_web/main/update.sh -o /tmp/zedproxy-update.sh \
-    && chmod +x /tmp/zedproxy-update.sh \
-    && sudo bash /tmp/zedproxy-update.sh
+# Atomic release-based deployment. Falls back to the in-repo script.
+exec sudo bash "${APP_DIR}/scripts/deploy/deploy.sh" "\$@"
 UPDATESCRIPT
 chmod +x /usr/local/bin/zedproxy-update
-ok "Shortcut installed: run 'zedproxy-update' to update"
+
+cat > /usr/local/bin/zedproxy-rollback <<ROLLBACKSCRIPT
+#!/usr/bin/env bash
+exec sudo bash "${APP_DIR}/scripts/deploy/rollback.sh" "\$@"
+ROLLBACKSCRIPT
+chmod +x /usr/local/bin/zedproxy-rollback
+
+cat > /usr/local/bin/zedproxy-deploy-status <<STATUSSCRIPT
+#!/usr/bin/env bash
+exec bash "${APP_DIR}/scripts/deploy/deploy-status.sh" "\$@"
+STATUSSCRIPT
+chmod +x /usr/local/bin/zedproxy-deploy-status
+
+ok "Shortcuts installed: zedproxy-update, zedproxy-rollback, zedproxy-deploy-status"
 
 # ─── Laravel scheduler cron (the ONE supported scheduling method) ─────────────
 # A single every-minute `schedule:run` drives every scheduled task defined in
