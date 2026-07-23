@@ -50,8 +50,9 @@
     </ul>
 
     @auth
-        <form method="POST" action="{{ route('plans.buy', $plan) }}" class="mt-8">
+        <form method="POST" action="{{ route('plans.buy', $plan) }}" class="mt-8" data-idempotent-form>
             @csrf
+            @include('partials.purchase-token', ['op' => 'new_service', 'planId' => $plan->id])
             <button type="submit" class="{{ str_replace('mt-8 ', '', $btnClass) }} w-full py-3">
                 خرید این پلن
             </button>

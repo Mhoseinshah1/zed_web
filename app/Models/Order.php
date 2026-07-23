@@ -46,6 +46,7 @@ class Order extends Model
         'order_number',
         'order_type',
         'user_id',
+        'purchase_fingerprint',
         'plan_id',
         'user_service_id',
         'renewal_package_id',
@@ -161,6 +162,11 @@ class Order extends Model
     public function discountRedemption(): HasOne
     {
         return $this->hasOne(DiscountRedemption::class);
+    }
+
+    public function purchaseIntent(): HasOne
+    {
+        return $this->hasOne(PurchaseIntent::class);
     }
 
     public function userService(): BelongsTo

@@ -58,8 +58,9 @@
             <p class="text-xs text-gray-400">اگر کد تخفیف دارید، در مرحله بعد (صفحه سفارش) می‌توانید آن را اعمال کنید.</p>
         </div>
 
-        <form action="{{ route('dashboard.services.extra-traffic.submit', $service) }}" method="POST" id="addon-form">
+        <form action="{{ route('dashboard.services.extra-traffic.submit', $service) }}" method="POST" id="addon-form" data-idempotent-form>
             @csrf
+            @include('partials.purchase-token', ['op' => 'extra_traffic', 'serviceId' => $service->id])
             <label for="amount_gb" class="block text-sm text-gray-300 mb-2">مقدار حجم اضافه</label>
             <div class="flex items-center gap-2">
                 <input type="number" name="amount_gb" id="amount_gb"

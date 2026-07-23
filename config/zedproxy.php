@@ -33,6 +33,28 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Purchase idempotency
+    |--------------------------------------------------------------------------
+    |
+    | intent_ttl_minutes:    how long a signed purchase token / intent stays
+    |                        valid after the form is rendered (default 30). A
+    |                        submission after this window is rejected and the
+    |                        user must reload the form.
+    | pending_reuse_minutes: if the user already has a recent UNPAID order for
+    |                        the same purchase intent, a new submission is
+    |                        redirected to that order instead of creating another
+    |                        (default 30).
+    |
+    */
+
+    'purchase' => [
+        'intent_ttl_minutes'    => (int) env('PURCHASE_INTENT_TTL_MINUTES', 30),
+        'pending_reuse_minutes' => (int) env('PURCHASE_PENDING_REUSE_MINUTES', 30),
+        'prune_batch_size'      => (int) env('PURCHASE_PRUNE_BATCH_SIZE', 500),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Discount reservations
     |--------------------------------------------------------------------------
     |

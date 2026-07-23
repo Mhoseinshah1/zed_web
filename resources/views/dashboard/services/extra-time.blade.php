@@ -60,8 +60,9 @@
             <p class="text-xs text-gray-400">اگر کد تخفیف دارید، در مرحله بعد (صفحه سفارش) می‌توانید آن را اعمال کنید.</p>
         </div>
 
-        <form action="{{ route('dashboard.services.extra-time.submit', $service) }}" method="POST" id="addon-form">
+        <form action="{{ route('dashboard.services.extra-time.submit', $service) }}" method="POST" id="addon-form" data-idempotent-form>
             @csrf
+            @include('partials.purchase-token', ['op' => 'extra_time', 'serviceId' => $service->id])
             <label for="amount_days" class="block text-sm text-gray-300 mb-2">تعداد روز اضافه</label>
             <div class="flex items-center gap-2">
                 <input type="number" name="amount_days" id="amount_days"

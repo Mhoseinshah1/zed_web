@@ -93,9 +93,11 @@ Route::post('/logout', [AuthController::class, 'logout'])->middleware('auth')->n
 // Theme / appearance preference — available to guests (cookie) and users (saved)
 Route::post('/theme', [ThemeController::class, 'update'])->name('theme.update');
 
-// Buy flow — POST to prevent accidental double-submit on page reload
+// Buy flow — POST to prevent accidental double-submit on page reload.
+// Server-side idempotency (purchase intent + fingerprint) is the real guarantee;
+// the throttle blunts abusive bursts of submissions.
 Route::post('/plans/{plan}/buy', [CheckoutController::class, 'buy'])
-    ->middleware(['auth', 'profile.complete'])
+    ->middleware(['auth', 'profile.complete', 'throttle:purchase-submit'])
     ->name('plans.buy');
 
 // User dashboard (prefix: /dashboard, name: dashboard.*)
@@ -115,12 +117,12 @@ Route::middleware(['noindex', 'auth'])->prefix('dashboard')->name('dashboard.')-
     Route::get('/services', [ServiceController::class, 'index'])->name('services');
     Route::get('/services/{service}', [ServiceController::class, 'show'])->name('services.show');
     Route::middleware('profile.complete')->group(function () {
-        Route::get('/services/{service}/renew', [RenewalController::class, 'show'])->name('services.renew');
-        Route::post('/services/{service}/renew', [RenewalController::class, 'submit'])->name('services.renew.submit');
-        Route::get('/services/{service}/extra-traffic', [ServiceAddonController::class, 'showTraffic'])->name('services.extra-traffic');
-        Route::post('/services/{service}/extra-traffic', [ServiceAddonController::class, 'submitTraffic'])->name('services.extra-traffic.submit');
-        Route::get('/services/{service}/extra-time', [ServiceAddonController::class, 'showTime'])->name('services.extra-time');
-        Route::post('/services/{service}/extra-time', [ServiceAddonController::class, 'submitTime'])->name('services.extra-time.submit');
+        Route::get('/services/{service}/renew', [RenewalController::class, 'show'])->middleware('throttle:purchase-intent')->name('services.renew');
+        Route::post('/services/{service}/renew', [RenewalController::class, 'submit'])->middleware('throttle:purchase-submit')->name('services.renew.submit');
+        Route::get('/services/{service}/extra-traffic', [ServiceAddonController::class, 'showTraffic'])->middleware('throttle:purchase-intent')->name('services.extra-traffic');
+        Route::post('/services/{service}/extra-traffic', [ServiceAddonController::class, 'submitTraffic'])->middleware('throttle:purchase-submit')->name('services.extra-traffic.submit');
+        Route::get('/services/{service}/extra-time', [ServiceAddonController::class, 'showTime'])->middleware('throttle:purchase-intent')->name('services.extra-time');
+        Route::post('/services/{service}/extra-time', [ServiceAddonController::class, 'submitTime'])->middleware('throttle:purchase-submit')->name('services.extra-time.submit');
     });
 
     // Marzban self-service actions — throttled to prevent abuse

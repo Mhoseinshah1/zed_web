@@ -2,8 +2,11 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\Order;
+use App\Models\PurchaseIntent;
 use App\Models\UserService;
 use App\Services\Addons\ServiceAddonService;
+use App\Services\Orders\OrderIdempotencyService;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\View\View;
@@ -12,6 +15,7 @@ class ServiceAddonController extends Controller
 {
     public function __construct(
         private readonly ServiceAddonService $addonService,
+        private readonly OrderIdempotencyService $idempotency,
     ) {}
 
     // ── Extra traffic ────────────────────────────────────────────────────────
@@ -56,18 +60,24 @@ class ServiceAddonController extends Controller
             'amount_gb.max'      => "حداکثر حجم قابل خرید {$maxGb} گیگابایت است.",
         ]);
 
+        $user = auth()->user();
+        $gb   = (int) $validated['amount_gb'];
+
         try {
-            $order = $this->addonService->createExtraTrafficOrder(
-                $service,
-                (int) $validated['amount_gb'],
-                auth()->user(),
+            $result = $this->idempotency->createOrReturn(
+                $user,
+                PurchaseIntent::OP_EXTRA_TRAFFIC,
+                ['user_service_id' => $service->id, 'options' => ['amount_gb' => $gb]],
+                $request->input('purchase_token'),
+                fn (string $fp): Order => $this->addonService->createExtraTrafficOrder($service, $gb, $user, $fp),
             );
-        } catch (\InvalidArgumentException $e) {
+        } catch (\InvalidArgumentException|\RuntimeException $e) {
             return $this->back($service, $e->getMessage());
         }
 
-        // Land on the order page so the user can apply a discount code before paying.
-        return redirect()->route('dashboard.orders.show', $order);
+        return redirect()
+            ->route('dashboard.orders.show', $result['order'])
+            ->with($result['reused'] ? 'info' : 'success', $result['message'] ?? '');
     }
 
     // ── Extra time ───────────────────────────────────────────────────────────
@@ -112,18 +122,24 @@ class ServiceAddonController extends Controller
             'amount_days.max'      => "حداکثر زمان قابل خرید {$maxDays} روز است.",
         ]);
 
+        $user = auth()->user();
+        $days = (int) $validated['amount_days'];
+
         try {
-            $order = $this->addonService->createExtraTimeOrder(
-                $service,
-                (int) $validated['amount_days'],
-                auth()->user(),
+            $result = $this->idempotency->createOrReturn(
+                $user,
+                PurchaseIntent::OP_EXTRA_TIME,
+                ['user_service_id' => $service->id, 'options' => ['amount_days' => $days]],
+                $request->input('purchase_token'),
+                fn (string $fp): Order => $this->addonService->createExtraTimeOrder($service, $days, $user, $fp),
             );
-        } catch (\InvalidArgumentException $e) {
+        } catch (\InvalidArgumentException|\RuntimeException $e) {
             return $this->back($service, $e->getMessage());
         }
 
-        // Land on the order page so the user can apply a discount code before paying.
-        return redirect()->route('dashboard.orders.show', $order);
+        return redirect()
+            ->route('dashboard.orders.show', $result['order'])
+            ->with($result['reused'] ? 'info' : 'success', $result['message'] ?? '');
     }
 
     private function back(UserService $service, string $message): RedirectResponse

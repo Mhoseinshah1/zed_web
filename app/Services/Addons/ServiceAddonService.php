@@ -97,7 +97,7 @@ class ServiceAddonService
 
     // ── Order creation ───────────────────────────────────────────────────────
 
-    public function createExtraTrafficOrder(UserService $service, int $gb, User $user): Order
+    public function createExtraTrafficOrder(UserService $service, int $gb, User $user, ?string $purchaseFingerprint = null): Order
     {
         if (! $this->trafficEnabled()) {
             throw new \InvalidArgumentException('خرید حجم اضافه در حال حاضر غیرفعال است.');
@@ -125,10 +125,11 @@ class ServiceAddonService
         $originalLimit   = (int) ($service->traffic_total_gb * self::BYTES_PER_GB);
         $newLimit        = $originalLimit + ($gb * self::BYTES_PER_GB);
 
-        return DB::transaction(function () use ($service, $gb, $pricePerGb, $amount, $originalLimit, $newLimit) {
+        return DB::transaction(function () use ($service, $gb, $pricePerGb, $amount, $originalLimit, $newLimit, $purchaseFingerprint) {
             return Order::create([
                 'order_type'          => Order::TYPE_EXTRA_TRAFFIC,
                 'user_id'             => $service->user_id,
+                'purchase_fingerprint'=> $purchaseFingerprint,
                 'user_service_id'     => $service->id,
                 'plan_name'           => $service->plan_name,
                 'extra_traffic_gb'    => $gb,
@@ -145,7 +146,7 @@ class ServiceAddonService
         });
     }
 
-    public function createExtraTimeOrder(UserService $service, int $days, User $user): Order
+    public function createExtraTimeOrder(UserService $service, int $days, User $user, ?string $purchaseFingerprint = null): Order
     {
         if (! $this->timeEnabled()) {
             throw new \InvalidArgumentException('خرید زمان اضافه در حال حاضر غیرفعال است.');
@@ -172,10 +173,11 @@ class ServiceAddonService
         $amount    = $days * $pricePerDay;
         $newExpiry = $this->calculateNewExpiry($service, $days);
 
-        return DB::transaction(function () use ($service, $days, $pricePerDay, $amount, $newExpiry) {
+        return DB::transaction(function () use ($service, $days, $pricePerDay, $amount, $newExpiry, $purchaseFingerprint) {
             return Order::create([
                 'order_type'         => Order::TYPE_EXTRA_TIME,
                 'user_id'            => $service->user_id,
+                'purchase_fingerprint'=> $purchaseFingerprint,
                 'user_service_id'    => $service->id,
                 'plan_name'          => $service->plan_name,
                 'extra_time_days'    => $days,

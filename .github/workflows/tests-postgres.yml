@@ -66,3 +66,6 @@ jobs:
 
       - name: Discount concurrency + reservation lifecycle (PostgreSQL)
         run: php artisan test --testsuite=Feature --filter='DiscountConcurrencyTest|DiscountConcurrencyPgTest|DiscountTest|DiscountAllFlowsTest'
+
+      - name: Order idempotency + real-concurrency (PostgreSQL)
+        run: php artisan test --testsuite=Feature --filter='OrderIdempotencyTest|OrderIdempotencyPgTest'

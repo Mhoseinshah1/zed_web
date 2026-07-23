@@ -166,8 +166,9 @@
                             {{ number_format($plan->price_toman) }} <small class="text-[11px] text-content-muted font-medium">تومان</small>
                         </div>
                         @auth
-                            <form method="POST" action="{{ route('plans.buy', $plan) }}">
+                            <form method="POST" action="{{ route('plans.buy', $plan) }}" data-idempotent-form>
                                 @csrf
+                                @include('partials.purchase-token', ['op' => 'new_service', 'planId' => $plan->id])
                                 <button type="submit" aria-label="خرید {{ $plan->name }}" class="wm-accent-bg w-[42px] h-[42px] rounded-[11px] flex items-center justify-center transition">
                                     <svg class="w-[19px] h-[19px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
                                 </button>

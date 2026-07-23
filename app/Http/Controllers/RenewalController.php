@@ -2,9 +2,12 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\Order;
 use App\Models\Plan;
+use App\Models\PurchaseIntent;
 use App\Models\SiteSetting;
 use App\Models\UserService;
+use App\Services\Orders\OrderIdempotencyService;
 use App\Services\Renewals\RenewalService;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -14,6 +17,7 @@ class RenewalController extends Controller
 {
     public function __construct(
         private readonly RenewalService $renewalService,
+        private readonly OrderIdempotencyService $idempotency,
     ) {}
 
     public function show(UserService $service): View|RedirectResponse
@@ -71,15 +75,25 @@ class RenewalController extends Controller
             ->where('renewal_enabled', true)
             ->firstOrFail();
 
+        $user = auth()->user();
+
         try {
-            $order = $this->renewalService->createRenewalOrder($service, $plan, auth()->user());
-        } catch (\InvalidArgumentException $e) {
+            $result = $this->idempotency->createOrReturn(
+                $user,
+                PurchaseIntent::OP_RENEWAL,
+                ['plan_id' => $plan->id, 'user_service_id' => $service->id],
+                $request->input('purchase_token'),
+                fn (string $fp): Order => $this->renewalService->createRenewalOrder($service, $plan, $user, $fp),
+            );
+        } catch (\InvalidArgumentException|\RuntimeException $e) {
             return redirect()
                 ->route('dashboard.services.show', $service)
                 ->with('error', $e->getMessage());
         }
 
         // Land on the order page so the user can apply a discount code before paying.
-        return redirect()->route('dashboard.orders.show', $order);
+        return redirect()
+            ->route('dashboard.orders.show', $result['order'])
+            ->with($result['reused'] ? 'info' : 'success', $result['message'] ?? '');
     }
 }
