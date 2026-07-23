@@ -6,7 +6,7 @@ name: Tests
 
 on:
   push:
-    branches: [ main, 'claude/**' ]
+    branches: [ main, 'claude/**', 'feat/**', 'fix/**' ]
   pull_request:
     branches: [ main ]
 
@@ -44,3 +44,42 @@ jobs:
 
       - name: Run test suite
         run: php artisan test
+
+  deploy-scripts:
+    # Validates the installer + atomic release-deployment shell scripts with
+    # syntax checks, shellcheck, and fully MOCKED deployment scenarios. It never
+    # performs a real deployment and never touches the runner's Nginx/PostgreSQL/
+    # Supervisor.
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Syntax-check all shell scripts
+        run: |
+          bash -n install.sh
+          bash -n update.sh
+          for f in $(find scripts tests -name '*.sh'); do
+            echo "bash -n $f"
+            bash -n "$f"
+          done
+
+      - name: Install shellcheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+
+      - name: ShellCheck (errors only)
+        run: |
+          shellcheck -S error -x \
+            scripts/lib/deploy-lib.sh \
+            scripts/deploy/deploy.sh \
+            scripts/deploy/rollback.sh \
+            scripts/deploy/deploy-status.sh \
+            scripts/lib/installer-lib.sh \
+            tests/deploy/run-tests.sh \
+            tests/installer/run-tests.sh
+
+      - name: Installer helper tests
+        run: bash tests/installer/run-tests.sh
+
+      - name: Deployment scenario tests (mocked)
+        run: bash tests/deploy/run-tests.sh
