@@ -19,6 +19,20 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Scheduler Lock Store
+    |--------------------------------------------------------------------------
+    |
+    | The cache store the Laravel scheduler uses for its mutexes
+    | (withoutOverlapping + the run-lock). Pinned to the file store so overlap
+    | prevention keeps working during a Redis outage — otherwise a lock failure
+    | on the default (Redis) store could let a long task dangerously double-run.
+    |
+    */
+
+    'schedule_store' => env('SCHEDULER_LOCK_STORE', 'file'),
+
+    /*
+    |--------------------------------------------------------------------------
     | Cache Stores
     |--------------------------------------------------------------------------
     |

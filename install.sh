@@ -1297,30 +1297,76 @@ UPDATESCRIPT
 chmod +x /usr/local/bin/zedproxy-update
 ok "Shortcut installed: run 'zedproxy-update' to update"
 
-# ─── Cron for backup ─────────────────────────────────────────────────────────
-log "Scheduling daily backup cron..."
-CRON_JOB="0 3 * * * www-data bash ${APP_DIR}/scripts/backup.sh >> /var/log/zedproxy-backup.log 2>&1"
-CRON_FILE="/etc/cron.d/zedproxy-backup"
-echo "$CRON_JOB" > "$CRON_FILE"
-chmod 0644 "$CRON_FILE"
-ok "Daily backup scheduled at 3:00 AM"
+# ─── Laravel scheduler cron (the ONE supported scheduling method) ─────────────
+# A single every-minute `schedule:run` drives every scheduled task defined in
+# routes/console.php (backups, Telegram reports, panel health, Marzban sync, and
+# the scheduler heartbeat). Writing a dedicated /etc/cron.d file (fully replaced
+# each run) is idempotent — re-running the installer never duplicates entries.
+log "Installing Laravel scheduler cron..."
+SCHED_USER="www-data"
+SCHED_LOG="/var/log/zedproxy-scheduler.log"
+SCHED_CRON_FILE="/etc/cron.d/zedproxy-scheduler"
+SCHED_LINE="$(zp_scheduler_cron_line "${APP_DIR}" "${SCHED_USER}" "php" "${SCHED_LOG}")"
+zp_write_cron_file "${SCHED_CRON_FILE}" "${SCHED_LINE}"
+ok "Scheduler cron installed (runs every minute → ${SCHED_LOG})"
+
+# Prepare the scheduler log with correct ownership/permissions so www-data can
+# write to it (and log rotation can manage it).
+touch "${SCHED_LOG}"
+chown "${SCHED_USER}:${SCHED_USER}" "${SCHED_LOG}" 2>/dev/null || true
+chmod 0640 "${SCHED_LOG}" 2>/dev/null || true
+
+# Log rotation for the scheduler log.
+cat > /etc/logrotate.d/zedproxy-scheduler <<LOGROTATE
+${SCHED_LOG} {
+    weekly
+    rotate 8
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
+    su ${SCHED_USER} ${SCHED_USER}
+    create 0640 ${SCHED_USER} ${SCHED_USER}
+}
+LOGROTATE
+ok "Log rotation configured for ${SCHED_LOG}"
+
+# Retire the legacy backup cron — backups are now controlled solely by the
+# Laravel scheduler (zedproxy:backup --scheduled), so they run from ONE system.
+if zp_remove_file "/etc/cron.d/zedproxy-backup"; then
+    ok "Removed legacy backup cron (backups now run via the Laravel scheduler)"
+fi
+
+# Verify the scheduler is wired up: list the registered tasks. The heartbeat
+# will appear within a minute; check it with: php artisan zedproxy:scheduler-status
+log "Verifying scheduler configuration..."
+if sudo -u "${SCHED_USER}" php "${APP_DIR}/artisan" schedule:list >/dev/null 2>&1 \
+    || php "${APP_DIR}/artisan" schedule:list >/dev/null 2>&1; then
+    ok "Scheduler tasks registered (php artisan schedule:list)"
+else
+    warn "Could not list scheduler tasks — run: cd ${APP_DIR} && php artisan schedule:list"
+fi
 
 # ─── HTTP health check (must pass before SSL) ─────────────────────────────────
 log "Running HTTP health check..."
 sleep 2
 
-HEALTH_RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost/health 2>/dev/null || echo "000")
+# Depend only on the safe public fields: HTTP 200 + "status":"ok". The response
+# never contains error messages, so it is safe to print.
+HEALTH_BODY=$(curl -s --max-time 10 http://localhost/health 2>/dev/null || echo "")
+HEALTH_RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 http://localhost/health 2>/dev/null || echo "000")
 HEALTH_OK=false
 
-if [ "$HEALTH_RESPONSE" = "200" ]; then
-    ok "Health check PASSED (HTTP 200)"
-    curl -s http://localhost/health
+if [ "$HEALTH_RESPONSE" = "200" ] && echo "$HEALTH_BODY" | grep -q '"status":[[:space:]]*"ok"'; then
+    ok "Health check PASSED (HTTP 200, status ok)"
+    echo "$HEALTH_BODY"
     echo ""
     HEALTH_OK=true
 else
     warn "Health check returned HTTP $HEALTH_RESPONSE"
     warn "The app may still be warming up. Run: curl http://localhost/health"
-    warn "Check logs: tail -f ${APP_DIR}/storage/logs/laravel.log"
+    warn "For details run: cd ${APP_DIR} && php artisan zedproxy:health"
 fi
 
 # ─── SSL / Let's Encrypt (only after HTTP health check passes) ────────────────

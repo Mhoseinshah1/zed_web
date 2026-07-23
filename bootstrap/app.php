@@ -12,12 +12,17 @@ return Application::configure(basePath: dirname(__DIR__))
         health: '/up',
     )
     ->withMiddleware(function (Middleware $middleware): void {
-        // Trust all reverse proxies (Nginx, Cloudflare, load balancers, etc.) so that
-        // Laravel generates correct https:// URLs. Without this, Livewire's update URI
-        // resolves to http:// while the page is served over https://, causing the browser
-        // to block the mixed-content XHR — the form then falls back to a native POST
-        // to /zed-admin/login (GET-only) and the server returns 405.
-        $middleware->trustProxies(at: '*');
+        // Trust only the reverse proxies configured in config/proxies.php
+        // (TRUSTED_PROXIES / TRUST_CLOUDFLARE_PROXIES) instead of every source.
+        // Forwarded headers — including X-Forwarded-Proto, which keeps HTTPS URL
+        // generation, Livewire, Filament and signed URLs working behind TLS
+        // termination — are honoured only when the immediate peer is a trusted
+        // proxy, so a directly reachable origin can no longer be tricked into
+        // trusting a spoofed X-Forwarded-For and bypassing IP rate limiting.
+        $middleware->replace(
+            \Illuminate\Http\Middleware\TrustProxies::class,
+            \App\Http\Middleware\TrustProxies::class,
+        );
 
         // NOWPayments IPN webhook must bypass CSRF — signature verified via HMAC-SHA512.
         // Telegram admin-bot webhook bypasses CSRF — verified by the secret-token header.
