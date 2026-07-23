@@ -548,7 +548,8 @@ jobs:
         # skip an already-run migration) — it must abort with a clear "duplicate"
         # error and delete nothing.
         run: |
-          cat > /tmp/guard_check.php <<'PHP'
+          # Written into the workspace so __DIR__ resolves to the app root.
+          cat > ci_guard_check.php <<'PHP'
           <?php
           require __DIR__.'/vendor/autoload.php';
           $app = require __DIR__.'/bootstrap/app.php';
@@ -593,4 +594,5 @@ jobs:
               exit(0);
           }
           PHP
-          php /tmp/guard_check.php
+          php ci_guard_check.php
+          rm -f ci_guard_check.php

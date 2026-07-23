@@ -837,11 +837,12 @@ class WalletTest extends TestCase
 
     public function test_admin_manual_credit_increases_balance(): void
     {
+        $admin = $this->makeUser();
         $user = $this->makeUser();
 
         app(WalletService::class)->credit($user, 200000, WalletTransaction::TYPE_MANUAL_CREDIT, [
             'description' => 'شارژ توسط ادمین',
-            'admin_id' => 1,
+            'admin_id' => $admin->id,
         ]);
 
         $user->refresh();
@@ -850,11 +851,12 @@ class WalletTest extends TestCase
 
     public function test_admin_manual_debit_decreases_balance(): void
     {
+        $admin = $this->makeUser();
         $user = $this->makeUser(['wallet_balance_toman' => 500000]);
 
         app(WalletService::class)->debit($user, 100000, WalletTransaction::TYPE_MANUAL_DEBIT, [
             'description' => 'برداشت توسط ادمین',
-            'admin_id' => 1,
+            'admin_id' => $admin->id,
         ]);
 
         $user->refresh();
@@ -863,12 +865,13 @@ class WalletTest extends TestCase
 
     public function test_admin_manual_debit_cannot_make_balance_negative(): void
     {
+        $admin = $this->makeUser();
         $user = $this->makeUser(['wallet_balance_toman' => 50000]);
 
         $this->expectException(\RuntimeException::class);
 
         app(WalletService::class)->debit($user, 100000, WalletTransaction::TYPE_MANUAL_DEBIT, [
-            'admin_id' => 1,
+            'admin_id' => $admin->id,
         ]);
 
         $user->refresh();
