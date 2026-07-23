@@ -7,12 +7,10 @@ use App\Models\PaymentMethod;
 use App\Models\PaymentTransaction;
 use App\Models\Plan;
 use App\Models\ProvisioningAttempt;
-use App\Models\SiteText;
 use App\Models\User;
 use App\Models\UserService;
 use App\Models\VpnPanel;
-use App\Models\WalletTransaction;
-use App\Services\PaymentService;
+use App\Services\Orders\MarkOrderAsPaidService;
 use App\Services\Provisioning\ProvisioningService;
 use App\Services\WalletService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -30,9 +28,10 @@ class ProvisioningTest extends TestCase
     {
         static $seq = 0;
         $seq++;
+
         return User::factory()->create(array_merge([
-            'username'             => "prov_test_{$seq}",
-            'email'                => "prov_{$seq}@test.com",
+            'username' => "prov_test_{$seq}",
+            'email' => "prov_{$seq}@test.com",
             'wallet_balance_toman' => 0,
         ], $attrs));
     }
@@ -40,9 +39,9 @@ class ProvisioningTest extends TestCase
     private function makePlan(int $price = 50000): Plan
     {
         return Plan::factory()->create([
-            'price_toman'   => $price,
-            'is_active'     => true,
-            'traffic_gb'    => 20,
+            'price_toman' => $price,
+            'is_active' => true,
+            'traffic_gb' => 20,
             'duration_days' => 30,
         ]);
     }
@@ -50,28 +49,28 @@ class ProvisioningTest extends TestCase
     private function makeOrder(User $user, Plan $plan, array $attrs = []): Order
     {
         return Order::create(array_merge([
-            'user_id'           => $user->id,
-            'plan_id'           => $plan->id,
-            'plan_name'         => $plan->name,
-            'price_toman'       => $plan->price_toman,
+            'user_id' => $user->id,
+            'plan_id' => $plan->id,
+            'plan_name' => $plan->name,
+            'price_toman' => $plan->price_toman,
             'final_price_toman' => $plan->price_toman,
-            'traffic_gb'        => $plan->traffic_gb,
-            'duration_days'     => $plan->duration_days,
-            'status'            => Order::STATUS_PAID,
-            'payment_status'    => Order::PAYMENT_PAID,
-            'paid_at'           => now(),
+            'traffic_gb' => $plan->traffic_gb,
+            'duration_days' => $plan->duration_days,
+            'status' => Order::STATUS_PAID,
+            'payment_status' => Order::PAYMENT_PAID,
+            'paid_at' => now(),
         ], $attrs));
     }
 
     private function makeMarzbanPanel(): VpnPanel
     {
         return VpnPanel::create([
-            'name'       => 'Test Panel',
-            'type'       => VpnPanel::TYPE_MARZBAN,
-            'base_url'   => 'https://panel.test',
-            'username'   => 'admin',
-            'password'   => 'secret',
-            'is_active'  => true,
+            'name' => 'Test Panel',
+            'type' => VpnPanel::TYPE_MARZBAN,
+            'base_url' => 'https://panel.test',
+            'username' => 'admin',
+            'password' => 'secret',
+            'is_active' => true,
             'is_default' => true,
         ]);
     }
@@ -81,10 +80,10 @@ class ProvisioningTest extends TestCase
         Http::fake([
             '*/api/admin/token' => Http::response([
                 'access_token' => 'test-token',
-                'token_type'   => 'bearer',
+                'token_type' => 'bearer',
             ], 200),
-            '*/api/user'        => Http::response($this->marzbanUserResponse($username), 200),
-            "*/api/user/*"      => Http::response($this->marzbanUserResponse($username), 200),
+            '*/api/user' => Http::response($this->marzbanUserResponse($username), 200),
+            '*/api/user/*' => Http::response($this->marzbanUserResponse($username), 200),
         ]);
     }
 
@@ -93,24 +92,24 @@ class ProvisioningTest extends TestCase
         Http::fake([
             '*/api/admin/token' => Http::response([
                 'access_token' => 'test-token',
-                'token_type'   => 'bearer',
+                'token_type' => 'bearer',
             ], 200),
-            '*/api/user'        => Http::response(['detail' => 'Internal server error'], 500),
-            '*/api/user/*'      => Http::response(['detail' => 'Not found'], 404),
+            '*/api/user' => Http::response(['detail' => 'Internal server error'], 500),
+            '*/api/user/*' => Http::response(['detail' => 'Not found'], 404),
         ]);
     }
 
     private function marzbanUserResponse(string $username): array
     {
         return [
-            'username'         => $username,
-            'status'           => 'active',
-            'used_traffic'     => 0,
-            'data_limit'       => 21_474_836_480,
-            'expire'           => now()->addDays(30)->timestamp,
+            'username' => $username,
+            'status' => 'active',
+            'used_traffic' => 0,
+            'data_limit' => 21_474_836_480,
+            'expire' => now()->addDays(30)->timestamp,
             'subscription_url' => 'https://panel.test/sub/TOKEN/',
-            'links'            => ['vless://test-config'],
-            'proxies'          => ['vless' => ['id' => 'some-uuid']],
+            'links' => ['vless://test-config'],
+            'proxies' => ['vless' => ['id' => 'some-uuid']],
         ];
     }
 
@@ -121,8 +120,8 @@ class ProvisioningTest extends TestCase
         $this->makeMarzbanPanel();
         $this->fakeMarzbanSuccess();
 
-        $user  = $this->makeUser();
-        $plan  = $this->makePlan();
+        $user = $this->makeUser();
+        $plan = $this->makePlan();
         $order = $this->makeOrder($user, $plan);
 
         $service = app(ProvisioningService::class)->provisionOrder($order);
@@ -141,15 +140,15 @@ class ProvisioningTest extends TestCase
         $this->makeMarzbanPanel();
         $this->fakeMarzbanSuccess();
 
-        $user  = $this->makeUser();
-        $plan  = $this->makePlan();
+        $user = $this->makeUser();
+        $plan = $this->makePlan();
         $order = $this->makeOrder($user, $plan);
 
         app(ProvisioningService::class)->provisionOrder($order);
 
         $this->assertDatabaseHas('provisioning_attempts', [
             'order_id' => $order->id,
-            'status'   => ProvisioningAttempt::STATUS_SUCCESS,
+            'status' => ProvisioningAttempt::STATUS_SUCCESS,
         ]);
     }
 
@@ -158,12 +157,12 @@ class ProvisioningTest extends TestCase
         $this->makeMarzbanPanel();
         $this->fakeMarzbanSuccess();
 
-        $user  = $this->makeUser();
-        $plan  = $this->makePlan();
+        $user = $this->makeUser();
+        $plan = $this->makePlan();
         $order = $this->makeOrder($user, $plan, [
-            'status'         => Order::STATUS_PENDING,
+            'status' => Order::STATUS_PENDING,
             'payment_status' => Order::PAYMENT_UNPAID,
-            'paid_at'        => null,
+            'paid_at' => null,
         ]);
 
         $this->expectException(\RuntimeException::class);
@@ -179,8 +178,8 @@ class ProvisioningTest extends TestCase
         $this->makeMarzbanPanel();
         $this->fakeMarzbanFailure();
 
-        $user  = $this->makeUser();
-        $plan  = $this->makePlan();
+        $user = $this->makeUser();
+        $plan = $this->makePlan();
         $order = $this->makeOrder($user, $plan);
 
         try {
@@ -197,8 +196,8 @@ class ProvisioningTest extends TestCase
         $this->makeMarzbanPanel();
         $this->fakeMarzbanFailure();
 
-        $user  = $this->makeUser();
-        $plan  = $this->makePlan();
+        $user = $this->makeUser();
+        $plan = $this->makePlan();
         $order = $this->makeOrder($user, $plan);
 
         try {
@@ -215,8 +214,8 @@ class ProvisioningTest extends TestCase
         $this->makeMarzbanPanel();
         $this->fakeMarzbanFailure();
 
-        $user  = $this->makeUser();
-        $plan  = $this->makePlan();
+        $user = $this->makeUser();
+        $plan = $this->makePlan();
         $order = $this->makeOrder($user, $plan);
 
         try {
@@ -226,7 +225,7 @@ class ProvisioningTest extends TestCase
 
         $this->assertDatabaseHas('provisioning_attempts', [
             'order_id' => $order->id,
-            'status'   => ProvisioningAttempt::STATUS_FAILED,
+            'status' => ProvisioningAttempt::STATUS_FAILED,
         ]);
     }
 
@@ -235,32 +234,32 @@ class ProvisioningTest extends TestCase
     public function test_admin_retry_works_after_provisioning_failed(): void
     {
         $panel = $this->makeMarzbanPanel();
-        $user  = $this->makeUser();
-        $plan  = $this->makePlan();
+        $user = $this->makeUser();
+        $plan = $this->makePlan();
         $order = $this->makeOrder($user, $plan, ['status' => Order::STATUS_PROVISIONING_FAILED]);
 
         // Set up the already-failed state manually (avoids Http::fake sequencing issues)
         $service = UserService::create([
-            'user_id'          => $user->id,
-            'order_id'         => $order->id,
-            'plan_id'          => $plan->id,
-            'plan_name'        => $plan->name,
+            'user_id' => $user->id,
+            'order_id' => $order->id,
+            'plan_id' => $plan->id,
+            'plan_name' => $plan->name,
             'traffic_total_gb' => $plan->traffic_gb,
-            'traffic_used_gb'  => 0,
-            'duration_days'    => $plan->duration_days,
-            'status'           => UserService::STATUS_PENDING_PROVISION,
+            'traffic_used_gb' => 0,
+            'duration_days' => $plan->duration_days,
+            'status' => UserService::STATUS_PENDING_PROVISION,
             'provision_status' => UserService::PROVISION_FAILED,
         ]);
         ProvisioningAttempt::create([
-            'order_id'       => $order->id,
-            'user_id'        => $user->id,
-            'user_service_id'=> $service->id,
-            'vpn_panel_id'   => $panel->id,
-            'status'         => ProvisioningAttempt::STATUS_FAILED,
+            'order_id' => $order->id,
+            'user_id' => $user->id,
+            'user_service_id' => $service->id,
+            'vpn_panel_id' => $panel->id,
+            'status' => ProvisioningAttempt::STATUS_FAILED,
             'attempt_number' => 1,
-            'error_message'  => 'HTTP 500 - Internal server error',
-            'started_at'     => now()->subMinute(),
-            'finished_at'    => now()->subSeconds(59),
+            'error_message' => 'HTTP 500 - Internal server error',
+            'started_at' => now()->subMinute(),
+            'finished_at' => now()->subSeconds(59),
         ]);
 
         // Admin retry with a working Marzban
@@ -277,8 +276,8 @@ class ProvisioningTest extends TestCase
         $this->makeMarzbanPanel();
         $this->fakeMarzbanSuccess();
 
-        $user  = $this->makeUser();
-        $plan  = $this->makePlan();
+        $user = $this->makeUser();
+        $plan = $this->makePlan();
         $order = $this->makeOrder($user, $plan);
 
         app(ProvisioningService::class)->provisionOrder($order);
@@ -291,32 +290,32 @@ class ProvisioningTest extends TestCase
     public function test_provisioning_creates_attempt_record_per_call(): void
     {
         $panel = $this->makeMarzbanPanel();
-        $user  = $this->makeUser();
-        $plan  = $this->makePlan();
+        $user = $this->makeUser();
+        $plan = $this->makePlan();
         $order = $this->makeOrder($user, $plan, ['status' => Order::STATUS_PROVISIONING_FAILED]);
 
         // Set up the already-failed state manually
         $service = UserService::create([
-            'user_id'          => $user->id,
-            'order_id'         => $order->id,
-            'plan_id'          => $plan->id,
-            'plan_name'        => $plan->name,
+            'user_id' => $user->id,
+            'order_id' => $order->id,
+            'plan_id' => $plan->id,
+            'plan_name' => $plan->name,
             'traffic_total_gb' => $plan->traffic_gb,
-            'traffic_used_gb'  => 0,
-            'duration_days'    => $plan->duration_days,
-            'status'           => UserService::STATUS_PENDING_PROVISION,
+            'traffic_used_gb' => 0,
+            'duration_days' => $plan->duration_days,
+            'status' => UserService::STATUS_PENDING_PROVISION,
             'provision_status' => UserService::PROVISION_FAILED,
         ]);
         ProvisioningAttempt::create([
-            'order_id'       => $order->id,
-            'user_id'        => $user->id,
-            'user_service_id'=> $service->id,
-            'vpn_panel_id'   => $panel->id,
-            'status'         => ProvisioningAttempt::STATUS_FAILED,
+            'order_id' => $order->id,
+            'user_id' => $user->id,
+            'user_service_id' => $service->id,
+            'vpn_panel_id' => $panel->id,
+            'status' => ProvisioningAttempt::STATUS_FAILED,
             'attempt_number' => 1,
-            'error_message'  => 'HTTP 500 - Internal server error',
-            'started_at'     => now()->subMinute(),
-            'finished_at'    => now()->subSeconds(59),
+            'error_message' => 'HTTP 500 - Internal server error',
+            'started_at' => now()->subMinute(),
+            'finished_at' => now()->subSeconds(59),
         ]);
 
         // Second attempt (retry) succeeds
@@ -333,8 +332,8 @@ class ProvisioningTest extends TestCase
         $this->makeMarzbanPanel();
         $this->fakeMarzbanSuccess();
 
-        $user  = $this->makeUser();
-        $plan  = $this->makePlan();
+        $user = $this->makeUser();
+        $plan = $this->makePlan();
         $order = $this->makeOrder($user, $plan);
 
         // First provisioning
@@ -355,22 +354,22 @@ class ProvisioningTest extends TestCase
     {
         Queue::fake();
 
-        $user  = $this->makeUser();
-        $plan  = $this->makePlan();
+        $user = $this->makeUser();
+        $plan = $this->makePlan();
         $order = $this->makeOrder($user, $plan);
 
         // Simulate two IPN arrivals for same order
         $tx = PaymentTransaction::create([
-            'order_id'          => $order->id,
-            'user_id'           => $user->id,
-            'provider'          => 'nowpayments',
-            'method'            => 'nowpayments',
-            'payment_purpose'   => 'order_payment',
-            'status'            => PaymentTransaction::STATUS_WAITING,
-            'amount_toman'      => $plan->price_toman,
+            'order_id' => $order->id,
+            'user_id' => $user->id,
+            'provider' => 'nowpayments',
+            'method' => 'nowpayments',
+            'payment_purpose' => 'order_payment',
+            'status' => PaymentTransaction::STATUS_WAITING,
+            'amount_toman' => $plan->price_toman,
         ]);
 
-        $markPaid = app(\App\Services\Orders\MarkOrderAsPaidService::class);
+        $markPaid = app(MarkOrderAsPaidService::class);
         $markPaid->markPaid($order, $tx);
 
         $order->refresh();
@@ -388,29 +387,29 @@ class ProvisioningTest extends TestCase
     {
         Queue::fake();
 
-        $user   = $this->makeUser(['wallet_balance_toman' => 0]);
+        $user = $this->makeUser(['wallet_balance_toman' => 0]);
         $method = PaymentMethod::firstOrCreate(
             ['type' => PaymentMethod::TYPE_NOWPAYMENTS],
             [
-                'title'      => 'NOWPayments',
-                'slug'       => 'nowpayments',
-                'is_active'  => true,
-                'api_key'    => 'test-key',
+                'title' => 'NOWPayments',
+                'slug' => 'nowpayments',
+                'is_active' => true,
+                'api_key' => 'test-key',
                 'ipn_secret' => 'test-secret',
-                'config'     => ['sandbox' => true, 'exchange_rate_usd' => 75000],
+                'config' => ['sandbox' => true, 'exchange_rate_usd' => 75000],
             ]
         );
 
         // Create a wallet-topup transaction (not linked to an order)
         $tx = PaymentTransaction::create([
-            'order_id'           => null,
-            'user_id'            => $user->id,
-            'payment_method_id'  => $method->id,
-            'provider'           => 'nowpayments',
-            'method'             => 'nowpayments',
-            'payment_purpose'    => 'wallet_topup',
-            'status'             => PaymentTransaction::STATUS_WAITING,
-            'amount_toman'       => 100000,
+            'order_id' => null,
+            'user_id' => $user->id,
+            'payment_method_id' => $method->id,
+            'provider' => 'nowpayments',
+            'method' => 'nowpayments',
+            'payment_purpose' => 'wallet_topup',
+            'status' => PaymentTransaction::STATUS_WAITING,
+            'amount_toman' => 100000,
         ]);
 
         // Credit wallet (simulates IPN finished for wallet_topup)
@@ -427,8 +426,8 @@ class ProvisioningTest extends TestCase
 
     public function test_user_sees_provisioning_message_when_order_provisioning(): void
     {
-        $user  = $this->makeUser();
-        $plan  = $this->makePlan();
+        $user = $this->makeUser();
+        $plan = $this->makePlan();
         $order = $this->makeOrder($user, $plan, ['status' => Order::STATUS_PROVISIONING]);
 
         $this->actingAs($user)
@@ -439,8 +438,8 @@ class ProvisioningTest extends TestCase
 
     public function test_user_sees_safe_message_on_provisioning_failed(): void
     {
-        $user  = $this->makeUser();
-        $plan  = $this->makePlan();
+        $user = $this->makeUser();
+        $plan = $this->makePlan();
         $order = $this->makeOrder($user, $plan, ['status' => Order::STATUS_PROVISIONING_FAILED]);
 
         $this->actingAs($user)
@@ -451,19 +450,19 @@ class ProvisioningTest extends TestCase
 
     public function test_user_does_not_see_technical_error_on_provisioning_failed(): void
     {
-        $user  = $this->makeUser();
-        $plan  = $this->makePlan();
+        $user = $this->makeUser();
+        $plan = $this->makePlan();
         $order = $this->makeOrder($user, $plan, ['status' => Order::STATUS_PROVISIONING_FAILED]);
 
         // Create a failed attempt with technical error
         ProvisioningAttempt::create([
-            'order_id'      => $order->id,
-            'user_id'       => $user->id,
-            'status'        => ProvisioningAttempt::STATUS_FAILED,
-            'attempt_number'=> 1,
+            'order_id' => $order->id,
+            'user_id' => $user->id,
+            'status' => ProvisioningAttempt::STATUS_FAILED,
+            'attempt_number' => 1,
             'error_message' => 'Marzban API error 500: Internal Server Error at https://panel.internal',
-            'started_at'    => now(),
-            'finished_at'   => now(),
+            'started_at' => now(),
+            'finished_at' => now(),
         ]);
 
         $response = $this->actingAs($user)
@@ -481,18 +480,18 @@ class ProvisioningTest extends TestCase
     public function test_admin_can_see_provisioning_attempts_in_panel(): void
     {
         $admin = $this->makeUser(['is_admin' => true]);
-        $user  = $this->makeUser();
-        $plan  = $this->makePlan();
+        $user = $this->makeUser();
+        $plan = $this->makePlan();
         $order = $this->makeOrder($user, $plan, ['status' => Order::STATUS_PROVISIONING_FAILED]);
 
         ProvisioningAttempt::create([
-            'order_id'       => $order->id,
-            'user_id'        => $user->id,
-            'status'         => ProvisioningAttempt::STATUS_FAILED,
+            'order_id' => $order->id,
+            'user_id' => $user->id,
+            'status' => ProvisioningAttempt::STATUS_FAILED,
             'attempt_number' => 1,
-            'error_message'  => 'Connection refused',
-            'started_at'     => now(),
-            'finished_at'    => now(),
+            'error_message' => 'Connection refused',
+            'started_at' => now(),
+            'finished_at' => now(),
         ]);
 
         $this->assertTrue(
@@ -511,8 +510,8 @@ class ProvisioningTest extends TestCase
         $this->makeMarzbanPanel();
         $this->fakeMarzbanFailure();
 
-        $user  = $this->makeUser();
-        $plan  = $this->makePlan();
+        $user = $this->makeUser();
+        $plan = $this->makePlan();
         $order = $this->makeOrder($user, $plan);
 
         try {
@@ -539,10 +538,10 @@ class ProvisioningTest extends TestCase
         $service = app(ProvisioningService::class);
 
         // Use reflection to test private method
-        $ref    = new \ReflectionMethod($service, 'sanitizeError');
+        $ref = new \ReflectionMethod($service, 'sanitizeError');
         $ref->setAccessible(true);
 
-        $dirty  = 'Request failed with Bearer eyJhbGciOiJIUzI1NiJ9.test token';
+        $dirty = 'Request failed with Bearer eyJhbGciOiJIUzI1NiJ9.test token';
         $result = $ref->invoke($service, $dirty);
 
         $this->assertStringNotContainsString('eyJhbGciOiJIUzI1NiJ9', $result);
@@ -555,8 +554,8 @@ class ProvisioningTest extends TestCase
         $this->makeMarzbanPanel();
         $this->fakeMarzbanSuccess();
 
-        $user  = $this->makeUser();
-        $plan  = $this->makePlan();
+        $user = $this->makeUser();
+        $plan = $this->makePlan();
         $order = $this->makeOrder($user, $plan);
 
         app(ProvisioningService::class)->provisionOrder($order);
@@ -567,8 +566,8 @@ class ProvisioningTest extends TestCase
 
     public function test_order_status_label_returns_persian_for_new_statuses(): void
     {
-        $user  = $this->makeUser();
-        $plan  = $this->makePlan();
+        $user = $this->makeUser();
+        $plan = $this->makePlan();
 
         $order = $this->makeOrder($user, $plan, ['status' => Order::STATUS_PROVISIONING]);
         $this->assertEquals('در حال ساخت سرویس', $order->statusLabel());

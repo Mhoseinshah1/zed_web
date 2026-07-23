@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Models\Page;
 use App\Models\SiteSetting;
 use App\Services\Theme\TemplateManager;
 use Database\Seeders\DefaultPagesSeeder;
@@ -33,12 +34,12 @@ class PublicPagesTest extends TestCase
     public function test_seeder_is_idempotent_and_keeps_admin_edits(): void
     {
         $this->seed(DefaultPagesSeeder::class);
-        \App\Models\Page::where('slug', 'about')->update(['title' => 'درباره ما (ویرایش‌شده)']);
+        Page::where('slug', 'about')->update(['title' => 'درباره ما (ویرایش‌شده)']);
 
         $this->seed(DefaultPagesSeeder::class); // re-run
 
-        $this->assertSame(1, \App\Models\Page::where('slug', 'about')->count());
-        $this->assertSame('درباره ما (ویرایش‌شده)', \App\Models\Page::where('slug', 'about')->value('title'));
+        $this->assertSame(1, Page::where('slug', 'about')->count());
+        $this->assertSame('درباره ما (ویرایش‌شده)', Page::where('slug', 'about')->value('title'));
     }
 
     // ── Task 2: every page gets the active template's shell ──────────────────

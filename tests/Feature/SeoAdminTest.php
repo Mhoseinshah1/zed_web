@@ -19,7 +19,7 @@ class SeoAdminTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
-        (new SeoPageSeeder())->run();
+        (new SeoPageSeeder)->run();
         SeoSettings::flush();
     }
 
@@ -43,7 +43,7 @@ class SeoAdminTest extends TestCase
         Livewire::actingAs($this->admin())
             ->test(EditSeoPage::class, ['record' => $home->getRouteKey()])
             ->fillForm([
-                'meta_title'       => 'عنوان سفارشی زدپروکسی',
+                'meta_title' => 'عنوان سفارشی زدپروکسی',
                 'meta_description' => 'توضیحات سفارشی برای صفحه اصلی',
             ])
             ->call('save')
@@ -73,9 +73,9 @@ class SeoAdminTest extends TestCase
         Livewire::actingAs($this->admin())
             ->test(SeoSettingsPage::class)
             ->fillForm([
-                'seo_site_name'     => 'زدپروکسی',
+                'seo_site_name' => 'زدپروکسی',
                 'seo_default_title' => 'زدپروکسی | عنوان سراسری',
-                'seo_org_name'      => 'شرکت زدپروکسی',
+                'seo_org_name' => 'شرکت زدپروکسی',
             ])
             ->call('save')
             ->assertHasNoFormErrors();

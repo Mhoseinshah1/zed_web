@@ -23,16 +23,16 @@ class KavenegarSmsProvider extends AbstractSmsProvider
         $receptor = $this->toLocal($normalizedPhone);
 
         $response = Http::asForm()->timeout(20)->post(
-            self::BASE . '/' . rawurlencode($this->apiKey()) . '/sms/send.json',
+            self::BASE.'/'.rawurlencode($this->apiKey()).'/sms/send.json',
             array_filter([
                 'receptor' => $receptor,
-                'sender'   => $this->sender() ?: null,
-                'message'  => $message,
+                'sender' => $this->sender() ?: null,
+                'message' => $message,
             ]),
         );
 
         if (! $response->successful()) {
-            throw new \RuntimeException('Kavenegar HTTP ' . $response->status());
+            throw new \RuntimeException('Kavenegar HTTP '.$response->status());
         }
 
         return true;
@@ -45,16 +45,16 @@ class KavenegarSmsProvider extends AbstractSmsProvider
             $receptor = $this->toLocal($normalizedPhone);
 
             $response = Http::asForm()->timeout(20)->post(
-                self::BASE . '/' . rawurlencode($this->apiKey()) . '/verify/lookup.json',
+                self::BASE.'/'.rawurlencode($this->apiKey()).'/verify/lookup.json',
                 [
                     'receptor' => $receptor,
                     'template' => $this->pattern(),
-                    'token'    => $code,
+                    'token' => $code,
                 ],
             );
 
             if (! $response->successful()) {
-                throw new \RuntimeException('Kavenegar lookup HTTP ' . $response->status());
+                throw new \RuntimeException('Kavenegar lookup HTTP '.$response->status());
             }
 
             return true;

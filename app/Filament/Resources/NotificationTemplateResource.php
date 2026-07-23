@@ -15,12 +15,17 @@ class NotificationTemplateResource extends Resource
 {
     protected static ?string $model = NotificationTemplate::class;
 
-    protected static ?string $navigationIcon   = 'heroicon-o-chat-bubble-left-right';
-    protected static ?string $navigationGroup   = 'اعلان‌ها و پیام‌ها';
-    protected static ?string $navigationLabel   = 'قالب پیام‌ها';
-    protected static ?string $modelLabel        = 'قالب پیام';
-    protected static ?string $pluralModelLabel  = 'قالب پیام‌ها';
-    protected static ?int    $navigationSort    = 20;
+    protected static ?string $navigationIcon = 'heroicon-o-chat-bubble-left-right';
+
+    protected static ?string $navigationGroup = 'اعلان‌ها و پیام‌ها';
+
+    protected static ?string $navigationLabel = 'قالب پیام‌ها';
+
+    protected static ?string $modelLabel = 'قالب پیام';
+
+    protected static ?string $pluralModelLabel = 'قالب پیام‌ها';
+
+    protected static ?int $navigationSort = 20;
 
     public static function form(Form $form): Form
     {
@@ -30,7 +35,7 @@ class NotificationTemplateResource extends Resource
                     ->label('کلید رویداد')
                     ->disabled()
                     ->dehydrated(false)
-                    ->formatStateUsing(fn ($state) => (NotificationModel::typeLabels()[$state] ?? $state) . "  ({$state})"),
+                    ->formatStateUsing(fn ($state) => (NotificationModel::typeLabels()[$state] ?? $state)."  ({$state})"),
 
                 Forms\Components\Toggle::make('is_active')
                     ->label('فعال')
@@ -90,7 +95,7 @@ class NotificationTemplateResource extends Resource
     {
         return [
             'index' => Pages\ListNotificationTemplates::route('/'),
-            'edit'  => Pages\EditNotificationTemplate::route('/{record}/edit'),
+            'edit' => Pages\EditNotificationTemplate::route('/{record}/edit'),
         ];
     }
 }

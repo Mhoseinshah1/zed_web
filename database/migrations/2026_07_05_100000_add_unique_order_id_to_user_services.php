@@ -43,8 +43,8 @@ return new class extends Migration
             $lines = $dupes->map(fn ($r) => "order_id={$r->order_id} → {$r->cnt} services")->implode('; ');
             throw new RuntimeException(
                 "Cannot add the unique constraint on user_services.order_id: duplicate services exist.\n"
-                . "Duplicates: {$lines}\n"
-                . "Resolve them first (nothing was deleted). Run: php artisan zedproxy:find-duplicate-services"
+                ."Duplicates: {$lines}\n"
+                .'Resolve them first (nothing was deleted). Run: php artisan zedproxy:find-duplicate-services'
             );
         }
 
@@ -86,9 +86,10 @@ return new class extends Migration
             if ($driver === 'sqlite') {
                 return DB::table('sqlite_master')->where('type', 'index')->where('name', $this->indexName)->exists();
             }
-        } catch (\Throwable $e) {
+        } catch (Throwable $e) {
             return false;
         }
+
         return false;
     }
 };

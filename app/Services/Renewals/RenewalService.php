@@ -2,6 +2,7 @@
 
 namespace App\Services\Renewals;
 
+use App\Models\Notification;
 use App\Models\Order;
 use App\Models\Plan;
 use App\Models\SiteSetting;
@@ -9,6 +10,7 @@ use App\Models\User;
 use App\Models\UserService;
 use App\Models\WalletTransaction;
 use App\Services\Marzban\MarzbanClient;
+use App\Services\Notifications\NotificationService;
 use App\Services\WalletService;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\DB;
@@ -48,31 +50,31 @@ class RenewalService
             throw new \InvalidArgumentException('این پلن برای تمدید سرویس مجاز نیست.');
         }
 
-        $renewalPrice   = $plan->effectiveRenewalPrice();
-        $renewalDays    = $plan->effectiveRenewalDays();
+        $renewalPrice = $plan->effectiveRenewalPrice();
+        $renewalDays = $plan->effectiveRenewalDays();
         $cashbackAmount = $plan->effectiveCashbackAmount();
 
         return DB::transaction(function () use ($service, $plan, $renewalPrice, $renewalDays, $cashbackAmount, $purchaseFingerprint) {
             return Order::create([
-                'order_type'              => Order::TYPE_RENEWAL,
-                'user_id'                 => $service->user_id,
-                'purchase_fingerprint'    => $purchaseFingerprint,
-                'user_service_id'         => $service->id,
-                'plan_id'                 => $plan->id,
-                'original_plan_id'        => $service->plan_id,
-                'plan_name'               => $plan->name,
-                'plan_slug'               => $plan->slug,
-                'traffic_gb'              => $plan->traffic_gb,
-                'duration_days'           => $renewalDays,
-                'renewal_days'            => $renewalDays,
-                'price_toman'             => $renewalPrice,
-                'final_price_toman'       => $renewalPrice,
-                'discount_toman'          => 0,
+                'order_type' => Order::TYPE_RENEWAL,
+                'user_id' => $service->user_id,
+                'purchase_fingerprint' => $purchaseFingerprint,
+                'user_service_id' => $service->id,
+                'plan_id' => $plan->id,
+                'original_plan_id' => $service->plan_id,
+                'plan_name' => $plan->name,
+                'plan_slug' => $plan->slug,
+                'traffic_gb' => $plan->traffic_gb,
+                'duration_days' => $renewalDays,
+                'renewal_days' => $renewalDays,
+                'price_toman' => $renewalPrice,
+                'final_price_toman' => $renewalPrice,
+                'discount_toman' => 0,
                 'renewal_cashback_amount' => $cashbackAmount,
                 'renewal_cashback_status' => $cashbackAmount ? 'pending' : null,
-                'status'                  => Order::STATUS_AWAITING_PAYMENT,
-                'payment_status'          => Order::PAYMENT_UNPAID,
-                'notes'                   => "تمدید سرویس {$service->service_number} با پلن {$plan->name}",
+                'status' => Order::STATUS_AWAITING_PAYMENT,
+                'payment_status' => Order::PAYMENT_UNPAID,
+                'notes' => "تمدید سرویس {$service->service_number} با پلن {$plan->name}",
             ]);
         });
     }
@@ -105,59 +107,61 @@ class RenewalService
         if (! $service) {
             Log::error('RenewalService: userService not found for renewal order', ['order_id' => $order->id]);
             $order->update(['status' => Order::STATUS_RENEWAL_FAILED]);
+
             return;
         }
 
-        $days      = $order->renewal_days ?? $order->duration_days;
+        $days = $order->renewal_days ?? $order->duration_days;
         $newExpiry = $this->calculateNewExpiry($service, $days);
 
         DB::transaction(function () use ($order, $service, $newExpiry) {
             $order->update([
                 'original_expire_at' => $service->expires_at,
-                'new_expire_at'      => $newExpiry,
+                'new_expire_at' => $newExpiry,
                 'renewal_applied_at' => now(),
             ]);
 
             $service->update([
                 'expires_at' => $newExpiry,
-                'status'     => UserService::STATUS_ACTIVE,
+                'status' => UserService::STATUS_ACTIVE,
             ]);
         });
 
         // Push to Marzban — updates expire only, preserves proxies/links/traffic
         if ($service->remote_username) {
             try {
-                $panel  = $service->vpnPanel;
+                $panel = $service->vpnPanel;
                 $client = $panel ? new MarzbanClient($panel) : $this->marzban;
                 $client->updateUser($service->remote_username, [
                     'expire' => $newExpiry->timestamp,
                 ]);
             } catch (\Exception $e) {
                 Log::error('RenewalService: Marzban updateUser failed', [
-                    'order_id'        => $order->id,
-                    'service_id'      => $service->id,
+                    'order_id' => $order->id,
+                    'service_id' => $service->id,
                     'remote_username' => $service->remote_username,
-                    'error'           => $e->getMessage(),
+                    'error' => $e->getMessage(),
                 ]);
                 // Payment is already confirmed; mark renewal failed so admin can retry
                 $order->update(['status' => Order::STATUS_RENEWAL_FAILED]);
 
-                app(\App\Services\Notifications\NotificationService::class)->notifyAdmins(
-                    \App\Models\Notification::TYPE_MARZBAN_UPDATE_FAILED,
+                app(NotificationService::class)->notifyAdmins(
+                    Notification::TYPE_MARZBAN_UPDATE_FAILED,
                     [
-                        'user_name'  => $order->user?->name ?? $order->user?->username ?? '—',
-                        'order_id'   => $order->order_number,
+                        'user_name' => $order->user?->name ?? $order->user?->username ?? '—',
+                        'order_id' => $order->order_number,
                         'service_id' => $service->id,
-                        'error'      => $e->getMessage(),
+                        'error' => $e->getMessage(),
                     ],
-                    'marzban_update_failed:renewal:' . $order->id,
+                    'marzban_update_failed:renewal:'.$order->id,
                 );
+
                 return;
             }
         }
 
         $order->update([
-            'status'       => Order::STATUS_COMPLETED,
+            'status' => Order::STATUS_COMPLETED,
             'completed_at' => now(),
         ]);
 
@@ -166,17 +170,17 @@ class RenewalService
 
         // Notify the user their service was renewed. Idempotent per order.
         if ($order->user) {
-            app(\App\Services\Notifications\NotificationService::class)->notify(
-                \App\Models\Notification::TYPE_RENEWAL_SUCCESS,
+            app(NotificationService::class)->notify(
+                Notification::TYPE_RENEWAL_SUCCESS,
                 $order->user,
                 [
-                    'user_name'    => $order->user->name ?? $order->user->username,
+                    'user_name' => $order->user->name ?? $order->user->username,
                     'service_name' => $service->plan_name ?? $service->service_number,
-                    'order_id'     => $order->order_number,
-                    'days'         => $days,
-                    'expiry_date'  => $newExpiry->format('Y/m/d'),
+                    'order_id' => $order->order_number,
+                    'days' => $days,
+                    'expiry_date' => $newExpiry->format('Y/m/d'),
                 ],
-                'renewal_success:order:' . $order->id,
+                'renewal_success:order:'.$order->id,
             );
         }
 
@@ -201,6 +205,7 @@ class RenewalService
 
         if ($existing) {
             $order->update(['renewal_cashback_status' => 'credited']);
+
             return;
         }
 
@@ -211,25 +216,25 @@ class RenewalService
 
         try {
             $this->walletService->credit($user, $order->renewal_cashback_amount, WalletTransaction::TYPE_RENEWAL_CASHBACK, [
-                'order_id'    => $order->id,
+                'order_id' => $order->id,
                 'description' => 'کش‌بک تمدید سرویس',
             ]);
             $order->update(['renewal_cashback_status' => 'credited']);
 
-            app(\App\Services\Notifications\NotificationService::class)->notify(
-                \App\Models\Notification::TYPE_RENEWAL_CASHBACK_SUCCESS,
+            app(NotificationService::class)->notify(
+                Notification::TYPE_RENEWAL_CASHBACK_SUCCESS,
                 $user,
                 [
-                    'user_name'       => $user->name ?? $user->username,
+                    'user_name' => $user->name ?? $user->username,
                     'cashback_amount' => number_format($order->renewal_cashback_amount),
-                    'order_id'        => $order->order_number,
+                    'order_id' => $order->order_number,
                 ],
-                'renewal_cashback_success:order:' . $order->id,
+                'renewal_cashback_success:order:'.$order->id,
             );
         } catch (\Exception $e) {
             Log::error('RenewalService: cashback credit failed', [
                 'order_id' => $order->id,
-                'error'    => $e->getMessage(),
+                'error' => $e->getMessage(),
             ]);
         }
     }

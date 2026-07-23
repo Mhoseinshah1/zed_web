@@ -3,6 +3,7 @@
 namespace App\Filament\Resources;
 
 use App\Filament\Resources\PageResource\Pages;
+use App\Filament\Support\SeoFormFields;
 use App\Models\Page;
 use Filament\Forms;
 use Filament\Forms\Form;
@@ -15,12 +16,17 @@ class PageResource extends Resource
 {
     protected static ?string $model = Page::class;
 
-    protected static ?string $navigationIcon   = 'heroicon-o-document';
-    protected static ?string $navigationGroup   = 'مدیریت محتوا';
-    protected static ?string $navigationLabel   = 'صفحات سایت';
-    protected static ?string $modelLabel        = 'صفحه';
-    protected static ?string $pluralModelLabel  = 'صفحات سایت';
-    protected static ?int    $navigationSort    = 80;
+    protected static ?string $navigationIcon = 'heroicon-o-document';
+
+    protected static ?string $navigationGroup = 'مدیریت محتوا';
+
+    protected static ?string $navigationLabel = 'صفحات سایت';
+
+    protected static ?string $modelLabel = 'صفحه';
+
+    protected static ?string $pluralModelLabel = 'صفحات سایت';
+
+    protected static ?int $navigationSort = 80;
 
     public static function form(Form $form): Form
     {
@@ -30,7 +36,7 @@ class PageResource extends Resource
                     ->live(onBlur: true)
                     ->afterStateUpdated(function (string $operation, $state, Forms\Set $set) {
                         if ($operation === 'create') {
-                            $set('slug', Str::slug($state) ?: 'page-' . Str::random(6));
+                            $set('slug', Str::slug($state) ?: 'page-'.Str::random(6));
                         }
                     }),
                 Forms\Components\TextInput::make('slug')->label('اسلاگ (آدرس)')->required()
@@ -61,7 +67,7 @@ class PageResource extends Resource
             ])->columns(2),
 
             Forms\Components\Section::make('سایت‌مپ')->collapsed()
-                ->schema(\App\Filament\Support\SeoFormFields::sitemapFields())->columns(3),
+                ->schema(SeoFormFields::sitemapFields())->columns(3),
 
             Forms\Components\Section::make('نمایش')->schema([
                 Forms\Components\TextInput::make('sort_order')->label('ترتیب نمایش')->numeric()->default(0),
@@ -99,9 +105,9 @@ class PageResource extends Resource
     public static function getPages(): array
     {
         return [
-            'index'  => Pages\ListPages::route('/'),
+            'index' => Pages\ListPages::route('/'),
             'create' => Pages\CreatePage::route('/create'),
-            'edit'   => Pages\EditPage::route('/{record}/edit'),
+            'edit' => Pages\EditPage::route('/{record}/edit'),
         ];
     }
 }

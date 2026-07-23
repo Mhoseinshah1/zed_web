@@ -5,6 +5,7 @@ namespace App\Services\Telegram;
 use App\Models\SiteSetting;
 use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Str;
 
 /**
  * Typed accessors for all admin Telegram settings (stored in SiteSetting, so no
@@ -13,7 +14,8 @@ use Illuminate\Support\Facades\Log;
  */
 class TelegramSettings
 {
-    public const PARSE_HTML        = 'HTML';
+    public const PARSE_HTML = 'HTML';
+
     public const PARSE_MARKDOWN_V2 = 'MarkdownV2';
 
     /** All notification categories (mapped to topics). */
@@ -92,8 +94,9 @@ class TelegramSettings
     public function rotateWebhookSecret(): string
     {
         // Telegram allows A-Z a-z 0-9 _ - (1..256 chars). Str::random is alnum.
-        $secret = \Illuminate\Support\Str::random(48);
+        $secret = Str::random(48);
         $this->storeWebhookSecret($secret);
+
         return $secret;
     }
 
@@ -106,12 +109,14 @@ class TelegramSettings
     public function allowedAdminIds(): array
     {
         $raw = (string) SiteSetting::get('telegram_admin_user_ids', '');
+
         return array_values(array_filter(array_map('trim', preg_split('/[\s,]+/', $raw) ?: [])));
     }
 
     public function parseMode(): string
     {
         $mode = (string) SiteSetting::get('telegram_parse_mode', self::PARSE_HTML);
+
         return in_array($mode, [self::PARSE_HTML, self::PARSE_MARKDOWN_V2], true) ? $mode : self::PARSE_HTML;
     }
 
@@ -128,12 +133,12 @@ class TelegramSettings
     public function categoryEnabled(string $category): bool
     {
         // Default ON for every known category unless explicitly disabled.
-        return (bool) SiteSetting::get('telegram_cat_' . $category, true);
+        return (bool) SiteSetting::get('telegram_cat_'.$category, true);
     }
 
     public function setCategoryEnabled(string $category, bool $enabled): void
     {
-        SiteSetting::set('telegram_cat_' . $category, $enabled ? 'true' : 'false');
+        SiteSetting::set('telegram_cat_'.$category, $enabled ? 'true' : 'false');
     }
 
     /** True only when the bot is fully configured and ready to send. */
@@ -146,6 +151,6 @@ class TelegramSettings
     public static function safeLog(string $message, array $context = []): void
     {
         unset($context['token'], $context['bot_token']);
-        Log::warning('[telegram-admin] ' . $message, $context);
+        Log::warning('[telegram-admin] '.$message, $context);
     }
 }

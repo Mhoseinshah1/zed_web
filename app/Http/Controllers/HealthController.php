@@ -7,9 +7,7 @@ use Illuminate\Http\JsonResponse;
 
 class HealthController extends Controller
 {
-    public function __construct(private readonly HealthCheckService $health)
-    {
-    }
+    public function __construct(private readonly HealthCheckService $health) {}
 
     /**
      * Public readiness probe. Returns ONLY safe boolean information — never
@@ -23,12 +21,12 @@ class HealthController extends Controller
 
         // Explicit, fixed key order — booleans only.
         $payload = [
-            'status'     => $allOk ? 'ok' : 'error',
-            'app'        => $components['app'],
-            'database'   => $components['database'],
-            'redis'      => $components['redis'],
+            'status' => $allOk ? 'ok' : 'error',
+            'app' => $components['app'],
+            'database' => $components['database'],
+            'redis' => $components['redis'],
             'migrations' => $components['migrations'],
-            'storage'    => $components['storage'],
+            'storage' => $components['storage'],
         ];
 
         return response()->json($payload, $allOk ? 200 : 503);

@@ -15,12 +15,17 @@ class FeatureResource extends Resource
 {
     protected static ?string $model = Feature::class;
 
-    protected static ?string $navigationIcon  = 'heroicon-o-star';
+    protected static ?string $navigationIcon = 'heroicon-o-star';
+
     protected static ?string $navigationGroup = 'مدیریت محتوا';
+
     protected static ?string $navigationLabel = 'ویژگی‌ها';
-    protected static ?string $modelLabel      = 'ویژگی';
+
+    protected static ?string $modelLabel = 'ویژگی';
+
     protected static ?string $pluralModelLabel = 'ویژگی‌ها';
-    protected static ?int $navigationSort     = 50;
+
+    protected static ?int $navigationSort = 50;
 
     public static function form(Form $form): Form
     {
@@ -34,7 +39,7 @@ class FeatureResource extends Resource
                     ->afterStateUpdated(function (string $operation, $state, Forms\Set $set) {
                         if ($operation === 'create') {
                             $slug = Str::slug($state, '-', 'fa');
-                            $set('slug', $slug ?: 'feature-' . Str::random(6));
+                            $set('slug', $slug ?: 'feature-'.Str::random(6));
                         }
                     }),
 
@@ -95,9 +100,9 @@ class FeatureResource extends Resource
     public static function getPages(): array
     {
         return [
-            'index'  => Pages\ListFeatures::route('/'),
+            'index' => Pages\ListFeatures::route('/'),
             'create' => Pages\CreateFeature::route('/create'),
-            'edit'   => Pages\EditFeature::route('/{record}/edit'),
+            'edit' => Pages\EditFeature::route('/{record}/edit'),
         ];
     }
 }

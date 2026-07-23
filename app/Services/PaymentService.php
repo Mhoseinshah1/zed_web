@@ -2,11 +2,13 @@
 
 namespace App\Services;
 
+use App\Models\Notification;
 use App\Models\Order;
 use App\Models\PaymentMethod;
 use App\Models\PaymentTransaction;
 use App\Models\User;
 use App\Models\WalletTransaction;
+use App\Services\Notifications\NotificationService;
 use App\Services\Orders\MarkOrderAsPaidService;
 use Illuminate\Support\Facades\DB;
 use RuntimeException;
@@ -14,7 +16,7 @@ use RuntimeException;
 class PaymentService
 {
     public function __construct(
-        private WalletService      $wallet,
+        private WalletService $wallet,
         private ServiceProvisioner $provisioner,
     ) {}
 
@@ -30,26 +32,26 @@ class PaymentService
                 ->first();
 
             $this->wallet->debit($user, $order->final_price_toman, WalletTransaction::TYPE_ORDER_PAYMENT, [
-                'order_id'    => $order->id,
+                'order_id' => $order->id,
                 'description' => "پرداخت سفارش {$order->order_number}",
             ]);
 
             $tx = PaymentTransaction::create([
-                'order_id'          => $order->id,
-                'user_id'           => $user->id,
+                'order_id' => $order->id,
+                'user_id' => $user->id,
                 'payment_method_id' => $method?->id,
-                'provider'          => 'wallet',
-                'method'            => 'wallet',
-                'status'            => PaymentTransaction::STATUS_APPROVED,
-                'amount_toman'      => $order->final_price_toman,
-                'reviewed_at'       => now(),
-                'paid_at'           => now(),
+                'provider' => 'wallet',
+                'method' => 'wallet',
+                'status' => PaymentTransaction::STATUS_APPROVED,
+                'amount_toman' => $order->final_price_toman,
+                'reviewed_at' => now(),
+                'paid_at' => now(),
             ]);
 
             $order->update([
                 'payment_status' => Order::PAYMENT_PAID,
-                'status'         => Order::STATUS_PAID,
-                'paid_at'        => now(),
+                'status' => Order::STATUS_PAID,
+                'paid_at' => now(),
             ]);
 
             return $tx;
@@ -61,15 +63,15 @@ class PaymentService
         app(MarkOrderAsPaidService::class)->markPaid($order->fresh(), $tx->fresh());
 
         // Notify the user that the wallet payment succeeded. Idempotent per order.
-        app(\App\Services\Notifications\NotificationService::class)->notify(
-            \App\Models\Notification::TYPE_WALLET_PAYMENT_SUCCESS,
+        app(NotificationService::class)->notify(
+            Notification::TYPE_WALLET_PAYMENT_SUCCESS,
             $user,
             [
-                'user_name'    => $user->name ?? $user->username,
-                'order_id'     => $order->order_number,
+                'user_name' => $user->name ?? $user->username,
+                'order_id' => $order->order_number,
                 'final_amount' => number_format($order->final_price_toman),
             ],
-            'wallet_payment_success:order:' . $order->id,
+            'wallet_payment_success:order:'.$order->id,
         );
 
         return $tx;
@@ -87,8 +89,8 @@ class PaymentService
             }
 
             $tx->update([
-                'status'      => PaymentTransaction::STATUS_APPROVED,
-                'admin_note'  => $adminNote,
+                'status' => PaymentTransaction::STATUS_APPROVED,
+                'admin_note' => $adminNote,
                 'reviewed_by' => $adminId,
                 'reviewed_at' => now(),
             ]);
@@ -98,8 +100,8 @@ class PaymentService
             if ($order->payment_status !== Order::PAYMENT_PAID) {
                 $order->update([
                     'payment_status' => Order::PAYMENT_PAID,
-                    'status'         => Order::STATUS_PAID,
-                    'paid_at'        => now(),
+                    'status' => Order::STATUS_PAID,
+                    'paid_at' => now(),
                 ]);
             }
 
@@ -124,8 +126,8 @@ class PaymentService
             }
 
             $tx->update([
-                'status'      => PaymentTransaction::STATUS_REJECTED,
-                'admin_note'  => $adminNote,
+                'status' => PaymentTransaction::STATUS_REJECTED,
+                'admin_note' => $adminNote,
                 'reviewed_by' => $adminId,
                 'reviewed_at' => now(),
                 'rejected_at' => now(),
@@ -141,7 +143,7 @@ class PaymentService
             if (! $hasApproved) {
                 $order->update([
                     'payment_status' => Order::PAYMENT_UNPAID,
-                    'status'         => Order::STATUS_PENDING,
+                    'status' => Order::STATUS_PENDING,
                 ]);
             }
         });

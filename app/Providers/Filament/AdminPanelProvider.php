@@ -2,27 +2,26 @@
 
 namespace App\Providers\Filament;
 
+use App\Filament\Pages\Auth\Login;
+use App\Filament\Pages\Dashboard;
+use App\Http\Middleware\NoIndexHeaders;
+use App\Services\Theme\AdminAppearanceResolver;
+use App\Services\Theme\AppearanceManager;
+use Filament\Enums\ThemeMode;
 use Filament\Http\Middleware\Authenticate;
 use Filament\Http\Middleware\AuthenticateSession;
 use Filament\Http\Middleware\DisableBladeIconComponents;
 use Filament\Http\Middleware\DispatchServingFilamentEvent;
-use Filament\Pages;
 use Filament\Panel;
 use Filament\PanelProvider;
-use App\Models\SiteSetting;
-use App\Services\Theme\AdminAppearanceResolver;
-use App\Services\Theme\AppearanceManager;
-use App\Services\Theme\ThemeManager;
-use Filament\Enums\ThemeMode;
 use Filament\Support\Colors\Color;
 use Filament\View\PanelsRenderHook;
-use Filament\Widgets;
-use Illuminate\Support\HtmlString;
 use Illuminate\Cookie\Middleware\AddQueuedCookiesToResponse;
 use Illuminate\Cookie\Middleware\EncryptCookies;
 use Illuminate\Foundation\Http\Middleware\VerifyCsrfToken;
 use Illuminate\Routing\Middleware\SubstituteBindings;
 use Illuminate\Session\Middleware\StartSession;
+use Illuminate\Support\HtmlString;
 use Illuminate\View\Middleware\ShareErrorsFromSession;
 
 class AdminPanelProvider extends PanelProvider
@@ -35,12 +34,12 @@ class AdminPanelProvider extends PanelProvider
             ->default()
             ->id('zed-admin')
             ->path('zed-admin')
-            ->login(\App\Filament\Pages\Auth\Login::class)
+            ->login(Login::class)
             ->brandName($brandText)
             ->defaultThemeMode($themeMode)
             ->colors([
                 'primary' => $primaryColor,
-                'danger'  => Color::Red,
+                'danger' => Color::Red,
                 'success' => Color::Green,
                 'warning' => Color::Amber,
             ])
@@ -60,7 +59,7 @@ class AdminPanelProvider extends PanelProvider
             ->discoverResources(in: app_path('Filament/Resources'), for: 'App\\Filament\\Resources')
             ->discoverPages(in: app_path('Filament/Pages'), for: 'App\\Filament\\Pages')
             ->pages([
-                \App\Filament\Pages\Dashboard::class,
+                Dashboard::class,
             ])
             ->discoverWidgets(in: app_path('Filament/Widgets'), for: 'App\\Filament\\Widgets')
             // The dashboard defines its own widget set (see App\Filament\Pages\Dashboard);
@@ -85,7 +84,7 @@ class AdminPanelProvider extends PanelProvider
                 DisableBladeIconComponents::class,
                 DispatchServingFilamentEvent::class,
                 // Admin panel must never be indexed.
-                \App\Http\Middleware\NoIndexHeaders::class,
+                NoIndexHeaders::class,
             ])
             ->authMiddleware([
                 Authenticate::class,
@@ -101,7 +100,7 @@ class AdminPanelProvider extends PanelProvider
      */
     protected function resolveAdminTheme(): array
     {
-        $primary   = Color::Indigo;
+        $primary = Color::Indigo;
         $themeMode = ThemeMode::Dark;
         $brandText = 'ZedProxy Admin';
 
@@ -112,9 +111,9 @@ class AdminPanelProvider extends PanelProvider
             $primary = Color::hex(AdminAppearanceResolver::adminPrimary());
 
             $themeMode = match (AppearanceManager::appearanceMode()) {
-                'light'  => ThemeMode::Light,
+                'light' => ThemeMode::Light,
                 'system' => ThemeMode::System,
-                default  => ThemeMode::Dark,
+                default => ThemeMode::Dark,
             };
 
             $brandText = AdminAppearanceResolver::brandText();
@@ -142,10 +141,10 @@ class AdminPanelProvider extends PanelProvider
         // theme-vars <style> block (no JS dependency). This early script only
         // sets <html> attributes that CSS hooks onto — the active preset and
         // density/sidebar/brand selectors — before first paint.
-        $preset  = e($r['preset']);
+        $preset = e($r['preset']);
         $density = e($r['density']);
         $sidebar = e($r['sidebar_size']);
-        $brand   = e($r['brand_display']);
+        $brand = e($r['brand_display']);
 
         return <<<HTML
 <script>(function(){try{var el=document.documentElement;
@@ -170,7 +169,7 @@ HTML;
             return '';
         }
 
-        $out = '<style id="zp-theme-tokens">' . $tokens . '</style>';
+        $out = '<style id="zp-theme-tokens">'.$tokens.'</style>';
 
         // Filament toggles `.dark` on <html>; mirror its light mode onto our
         // neutral ramp (admin-scoped so the user side is unaffected).
@@ -179,10 +178,10 @@ HTML;
         // borders). Injected only into the admin <head>, so the public site and
         // user panel are unaffected.
         $lightRamp = 'html:not(.dark){'
-            . '--zp-bg:#f1f4fa;--zp-bg-soft:#e8edf6;--zp-surface:#ffffff;--zp-surface-soft:#f5f8fc;'
-            . '--zp-surface-hover:#eef2f9;--zp-text:#141a26;--zp-text-muted:#5c6680;--zp-border:#e3e8f1;'
-            . '--zp-card-shadow:0 1px 3px rgb(30 40 70 / .06), 0 8px 24px -14px rgb(30 40 70 / .14);}';
-        $out .= '<style id="zp-admin-light">' . $lightRamp . '</style>';
+            .'--zp-bg:#f1f4fa;--zp-bg-soft:#e8edf6;--zp-surface:#ffffff;--zp-surface-soft:#f5f8fc;'
+            .'--zp-surface-hover:#eef2f9;--zp-text:#141a26;--zp-text-muted:#5c6680;--zp-border:#e3e8f1;'
+            .'--zp-card-shadow:0 1px 3px rgb(30 40 70 / .06), 0 8px 24px -14px rgb(30 40 70 / .14);}';
+        $out .= '<style id="zp-admin-light">'.$lightRamp.'</style>';
 
         // Declarative, database-driven admin appearance variables. Rendered
         // AFTER the base tokens so the resolved values win the cascade, and
@@ -199,7 +198,7 @@ HTML;
         // and admin-only (never imported into app.css), scoped under .fi-body.
         $shell = $this->adminShellCss();
         if ($shell !== '') {
-            $out .= '<style id="zp-admin-shell">' . $shell . '</style>';
+            $out .= '<style id="zp-admin-shell">'.$shell.'</style>';
         }
 
         return $out;

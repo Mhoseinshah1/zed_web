@@ -17,8 +17,8 @@ class ThemeRegistry
     private const SEMANTIC = [
         'success' => '#34d399',
         'warning' => '#fbbf24',
-        'danger'  => '#f43f5e',
-        'info'    => '#38bdf8',
+        'danger' => '#f43f5e',
+        'info' => '#38bdf8',
     ];
 
     /**
@@ -32,6 +32,7 @@ class ThemeRegistry
         foreach (ThemeManager::presets() as $slug => $preset) {
             $out[$slug] = self::enrich($slug, $preset);
         }
+
         return $out;
     }
 
@@ -50,6 +51,7 @@ class ThemeRegistry
     public static function get(string $slug): ?array
     {
         $preset = ThemeManager::presets()[$slug] ?? null;
+
         return $preset ? self::enrich($slug, $preset) : null;
     }
 
@@ -75,33 +77,33 @@ class ThemeRegistry
      */
     private static function enrich(string $slug, array $preset): array
     {
-        $colors  = $preset['colors'] ?? [];
+        $colors = $preset['colors'] ?? [];
         $primary = $colors['primary'] ?? '#3b82f6';
 
         return [
-            'slug'        => $slug,
-            'title'       => $preset['title'] ?? $slug,
-            'name'        => $preset['name'] ?? $slug,
-            'group'       => $preset['group'] ?? 'dark',
-            'appearance'  => $preset['appearance'] ?? 'dark',
+            'slug' => $slug,
+            'title' => $preset['title'] ?? $slug,
+            'name' => $preset['name'] ?? $slug,
+            'group' => $preset['group'] ?? 'dark',
+            'appearance' => $preset['appearance'] ?? 'dark',
             'description' => $preset['description'] ?? '',
-            'dots'        => $preset['dots'] ?? [$primary],
-            'colors'      => array_merge([
-                'primary'      => $primary,
-                'secondary'    => $colors['secondary'] ?? $primary,
-                'accent'       => $colors['accent'] ?? $primary,
-                'bg'           => $colors['bg'] ?? '#0a0e1a',
-                'surface'      => $colors['surface'] ?? '#141a2b',
+            'dots' => $preset['dots'] ?? [$primary],
+            'colors' => array_merge([
+                'primary' => $primary,
+                'secondary' => $colors['secondary'] ?? $primary,
+                'accent' => $colors['accent'] ?? $primary,
+                'bg' => $colors['bg'] ?? '#0a0e1a',
+                'surface' => $colors['surface'] ?? '#141a2b',
                 'surface_soft' => $colors['surface_soft'] ?? '#1c2438',
-                'text'         => $colors['text'] ?? '#e8ebf5',
-                'muted'        => $colors['muted'] ?? '#9aa3bd',
-                'border'       => $colors['border'] ?? '#283047',
-                'gradient'     => $colors['gradient'] ?? "linear-gradient(135deg,{$primary},{$primary})",
+                'text' => $colors['text'] ?? '#e8ebf5',
+                'muted' => $colors['muted'] ?? '#9aa3bd',
+                'border' => $colors['border'] ?? '#283047',
+                'gradient' => $colors['gradient'] ?? "linear-gradient(135deg,{$primary},{$primary})",
             ], self::SEMANTIC, $colors),
             // Design metadata used by the studio preview / chrome.
-            'card_shadow'  => $preset['card_shadow'] ?? '0 10px 30px -12px rgb(0 0 0 / .5)',
+            'card_shadow' => $preset['card_shadow'] ?? '0 10px 30px -12px rgb(0 0 0 / .5)',
             'button_style' => $preset['button_style'] ?? 'gradient',
-            'badge_style'  => $preset['badge_style'] ?? 'soft',
+            'badge_style' => $preset['badge_style'] ?? 'soft',
         ];
     }
 }

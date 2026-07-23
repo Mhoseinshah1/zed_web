@@ -14,12 +14,17 @@ class SupportTicketCategoryResource extends Resource
 {
     protected static ?string $model = SupportTicketCategory::class;
 
-    protected static ?string $navigationIcon   = 'heroicon-o-tag';
-    protected static ?string $navigationGroup   = 'پشتیبانی';
-    protected static ?string $navigationLabel   = 'دسته‌بندی تیکت‌ها';
-    protected static ?string $modelLabel        = 'دسته‌بندی تیکت';
-    protected static ?string $pluralModelLabel  = 'دسته‌بندی تیکت‌ها';
-    protected static ?int    $navigationSort    = 20;
+    protected static ?string $navigationIcon = 'heroicon-o-tag';
+
+    protected static ?string $navigationGroup = 'پشتیبانی';
+
+    protected static ?string $navigationLabel = 'دسته‌بندی تیکت‌ها';
+
+    protected static ?string $modelLabel = 'دسته‌بندی تیکت';
+
+    protected static ?string $pluralModelLabel = 'دسته‌بندی تیکت‌ها';
+
+    protected static ?int $navigationSort = 20;
 
     public static function form(Form $form): Form
     {
@@ -60,9 +65,9 @@ class SupportTicketCategoryResource extends Resource
     public static function getPages(): array
     {
         return [
-            'index'  => Pages\ListSupportTicketCategories::route('/'),
+            'index' => Pages\ListSupportTicketCategories::route('/'),
             'create' => Pages\CreateSupportTicketCategory::route('/create'),
-            'edit'   => Pages\EditSupportTicketCategory::route('/{record}/edit'),
+            'edit' => Pages\EditSupportTicketCategory::route('/{record}/edit'),
         ];
     }
 }

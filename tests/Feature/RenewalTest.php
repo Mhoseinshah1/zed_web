@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Filament\Pages\FinancialReport;
 use App\Filament\Pages\RenewalSettingsPage;
 use App\Filament\Resources\RenewalPackageResource;
 use App\Models\Order;
@@ -16,6 +17,7 @@ use App\Services\Marzban\MarzbanClient;
 use App\Services\Orders\MarkOrderAsPaidService;
 use App\Services\Renewals\RenewalService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Tests\TestCase;
 
 class RenewalTest extends TestCase
@@ -27,14 +29,14 @@ class RenewalTest extends TestCase
     private function makePlan(array $overrides = []): Plan
     {
         return Plan::create(array_merge([
-            'name'             => 'پلن تست',
-            'slug'             => 'test-plan-' . uniqid(),
-            'price_toman'      => 100000,
-            'duration_days'    => 30,
-            'traffic_gb'       => 50,
-            'is_active'        => true,
-            'renewal_enabled'  => true,
-            'sort_order'       => 0,
+            'name' => 'پلن تست',
+            'slug' => 'test-plan-'.uniqid(),
+            'price_toman' => 100000,
+            'duration_days' => 30,
+            'traffic_gb' => 50,
+            'is_active' => true,
+            'renewal_enabled' => true,
+            'sort_order' => 0,
         ], $overrides));
     }
 
@@ -47,56 +49,57 @@ class RenewalTest extends TestCase
     {
         // Create a minimal plan just for FK reference — inactive so it doesn't appear as a renewable option
         $plan = Plan::create([
-            'name'            => 'پلن سرویس',
-            'slug'            => 'svc-plan-' . uniqid(),
-            'price_toman'     => 100000,
-            'duration_days'   => 30,
-            'traffic_gb'      => 50,
-            'is_active'       => false,
+            'name' => 'پلن سرویس',
+            'slug' => 'svc-plan-'.uniqid(),
+            'price_toman' => 100000,
+            'duration_days' => 30,
+            'traffic_gb' => 50,
+            'is_active' => false,
             'renewal_enabled' => false,
-            'sort_order'      => 0,
+            'sort_order' => 0,
         ]);
+
         return UserService::create(array_merge([
-            'user_id'          => $user->id,
-            'plan_id'          => $plan->id,
-            'status'           => UserService::STATUS_ACTIVE,
+            'user_id' => $user->id,
+            'plan_id' => $plan->id,
+            'status' => UserService::STATUS_ACTIVE,
             'provision_status' => UserService::PROVISION_PROVISIONED,
-            'plan_name'        => $plan->name,
-            'expires_at'       => now()->addDays(10),
+            'plan_name' => $plan->name,
+            'expires_at' => now()->addDays(10),
         ], $overrides));
     }
 
     private function makeRenewalOrder(UserService $service, Plan $plan, array $overrides = []): Order
     {
         return Order::create(array_merge([
-            'order_type'        => Order::TYPE_RENEWAL,
-            'user_id'           => $service->user_id,
-            'user_service_id'   => $service->id,
-            'plan_id'           => $plan->id,
-            'original_plan_id'  => $service->plan_id,
-            'plan_name'         => $plan->name,
-            'plan_slug'         => $plan->slug,
-            'duration_days'     => $plan->effectiveRenewalDays(),
-            'renewal_days'      => $plan->effectiveRenewalDays(),
-            'price_toman'       => $plan->effectiveRenewalPrice(),
+            'order_type' => Order::TYPE_RENEWAL,
+            'user_id' => $service->user_id,
+            'user_service_id' => $service->id,
+            'plan_id' => $plan->id,
+            'original_plan_id' => $service->plan_id,
+            'plan_name' => $plan->name,
+            'plan_slug' => $plan->slug,
+            'duration_days' => $plan->effectiveRenewalDays(),
+            'renewal_days' => $plan->effectiveRenewalDays(),
+            'price_toman' => $plan->effectiveRenewalPrice(),
             'final_price_toman' => $plan->effectiveRenewalPrice(),
-            'discount_toman'    => 0,
-            'status'            => Order::STATUS_PAID,
-            'payment_status'    => Order::PAYMENT_PAID,
-            'paid_at'           => now(),
+            'discount_toman' => 0,
+            'status' => Order::STATUS_PAID,
+            'payment_status' => Order::PAYMENT_PAID,
+            'paid_at' => now(),
         ], $overrides));
     }
 
     private function makePaidTx(Order $order, User $user): PaymentTransaction
     {
         return PaymentTransaction::create([
-            'order_id'        => $order->id,
-            'user_id'         => $user->id,
-            'provider'        => 'wallet',
-            'status'          => PaymentTransaction::STATUS_APPROVED,
-            'amount_toman'    => $order->final_price_toman,
+            'order_id' => $order->id,
+            'user_id' => $user->id,
+            'provider' => 'wallet',
+            'status' => PaymentTransaction::STATUS_APPROVED,
+            'amount_toman' => $order->final_price_toman,
             'payment_purpose' => 'order_payment',
-            'paid_at'         => now(),
+            'paid_at' => now(),
         ]);
     }
 
@@ -135,10 +138,10 @@ class RenewalTest extends TestCase
     public function test_plan_effective_cashback_amount_percent(): void
     {
         $plan = $this->makePlan([
-            'price_toman'              => 100000,
+            'price_toman' => 100000,
             'renewal_cashback_enabled' => true,
-            'renewal_cashback_type'    => 'percent',
-            'renewal_cashback_value'   => 10,
+            'renewal_cashback_type' => 'percent',
+            'renewal_cashback_value' => 10,
         ]);
         $this->assertSame(10000, $plan->effectiveCashbackAmount());
     }
@@ -147,8 +150,8 @@ class RenewalTest extends TestCase
     {
         $plan = $this->makePlan([
             'renewal_cashback_enabled' => true,
-            'renewal_cashback_type'    => 'fixed',
-            'renewal_cashback_value'   => 5000,
+            'renewal_cashback_type' => 'fixed',
+            'renewal_cashback_value' => 5000,
         ]);
         $this->assertSame(5000, $plan->effectiveCashbackAmount());
     }
@@ -179,9 +182,9 @@ class RenewalTest extends TestCase
 
     public function test_create_renewal_order_success(): void
     {
-        $user    = $this->makeUser();
+        $user = $this->makeUser();
         $service = $this->makeService($user);
-        $plan    = $this->makePlan();
+        $plan = $this->makePlan();
 
         $order = app(RenewalService::class)->createRenewalOrder($service, $plan, $user);
 
@@ -193,9 +196,9 @@ class RenewalTest extends TestCase
 
     public function test_create_renewal_order_throws_for_unlimited_service(): void
     {
-        $user    = $this->makeUser();
+        $user = $this->makeUser();
         $service = $this->makeService($user, ['expires_at' => null]);
-        $plan    = $this->makePlan();
+        $plan = $this->makePlan();
 
         $this->expectException(\InvalidArgumentException::class);
         app(RenewalService::class)->createRenewalOrder($service, $plan, $user);
@@ -203,9 +206,9 @@ class RenewalTest extends TestCase
 
     public function test_create_renewal_order_throws_for_inactive_plan(): void
     {
-        $user    = $this->makeUser();
+        $user = $this->makeUser();
         $service = $this->makeService($user);
-        $plan    = $this->makePlan(['is_active' => false]);
+        $plan = $this->makePlan(['is_active' => false]);
 
         $this->expectException(\InvalidArgumentException::class);
         app(RenewalService::class)->createRenewalOrder($service, $plan, $user);
@@ -213,9 +216,9 @@ class RenewalTest extends TestCase
 
     public function test_create_renewal_order_throws_for_non_renewable_plan(): void
     {
-        $user    = $this->makeUser();
+        $user = $this->makeUser();
         $service = $this->makeService($user);
-        $plan    = $this->makePlan(['renewal_enabled' => false]);
+        $plan = $this->makePlan(['renewal_enabled' => false]);
 
         $this->expectException(\InvalidArgumentException::class);
         app(RenewalService::class)->createRenewalOrder($service, $plan, $user);
@@ -225,9 +228,9 @@ class RenewalTest extends TestCase
     {
         SiteSetting::set('renewal_enabled', 'false');
 
-        $user    = $this->makeUser();
+        $user = $this->makeUser();
         $service = $this->makeService($user);
-        $plan    = $this->makePlan();
+        $plan = $this->makePlan();
 
         $this->expectException(\InvalidArgumentException::class);
         app(RenewalService::class)->createRenewalOrder($service, $plan, $user);
@@ -235,10 +238,10 @@ class RenewalTest extends TestCase
 
     public function test_create_renewal_order_throws_when_wrong_user(): void
     {
-        $user  = $this->makeUser();
+        $user = $this->makeUser();
         $other = $this->makeUser();
         $service = $this->makeService($user);
-        $plan    = $this->makePlan();
+        $plan = $this->makePlan();
 
         $this->expectException(\InvalidArgumentException::class);
         app(RenewalService::class)->createRenewalOrder($service, $plan, $other);
@@ -246,13 +249,13 @@ class RenewalTest extends TestCase
 
     public function test_create_renewal_order_stores_cashback_amount(): void
     {
-        $user    = $this->makeUser();
+        $user = $this->makeUser();
         $service = $this->makeService($user);
-        $plan    = $this->makePlan([
-            'price_toman'              => 100000,
+        $plan = $this->makePlan([
+            'price_toman' => 100000,
             'renewal_cashback_enabled' => true,
-            'renewal_cashback_type'    => 'percent',
-            'renewal_cashback_value'   => 10,
+            'renewal_cashback_type' => 'percent',
+            'renewal_cashback_value' => 10,
         ]);
 
         $order = app(RenewalService::class)->createRenewalOrder($service, $plan, $user);
@@ -263,9 +266,9 @@ class RenewalTest extends TestCase
 
     public function test_create_renewal_order_no_cashback_when_disabled(): void
     {
-        $user    = $this->makeUser();
+        $user = $this->makeUser();
         $service = $this->makeService($user);
-        $plan    = $this->makePlan(['renewal_cashback_enabled' => false]);
+        $plan = $this->makePlan(['renewal_cashback_enabled' => false]);
 
         $order = app(RenewalService::class)->createRenewalOrder($service, $plan, $user);
 
@@ -277,7 +280,7 @@ class RenewalTest extends TestCase
 
     public function test_calculate_new_expiry_extends_from_expires_at_when_active(): void
     {
-        $user   = $this->makeUser();
+        $user = $this->makeUser();
         $expiry = now()->addDays(10);
         $service = $this->makeService($user, ['expires_at' => $expiry]);
 
@@ -292,10 +295,10 @@ class RenewalTest extends TestCase
 
     public function test_calculate_new_expiry_extends_from_now_when_expired(): void
     {
-        $user    = $this->makeUser();
+        $user = $this->makeUser();
         $service = $this->makeService($user, [
             'expires_at' => now()->subDays(5),
-            'status'     => UserService::STATUS_EXPIRED,
+            'status' => UserService::STATUS_EXPIRED,
         ]);
 
         $before = now();
@@ -312,11 +315,11 @@ class RenewalTest extends TestCase
 
     public function test_apply_renewal_updates_service_expiry(): void
     {
-        $user   = $this->makeUser();
+        $user = $this->makeUser();
         $expiry = now()->addDays(10);
         $service = $this->makeService($user, ['expires_at' => $expiry]);
-        $plan    = $this->makePlan(['duration_days' => 30]);
-        $order   = $this->makeRenewalOrder($service, $plan);
+        $plan = $this->makePlan(['duration_days' => 30]);
+        $order = $this->makeRenewalOrder($service, $plan);
 
         $this->mock(MarzbanClient::class)->shouldReceive('updateUser')->andReturn([]);
 
@@ -333,10 +336,10 @@ class RenewalTest extends TestCase
 
     public function test_apply_renewal_sets_renewal_applied_at(): void
     {
-        $user    = $this->makeUser();
+        $user = $this->makeUser();
         $service = $this->makeService($user);
-        $plan    = $this->makePlan();
-        $order   = $this->makeRenewalOrder($service, $plan);
+        $plan = $this->makePlan();
+        $order = $this->makeRenewalOrder($service, $plan);
 
         $this->mock(MarzbanClient::class)->shouldReceive('updateUser')->andReturn([]);
 
@@ -347,11 +350,11 @@ class RenewalTest extends TestCase
 
     public function test_apply_renewal_is_idempotent(): void
     {
-        $user    = $this->makeUser();
-        $expiry  = now()->addDays(10);
+        $user = $this->makeUser();
+        $expiry = now()->addDays(10);
         $service = $this->makeService($user, ['expires_at' => $expiry, 'remote_username' => 'test_user']);
-        $plan    = $this->makePlan(['duration_days' => 30]);
-        $order   = $this->makeRenewalOrder($service, $plan);
+        $plan = $this->makePlan(['duration_days' => 30]);
+        $order = $this->makeRenewalOrder($service, $plan);
 
         $this->mock(MarzbanClient::class)->shouldReceive('updateUser')->once()->andReturn([]);
 
@@ -369,13 +372,13 @@ class RenewalTest extends TestCase
 
     public function test_apply_renewal_marks_renewal_failed_when_service_missing(): void
     {
-        $user    = $this->makeUser();
-        $plan    = $this->makePlan();
+        $user = $this->makeUser();
+        $plan = $this->makePlan();
         $service = $this->makeService($user);
-        $order   = $this->makeRenewalOrder($service, $plan);
+        $order = $this->makeRenewalOrder($service, $plan);
 
         // Detach user_service_id after creation to simulate missing service
-        \Illuminate\Support\Facades\DB::table('orders')
+        DB::table('orders')
             ->where('id', $order->id)
             ->update(['user_service_id' => null]);
 
@@ -386,16 +389,16 @@ class RenewalTest extends TestCase
 
     public function test_apply_renewal_marks_failed_when_marzban_throws(): void
     {
-        $user    = $this->makeUser();
+        $user = $this->makeUser();
         $service = $this->makeService($user, ['remote_username' => 'test_user']);
-        $plan    = $this->makePlan();
-        $order   = $this->makeRenewalOrder($service, $plan);
+        $plan = $this->makePlan();
+        $order = $this->makeRenewalOrder($service, $plan);
 
         $panel = VpnPanel::create([
-            'name'       => 'Test Panel',
-            'type'       => VpnPanel::TYPE_MARZBAN,
-            'url'        => 'https://test.example.com',
-            'is_active'  => true,
+            'name' => 'Test Panel',
+            'type' => VpnPanel::TYPE_MARZBAN,
+            'url' => 'https://test.example.com',
+            'is_active' => true,
             'is_default' => true,
         ]);
         $service->update(['vpn_panel_id' => $panel->id]);
@@ -413,13 +416,13 @@ class RenewalTest extends TestCase
 
     public function test_apply_renewal_credits_percent_cashback_to_wallet(): void
     {
-        $user    = $this->makeUser();
+        $user = $this->makeUser();
         $service = $this->makeService($user);
-        $plan    = $this->makePlan([
-            'price_toman'              => 100000,
+        $plan = $this->makePlan([
+            'price_toman' => 100000,
             'renewal_cashback_enabled' => true,
-            'renewal_cashback_type'    => 'percent',
-            'renewal_cashback_value'   => 10,
+            'renewal_cashback_type' => 'percent',
+            'renewal_cashback_value' => 10,
         ]);
         $order = $this->makeRenewalOrder($service, $plan, [
             'renewal_cashback_amount' => 10000,
@@ -442,12 +445,12 @@ class RenewalTest extends TestCase
 
     public function test_apply_renewal_credits_fixed_cashback_to_wallet(): void
     {
-        $user    = $this->makeUser();
+        $user = $this->makeUser();
         $service = $this->makeService($user);
-        $plan    = $this->makePlan([
+        $plan = $this->makePlan([
             'renewal_cashback_enabled' => true,
-            'renewal_cashback_type'    => 'fixed',
-            'renewal_cashback_value'   => 5000,
+            'renewal_cashback_type' => 'fixed',
+            'renewal_cashback_value' => 5000,
         ]);
         $order = $this->makeRenewalOrder($service, $plan, [
             'renewal_cashback_amount' => 5000,
@@ -464,12 +467,12 @@ class RenewalTest extends TestCase
 
     public function test_duplicate_ipn_does_not_credit_cashback_twice(): void
     {
-        $user    = $this->makeUser();
+        $user = $this->makeUser();
         $service = $this->makeService($user, ['remote_username' => 'test_user']);
-        $plan    = $this->makePlan([
+        $plan = $this->makePlan([
             'renewal_cashback_enabled' => true,
-            'renewal_cashback_type'    => 'fixed',
-            'renewal_cashback_value'   => 5000,
+            'renewal_cashback_type' => 'fixed',
+            'renewal_cashback_value' => 5000,
         ]);
         $order = $this->makeRenewalOrder($service, $plan, [
             'renewal_cashback_amount' => 5000,
@@ -491,12 +494,12 @@ class RenewalTest extends TestCase
 
     public function test_cashback_appears_in_wallet_transactions(): void
     {
-        $user    = $this->makeUser();
+        $user = $this->makeUser();
         $service = $this->makeService($user);
-        $plan    = $this->makePlan([
+        $plan = $this->makePlan([
             'renewal_cashback_enabled' => true,
-            'renewal_cashback_type'    => 'fixed',
-            'renewal_cashback_value'   => 3000,
+            'renewal_cashback_type' => 'fixed',
+            'renewal_cashback_value' => 3000,
         ]);
         $order = $this->makeRenewalOrder($service, $plan, [
             'renewal_cashback_amount' => 3000,
@@ -520,25 +523,25 @@ class RenewalTest extends TestCase
 
     public function test_mark_order_paid_routes_renewal_to_renewal_service(): void
     {
-        $user    = $this->makeUser();
+        $user = $this->makeUser();
         $service = $this->makeService($user);
-        $plan    = $this->makePlan();
+        $plan = $this->makePlan();
 
         $order = Order::create([
-            'order_type'        => Order::TYPE_RENEWAL,
-            'user_id'           => $user->id,
-            'user_service_id'   => $service->id,
-            'plan_id'           => $plan->id,
-            'original_plan_id'  => $service->plan_id,
-            'plan_name'         => $plan->name,
-            'plan_slug'         => $plan->slug,
-            'duration_days'     => 30,
-            'renewal_days'      => 30,
-            'price_toman'       => 100000,
+            'order_type' => Order::TYPE_RENEWAL,
+            'user_id' => $user->id,
+            'user_service_id' => $service->id,
+            'plan_id' => $plan->id,
+            'original_plan_id' => $service->plan_id,
+            'plan_name' => $plan->name,
+            'plan_slug' => $plan->slug,
+            'duration_days' => 30,
+            'renewal_days' => 30,
+            'price_toman' => 100000,
             'final_price_toman' => 100000,
-            'discount_toman'    => 0,
-            'status'            => Order::STATUS_AWAITING_PAYMENT,
-            'payment_status'    => Order::PAYMENT_UNPAID,
+            'discount_toman' => 0,
+            'status' => Order::STATUS_AWAITING_PAYMENT,
+            'payment_status' => Order::PAYMENT_UNPAID,
         ]);
         $tx = $this->makePaidTx($order, $user);
         $tx->update(['status' => PaymentTransaction::STATUS_PENDING]);
@@ -553,12 +556,12 @@ class RenewalTest extends TestCase
 
     public function test_duplicate_ipn_does_not_renew_twice(): void
     {
-        $user   = $this->makeUser();
+        $user = $this->makeUser();
         $expiry = now()->addDays(10);
         $service = $this->makeService($user, ['expires_at' => $expiry, 'remote_username' => 'test_user']);
-        $plan    = $this->makePlan(['duration_days' => 30]);
-        $order   = $this->makeRenewalOrder($service, $plan);
-        $tx      = $this->makePaidTx($order, $user);
+        $plan = $this->makePlan(['duration_days' => 30]);
+        $order = $this->makeRenewalOrder($service, $plan);
+        $tx = $this->makePaidTx($order, $user);
 
         $this->mock(MarzbanClient::class)->shouldReceive('updateUser')->once()->andReturn([]);
 
@@ -576,10 +579,10 @@ class RenewalTest extends TestCase
 
     public function test_renewal_does_not_create_new_user_service(): void
     {
-        $user    = $this->makeUser();
+        $user = $this->makeUser();
         $service = $this->makeService($user);
-        $plan    = $this->makePlan();
-        $order   = $this->makeRenewalOrder($service, $plan);
+        $plan = $this->makePlan();
+        $order = $this->makeRenewalOrder($service, $plan);
 
         $this->mock(MarzbanClient::class)->shouldReceive('updateUser')->andReturn([]);
 
@@ -602,7 +605,7 @@ class RenewalTest extends TestCase
 
     public function test_renewal_page_shows_active_renewable_plans(): void
     {
-        $user    = $this->makeUser();
+        $user = $this->makeUser();
         $service = $this->makeService($user);
 
         $this->makePlan(['name' => 'فعال و تمدیدپذیر', 'slug' => 'active-ok', 'is_active' => true,  'renewal_enabled' => true]);
@@ -620,7 +623,7 @@ class RenewalTest extends TestCase
 
     public function test_renewal_page_hides_non_renewable_plans(): void
     {
-        $user    = $this->makeUser();
+        $user = $this->makeUser();
         $service = $this->makeService($user);
 
         // Only create a non-renewable plan
@@ -645,7 +648,7 @@ class RenewalTest extends TestCase
 
     public function test_renewal_page_redirects_for_unlimited_service(): void
     {
-        $user    = $this->makeUser();
+        $user = $this->makeUser();
         $service = $this->makeService($user, ['expires_at' => null]);
         $this->makePlan();
 
@@ -658,7 +661,7 @@ class RenewalTest extends TestCase
     {
         SiteSetting::set('renewal_enabled', 'false');
 
-        $user    = $this->makeUser();
+        $user = $this->makeUser();
         $service = $this->makeService($user);
         $this->makePlan();
 
@@ -669,9 +672,9 @@ class RenewalTest extends TestCase
 
     public function test_renewal_submit_creates_order_and_redirects_to_payment(): void
     {
-        $user    = $this->makeUser();
+        $user = $this->makeUser();
         $service = $this->makeService($user);
-        $plan    = $this->makePlan();
+        $plan = $this->makePlan();
 
         $response = $this->actingAs($user)
             ->post(route('dashboard.services.renew.submit', $service), ['plan_id' => $plan->id]);
@@ -683,9 +686,9 @@ class RenewalTest extends TestCase
 
     public function test_renewal_submit_rejects_inactive_plan(): void
     {
-        $user    = $this->makeUser();
+        $user = $this->makeUser();
         $service = $this->makeService($user);
-        $plan    = $this->makePlan(['is_active' => false]);
+        $plan = $this->makePlan(['is_active' => false]);
 
         $this->actingAs($user)
             ->post(route('dashboard.services.renew.submit', $service), ['plan_id' => $plan->id])
@@ -694,9 +697,9 @@ class RenewalTest extends TestCase
 
     public function test_renewal_submit_rejects_non_renewable_plan(): void
     {
-        $user    = $this->makeUser();
+        $user = $this->makeUser();
         $service = $this->makeService($user);
-        $plan    = $this->makePlan(['renewal_enabled' => false]);
+        $plan = $this->makePlan(['renewal_enabled' => false]);
 
         $this->actingAs($user)
             ->post(route('dashboard.services.renew.submit', $service), ['plan_id' => $plan->id])
@@ -708,7 +711,7 @@ class RenewalTest extends TestCase
         $owner = $this->makeUser();
         $other = $this->makeUser();
         $service = $this->makeService($owner);
-        $plan    = $this->makePlan();
+        $plan = $this->makePlan();
 
         $this->actingAs($other)
             ->post(route('dashboard.services.renew.submit', $service), ['plan_id' => $plan->id])
@@ -717,12 +720,12 @@ class RenewalTest extends TestCase
 
     public function test_wallet_renewal_payment_applies_renewal(): void
     {
-        $user    = $this->makeUser(['wallet_balance_toman' => 200000]);
+        $user = $this->makeUser(['wallet_balance_toman' => 200000]);
         $service = $this->makeService($user);
-        $plan    = $this->makePlan(['price_toman' => 100000]);
+        $plan = $this->makePlan(['price_toman' => 100000]);
 
         $order = app(RenewalService::class)->createRenewalOrder($service, $plan, $user);
-        $tx    = $this->makePaidTx($order, $user);
+        $tx = $this->makePaidTx($order, $user);
         $tx->update(['status' => PaymentTransaction::STATUS_PENDING]);
 
         $this->mock(MarzbanClient::class)->shouldReceive('updateUser')->andReturn([]);
@@ -735,7 +738,7 @@ class RenewalTest extends TestCase
 
     public function test_discount_hint_visible_on_renew_page(): void
     {
-        $user    = $this->makeUser();
+        $user = $this->makeUser();
         $service = $this->makeService($user);
         $this->makePlan();
 
@@ -752,7 +755,7 @@ class RenewalTest extends TestCase
 
     public function test_financial_report_renewal_methods_exist(): void
     {
-        $report = app(\App\Filament\Pages\FinancialReport::class);
+        $report = app(FinancialReport::class);
         $this->assertTrue(method_exists($report, 'getRenewalOrdersRange'));
         $this->assertTrue(method_exists($report, 'getRenewalSalesRange'));
         $this->assertTrue(method_exists($report, 'getRenewalFailedCount'));
@@ -763,14 +766,14 @@ class RenewalTest extends TestCase
 
     public function test_financial_report_counts_renewal_as_sales(): void
     {
-        $user    = $this->makeUser();
+        $user = $this->makeUser();
         $service = $this->makeService($user);
-        $plan    = $this->makePlan(['price_toman' => 100000]);
+        $plan = $this->makePlan(['price_toman' => 100000]);
         $this->makeRenewalOrder($service, $plan);
 
-        $report = app(\App\Filament\Pages\FinancialReport::class);
+        $report = app(FinancialReport::class);
         $report->dateFrom = now()->subDay()->format('Y-m-d');
-        $report->dateTo   = now()->addDay()->format('Y-m-d');
+        $report->dateTo = now()->addDay()->format('Y-m-d');
 
         $this->assertSame(1, $report->getRenewalOrdersRange());
         $this->assertSame(100000, $report->getRenewalSalesRange());
@@ -782,23 +785,23 @@ class RenewalTest extends TestCase
         $plan = $this->makePlan(['price_toman' => 80000]);
 
         Order::create([
-            'order_type'        => Order::TYPE_NEW_SERVICE,
-            'user_id'           => $user->id,
-            'plan_id'           => $plan->id,
-            'plan_name'         => $plan->name,
-            'plan_slug'         => $plan->slug,
-            'duration_days'     => 30,
-            'price_toman'       => 80000,
+            'order_type' => Order::TYPE_NEW_SERVICE,
+            'user_id' => $user->id,
+            'plan_id' => $plan->id,
+            'plan_name' => $plan->name,
+            'plan_slug' => $plan->slug,
+            'duration_days' => 30,
+            'price_toman' => 80000,
             'final_price_toman' => 80000,
-            'discount_toman'    => 0,
-            'status'            => Order::STATUS_COMPLETED,
-            'payment_status'    => Order::PAYMENT_PAID,
-            'paid_at'           => now(),
+            'discount_toman' => 0,
+            'status' => Order::STATUS_COMPLETED,
+            'payment_status' => Order::PAYMENT_PAID,
+            'paid_at' => now(),
         ]);
 
-        $report = app(\App\Filament\Pages\FinancialReport::class);
+        $report = app(FinancialReport::class);
         $report->dateFrom = now()->subDay()->format('Y-m-d');
-        $report->dateTo   = now()->addDay()->format('Y-m-d');
+        $report->dateTo = now()->addDay()->format('Y-m-d');
 
         $this->assertSame(1, $report->getNewServiceOrdersRange());
         $this->assertSame(80000, $report->getNewServiceSalesRange());
@@ -809,7 +812,7 @@ class RenewalTest extends TestCase
 
     public function test_renewal_settings_page_navigation_group(): void
     {
-        $ref  = new \ReflectionClass(RenewalSettingsPage::class);
+        $ref = new \ReflectionClass(RenewalSettingsPage::class);
         $prop = $ref->getProperty('navigationGroup');
         $prop->setAccessible(true);
 

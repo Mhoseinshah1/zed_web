@@ -22,7 +22,7 @@ class SupportTicketMessage extends Model
     ];
 
     protected $casts = [
-        'is_admin'         => 'boolean',
+        'is_admin' => 'boolean',
         'is_internal_note' => 'boolean',
     ];
 
@@ -65,12 +65,12 @@ class SupportTicketMessage extends Model
         // New multi-attachments.
         foreach ($this->attachments as $attachment) {
             $items->push([
-                'name'     => $attachment->displayName(),
-                'url'      => $attachment->url(),
+                'name' => $attachment->displayName(),
+                'url' => $attachment->url(),
                 'is_image' => $attachment->isImage(),
-                'is_pdf'   => $attachment->isPdf(),
-                'exists'   => $attachment->exists(),
-                'ext'      => $attachment->extension(),
+                'is_pdf' => $attachment->isPdf(),
+                'exists' => $attachment->exists(),
+                'ext' => $attachment->extension(),
             ]);
         }
 
@@ -78,12 +78,12 @@ class SupportTicketMessage extends Model
         if (filled($this->attachment_path)) {
             $ext = strtolower(pathinfo($this->attachment_name ?: $this->attachment_path, PATHINFO_EXTENSION));
             $items->push([
-                'name'     => $this->attachment_name ?: basename($this->attachment_path),
-                'url'      => Storage::disk('public')->url($this->attachment_path),
+                'name' => $this->attachment_name ?: basename($this->attachment_path),
+                'url' => Storage::disk('public')->url($this->attachment_path),
                 'is_image' => in_array($ext, SupportTicketAttachment::IMAGE_EXTENSIONS, true),
-                'is_pdf'   => $ext === 'pdf',
-                'exists'   => Storage::disk('public')->exists($this->attachment_path),
-                'ext'      => $ext,
+                'is_pdf' => $ext === 'pdf',
+                'exists' => Storage::disk('public')->exists($this->attachment_path),
+                'ext' => $ext,
             ]);
         }
 

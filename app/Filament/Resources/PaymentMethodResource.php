@@ -15,12 +15,17 @@ class PaymentMethodResource extends Resource
 {
     protected static ?string $model = PaymentMethod::class;
 
-    protected static ?string $navigationIcon   = 'heroicon-o-credit-card';
-    protected static ?string $navigationGroup  = 'سفارش‌ها و مالی';
-    protected static ?string $navigationLabel  = 'روش‌های پرداخت';
-    protected static ?string $modelLabel       = 'روش پرداخت';
+    protected static ?string $navigationIcon = 'heroicon-o-credit-card';
+
+    protected static ?string $navigationGroup = 'سفارش‌ها و مالی';
+
+    protected static ?string $navigationLabel = 'روش‌های پرداخت';
+
+    protected static ?string $modelLabel = 'روش پرداخت';
+
     protected static ?string $pluralModelLabel = 'روش‌های پرداخت';
-    protected static ?int    $navigationSort   = 60;
+
+    protected static ?int $navigationSort = 60;
 
     public static function form(Form $form): Form
     {
@@ -161,7 +166,7 @@ class PaymentMethodResource extends Resource
                         ->label('حالت پرداخت NOWPayments')
                         ->options([
                             'invoice' => 'فاکتور میزبانی‌شده؛ انتخاب ارز توسط مشتری',
-                            'direct'  => 'پرداخت مستقیم؛ ارز از قبل مشخص می‌شود',
+                            'direct' => 'پرداخت مستقیم؛ ارز از قبل مشخص می‌شود',
                         ])
                         ->default('invoice')
                         ->helperText('در حالت فاکتور، مشتری ارز را داخل NOWPayments انتخاب می‌کند.')
@@ -255,7 +260,7 @@ class PaymentMethodResource extends Resource
                     ->formatStateUsing(fn ($state) => PaymentMethod::allTypes()[$state] ?? $state)
                     ->colors([
                         'success' => ['wallet'],
-                        'info'    => ['manual_crypto', 'nowpayments'],
+                        'info' => ['manual_crypto', 'nowpayments'],
                         'warning' => ['manual_stars', 'manual_rial'],
                     ]),
 
@@ -288,9 +293,9 @@ class PaymentMethodResource extends Resource
     public static function getPages(): array
     {
         return [
-            'index'  => Pages\ListPaymentMethods::route('/'),
+            'index' => Pages\ListPaymentMethods::route('/'),
             'create' => Pages\CreatePaymentMethod::route('/create'),
-            'edit'   => Pages\EditPaymentMethod::route('/{record}/edit'),
+            'edit' => Pages\EditPaymentMethod::route('/{record}/edit'),
         ];
     }
 }

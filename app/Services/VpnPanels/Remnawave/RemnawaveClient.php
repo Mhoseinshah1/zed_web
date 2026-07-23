@@ -41,7 +41,7 @@ class RemnawaveClient
     /** base_url + endpoint with safe slash normalisation. */
     public function url(string $endpoint): string
     {
-        return rtrim(trim((string) $this->panel->base_url), '/') . '/' . ltrim($endpoint, '/');
+        return rtrim(trim((string) $this->panel->base_url), '/').'/'.ltrim($endpoint, '/');
     }
 
     // ── HTTP plumbing ─────────────────────────────────────────────────────────
@@ -112,6 +112,7 @@ class RemnawaveClient
     private function unwrap(array $json): array
     {
         $obj = $json['response'] ?? $json;
+
         return is_array($obj) ? $obj : [];
     }
 
@@ -120,6 +121,7 @@ class RemnawaveClient
     public function testConnection(): bool
     {
         $this->request('get', '/api/users/tags');
+
         return true;
     }
 
@@ -150,13 +152,13 @@ class RemnawaveClient
     /** @return array<string,mixed> */
     public function getUser(string $uuid): array
     {
-        return $this->unwrap($this->request('get', '/api/users/' . rawurlencode($uuid)));
+        return $this->unwrap($this->request('get', '/api/users/'.rawurlencode($uuid)));
     }
 
     /** @return array<string,mixed> */
     public function getUserByUsername(string $username): array
     {
-        return $this->unwrap($this->request('get', '/api/users/by-username/' . rawurlencode($username)));
+        return $this->unwrap($this->request('get', '/api/users/by-username/'.rawurlencode($username)));
     }
 
     /**
@@ -165,34 +167,38 @@ class RemnawaveClient
     public function deleteUser(string $uuid): bool
     {
         try {
-            $this->request('delete', '/api/users/' . rawurlencode($uuid));
+            $this->request('delete', '/api/users/'.rawurlencode($uuid));
         } catch (RemnawaveException $e) {
             // Already gone → idempotent success.
         }
+
         return true;
     }
 
     public function enableUser(string $uuid): bool
     {
-        $this->request('post', '/api/users/' . rawurlencode($uuid) . '/actions/enable');
+        $this->request('post', '/api/users/'.rawurlencode($uuid).'/actions/enable');
+
         return true;
     }
 
     public function disableUser(string $uuid): bool
     {
-        $this->request('post', '/api/users/' . rawurlencode($uuid) . '/actions/disable');
+        $this->request('post', '/api/users/'.rawurlencode($uuid).'/actions/disable');
+
         return true;
     }
 
     public function resetUserTraffic(string $uuid): bool
     {
-        $this->request('post', '/api/users/' . rawurlencode($uuid) . '/actions/reset-traffic');
+        $this->request('post', '/api/users/'.rawurlencode($uuid).'/actions/reset-traffic');
+
         return true;
     }
 
     /** Revoke (regenerate) the subscription; returns the refreshed user object. */
     public function revokeSubscription(string $uuid): array
     {
-        return $this->unwrap($this->request('post', '/api/users/' . rawurlencode($uuid) . '/actions/revoke'));
+        return $this->unwrap($this->request('post', '/api/users/'.rawurlencode($uuid).'/actions/revoke'));
     }
 }

@@ -31,6 +31,7 @@ class FindDuplicateServicesCommand extends Command
         if ($groups->isEmpty()) {
             $this->info('✓ هیچ سرویس تکراری برای یک سفارش یافت نشد.');
             $this->line('No duplicate services found — every order maps to at most one service.');
+
             return self::SUCCESS;
         }
 

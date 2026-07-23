@@ -14,12 +14,17 @@ class LandingSectionResource extends Resource
 {
     protected static ?string $model = LandingSection::class;
 
-    protected static ?string $navigationIcon   = 'heroicon-o-squares-2x2';
-    protected static ?string $navigationGroup   = 'مدیریت محتوا';
-    protected static ?string $navigationLabel   = 'سکشن‌های صفحه اصلی';
-    protected static ?string $modelLabel        = 'سکشن صفحه اصلی';
-    protected static ?string $pluralModelLabel  = 'سکشن‌های صفحه اصلی';
-    protected static ?int    $navigationSort    = 30;
+    protected static ?string $navigationIcon = 'heroicon-o-squares-2x2';
+
+    protected static ?string $navigationGroup = 'مدیریت محتوا';
+
+    protected static ?string $navigationLabel = 'سکشن‌های صفحه اصلی';
+
+    protected static ?string $modelLabel = 'سکشن صفحه اصلی';
+
+    protected static ?string $pluralModelLabel = 'سکشن‌های صفحه اصلی';
+
+    protected static ?int $navigationSort = 30;
 
     public static function form(Form $form): Form
     {
@@ -96,9 +101,9 @@ class LandingSectionResource extends Resource
     public static function getPages(): array
     {
         return [
-            'index'  => Pages\ListLandingSections::route('/'),
+            'index' => Pages\ListLandingSections::route('/'),
             'create' => Pages\CreateLandingSection::route('/create'),
-            'edit'   => Pages\EditLandingSection::route('/{record}/edit'),
+            'edit' => Pages\EditLandingSection::route('/{record}/edit'),
         ];
     }
 }

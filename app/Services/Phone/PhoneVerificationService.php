@@ -19,10 +19,13 @@ use Illuminate\Support\Facades\Hash;
 class PhoneVerificationService
 {
     // Defaults — overridden by admin settings at runtime.
-    public const CODE_TTL_MINUTES    = 5;
-    public const MAX_ATTEMPTS        = 5;
+    public const CODE_TTL_MINUTES = 5;
+
+    public const MAX_ATTEMPTS = 5;
+
     public const RESEND_COOLDOWN_SEC = 60;
-    public const DAILY_CAP           = 10;
+
+    public const DAILY_CAP = 10;
 
     public function __construct(
         private readonly SmsService $sms,
@@ -139,14 +142,14 @@ class PhoneVerificationService
         $code = (string) random_int(100000, 999999);
 
         $record = PhoneVerificationCode::create([
-            'user_id'          => $user->id,
-            'phone'            => $user->phone,
+            'user_id' => $user->id,
+            'phone' => $user->phone,
             'normalized_phone' => $normalized,
-            'code_hash'        => Hash::make($code),
-            'expires_at'       => now()->addMinutes($this->ttlMinutes()),
-            'attempts'         => 0,
-            'ip_address'       => $meta['ip'] ?? null,
-            'user_agent'       => $meta['user_agent'] ?? null,
+            'code_hash' => Hash::make($code),
+            'expires_at' => now()->addMinutes($this->ttlMinutes()),
+            'attempts' => 0,
+            'ip_address' => $meta['ip'] ?? null,
+            'user_agent' => $meta['user_agent'] ?? null,
         ]);
 
         // Best-effort SMS delivery — never throws.
@@ -158,13 +161,13 @@ class PhoneVerificationService
                 : ($this->sms->isConfigured()
                     ? PhoneVerificationCode::SEND_STATUS_FAILED
                     : PhoneVerificationCode::SEND_STATUS_SKIPPED),
-            'send_error'  => $smsSent ? null : ($this->sms->isConfigured() ? 'ارسال پیامک ناموفق بود.' : null),
+            'send_error' => $smsSent ? null : ($this->sms->isConfigured() ? 'ارسال پیامک ناموفق بود.' : null),
         ]);
 
         return [
-            'status'   => 'sent',
-            'message'  => 'کد تایید ارسال شد.',
-            'code'     => $code, // returned for internal/test use; never shown to end users
+            'status' => 'sent',
+            'message' => 'کد تایید ارسال شد.',
+            'code' => $code, // returned for internal/test use; never shown to end users
             'sms_sent' => $smsSent,
         ];
     }
@@ -176,14 +179,15 @@ class PhoneVerificationService
             $normalized = PhoneNumber::normalize($phone);
             if ($normalized !== null) {
                 $user->update([
-                    'phone'                => $phone,
-                    'normalized_phone'     => $normalized,
+                    'phone' => $phone,
+                    'normalized_phone' => $normalized,
                     'profile_completed_at' => $user->profile_completed_at ?? now(),
                 ]);
             }
         }
 
         $result = $this->requestCode($user, $meta);
+
         return ($result['sms_sent'] ?? false) === true;
     }
 
@@ -223,7 +227,7 @@ class PhoneVerificationService
 
         $record->update(['used_at' => now()]);
         $user->update([
-            'phone_verified_at'    => now(),
+            'phone_verified_at' => now(),
             'profile_completed_at' => $user->profile_completed_at ?? now(),
         ]);
 

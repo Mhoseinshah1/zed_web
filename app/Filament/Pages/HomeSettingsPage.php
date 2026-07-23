@@ -21,35 +21,40 @@ class HomeSettingsPage extends Page implements HasForms
 
     protected static string $view = 'filament.pages.cms-settings';
 
-    protected static ?string $navigationIcon  = 'heroicon-o-home';
+    protected static ?string $navigationIcon = 'heroicon-o-home';
+
     protected static ?string $navigationGroup = 'مدیریت محتوا';
+
     protected static ?string $navigationLabel = 'صفحه اصلی';
-    protected static ?string $title           = 'تنظیمات صفحه اصلی';
-    protected static ?string $slug            = 'content/home';
-    protected static ?int    $navigationSort  = 20;
+
+    protected static ?string $title = 'تنظیمات صفحه اصلی';
+
+    protected static ?string $slug = 'content/home';
+
+    protected static ?int $navigationSort = 20;
 
     /** @var array<string,mixed> */
     public array $data = [];
 
     public const KEYS = [
-        'hero_title'                 => 'عنوان اصلی',
-        'hero_subtitle'              => 'زیرعنوان',
-        'hero_description'           => 'توضیحات',
-        'hero_badge_text'            => 'متن برچسب',
-        'hero_primary_button_text'   => 'متن دکمه اصلی',
-        'hero_primary_button_url'    => 'لینک دکمه اصلی',
+        'hero_title' => 'عنوان اصلی',
+        'hero_subtitle' => 'زیرعنوان',
+        'hero_description' => 'توضیحات',
+        'hero_badge_text' => 'متن برچسب',
+        'hero_primary_button_text' => 'متن دکمه اصلی',
+        'hero_primary_button_url' => 'لینک دکمه اصلی',
         'hero_secondary_button_text' => 'متن دکمه دوم',
-        'hero_secondary_button_url'  => 'لینک دکمه دوم',
-        'hero_image'                 => 'تصویر اصلی',
-        'hero_background_image'      => 'تصویر پس‌زمینه',
-        'hero_is_active'             => 'فعال بودن بخش',
-        'background_style'           => 'سبک پس‌زمینه',
-        'home_meta_title'            => 'عنوان سئو',
-        'home_meta_description'      => 'توضیحات سئو',
-        'home_meta_keywords'         => 'کلمات کلیدی سئو',
-        'home_og_title'              => 'عنوان اشتراک‌گذاری',
-        'home_og_description'        => 'توضیحات اشتراک‌گذاری',
-        'home_og_image'              => 'تصویر اشتراک‌گذاری',
+        'hero_secondary_button_url' => 'لینک دکمه دوم',
+        'hero_image' => 'تصویر اصلی',
+        'hero_background_image' => 'تصویر پس‌زمینه',
+        'hero_is_active' => 'فعال بودن بخش',
+        'background_style' => 'سبک پس‌زمینه',
+        'home_meta_title' => 'عنوان سئو',
+        'home_meta_description' => 'توضیحات سئو',
+        'home_meta_keywords' => 'کلمات کلیدی سئو',
+        'home_og_title' => 'عنوان اشتراک‌گذاری',
+        'home_og_description' => 'توضیحات اشتراک‌گذاری',
+        'home_og_image' => 'تصویر اشتراک‌گذاری',
     ];
 
     public function mount(): void

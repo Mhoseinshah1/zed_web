@@ -17,11 +17,11 @@ class MarzbanClientTest extends TestCase
     private function makePanel(array $attrs = []): VpnPanel
     {
         return VpnPanel::create(array_merge([
-            'name'      => 'Test Panel',
-            'type'      => VpnPanel::TYPE_MARZBAN,
-            'base_url'  => 'https://panel.example.com',
-            'username'  => 'admin',
-            'password'  => 'secret123', // encrypted cast handles this
+            'name' => 'Test Panel',
+            'type' => VpnPanel::TYPE_MARZBAN,
+            'base_url' => 'https://panel.example.com',
+            'username' => 'admin',
+            'password' => 'secret123', // encrypted cast handles this
             'is_active' => true,
         ], $attrs));
     }
@@ -46,9 +46,9 @@ class MarzbanClientTest extends TestCase
     {
         $this->fakeLoginSuccess('my-jwt-token');
 
-        $panel  = $this->makePanel();
+        $panel = $this->makePanel();
         $client = new MarzbanClient($panel);
-        $token  = $client->login();
+        $token = $client->login();
 
         $this->assertEquals('my-jwt-token', $token);
     }
@@ -57,7 +57,7 @@ class MarzbanClientTest extends TestCase
     {
         $this->fakeLoginFailure(401);
 
-        $panel  = $this->makePanel();
+        $panel = $this->makePanel();
         $client = new MarzbanClient($panel);
 
         $this->expectException(MarzbanException::class);
@@ -68,7 +68,7 @@ class MarzbanClientTest extends TestCase
     {
         $this->fakeLoginSuccess('cached-token');
 
-        $panel  = $this->makePanel();
+        $panel = $this->makePanel();
         $client = new MarzbanClient($panel);
         $client->login();
 
@@ -81,12 +81,12 @@ class MarzbanClientTest extends TestCase
     {
         Http::fake([
             '*/api/admin/token' => Http::response(['access_token' => 'tok', 'token_type' => 'bearer'], 200),
-            '*/api/system'      => Http::response(['version' => '0.3.2', 'mem_used' => 1024], 200),
+            '*/api/system' => Http::response(['version' => '0.3.2', 'mem_used' => 1024], 200),
         ]);
 
-        $panel  = $this->makePanel();
+        $panel = $this->makePanel();
         $client = new MarzbanClient($panel);
-        $info   = $client->testConnection();
+        $info = $client->testConnection();
 
         $this->assertEquals('0.3.2', $info['version']);
     }
@@ -95,10 +95,10 @@ class MarzbanClientTest extends TestCase
     {
         Http::fake([
             '*/api/admin/token' => Http::response(['access_token' => 'tok', 'token_type' => 'bearer'], 200),
-            '*/api/system'      => Http::response(['detail' => 'Forbidden'], 403),
+            '*/api/system' => Http::response(['detail' => 'Forbidden'], 403),
         ]);
 
-        $panel  = $this->makePanel();
+        $panel = $this->makePanel();
         $client = new MarzbanClient($panel);
 
         $this->expectException(MarzbanException::class);
@@ -111,16 +111,16 @@ class MarzbanClientTest extends TestCase
     {
         Http::fake([
             '*/api/admin/token' => Http::response(['access_token' => 'tok', 'token_type' => 'bearer'], 200),
-            '*/api/user'        => Http::response($this->fakeUserResponse('zpx_1_2_abcde'), 200),
+            '*/api/user' => Http::response($this->fakeUserResponse('zpx_1_2_abcde'), 200),
         ]);
 
-        $panel  = $this->makePanel();
+        $panel = $this->makePanel();
         $client = new MarzbanClient($panel);
         $result = $client->createUser([
-            'username'   => 'zpx_1_2_abcde',
-            'proxies'    => ['vless' => new \stdClass()],
+            'username' => 'zpx_1_2_abcde',
+            'proxies' => ['vless' => new \stdClass],
             'data_limit' => 0,
-            'status'     => 'active',
+            'status' => 'active',
         ]);
 
         $this->assertEquals('zpx_1_2_abcde', $result['username']);
@@ -133,13 +133,13 @@ class MarzbanClientTest extends TestCase
     public function test_get_user_returns_user_data(): void
     {
         Http::fake([
-            '*/api/admin/token'         => Http::response(['access_token' => 'tok', 'token_type' => 'bearer'], 200),
+            '*/api/admin/token' => Http::response(['access_token' => 'tok', 'token_type' => 'bearer'], 200),
             '*/api/user/zpx_1_2_abcde' => Http::response($this->fakeUserResponse('zpx_1_2_abcde'), 200),
         ]);
 
-        $panel  = $this->makePanel();
+        $panel = $this->makePanel();
         $client = new MarzbanClient($panel);
-        $user   = $client->getUser('zpx_1_2_abcde');
+        $user = $client->getUser('zpx_1_2_abcde');
 
         $this->assertEquals('zpx_1_2_abcde', $user['username']);
     }
@@ -160,15 +160,16 @@ class MarzbanClientTest extends TestCase
                 if ($called === 1) {
                     return Http::response(['detail' => 'Not authenticated'], 401);
                 }
+
                 return Http::response(['version' => '0.3.2'], 200);
             }
         });
 
-        $panel  = $this->makePanel();
+        $panel = $this->makePanel();
         Cache::put("marzban_token_panel_{$panel->id}", 'stale-token', 3500);
 
         $client = new MarzbanClient($panel);
-        $info   = $client->testConnection(); // testConnection calls /api/system
+        $info = $client->testConnection(); // testConnection calls /api/system
 
         $this->assertEquals('0.3.2', $info['version']);
     }
@@ -177,10 +178,10 @@ class MarzbanClientTest extends TestCase
 
     public function test_normalize_user_response_converts_bytes_to_gb(): void
     {
-        $panel  = $this->makePanel();
+        $panel = $this->makePanel();
         $client = new MarzbanClient($panel);
 
-        $raw        = $this->fakeUserResponse('test', usedBytes: 5_368_709_120); // 5 GB
+        $raw = $this->fakeUserResponse('test', usedBytes: 5_368_709_120); // 5 GB
         $normalized = $client->normalizeUserResponse($raw);
 
         $this->assertEquals(5.0, $normalized['used_traffic_gb']);
@@ -188,11 +189,11 @@ class MarzbanClientTest extends TestCase
 
     public function test_extract_subscription_link_returns_url(): void
     {
-        $panel  = $this->makePanel();
+        $panel = $this->makePanel();
         $client = new MarzbanClient($panel);
 
         $response = $this->fakeUserResponse('test');
-        $link     = $client->extractSubscriptionLink($response);
+        $link = $client->extractSubscriptionLink($response);
 
         $this->assertEquals('https://panel.example.com/sub/TOKEN123/', $link);
     }
@@ -200,11 +201,11 @@ class MarzbanClientTest extends TestCase
     public function test_user_exists_returns_false_on_404(): void
     {
         Http::fake([
-            '*/api/admin/token'          => Http::response(['access_token' => 'tok', 'token_type' => 'bearer'], 200),
+            '*/api/admin/token' => Http::response(['access_token' => 'tok', 'token_type' => 'bearer'], 200),
             '*/api/user/nonexistent_user' => Http::response(['detail' => 'User not found'], 404),
         ]);
 
-        $panel  = $this->makePanel();
+        $panel = $this->makePanel();
         $client = new MarzbanClient($panel);
 
         $this->assertFalse($client->userExists('nonexistent_user'));
@@ -220,11 +221,12 @@ class MarzbanClientTest extends TestCase
                     'application/x-www-form-urlencoded',
                     $request->header('Content-Type')[0] ?? ''
                 );
+
                 return Http::response(['access_token' => 'tok', 'token_type' => 'bearer'], 200);
             }
         });
 
-        $panel  = $this->makePanel();
+        $panel = $this->makePanel();
         $client = new MarzbanClient($panel);
         $client->login();
     }
@@ -240,17 +242,18 @@ class MarzbanClientTest extends TestCase
             if (str_contains($request->url(), '/api/user') && $request->method() === 'POST') {
                 $body = $request->body();
                 $this->assertIsObject(json_decode($body)->proxies->vless ?? null);
+
                 return Http::response($this->fakeUserResponse('zpx_test'), 200);
             }
         });
 
-        $panel  = $this->makePanel();
+        $panel = $this->makePanel();
         $client = new MarzbanClient($panel);
         $client->createUser([
-            'username'   => 'zpx_test',
-            'proxies'    => ['vless' => new \stdClass()],
+            'username' => 'zpx_test',
+            'proxies' => ['vless' => new \stdClass],
             'data_limit' => 0,
-            'status'     => 'active',
+            'status' => 'active',
         ]);
     }
 
@@ -265,17 +268,18 @@ class MarzbanClientTest extends TestCase
             if (str_contains($request->url(), '/api/user') && $request->method() === 'POST') {
                 $decoded = json_decode($request->body(), true);
                 $this->assertArrayNotHasKey('inbounds', $decoded);
+
                 return Http::response($this->fakeUserResponse('zpx_test'), 200);
             }
         });
 
-        $panel  = $this->makePanel();
+        $panel = $this->makePanel();
         $client = new MarzbanClient($panel);
         $client->createUser([
-            'username'   => 'zpx_test',
-            'proxies'    => ['vless' => new \stdClass()],
+            'username' => 'zpx_test',
+            'proxies' => ['vless' => new \stdClass],
             'data_limit' => 0,
-            'status'     => 'active',
+            'status' => 'active',
         ]);
     }
 
@@ -284,11 +288,11 @@ class MarzbanClientTest extends TestCase
     public function test_reset_traffic_calls_correct_endpoint(): void
     {
         Http::fake([
-            '*/api/admin/token'          => Http::response(['access_token' => 'tok', 'token_type' => 'bearer'], 200),
-            '*/api/user/zpx_test/reset'  => Http::response($this->fakeUserResponse('zpx_test'), 200),
+            '*/api/admin/token' => Http::response(['access_token' => 'tok', 'token_type' => 'bearer'], 200),
+            '*/api/user/zpx_test/reset' => Http::response($this->fakeUserResponse('zpx_test'), 200),
         ]);
 
-        $panel  = $this->makePanel();
+        $panel = $this->makePanel();
         $client = new MarzbanClient($panel);
         $result = $client->resetTraffic('zpx_test');
 
@@ -302,14 +306,14 @@ class MarzbanClientTest extends TestCase
         $newSubUrl = 'https://panel.example.com/sub/NEWTOKEN456/';
 
         Http::fake([
-            '*/api/admin/token'              => Http::response(['access_token' => 'tok', 'token_type' => 'bearer'], 200),
+            '*/api/admin/token' => Http::response(['access_token' => 'tok', 'token_type' => 'bearer'], 200),
             '*/api/user/zpx_test/revoke_sub' => Http::response(
                 array_merge($this->fakeUserResponse('zpx_test'), ['subscription_url' => $newSubUrl]),
                 200
             ),
         ]);
 
-        $panel  = $this->makePanel();
+        $panel = $this->makePanel();
         $client = new MarzbanClient($panel);
         $result = $client->revokeSubscription('zpx_test');
 
@@ -327,6 +331,7 @@ class MarzbanClientTest extends TestCase
             if (str_contains($request->url(), '/api/user/zpx_test') && $request->method() === 'PUT') {
                 $body = json_decode($request->body(), true);
                 $this->assertEquals('disabled', $body['status']);
+
                 return Http::response(
                     array_merge($this->fakeUserResponse('zpx_test'), ['status' => 'disabled']),
                     200
@@ -334,7 +339,7 @@ class MarzbanClientTest extends TestCase
             }
         });
 
-        $panel  = $this->makePanel();
+        $panel = $this->makePanel();
         $client = new MarzbanClient($panel);
         $result = $client->updateUser('zpx_test', ['status' => 'disabled']);
 
@@ -352,11 +357,12 @@ class MarzbanClientTest extends TestCase
             if (str_contains($request->url(), '/api/user/zpx_test') && $request->method() === 'PUT') {
                 $body = json_decode($request->body(), true);
                 $this->assertEquals('active', $body['status']);
+
                 return Http::response($this->fakeUserResponse('zpx_test'), 200);
             }
         });
 
-        $panel  = $this->makePanel();
+        $panel = $this->makePanel();
         $client = new MarzbanClient($panel);
         $result = $client->updateUser('zpx_test', ['status' => 'active']);
 
@@ -367,7 +373,7 @@ class MarzbanClientTest extends TestCase
 
     public function test_forget_token_removes_from_cache(): void
     {
-        $panel  = $this->makePanel();
+        $panel = $this->makePanel();
         Cache::put("marzban_token_panel_{$panel->id}", 'cached-token', 3500);
 
         $client = new MarzbanClient($panel);
@@ -381,14 +387,14 @@ class MarzbanClientTest extends TestCase
     private function fakeUserResponse(string $username, int $usedBytes = 0): array
     {
         return [
-            'username'         => $username,
-            'status'           => 'active',
-            'used_traffic'     => $usedBytes,
-            'data_limit'       => 21_474_836_480, // 20 GB
-            'expire'           => now()->addDays(30)->timestamp,
+            'username' => $username,
+            'status' => 'active',
+            'used_traffic' => $usedBytes,
+            'data_limit' => 21_474_836_480, // 20 GB
+            'expire' => now()->addDays(30)->timestamp,
             'subscription_url' => 'https://panel.example.com/sub/TOKEN123/',
-            'links'            => ['vless://some-config'],
-            'proxies'          => ['vless' => ['id' => 'uuid-here']],
+            'links' => ['vless://some-config'],
+            'proxies' => ['vless' => ['id' => 'uuid-here']],
         ];
     }
 }

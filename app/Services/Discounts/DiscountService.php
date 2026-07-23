@@ -28,12 +28,17 @@ class DiscountService
     use RetriesDeadlocks;
 
     // User-facing Persian messages.
-    public const MSG_CAPACITY_FULL   = 'ظرفیت استفاده از این کد تخفیف تکمیل شده است.';
-    public const MSG_PER_USER_LIMIT  = 'شما قبلاً به حداکثر تعداد استفاده از این کد رسیده‌اید.';
-    public const MSG_RESERVATION_EXP  = 'زمان رزرو این کد تخفیف به پایان رسیده است.';
-    public const MSG_APPLIED          = 'کد تخفیف با موفقیت اعمال شد.';
-    public const MSG_REMOVED          = 'کد تخفیف از سفارش حذف شد.';
-    public const MSG_ORDER_HAS_USED   = 'این سفارش قبلاً از یک کد تخفیف استفاده کرده است.';
+    public const MSG_CAPACITY_FULL = 'ظرفیت استفاده از این کد تخفیف تکمیل شده است.';
+
+    public const MSG_PER_USER_LIMIT = 'شما قبلاً به حداکثر تعداد استفاده از این کد رسیده‌اید.';
+
+    public const MSG_RESERVATION_EXP = 'زمان رزرو این کد تخفیف به پایان رسیده است.';
+
+    public const MSG_APPLIED = 'کد تخفیف با موفقیت اعمال شد.';
+
+    public const MSG_REMOVED = 'کد تخفیف از سفارش حذف شد.';
+
+    public const MSG_ORDER_HAS_USED = 'این سفارش قبلاً از یک کد تخفیف استفاده کرده است.';
 
     private function ttlMinutes(): int
     {
@@ -60,9 +65,9 @@ class DiscountService
         }
 
         return [
-            'valid'           => true,
-            'message'         => self::MSG_APPLIED,
-            'discount_code'   => $discountCode,
+            'valid' => true,
+            'message' => self::MSG_APPLIED,
+            'discount_code' => $discountCode,
             'discount_amount' => $this->calculateDiscount($order, $discountCode),
         ];
     }
@@ -80,6 +85,7 @@ class DiscountService
             if ($discountCode->max_discount_amount !== null) {
                 $amount = min($amount, (int) $discountCode->max_discount_amount);
             }
+
             return max(0, min($amount, $base));
         }
 
@@ -139,19 +145,19 @@ class DiscountService
 
                 // (9) Reserve atomically. The partial unique index is the final wall.
                 $discountAmount = $this->calculateDiscount($locked, $discountCode);
-                $finalAmount    = max(0, (int) $locked->price_toman - $discountAmount);
+                $finalAmount = max(0, (int) $locked->price_toman - $discountAmount);
 
                 try {
                     DiscountRedemption::create([
                         'discount_code_id' => $discountCode->id,
-                        'user_id'          => $user->id,
-                        'order_id'         => $locked->id,
-                        'status'           => DiscountRedemption::STATUS_RESERVED,
-                        'original_amount'  => (int) $locked->price_toman,
-                        'discount_amount'  => $discountAmount,
-                        'final_amount'     => $finalAmount,
-                        'reserved_at'      => now(),
-                        'expires_at'       => now()->addMinutes($this->ttlMinutes()),
+                        'user_id' => $user->id,
+                        'order_id' => $locked->id,
+                        'status' => DiscountRedemption::STATUS_RESERVED,
+                        'original_amount' => (int) $locked->price_toman,
+                        'discount_amount' => $discountAmount,
+                        'final_amount' => $finalAmount,
+                        'reserved_at' => now(),
+                        'expires_at' => now()->addMinutes($this->ttlMinutes()),
                     ]);
                 } catch (QueryException $e) {
                     // A concurrent request beat us to the single active-reservation
@@ -161,11 +167,11 @@ class DiscountService
 
                 // (10) Order discount snapshot inside the same transaction.
                 $locked->update([
-                    'discount_code_id'  => $discountCode->id,
-                    'discount_code'     => $discountCode->code,
-                    'discount_type'     => $discountCode->type,
-                    'discount_value'    => $discountCode->value,
-                    'discount_toman'    => $discountAmount,
+                    'discount_code_id' => $discountCode->id,
+                    'discount_code' => $discountCode->code,
+                    'discount_type' => $discountCode->type,
+                    'discount_value' => $discountCode->value,
+                    'discount_toman' => $discountAmount,
                     'final_price_toman' => $finalAmount,
                 ]);
 
@@ -188,11 +194,11 @@ class DiscountService
                 $this->releaseActive($locked, 'removed');
 
                 $locked->update([
-                    'discount_code_id'  => null,
-                    'discount_code'     => null,
-                    'discount_type'     => null,
-                    'discount_value'    => null,
-                    'discount_toman'    => 0,
+                    'discount_code_id' => null,
+                    'discount_code' => null,
+                    'discount_type' => null,
+                    'discount_value' => null,
+                    'discount_toman' => 0,
                     'final_price_toman' => (int) $locked->price_toman, // recalculated server-side
                 ]);
             });
@@ -244,23 +250,23 @@ class DiscountService
                 try {
                     if ($reservation) {
                         $reservation->update([
-                            'status'          => DiscountRedemption::STATUS_USED,
-                            'used_at'         => now(),
+                            'status' => DiscountRedemption::STATUS_USED,
+                            'used_at' => now(),
                             'discount_amount' => (int) $locked->discount_toman,
-                            'final_amount'    => (int) $locked->final_price_toman,
+                            'final_amount' => (int) $locked->final_price_toman,
                             'original_amount' => (int) $locked->price_toman,
                         ]);
                     } else {
                         DiscountRedemption::create([
                             'discount_code_id' => $locked->discount_code_id,
-                            'user_id'          => $locked->user_id,
-                            'order_id'         => $locked->id,
-                            'status'           => DiscountRedemption::STATUS_USED,
-                            'original_amount'  => (int) $locked->price_toman,
-                            'discount_amount'  => (int) $locked->discount_toman,
-                            'final_amount'     => (int) $locked->final_price_toman,
-                            'reserved_at'      => now(),
-                            'used_at'          => now(),
+                            'user_id' => $locked->user_id,
+                            'order_id' => $locked->id,
+                            'status' => DiscountRedemption::STATUS_USED,
+                            'original_amount' => (int) $locked->price_toman,
+                            'discount_amount' => (int) $locked->discount_toman,
+                            'final_amount' => (int) $locked->final_price_toman,
+                            'reserved_at' => now(),
+                            'used_at' => now(),
                         ]);
                     }
                 } catch (QueryException $e) {
@@ -279,12 +285,12 @@ class DiscountService
                 Notification::TYPE_DISCOUNT_USED,
                 $order->user,
                 [
-                    'user_name'       => $order->user->name ?? $order->user->username,
-                    'order_id'        => $order->order_number,
+                    'user_name' => $order->user->name ?? $order->user->username,
+                    'order_id' => $order->order_number,
                     'discount_amount' => number_format($order->discount_toman),
-                    'final_amount'    => number_format($order->final_price_toman),
+                    'final_amount' => number_format($order->final_price_toman),
                 ],
-                'discount_used:order:' . $order->id,
+                'discount_used:order:'.$order->id,
             );
         }
     }
@@ -353,7 +359,7 @@ class DiscountService
                         }
 
                         $row->update([
-                            'status'      => DiscountRedemption::STATUS_EXPIRED,
+                            'status' => DiscountRedemption::STATUS_EXPIRED,
                             'released_at' => now(),
                         ]);
                         $expired++;
@@ -364,11 +370,11 @@ class DiscountService
                             && $order->payment_status !== Order::PAYMENT_PAID
                             && (int) $order->discount_code_id === (int) $row->discount_code_id) {
                             $order->update([
-                                'discount_code_id'  => null,
-                                'discount_code'     => null,
-                                'discount_type'     => null,
-                                'discount_value'    => null,
-                                'discount_toman'    => 0,
+                                'discount_code_id' => null,
+                                'discount_code' => null,
+                                'discount_type' => null,
+                                'discount_value' => null,
+                                'discount_toman' => 0,
                                 'final_price_toman' => (int) $order->price_toman,
                             ]);
                             $ordersCleared++;
@@ -392,6 +398,7 @@ class DiscountService
     private function resolveCode(string $code): ?DiscountCode
     {
         $trimmed = trim($code);
+
         return DiscountCode::where('code', strtoupper($trimmed))->first()
             ?? DiscountCode::where('code', $trimmed)->first();
     }
@@ -500,7 +507,7 @@ class DiscountService
         return DiscountRedemption::where('order_id', $order->id)
             ->where('status', DiscountRedemption::STATUS_RESERVED)
             ->update([
-                'status'      => DiscountRedemption::STATUS_RELEASED,
+                'status' => DiscountRedemption::STATUS_RELEASED,
                 'released_at' => now(),
             ]);
     }

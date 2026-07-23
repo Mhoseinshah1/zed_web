@@ -23,7 +23,7 @@ class AppearanceManager
     private const SEMANTIC = [
         'success' => '#34d399',
         'warning' => '#fbbf24',
-        'danger'  => '#f43f5e',
+        'danger' => '#f43f5e',
     ];
 
     /**
@@ -80,15 +80,16 @@ class AppearanceManager
         if ($preset !== '' && array_key_exists($preset, self::presets())) {
             return $preset;
         }
+
         return self::migrateLegacyPreset();
     }
 
     /** @return array<string,mixed> resolved active palette (with overrides). */
     public static function activePalette(): array
     {
-        $preset  = self::presets()[self::activePreset()];
+        $preset = self::presets()[self::activePreset()];
         $primary = self::colorOverride('primary_color', $preset['primary']);
-        $accent  = self::colorOverride('accent_color', $preset['accent']);
+        $accent = self::colorOverride('accent_color', $preset['accent']);
 
         return array_merge($preset, ['primary' => $primary, 'accent' => $accent]);
     }
@@ -97,6 +98,7 @@ class AppearanceManager
     public static function appearanceMode(): string
     {
         $mode = (string) ThemeSettingsService::firstOf(['appearance_mode', 'default_appearance'], 'dark');
+
         return in_array($mode, ['light', 'dark', 'system'], true) ? $mode : 'dark';
     }
 
@@ -119,14 +121,14 @@ class AppearanceManager
         $p = self::activePalette();
 
         return [
-            '--zp-primary'       => $p['primary'],
+            '--zp-primary' => $p['primary'],
             '--zp-primary-hover' => $p['primary'],
-            '--zp-secondary'     => $p['accent'],
-            '--zp-accent'        => $p['accent'],
-            '--zp-success'       => self::SEMANTIC['success'],
-            '--zp-warning'       => self::SEMANTIC['warning'],
-            '--zp-danger'        => self::SEMANTIC['danger'],
-            '--zp-gradient'      => "linear-gradient(135deg,{$p['primary']},{$p['accent']})",
+            '--zp-secondary' => $p['accent'],
+            '--zp-accent' => $p['accent'],
+            '--zp-success' => self::SEMANTIC['success'],
+            '--zp-warning' => self::SEMANTIC['warning'],
+            '--zp-danger' => self::SEMANTIC['danger'],
+            '--zp-gradient' => "linear-gradient(135deg,{$p['primary']},{$p['accent']})",
         ];
     }
 
@@ -152,8 +154,9 @@ class AppearanceManager
     private static function colorOverride(string $key, string $default): string
     {
         $val = (string) ThemeSettingsService::get($key, '');
+
         return preg_match('/^#?[0-9a-fA-F]{6}$/', $val) === 1
-            ? (str_starts_with($val, '#') ? $val : '#' . $val)
+            ? (str_starts_with($val, '#') ? $val : '#'.$val)
             : $default;
     }
 
@@ -161,12 +164,13 @@ class AppearanceManager
     private static function migrateLegacyPreset(): string
     {
         $old = (string) ThemeSettingsService::firstOf(['default_theme_admin', 'default_theme_public'], '');
+
         return match ($old) {
             'zed-minimal-light', 'zed-frost', 'zed-sky-light', 'zed-mint' => 'minimal_light',
-            'zed-luxury-gold', 'zed-sunset'                               => 'luxury_gold',
-            'zed-graphite', 'zed-titanium'                                => 'graphite_admin',
-            'zed-cyber-dark', 'zed-aurora', 'zed-neon'                    => 'professional_blue',
-            default                                                       => self::DEFAULT_PRESET,
+            'zed-luxury-gold', 'zed-sunset' => 'luxury_gold',
+            'zed-graphite', 'zed-titanium' => 'graphite_admin',
+            'zed-cyber-dark', 'zed-aurora', 'zed-neon' => 'professional_blue',
+            default => self::DEFAULT_PRESET,
         };
     }
 }

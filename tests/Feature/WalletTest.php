@@ -14,6 +14,7 @@ use App\Services\PaymentService;
 use App\Services\ServiceProvisioner;
 use App\Services\WalletService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Cache;
 use Tests\TestCase;
 
 class WalletTest extends TestCase
@@ -26,10 +27,11 @@ class WalletTest extends TestCase
     {
         static $seq = 0;
         $seq++;
+
         return User::factory()->create(array_merge([
             'wallet_balance_toman' => 0,
-            'username'             => "testuser{$seq}",
-            'email'                => "testuser{$seq}@example.com",
+            'username' => "testuser{$seq}",
+            'email' => "testuser{$seq}@example.com",
         ], $attrs));
     }
 
@@ -37,20 +39,20 @@ class WalletTest extends TestCase
     {
         return Plan::factory()->create([
             'price_toman' => $price,
-            'is_active'   => true,
+            'is_active' => true,
         ]);
     }
 
     private function makeOrder(User $user, Plan $plan): Order
     {
         return Order::create([
-            'user_id'           => $user->id,
-            'plan_id'           => $plan->id,
-            'plan_name'         => $plan->name,
-            'price_toman'       => $plan->price_toman,
+            'user_id' => $user->id,
+            'plan_id' => $plan->id,
+            'plan_name' => $plan->name,
+            'price_toman' => $plan->price_toman,
             'final_price_toman' => $plan->price_toman,
-            'status'            => Order::STATUS_PENDING,
-            'payment_status'    => Order::PAYMENT_UNPAID,
+            'status' => Order::STATUS_PENDING,
+            'payment_status' => Order::PAYMENT_UNPAID,
         ]);
     }
 
@@ -67,15 +69,15 @@ class WalletTest extends TestCase
         return PaymentMethod::firstOrCreate(
             ['type' => PaymentMethod::TYPE_NOWPAYMENTS],
             [
-                'title'      => 'NOWPayments',
-                'slug'       => 'nowpayments',
-                'is_active'  => true,
-                'api_key'    => 'test-api-key',
+                'title' => 'NOWPayments',
+                'slug' => 'nowpayments',
+                'is_active' => true,
+                'api_key' => 'test-api-key',
                 'ipn_secret' => 'test-ipn-secret',
-                'config'     => [
-                    'sandbox'           => true,
-                    'nowpayments_mode'  => 'invoice',
-                    'price_currency'    => 'usd',
+                'config' => [
+                    'sandbox' => true,
+                    'nowpayments_mode' => 'invoice',
+                    'price_currency' => 'usd',
                     'exchange_rate_usd' => 75000,
                 ],
             ]
@@ -139,22 +141,23 @@ class WalletTest extends TestCase
         $sorted = $payload;
         ksort($sorted);
         $json = json_encode($sorted, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+
         return hash_hmac('sha512', $json, $secret);
     }
 
     private function makeWalletTopupTx(User $user, PaymentMethod $method, array $attrs = []): PaymentTransaction
     {
         return PaymentTransaction::create(array_merge([
-            'order_id'           => null,
-            'user_id'            => $user->id,
-            'payment_method_id'  => $method->id,
-            'provider'           => 'nowpayments',
-            'method'             => 'nowpayments',
-            'payment_purpose'    => 'wallet_topup',
-            'status'             => PaymentTransaction::STATUS_WAITING,
-            'amount_toman'       => 100000,
+            'order_id' => null,
+            'user_id' => $user->id,
+            'payment_method_id' => $method->id,
+            'provider' => 'nowpayments',
+            'method' => 'nowpayments',
+            'payment_purpose' => 'wallet_topup',
+            'status' => PaymentTransaction::STATUS_WAITING,
+            'amount_toman' => 100000,
             'provider_reference' => 'inv_wallet_001',
-            'gateway_status'     => 'waiting',
+            'gateway_status' => 'waiting',
         ], $attrs));
     }
 
@@ -179,13 +182,13 @@ class WalletTest extends TestCase
         ]);
 
         $this->assertDatabaseHas('wallet_transactions', [
-            'user_id'              => $user->id,
-            'type'                 => WalletTransaction::TYPE_MANUAL_CREDIT,
-            'direction'            => WalletTransaction::DIRECTION_CREDIT,
-            'amount_toman'         => 75000,
+            'user_id' => $user->id,
+            'type' => WalletTransaction::TYPE_MANUAL_CREDIT,
+            'direction' => WalletTransaction::DIRECTION_CREDIT,
+            'amount_toman' => 75000,
             'balance_before_toman' => 0,
-            'balance_after_toman'  => 75000,
-            'status'               => WalletTransaction::STATUS_COMPLETED,
+            'balance_after_toman' => 75000,
+            'status' => WalletTransaction::STATUS_COMPLETED,
         ]);
     }
 
@@ -208,13 +211,13 @@ class WalletTest extends TestCase
         ]);
 
         $this->assertDatabaseHas('wallet_transactions', [
-            'user_id'              => $user->id,
-            'type'                 => WalletTransaction::TYPE_ORDER_PAYMENT,
-            'direction'            => WalletTransaction::DIRECTION_DEBIT,
-            'amount_toman'         => 40000,
+            'user_id' => $user->id,
+            'type' => WalletTransaction::TYPE_ORDER_PAYMENT,
+            'direction' => WalletTransaction::DIRECTION_DEBIT,
+            'amount_toman' => 40000,
             'balance_before_toman' => 100000,
-            'balance_after_toman'  => 60000,
-            'status'               => WalletTransaction::STATUS_COMPLETED,
+            'balance_after_toman' => 60000,
+            'status' => WalletTransaction::STATUS_COMPLETED,
         ]);
     }
 
@@ -251,8 +254,8 @@ class WalletTest extends TestCase
         $this->assertEquals(20000, $user->wallet_balance_toman);
 
         $this->assertDatabaseHas('wallet_transactions', [
-            'user_id'   => $user->id,
-            'type'      => WalletTransaction::TYPE_REFUND,
+            'user_id' => $user->id,
+            'type' => WalletTransaction::TYPE_REFUND,
             'direction' => WalletTransaction::DIRECTION_CREDIT,
         ]);
     }
@@ -327,14 +330,14 @@ class WalletTest extends TestCase
         $user = $this->makeUser(['wallet_balance_toman' => 100000]);
 
         WalletTransaction::create([
-            'user_id'              => $user->id,
-            'type'                 => WalletTransaction::TYPE_MANUAL_CREDIT,
-            'direction'            => WalletTransaction::DIRECTION_CREDIT,
-            'amount_toman'         => 100000,
+            'user_id' => $user->id,
+            'type' => WalletTransaction::TYPE_MANUAL_CREDIT,
+            'direction' => WalletTransaction::DIRECTION_CREDIT,
+            'amount_toman' => 100000,
             'balance_before_toman' => 0,
-            'balance_after_toman'  => 100000,
-            'status'               => WalletTransaction::STATUS_COMPLETED,
-            'description'          => 'شارژ تست',
+            'balance_after_toman' => 100000,
+            'status' => WalletTransaction::STATUS_COMPLETED,
+            'description' => 'شارژ تست',
         ]);
 
         $this->actingAs($user)
@@ -373,13 +376,13 @@ class WalletTest extends TestCase
         $other = $this->makeUser();
 
         WalletTransaction::create([
-            'user_id'              => $owner->id,
-            'type'                 => WalletTransaction::TYPE_MANUAL_CREDIT,
-            'direction'            => WalletTransaction::DIRECTION_CREDIT,
-            'amount_toman'         => 50000,
+            'user_id' => $owner->id,
+            'type' => WalletTransaction::TYPE_MANUAL_CREDIT,
+            'direction' => WalletTransaction::DIRECTION_CREDIT,
+            'amount_toman' => 50000,
             'balance_before_toman' => 0,
-            'balance_after_toman'  => 50000,
-            'status'               => WalletTransaction::STATUS_COMPLETED,
+            'balance_after_toman' => 50000,
+            'status' => WalletTransaction::STATUS_COMPLETED,
         ]);
 
         $response = $this->actingAs($other)
@@ -396,9 +399,9 @@ class WalletTest extends TestCase
     public function test_wallet_payment_succeeds_when_enabled_and_balance_sufficient(): void
     {
         $this->enableWalletPayment();
-        $user   = $this->makeUser(['wallet_balance_toman' => 100000]);
-        $plan   = $this->makePlan(50000);
-        $order  = $this->makeOrder($user, $plan);
+        $user = $this->makeUser(['wallet_balance_toman' => 100000]);
+        $plan = $this->makePlan(50000);
+        $order = $this->makeOrder($user, $plan);
         $method = $this->makeWalletMethod();
 
         $this->actingAs($user)
@@ -417,9 +420,9 @@ class WalletTest extends TestCase
     public function test_wallet_payment_creates_debit_transaction(): void
     {
         $this->enableWalletPayment();
-        $user   = $this->makeUser(['wallet_balance_toman' => 100000]);
-        $plan   = $this->makePlan(50000);
-        $order  = $this->makeOrder($user, $plan);
+        $user = $this->makeUser(['wallet_balance_toman' => 100000]);
+        $plan = $this->makePlan(50000);
+        $order = $this->makeOrder($user, $plan);
         $method = $this->makeWalletMethod();
 
         $this->actingAs($user)
@@ -428,9 +431,9 @@ class WalletTest extends TestCase
             ]);
 
         $this->assertDatabaseHas('wallet_transactions', [
-            'user_id'   => $user->id,
-            'order_id'  => $order->id,
-            'type'      => WalletTransaction::TYPE_ORDER_PAYMENT,
+            'user_id' => $user->id,
+            'order_id' => $order->id,
+            'type' => WalletTransaction::TYPE_ORDER_PAYMENT,
             'direction' => WalletTransaction::DIRECTION_DEBIT,
             'amount_toman' => 50000,
         ]);
@@ -439,9 +442,9 @@ class WalletTest extends TestCase
     public function test_wallet_payment_blocked_when_wallet_disabled(): void
     {
         $this->disableWallet();
-        $user   = $this->makeUser(['wallet_balance_toman' => 100000]);
-        $plan   = $this->makePlan(50000);
-        $order  = $this->makeOrder($user, $plan);
+        $user = $this->makeUser(['wallet_balance_toman' => 100000]);
+        $plan = $this->makePlan(50000);
+        $order = $this->makeOrder($user, $plan);
         $method = $this->makeWalletMethod();
 
         $this->actingAs($user)
@@ -457,9 +460,9 @@ class WalletTest extends TestCase
     public function test_wallet_payment_blocked_when_payment_disabled(): void
     {
         $this->disableWalletPayment();
-        $user   = $this->makeUser(['wallet_balance_toman' => 100000]);
-        $plan   = $this->makePlan(50000);
-        $order  = $this->makeOrder($user, $plan);
+        $user = $this->makeUser(['wallet_balance_toman' => 100000]);
+        $plan = $this->makePlan(50000);
+        $order = $this->makeOrder($user, $plan);
         $method = $this->makeWalletMethod();
 
         $this->actingAs($user)
@@ -475,9 +478,9 @@ class WalletTest extends TestCase
     public function test_wallet_payment_blocked_when_balance_insufficient(): void
     {
         $this->enableWalletPayment();
-        $user   = $this->makeUser(['wallet_balance_toman' => 10000]);
-        $plan   = $this->makePlan(50000);
-        $order  = $this->makeOrder($user, $plan);
+        $user = $this->makeUser(['wallet_balance_toman' => 10000]);
+        $plan = $this->makePlan(50000);
+        $order = $this->makeOrder($user, $plan);
         $method = $this->makeWalletMethod();
 
         $this->actingAs($user)
@@ -496,9 +499,9 @@ class WalletTest extends TestCase
     public function test_wallet_payment_is_idempotent_no_double_debit(): void
     {
         $this->enableWalletPayment();
-        $user   = $this->makeUser(['wallet_balance_toman' => 100000]);
-        $plan   = $this->makePlan(50000);
-        $order  = $this->makeOrder($user, $plan);
+        $user = $this->makeUser(['wallet_balance_toman' => 100000]);
+        $plan = $this->makePlan(50000);
+        $order = $this->makeOrder($user, $plan);
         $method = $this->makeWalletMethod();
 
         // First payment
@@ -516,9 +519,9 @@ class WalletTest extends TestCase
     public function test_double_wallet_payment_does_not_double_debit_balance(): void
     {
         $this->enableWalletPayment();
-        $user   = $this->makeUser(['wallet_balance_toman' => 100000]);
-        $plan   = $this->makePlan(50000);
-        $order  = $this->makeOrder($user, $plan);
+        $user = $this->makeUser(['wallet_balance_toman' => 100000]);
+        $plan = $this->makePlan(50000);
+        $order = $this->makeOrder($user, $plan);
         $method = $this->makeWalletMethod();
 
         $service = app(PaymentService::class);
@@ -536,8 +539,8 @@ class WalletTest extends TestCase
     public function test_wallet_payment_does_not_go_negative(): void
     {
         $this->enableWalletPayment();
-        $user  = $this->makeUser(['wallet_balance_toman' => 30000]);
-        $plan  = $this->makePlan(50000);
+        $user = $this->makeUser(['wallet_balance_toman' => 30000]);
+        $plan = $this->makePlan(50000);
         $order = $this->makeOrder($user, $plan);
         $this->makeWalletMethod();
 
@@ -551,10 +554,10 @@ class WalletTest extends TestCase
     public function test_user_cannot_pay_another_users_order(): void
     {
         $this->enableWalletPayment();
-        $owner  = $this->makeUser(['wallet_balance_toman' => 100000]);
-        $other  = $this->makeUser(['wallet_balance_toman' => 100000]);
-        $plan   = $this->makePlan(50000);
-        $order  = $this->makeOrder($owner, $plan);
+        $owner = $this->makeUser(['wallet_balance_toman' => 100000]);
+        $other = $this->makeUser(['wallet_balance_toman' => 100000]);
+        $plan = $this->makePlan(50000);
+        $order = $this->makeOrder($owner, $plan);
         $method = $this->makeWalletMethod();
 
         $this->actingAs($other)
@@ -616,7 +619,7 @@ class WalletTest extends TestCase
     {
         $this->enableNowpaymentsTopup();
         $method = $this->makeNowPaymentsMethod();
-        $user   = $this->makeUser();
+        $user = $this->makeUser();
 
         $this->actingAs($user)
             ->get(route('dashboard.wallet.topup'))
@@ -645,7 +648,7 @@ class WalletTest extends TestCase
 
         $this->actingAs($user)
             ->post(route('dashboard.wallet.topup.submit'), [
-                'amount'            => 100000,
+                'amount' => 100000,
                 'payment_method_id' => 1,
             ])
             ->assertForbidden();
@@ -655,20 +658,20 @@ class WalletTest extends TestCase
 
     public function test_ipn_finished_for_wallet_topup_credits_wallet(): void
     {
-        $user   = $this->makeUser();
+        $user = $this->makeUser();
         $method = $this->makeNowPaymentsMethod();
-        $tx     = $this->makeWalletTopupTx($user, $method, [
+        $tx = $this->makeWalletTopupTx($user, $method, [
             'provider_reference' => 'inv_wallet_001',
-            'amount_toman'       => 100000,
+            'amount_toman' => 100000,
         ]);
 
         $payload = [
-            'invoice_id'     => 'inv_wallet_001',
-            'payment_id'     => 'pay_wallet_001',
+            'invoice_id' => 'inv_wallet_001',
+            'payment_id' => 'pay_wallet_001',
             'payment_status' => 'finished',
-            'order_id'       => 'wallet-' . $user->id . '-1234567890',
-            'pay_amount'     => 1.5,
-            'pay_currency'   => 'usdttrc20',
+            'order_id' => 'wallet-'.$user->id.'-1234567890',
+            'pay_amount' => 1.5,
+            'pay_currency' => 'usdttrc20',
         ];
         $signature = $this->makeIpnSignature($payload, 'test-ipn-secret');
 
@@ -683,20 +686,20 @@ class WalletTest extends TestCase
 
     public function test_ipn_wallet_topup_creates_wallet_transaction(): void
     {
-        $user   = $this->makeUser();
+        $user = $this->makeUser();
         $method = $this->makeNowPaymentsMethod();
-        $tx     = $this->makeWalletTopupTx($user, $method, [
+        $tx = $this->makeWalletTopupTx($user, $method, [
             'provider_reference' => 'inv_wallet_002',
-            'amount_toman'       => 50000,
+            'amount_toman' => 50000,
         ]);
 
         $payload = [
-            'invoice_id'     => 'inv_wallet_002',
-            'payment_id'     => 'pay_wallet_002',
+            'invoice_id' => 'inv_wallet_002',
+            'payment_id' => 'pay_wallet_002',
             'payment_status' => 'finished',
-            'order_id'       => 'wallet-' . $user->id . '-111',
-            'pay_amount'     => 0.75,
-            'pay_currency'   => 'eth',
+            'order_id' => 'wallet-'.$user->id.'-111',
+            'pay_amount' => 0.75,
+            'pay_currency' => 'eth',
         ];
         $signature = $this->makeIpnSignature($payload, 'test-ipn-secret');
 
@@ -704,30 +707,30 @@ class WalletTest extends TestCase
             ->postJson(route('webhooks.nowpayments'), $payload);
 
         $this->assertDatabaseHas('wallet_transactions', [
-            'user_id'               => $user->id,
+            'user_id' => $user->id,
             'payment_transaction_id' => $tx->id,
-            'type'                  => WalletTransaction::TYPE_TOPUP,
-            'direction'             => WalletTransaction::DIRECTION_CREDIT,
-            'amount_toman'          => 50000,
+            'type' => WalletTransaction::TYPE_TOPUP,
+            'direction' => WalletTransaction::DIRECTION_CREDIT,
+            'amount_toman' => 50000,
         ]);
     }
 
     public function test_duplicate_ipn_does_not_double_credit_wallet(): void
     {
-        $user   = $this->makeUser();
+        $user = $this->makeUser();
         $method = $this->makeNowPaymentsMethod();
-        $tx     = $this->makeWalletTopupTx($user, $method, [
+        $tx = $this->makeWalletTopupTx($user, $method, [
             'provider_reference' => 'inv_wallet_003',
-            'amount_toman'       => 80000,
+            'amount_toman' => 80000,
         ]);
 
         $payload = [
-            'invoice_id'     => 'inv_wallet_003',
-            'payment_id'     => 'pay_wallet_003',
+            'invoice_id' => 'inv_wallet_003',
+            'payment_id' => 'pay_wallet_003',
             'payment_status' => 'finished',
-            'order_id'       => 'wallet-' . $user->id . '-222',
-            'pay_amount'     => 1.0,
-            'pay_currency'   => 'usdttrc20',
+            'order_id' => 'wallet-'.$user->id.'-222',
+            'pay_amount' => 1.0,
+            'pay_currency' => 'usdttrc20',
         ];
         $signature = $this->makeIpnSignature($payload, 'test-ipn-secret');
 
@@ -747,20 +750,20 @@ class WalletTest extends TestCase
 
     public function test_wallet_topup_ipn_does_not_create_user_service(): void
     {
-        $user   = $this->makeUser();
+        $user = $this->makeUser();
         $method = $this->makeNowPaymentsMethod();
-        $tx     = $this->makeWalletTopupTx($user, $method, [
+        $tx = $this->makeWalletTopupTx($user, $method, [
             'provider_reference' => 'inv_wallet_004',
-            'amount_toman'       => 100000,
+            'amount_toman' => 100000,
         ]);
 
         $payload = [
-            'invoice_id'     => 'inv_wallet_004',
-            'payment_id'     => 'pay_wallet_004',
+            'invoice_id' => 'inv_wallet_004',
+            'payment_id' => 'pay_wallet_004',
             'payment_status' => 'finished',
-            'order_id'       => 'wallet-' . $user->id . '-333',
-            'pay_amount'     => 1.5,
-            'pay_currency'   => 'usdttrc20',
+            'order_id' => 'wallet-'.$user->id.'-333',
+            'pay_amount' => 1.5,
+            'pay_currency' => 'usdttrc20',
         ];
         $signature = $this->makeIpnSignature($payload, 'test-ipn-secret');
 
@@ -774,30 +777,30 @@ class WalletTest extends TestCase
 
     public function test_order_payment_ipn_still_creates_user_service(): void
     {
-        $user   = $this->makeUser();
-        $plan   = $this->makePlan(50000);
-        $order  = $this->makeOrder($user, $plan);
+        $user = $this->makeUser();
+        $plan = $this->makePlan(50000);
+        $order = $this->makeOrder($user, $plan);
         $method = $this->makeNowPaymentsMethod();
 
         $tx = PaymentTransaction::create([
-            'order_id'           => $order->id,
-            'user_id'            => $user->id,
-            'payment_method_id'  => $method->id,
-            'provider'           => 'nowpayments',
-            'method'             => 'nowpayments',
-            'payment_purpose'    => 'order_payment',
-            'status'             => PaymentTransaction::STATUS_WAITING,
-            'amount_toman'       => 50000,
+            'order_id' => $order->id,
+            'user_id' => $user->id,
+            'payment_method_id' => $method->id,
+            'provider' => 'nowpayments',
+            'method' => 'nowpayments',
+            'payment_purpose' => 'order_payment',
+            'status' => PaymentTransaction::STATUS_WAITING,
+            'amount_toman' => 50000,
             'provider_reference' => 'pay_order_001',
-            'gateway_status'     => 'waiting',
+            'gateway_status' => 'waiting',
         ]);
 
         $payload = [
-            'payment_id'     => 'pay_order_001',
+            'payment_id' => 'pay_order_001',
             'payment_status' => 'finished',
-            'order_id'       => (string) $order->id,
-            'pay_amount'     => 0.7,
-            'pay_currency'   => 'usdttrc20',
+            'order_id' => (string) $order->id,
+            'pay_amount' => 0.7,
+            'pay_currency' => 'usdttrc20',
         ];
         $signature = $this->makeIpnSignature($payload, 'test-ipn-secret');
 
@@ -814,9 +817,9 @@ class WalletTest extends TestCase
 
     public function test_credit_from_payment_transaction_is_idempotent(): void
     {
-        $user   = $this->makeUser();
+        $user = $this->makeUser();
         $method = $this->makeNowPaymentsMethod();
-        $tx     = $this->makeWalletTopupTx($user, $method, ['amount_toman' => 60000]);
+        $tx = $this->makeWalletTopupTx($user, $method, ['amount_toman' => 60000]);
 
         $walletService = app(WalletService::class);
 
@@ -838,7 +841,7 @@ class WalletTest extends TestCase
 
         app(WalletService::class)->credit($user, 200000, WalletTransaction::TYPE_MANUAL_CREDIT, [
             'description' => 'شارژ توسط ادمین',
-            'admin_id'    => 1,
+            'admin_id' => 1,
         ]);
 
         $user->refresh();
@@ -851,7 +854,7 @@ class WalletTest extends TestCase
 
         app(WalletService::class)->debit($user, 100000, WalletTransaction::TYPE_MANUAL_DEBIT, [
             'description' => 'برداشت توسط ادمین',
-            'admin_id'    => 1,
+            'admin_id' => 1,
         ]);
 
         $user->refresh();
@@ -896,7 +899,7 @@ class WalletTest extends TestCase
     {
         $this->disableNowpaymentsTopup();
         $method = $this->makeNowPaymentsMethod();
-        $user   = $this->makeUser();
+        $user = $this->makeUser();
 
         $response = $this->actingAs($user)
             ->get(route('dashboard.wallet.topup'))
@@ -915,18 +918,18 @@ class WalletTest extends TestCase
 
     public function test_ipn_with_invalid_signature_is_rejected(): void
     {
-        $user   = $this->makeUser();
+        $user = $this->makeUser();
         $method = $this->makeNowPaymentsMethod();
-        $tx     = $this->makeWalletTopupTx($user, $method, [
+        $tx = $this->makeWalletTopupTx($user, $method, [
             'provider_reference' => 'inv_invalid_sig',
-            'amount_toman'       => 100000,
+            'amount_toman' => 100000,
         ]);
 
         $payload = [
-            'invoice_id'     => 'inv_invalid_sig',
+            'invoice_id' => 'inv_invalid_sig',
             'payment_status' => 'finished',
-            'pay_amount'     => 1.5,
-            'pay_currency'   => 'usdttrc20',
+            'pay_amount' => 1.5,
+            'pay_currency' => 'usdttrc20',
         ];
 
         $response = $this->withHeaders(['x-nowpayments-sig' => 'wrong-signature'])
@@ -940,7 +943,7 @@ class WalletTest extends TestCase
     public function test_ipn_with_missing_signature_is_rejected(): void
     {
         $payload = [
-            'payment_id'     => 'pay_xyz',
+            'payment_id' => 'pay_xyz',
             'payment_status' => 'finished',
         ];
 
@@ -953,7 +956,7 @@ class WalletTest extends TestCase
     public function test_wallet_settings_boolean_persists_enabled(): void
     {
         $this->setSetting('wallet_enabled', '1');
-        \Illuminate\Support\Facades\Cache::forget('site_text:wallet_enabled');
+        Cache::forget('site_text:wallet_enabled');
 
         $this->assertTrue(SiteText::getBool('wallet_enabled', false));
     }
@@ -961,7 +964,7 @@ class WalletTest extends TestCase
     public function test_wallet_settings_boolean_persists_disabled(): void
     {
         $this->setSetting('wallet_enabled', '0');
-        \Illuminate\Support\Facades\Cache::forget('site_text:wallet_enabled');
+        Cache::forget('site_text:wallet_enabled');
 
         $this->assertFalse(SiteText::getBool('wallet_enabled', true));
     }
@@ -969,7 +972,7 @@ class WalletTest extends TestCase
     public function test_wallet_settings_read_from_db_correctly(): void
     {
         $this->setSetting('wallet_min_topup_amount', '250000');
-        \Illuminate\Support\Facades\Cache::forget('site_text:wallet_min_topup_amount');
+        Cache::forget('site_text:wallet_min_topup_amount');
 
         $this->assertEquals('250000', SiteText::get('wallet_min_topup_amount', ''));
     }
@@ -1002,9 +1005,9 @@ class WalletTest extends TestCase
     public function test_checkout_respects_wallet_payment_enabled(): void
     {
         $this->disableWalletPayment();
-        $user   = $this->makeUser(['wallet_balance_toman' => 200000]);
-        $plan   = $this->makePlan(50000);
-        $order  = $this->makeOrder($user, $plan);
+        $user = $this->makeUser(['wallet_balance_toman' => 200000]);
+        $plan = $this->makePlan(50000);
+        $order = $this->makeOrder($user, $plan);
         $method = $this->makeWalletMethod();
 
         $this->actingAs($user)
@@ -1037,12 +1040,12 @@ class WalletTest extends TestCase
     {
         $this->enableWallet();
         $this->setSetting('wallet_topup_enabled', '0');
-        \Illuminate\Support\Facades\Cache::forget('site_text:wallet_topup_enabled');
+        Cache::forget('site_text:wallet_topup_enabled');
         $user = $this->makeUser();
 
         $this->actingAs($user)
             ->post(route('dashboard.wallet.topup.submit'), [
-                'amount'            => 100000,
+                'amount' => 100000,
                 'payment_method_id' => 1,
             ])
             ->assertForbidden();
@@ -1052,7 +1055,7 @@ class WalletTest extends TestCase
     {
         $this->disableNowpaymentsTopup();
         $method = $this->makeNowPaymentsMethod();
-        $user   = $this->makeUser();
+        $user = $this->makeUser();
 
         $this->actingAs($user)
             ->get(route('dashboard.wallet.topup'))

@@ -10,6 +10,7 @@ use App\Models\SupportTicketMessage;
 use App\Models\User;
 use App\Models\UserService;
 use App\Services\Notifications\NotificationService;
+use App\Services\Telegram\TelegramAdminNotifier;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\DB;
 
@@ -24,26 +25,26 @@ class SupportTicketService
      *
      * Related order/service are only attached when they belong to the user.
      *
-     * @param array{subject:string,body:string,category_id?:int|null,priority?:string,order_id?:int|null,user_service_id?:int|null} $data
-     * @param array<int, UploadedFile> $attachments
+     * @param  array{subject:string,body:string,category_id?:int|null,priority?:string,order_id?:int|null,user_service_id?:int|null}  $data
+     * @param  array<int, UploadedFile>  $attachments
      */
     public function createTicket(User $user, array $data, array $attachments = []): SupportTicket
     {
-        $orderId   = $this->ownedOrderId($user, $data['order_id'] ?? null);
+        $orderId = $this->ownedOrderId($user, $data['order_id'] ?? null);
         $serviceId = $this->ownedServiceId($user, $data['user_service_id'] ?? null);
 
         $ticket = DB::transaction(function () use ($user, $data, $orderId, $serviceId, $attachments) {
             $ticket = SupportTicket::create([
-                'user_id'         => $user->id,
-                'category_id'     => $data['category_id'] ?? null,
-                'order_id'        => $orderId,
+                'user_id' => $user->id,
+                'category_id' => $data['category_id'] ?? null,
+                'order_id' => $orderId,
                 'user_service_id' => $serviceId,
-                'subject'         => $data['subject'],
-                'status'          => SupportTicket::STATUS_WAITING_ADMIN,
-                'priority'        => $this->normalizePriority($data['priority'] ?? null),
-                'last_reply_at'   => now(),
-                'admin_unread'    => true,
-                'user_unread'     => false,
+                'subject' => $data['subject'],
+                'status' => SupportTicket::STATUS_WAITING_ADMIN,
+                'priority' => $this->normalizePriority($data['priority'] ?? null),
+                'last_reply_at' => now(),
+                'admin_unread' => true,
+                'user_unread' => false,
             ]);
 
             $this->storeMessage($ticket, $user, $data['body'], isAdmin: false, isInternal: false, attachments: $attachments);
@@ -54,16 +55,16 @@ class SupportTicketService
         $this->notifications->notifyAdmins(
             Notification::TYPE_TICKET_CREATED,
             [
-                'user_name'     => $user->name ?? $user->username,
+                'user_name' => $user->name ?? $user->username,
                 'ticket_number' => $ticket->ticket_number,
-                'subject'       => $ticket->subject,
+                'subject' => $ticket->subject,
             ],
-            'ticket_created:' . $ticket->id,
+            'ticket_created:'.$ticket->id,
         );
 
-        app(\App\Services\Telegram\TelegramAdminNotifier::class)->event('ticket_created', [
-            'user'    => $user->name ?? $user->username,
-            'ticket'  => $ticket->ticket_number,
+        app(TelegramAdminNotifier::class)->event('ticket_created', [
+            'user' => $user->name ?? $user->username,
+            'ticket' => $ticket->ticket_number,
             'subject' => $ticket->subject,
         ], $ticket);
 
@@ -76,7 +77,7 @@ class SupportTicketService
      * @throws \RuntimeException when the ticket is closed
      */
     /**
-     * @param array<int, UploadedFile> $attachments
+     * @param  array<int, UploadedFile>  $attachments
      */
     public function userReply(SupportTicket $ticket, User $user, string $body, array $attachments = []): SupportTicketMessage
     {
@@ -88,10 +89,10 @@ class SupportTicketService
             $message = $this->storeMessage($ticket, $user, $body, isAdmin: false, isInternal: false, attachments: $attachments);
 
             $ticket->update([
-                'status'        => SupportTicket::STATUS_WAITING_ADMIN,
+                'status' => SupportTicket::STATUS_WAITING_ADMIN,
                 'last_reply_at' => now(),
-                'admin_unread'  => true,
-                'user_unread'   => false,
+                'admin_unread' => true,
+                'user_unread' => false,
             ]);
 
             return $message;
@@ -100,14 +101,14 @@ class SupportTicketService
         $this->notifications->notifyAdmins(
             Notification::TYPE_TICKET_USER_REPLY,
             [
-                'user_name'     => $user->name ?? $user->username,
+                'user_name' => $user->name ?? $user->username,
                 'ticket_number' => $ticket->ticket_number,
             ],
-            'ticket_user_reply:' . $message->id,
+            'ticket_user_reply:'.$message->id,
         );
 
-        app(\App\Services\Telegram\TelegramAdminNotifier::class)->event('ticket_replied', [
-            'user'   => $user->name ?? $user->username,
+        app(TelegramAdminNotifier::class)->event('ticket_replied', [
+            'user' => $user->name ?? $user->username,
             'ticket' => $ticket->ticket_number,
         ], $ticket);
 
@@ -119,7 +120,7 @@ class SupportTicketService
      * and do not notify them or change the public status.
      */
     /**
-     * @param array<int, UploadedFile> $attachments
+     * @param  array<int, UploadedFile>  $attachments
      */
     public function adminReply(SupportTicket $ticket, User $admin, string $body, bool $internal = false, array $attachments = []): SupportTicketMessage
     {
@@ -128,10 +129,10 @@ class SupportTicketService
 
             if (! $internal) {
                 $ticket->update([
-                    'status'        => SupportTicket::STATUS_ANSWERED,
+                    'status' => SupportTicket::STATUS_ANSWERED,
                     'last_reply_at' => now(),
-                    'user_unread'   => true,
-                    'admin_unread'  => false,
+                    'user_unread' => true,
+                    'admin_unread' => false,
                 ]);
             }
 
@@ -143,10 +144,10 @@ class SupportTicketService
                 Notification::TYPE_TICKET_ADMIN_REPLY,
                 $ticket->user,
                 [
-                    'user_name'     => $ticket->user->name ?? $ticket->user->username,
+                    'user_name' => $ticket->user->name ?? $ticket->user->username,
                     'ticket_number' => $ticket->ticket_number,
                 ],
-                'ticket_admin_reply:' . $message->id,
+                'ticket_admin_reply:'.$message->id,
             );
         }
 
@@ -180,16 +181,16 @@ class SupportTicketService
     // ── Internal ─────────────────────────────────────────────────────────────
 
     /**
-     * @param array<int, UploadedFile> $attachments
+     * @param  array<int, UploadedFile>  $attachments
      */
     private function storeMessage(SupportTicket $ticket, User $author, string $body, bool $isAdmin, bool $isInternal, array $attachments = []): SupportTicketMessage
     {
         $message = SupportTicketMessage::create([
             'support_ticket_id' => $ticket->id,
-            'user_id'           => $author->id,
-            'is_admin'          => $isAdmin,
-            'is_internal_note'  => $isInternal,
-            'body'              => $body,
+            'user_id' => $author->id,
+            'is_admin' => $isAdmin,
+            'is_internal_note' => $isInternal,
+            'body' => $body,
         ]);
 
         foreach ($attachments as $file) {
@@ -206,10 +207,10 @@ class SupportTicketService
         $path = $file->store('support-tickets', 'public');
 
         return $message->attachments()->create([
-            'path'          => $path,
+            'path' => $path,
             'original_name' => $file->getClientOriginalName(),
-            'mime_type'     => $file->getClientMimeType(),
-            'size'          => $file->getSize(),
+            'mime_type' => $file->getClientMimeType(),
+            'size' => $file->getSize(),
         ]);
     }
 
@@ -217,7 +218,7 @@ class SupportTicketService
      * Attach already-stored files (e.g. uploaded by a Filament FileUpload that
      * stored them on the public disk) to a message.
      *
-     * @param array<int, string> $paths
+     * @param  array<int, string>  $paths
      */
     public function attachStoredPaths(SupportTicketMessage $message, array $paths): void
     {
@@ -226,7 +227,7 @@ class SupportTicketService
                 continue;
             }
             $message->attachments()->create([
-                'path'          => $path,
+                'path' => $path,
                 'original_name' => basename($path),
             ]);
         }
@@ -237,6 +238,7 @@ class SupportTicketService
         if (! $orderId) {
             return null;
         }
+
         return Order::where('id', $orderId)->where('user_id', $user->id)->exists() ? $orderId : null;
     }
 
@@ -245,6 +247,7 @@ class SupportTicketService
         if (! $serviceId) {
             return null;
         }
+
         return UserService::where('id', $serviceId)->where('user_id', $user->id)->exists() ? $serviceId : null;
     }
 

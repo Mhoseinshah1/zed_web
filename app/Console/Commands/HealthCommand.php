@@ -23,36 +23,36 @@ class HealthCommand extends Command
     public function handle(HealthCheckService $health): int
     {
         $results = $health->collect();
-        $allOk   = collect($results)->every(fn (array $r) => $r['ok'] === true);
+        $allOk = collect($results)->every(fn (array $r) => $r['ok'] === true);
 
         // Scheduler health is reported informationally — a stale heartbeat does
         // not fail the infra health check (a fresh install has no heartbeat yet),
         // but it is surfaced so operators can see the scheduler state.
         $scheduler = [
-            'healthy'     => SchedulerHeartbeat::isHealthy(),
+            'healthy' => SchedulerHeartbeat::isHealthy(),
             'last_run_at' => SchedulerHeartbeat::lastRunAt()?->toIso8601String(),
             'age_seconds' => SchedulerHeartbeat::ageSeconds(),
         ];
 
         if ($this->option('json')) {
             $this->line((string) json_encode([
-                'status'     => $allOk ? 'ok' : 'error',
+                'status' => $allOk ? 'ok' : 'error',
                 'components' => $results,
-                'scheduler'  => $scheduler,
+                'scheduler' => $scheduler,
             ], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
 
             return $allOk ? self::SUCCESS : self::FAILURE;
         }
 
         $labels = [
-            'app'        => 'برنامه',
-            'database'   => 'اتصال دیتابیس برقرار نیست.',
-            'redis'      => 'اتصال Redis برقرار نیست.',
+            'app' => 'برنامه',
+            'database' => 'اتصال دیتابیس برقرار نیست.',
+            'redis' => 'اتصال Redis برقرار نیست.',
             'migrations' => 'جدول مهاجرت‌ها',
-            'storage'    => 'دسترسی نوشتن در فضای ذخیره‌سازی وجود ندارد.',
+            'storage' => 'دسترسی نوشتن در فضای ذخیره‌سازی وجود ندارد.',
         ];
 
-        $this->info('وضعیت کلی سیستم: ' . ($allOk ? 'سالم ✅' : 'ناسالم ❌'));
+        $this->info('وضعیت کلی سیستم: '.($allOk ? 'سالم ✅' : 'ناسالم ❌'));
         $this->newLine();
 
         $rows = [];
@@ -60,7 +60,7 @@ class HealthCommand extends Command
             $rows[] = [
                 $name,
                 $result['ok'] ? '✅' : '❌',
-                $result['ok'] ? '—' : ($this->reasonFor($name, $labels) . ($result['error'] ? "  ({$result['error']})" : '')),
+                $result['ok'] ? '—' : ($this->reasonFor($name, $labels).($result['error'] ? "  ({$result['error']})" : '')),
             ];
         }
 
@@ -70,8 +70,8 @@ class HealthCommand extends Command
             $scheduler['healthy'] ? '✅' : '⚠️',
             $scheduler['last_run_at'] === null
                 ? 'زمان‌بندی وظایف به‌درستی اجرا نمی‌شود. (آخرین اجرای موفق: —)'
-                : ('آخرین اجرای موفق: ' . $scheduler['last_run_at'] . " ({$scheduler['age_seconds']}s)"
-                    . ($scheduler['healthy'] ? '' : ' — زمان‌بندی وظایف به‌درستی اجرا نمی‌شود.')),
+                : ('آخرین اجرای موفق: '.$scheduler['last_run_at']." ({$scheduler['age_seconds']}s)"
+                    .($scheduler['healthy'] ? '' : ' — زمان‌بندی وظایف به‌درستی اجرا نمی‌شود.')),
         ];
 
         $this->table(['Component', 'OK', 'Detail'], $rows);

@@ -10,12 +10,13 @@ use Illuminate\Support\Str;
 class Feature extends Model
 {
     use HasFactory;
+
     protected $fillable = [
         'title', 'slug', 'description', 'icon', 'is_active', 'sort_order',
     ];
 
     protected $casts = [
-        'is_active'  => 'boolean',
+        'is_active' => 'boolean',
         'sort_order' => 'integer',
     ];
 
@@ -30,7 +31,7 @@ class Feature extends Model
             if (empty($feature->slug)) {
                 $feature->slug = Str::slug($feature->title, '-', 'fa');
                 if (empty($feature->slug)) {
-                    $feature->slug = Str::slug('feature-' . uniqid());
+                    $feature->slug = Str::slug('feature-'.uniqid());
                 }
             }
         });

@@ -14,12 +14,17 @@ class TestimonialResource extends Resource
 {
     protected static ?string $model = Testimonial::class;
 
-    protected static ?string $navigationIcon   = 'heroicon-o-chat-bubble-left-right';
-    protected static ?string $navigationGroup   = 'نمایندگان و بازاریابی';
-    protected static ?string $navigationLabel   = 'نظرات کاربران';
-    protected static ?string $modelLabel        = 'نظر کاربر';
-    protected static ?string $pluralModelLabel  = 'نظرات کاربران';
-    protected static ?int    $navigationSort    = 40;
+    protected static ?string $navigationIcon = 'heroicon-o-chat-bubble-left-right';
+
+    protected static ?string $navigationGroup = 'نمایندگان و بازاریابی';
+
+    protected static ?string $navigationLabel = 'نظرات کاربران';
+
+    protected static ?string $modelLabel = 'نظر کاربر';
+
+    protected static ?string $pluralModelLabel = 'نظرات کاربران';
+
+    protected static ?int $navigationSort = 40;
 
     public static function form(Form $form): Form
     {
@@ -74,9 +79,9 @@ class TestimonialResource extends Resource
     public static function getPages(): array
     {
         return [
-            'index'  => Pages\ListTestimonials::route('/'),
+            'index' => Pages\ListTestimonials::route('/'),
             'create' => Pages\CreateTestimonial::route('/create'),
-            'edit'   => Pages\EditTestimonial::route('/{record}/edit'),
+            'edit' => Pages\EditTestimonial::route('/{record}/edit'),
         ];
     }
 }

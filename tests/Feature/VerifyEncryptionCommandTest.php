@@ -25,11 +25,11 @@ class VerifyEncryptionCommandTest extends TestCase
     public function test_passes_when_encrypted_secrets_decrypt(): void
     {
         VpnPanel::create([
-            'name'      => 'Panel A',
-            'type'      => VpnPanel::TYPE_MARZBAN,
-            'base_url'  => 'https://panel.example.com',
+            'name' => 'Panel A',
+            'type' => VpnPanel::TYPE_MARZBAN,
+            'base_url' => 'https://panel.example.com',
             'api_token' => 'super-secret-token',
-            'password'  => 'super-secret-pass',
+            'password' => 'super-secret-pass',
         ]);
 
         // Sanity: the value round-trips through the encrypted cast.
@@ -43,9 +43,9 @@ class VerifyEncryptionCommandTest extends TestCase
     public function test_fails_when_ciphertext_cannot_be_decrypted(): void
     {
         $panel = VpnPanel::create([
-            'name'      => 'Panel B',
-            'type'      => VpnPanel::TYPE_MARZBAN,
-            'base_url'  => 'https://panel.example.com',
+            'name' => 'Panel B',
+            'type' => VpnPanel::TYPE_MARZBAN,
+            'base_url' => 'https://panel.example.com',
             'api_token' => 'super-secret-token',
         ]);
 
@@ -63,9 +63,9 @@ class VerifyEncryptionCommandTest extends TestCase
     public function test_never_prints_the_decrypted_value(): void
     {
         VpnPanel::create([
-            'name'      => 'Panel C',
-            'type'      => VpnPanel::TYPE_MARZBAN,
-            'base_url'  => 'https://panel.example.com',
+            'name' => 'Panel C',
+            'type' => VpnPanel::TYPE_MARZBAN,
+            'base_url' => 'https://panel.example.com',
             'api_token' => 'TOP-SECRET-NEEDLE',
         ]);
 

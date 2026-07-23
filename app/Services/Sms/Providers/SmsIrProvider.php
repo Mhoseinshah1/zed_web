@@ -21,15 +21,15 @@ class SmsIrProvider extends AbstractSmsProvider
     {
         $response = Http::withHeaders([
             'X-API-KEY' => $this->apiKey(),
-            'Accept'    => 'application/json',
-        ])->timeout(20)->post(self::BASE . '/send/bulk', array_filter([
-            'lineNumber'  => $this->sender() ?: null,
+            'Accept' => 'application/json',
+        ])->timeout(20)->post(self::BASE.'/send/bulk', array_filter([
+            'lineNumber' => $this->sender() ?: null,
             'messageText' => $message,
-            'mobiles'     => [$this->toLocal($normalizedPhone)],
+            'mobiles' => [$this->toLocal($normalizedPhone)],
         ]));
 
         if (! $response->successful()) {
-            throw new \RuntimeException('SMS.ir HTTP ' . $response->status());
+            throw new \RuntimeException('SMS.ir HTTP '.$response->status());
         }
 
         return true;
@@ -40,9 +40,9 @@ class SmsIrProvider extends AbstractSmsProvider
         if ($this->pattern() !== '') {
             $response = Http::withHeaders([
                 'X-API-KEY' => $this->apiKey(),
-                'Accept'    => 'application/json',
-            ])->timeout(20)->post(self::BASE . '/send/verify', [
-                'mobile'     => $this->toLocal($normalizedPhone),
+                'Accept' => 'application/json',
+            ])->timeout(20)->post(self::BASE.'/send/verify', [
+                'mobile' => $this->toLocal($normalizedPhone),
                 'templateId' => $this->pattern(),
                 'parameters' => [
                     ['name' => 'CODE', 'value' => $code],
@@ -50,7 +50,7 @@ class SmsIrProvider extends AbstractSmsProvider
             ]);
 
             if (! $response->successful()) {
-                throw new \RuntimeException('SMS.ir verify HTTP ' . $response->status());
+                throw new \RuntimeException('SMS.ir verify HTTP '.$response->status());
             }
 
             return true;

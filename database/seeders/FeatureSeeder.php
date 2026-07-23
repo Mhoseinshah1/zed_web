@@ -26,15 +26,15 @@ class FeatureSeeder extends Seeder
         foreach ($defaults as $item) {
             $slug = Str::slug($item['title'], '-', 'fa');
             if (empty($slug)) {
-                $slug = 'feature-' . $item['sort_order'];
+                $slug = 'feature-'.$item['sort_order'];
             }
 
             Feature::firstOrCreate(
                 ['slug' => $slug],
                 [
-                    'title'      => $item['title'],
-                    'icon'       => $item['icon'],
-                    'is_active'  => true,
+                    'title' => $item['title'],
+                    'icon' => $item['icon'],
+                    'is_active' => true,
                     'sort_order' => $item['sort_order'],
                 ]
             );

@@ -4,7 +4,6 @@ namespace App\Http\Controllers;
 
 use App\Models\SiteSetting;
 use App\Models\UserService;
-use App\Models\VpnPanel;
 use App\Services\Marzban\UserServiceSyncService;
 use Illuminate\Http\RedirectResponse;
 
@@ -20,7 +19,7 @@ class ServiceController extends Controller
      */
     public function index()
     {
-        $user     = auth()->user();
+        $user = auth()->user();
         $services = $user->services()->latest()->paginate(15);
 
         return view('dashboard.services.index', compact('user', 'services'));
@@ -30,7 +29,7 @@ class ServiceController extends Controller
     {
         abort_if($service->user_id !== auth()->id(), 403);
 
-        $panel       = $service->marzbanPanel();
+        $panel = $service->marzbanPanel();
         $syncWarning = null;
 
         // On-demand sync for this single service only, gated by the cache window
@@ -51,15 +50,15 @@ class ServiceController extends Controller
         }
 
         // Resolve capabilities from panel toggles (defaults when no panel)
-        $canSync              = $panel ? (bool) $panel->allow_user_sync_service          : true;
-        $canRevoke            = $panel ? (bool) $panel->allow_user_revoke_subscription   : true;
-        $canReset             = $panel ? (bool) $panel->allow_user_reset_traffic         : false;
-        $canDisable           = $panel ? (bool) $panel->allow_user_disable_service       : false;
-        $canEnable            = $panel ? (bool) $panel->allow_user_enable_service        : false;
-        $canViewSubQr         = $panel ? (bool) $panel->allow_user_view_subscription_qr  : true;
-        $canViewConfigQr      = $panel ? (bool) $panel->allow_user_view_config_qr        : true;
-        $canCopySubLink       = $panel ? (bool) $panel->allow_user_copy_subscription_link : true;
-        $canCopyConfigLink    = $panel ? (bool) $panel->allow_user_copy_config_link       : true;
+        $canSync = $panel ? (bool) $panel->allow_user_sync_service : true;
+        $canRevoke = $panel ? (bool) $panel->allow_user_revoke_subscription : true;
+        $canReset = $panel ? (bool) $panel->allow_user_reset_traffic : false;
+        $canDisable = $panel ? (bool) $panel->allow_user_disable_service : false;
+        $canEnable = $panel ? (bool) $panel->allow_user_enable_service : false;
+        $canViewSubQr = $panel ? (bool) $panel->allow_user_view_subscription_qr : true;
+        $canViewConfigQr = $panel ? (bool) $panel->allow_user_view_config_qr : true;
+        $canCopySubLink = $panel ? (bool) $panel->allow_user_copy_subscription_link : true;
+        $canCopyConfigLink = $panel ? (bool) $panel->allow_user_copy_config_link : true;
         $canViewAllConfigLinks = $panel ? (bool) $panel->allow_user_view_all_config_links : true;
 
         return view('dashboard.services.show', compact(

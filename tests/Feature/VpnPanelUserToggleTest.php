@@ -22,75 +22,76 @@ class VpnPanelUserToggleTest extends TestCase
     private function makeUser(): User
     {
         self::$seq++;
+
         return User::factory()->create([
-            'username' => 'toggle_' . self::$seq,
-            'email'    => 'toggle_' . self::$seq . '@ex.com',
+            'username' => 'toggle_'.self::$seq,
+            'email' => 'toggle_'.self::$seq.'@ex.com',
         ]);
     }
 
     private function makePanel(array $overrides = []): VpnPanel
     {
         return VpnPanel::create(array_merge([
-            'name'       => 'Toggle Panel',
-            'type'       => VpnPanel::TYPE_MARZBAN,
-            'base_url'   => 'https://panel.example.com',
-            'username'   => 'admin',
-            'password'   => 'secret',
-            'is_active'  => true,
+            'name' => 'Toggle Panel',
+            'type' => VpnPanel::TYPE_MARZBAN,
+            'base_url' => 'https://panel.example.com',
+            'username' => 'admin',
+            'password' => 'secret',
+            'is_active' => true,
             'is_default' => true,
         ], $overrides));
     }
 
     private function makeActiveService(User $user, VpnPanel $panel, string $remoteUsername = 'zpx_tgl'): UserService
     {
-        $plan  = Plan::factory()->create([
-            'name'          => 'Toggle Plan',
-            'price_toman'   => 50000,
-            'is_active'     => true,
-            'traffic_gb'    => 20,
+        $plan = Plan::factory()->create([
+            'name' => 'Toggle Plan',
+            'price_toman' => 50000,
+            'is_active' => true,
+            'traffic_gb' => 20,
             'duration_days' => 30,
         ]);
         $order = Order::create([
-            'user_id'           => $user->id,
-            'plan_id'           => $plan->id,
-            'plan_name'         => $plan->name,
-            'price_toman'       => $plan->price_toman,
+            'user_id' => $user->id,
+            'plan_id' => $plan->id,
+            'plan_name' => $plan->name,
+            'price_toman' => $plan->price_toman,
             'final_price_toman' => $plan->price_toman,
-            'traffic_gb'        => $plan->traffic_gb,
-            'duration_days'     => $plan->duration_days,
-            'status'            => Order::STATUS_PAID,
-            'payment_status'    => Order::PAYMENT_PAID,
+            'traffic_gb' => $plan->traffic_gb,
+            'duration_days' => $plan->duration_days,
+            'status' => Order::STATUS_PAID,
+            'payment_status' => Order::PAYMENT_PAID,
         ]);
 
         return UserService::create([
-            'user_id'           => $user->id,
-            'order_id'          => $order->id,
-            'plan_id'           => $plan->id,
-            'plan_name'         => $plan->name,
-            'vpn_panel_id'      => $panel->id,
-            'traffic_total_gb'  => 20,
-            'traffic_used_gb'   => 5,
-            'duration_days'     => 30,
-            'status'            => UserService::STATUS_ACTIVE,
-            'provision_status'  => UserService::PROVISION_PROVISIONED,
-            'remote_username'   => $remoteUsername,
+            'user_id' => $user->id,
+            'order_id' => $order->id,
+            'plan_id' => $plan->id,
+            'plan_name' => $plan->name,
+            'vpn_panel_id' => $panel->id,
+            'traffic_total_gb' => 20,
+            'traffic_used_gb' => 5,
+            'duration_days' => 30,
+            'status' => UserService::STATUS_ACTIVE,
+            'provision_status' => UserService::PROVISION_PROVISIONED,
+            'remote_username' => $remoteUsername,
             'subscription_link' => 'https://panel.example.com/sub/TOKEN/',
-            'config_link'       => 'vless://cfg',
-            'last_synced_at'    => now(), // prevent auto-sync on show
+            'config_link' => 'vless://cfg',
+            'last_synced_at' => now(), // prevent auto-sync on show
         ]);
     }
 
     private function fakeMarzbanUser(string $username): array
     {
         return [
-            'username'         => $username,
-            'status'           => 'active',
-            'used_traffic'     => 1_073_741_824,
-            'data_limit'       => 21_474_836_480,
-            'expire'           => now()->addDays(30)->timestamp,
+            'username' => $username,
+            'status' => 'active',
+            'used_traffic' => 1_073_741_824,
+            'data_limit' => 21_474_836_480,
+            'expire' => now()->addDays(30)->timestamp,
             'subscription_url' => 'https://panel.example.com/sub/NEWTOKEN/',
-            'links'            => ['vless://new-config'],
-            'proxies'          => ['vless' => ['id' => 'uuid']],
+            'links' => ['vless://new-config'],
+            'proxies' => ['vless' => ['id' => 'uuid']],
         ];
     }
 
@@ -116,9 +117,9 @@ class VpnPanelUserToggleTest extends TestCase
     {
         $panel = $this->makePanel();
         $panel->update([
-            'allow_user_sync_service'        => false,
-            'allow_user_reset_traffic'       => true,
-            'allow_user_disable_service'     => true,
+            'allow_user_sync_service' => false,
+            'allow_user_reset_traffic' => true,
+            'allow_user_disable_service' => true,
         ]);
 
         $panel->refresh();
@@ -138,8 +139,8 @@ class VpnPanelUserToggleTest extends TestCase
 
     public function test_sync_blocked_when_panel_toggle_off(): void
     {
-        $panel   = $this->makePanel(['allow_user_sync_service' => false]);
-        $user    = $this->makeUser();
+        $panel = $this->makePanel(['allow_user_sync_service' => false]);
+        $user = $this->makeUser();
         $service = $this->makeActiveService($user, $panel, 'zpx_tgl_sync_off');
 
         $this->actingAs($user)
@@ -150,13 +151,13 @@ class VpnPanelUserToggleTest extends TestCase
 
     public function test_sync_allowed_when_panel_toggle_on(): void
     {
-        $panel    = $this->makePanel(['allow_user_sync_service' => true]);
-        $user     = $this->makeUser();
+        $panel = $this->makePanel(['allow_user_sync_service' => true]);
+        $user = $this->makeUser();
         $username = 'zpx_tgl_sync_on';
-        $service  = $this->makeActiveService($user, $panel, $username);
+        $service = $this->makeActiveService($user, $panel, $username);
 
         Http::fake([
-            '*/api/admin/token'      => Http::response(['access_token' => 'tok', 'token_type' => 'bearer'], 200),
+            '*/api/admin/token' => Http::response(['access_token' => 'tok', 'token_type' => 'bearer'], 200),
             "*/api/user/{$username}" => Http::response($this->fakeMarzbanUser($username), 200),
         ]);
 
@@ -170,8 +171,8 @@ class VpnPanelUserToggleTest extends TestCase
 
     public function test_revoke_blocked_when_panel_toggle_off(): void
     {
-        $panel   = $this->makePanel(['allow_user_revoke_subscription' => false]);
-        $user    = $this->makeUser();
+        $panel = $this->makePanel(['allow_user_revoke_subscription' => false]);
+        $user = $this->makeUser();
         $service = $this->makeActiveService($user, $panel, 'zpx_tgl_rvk_off');
 
         $this->actingAs($user)
@@ -184,8 +185,8 @@ class VpnPanelUserToggleTest extends TestCase
 
     public function test_reset_traffic_blocked_when_panel_toggle_off(): void
     {
-        $panel   = $this->makePanel(['allow_user_reset_traffic' => false]);
-        $user    = $this->makeUser();
+        $panel = $this->makePanel(['allow_user_reset_traffic' => false]);
+        $user = $this->makeUser();
         $service = $this->makeActiveService($user, $panel, 'zpx_tgl_rst_off');
 
         $this->actingAs($user)
@@ -196,13 +197,13 @@ class VpnPanelUserToggleTest extends TestCase
 
     public function test_reset_traffic_allowed_when_panel_toggle_on(): void
     {
-        $panel    = $this->makePanel(['allow_user_reset_traffic' => true]);
-        $user     = $this->makeUser();
+        $panel = $this->makePanel(['allow_user_reset_traffic' => true]);
+        $user = $this->makeUser();
         $username = 'zpx_tgl_rst_on';
-        $service  = $this->makeActiveService($user, $panel, $username);
+        $service = $this->makeActiveService($user, $panel, $username);
 
         Http::fake([
-            '*/api/admin/token'            => Http::response(['access_token' => 'tok', 'token_type' => 'bearer'], 200),
+            '*/api/admin/token' => Http::response(['access_token' => 'tok', 'token_type' => 'bearer'], 200),
             "*/api/user/{$username}/reset" => Http::response(null, 200),
         ]);
 
@@ -219,8 +220,8 @@ class VpnPanelUserToggleTest extends TestCase
 
     public function test_disable_blocked_when_panel_toggle_off(): void
     {
-        $panel   = $this->makePanel(['allow_user_disable_service' => false]);
-        $user    = $this->makeUser();
+        $panel = $this->makePanel(['allow_user_disable_service' => false]);
+        $user = $this->makeUser();
         $service = $this->makeActiveService($user, $panel, 'zpx_tgl_dis_off');
 
         $this->actingAs($user)
@@ -234,13 +235,13 @@ class VpnPanelUserToggleTest extends TestCase
 
     public function test_disable_allowed_when_panel_toggle_on(): void
     {
-        $panel    = $this->makePanel(['allow_user_disable_service' => true]);
-        $user     = $this->makeUser();
+        $panel = $this->makePanel(['allow_user_disable_service' => true]);
+        $user = $this->makeUser();
         $username = 'zpx_tgl_dis_on';
-        $service  = $this->makeActiveService($user, $panel, $username);
+        $service = $this->makeActiveService($user, $panel, $username);
 
         Http::fake([
-            '*/api/admin/token'      => Http::response(['access_token' => 'tok', 'token_type' => 'bearer'], 200),
+            '*/api/admin/token' => Http::response(['access_token' => 'tok', 'token_type' => 'bearer'], 200),
             "*/api/user/{$username}" => Http::response(array_merge($this->fakeMarzbanUser($username), ['status' => 'disabled']), 200),
         ]);
 
@@ -258,8 +259,8 @@ class VpnPanelUserToggleTest extends TestCase
     public function test_enable_blocked_when_panel_toggle_off(): void
     {
         $panel = $this->makePanel(['allow_user_enable_service' => false]);
-        $user  = $this->makeUser();
-        $plan  = Plan::factory()->create(['name' => 'P', 'price_toman' => 1, 'is_active' => true, 'traffic_gb' => 10, 'duration_days' => 10]);
+        $user = $this->makeUser();
+        $plan = Plan::factory()->create(['name' => 'P', 'price_toman' => 1, 'is_active' => true, 'traffic_gb' => 10, 'duration_days' => 10]);
         $order = Order::create([
             'user_id' => $user->id, 'plan_id' => $plan->id, 'plan_name' => $plan->name,
             'price_toman' => 1, 'final_price_toman' => 1, 'traffic_gb' => 10, 'duration_days' => 10,
@@ -288,33 +289,33 @@ class VpnPanelUserToggleTest extends TestCase
 
     public function test_auto_sync_fires_when_last_synced_at_is_null(): void
     {
-        $panel    = $this->makePanel();
-        $user     = $this->makeUser();
+        $panel = $this->makePanel();
+        $user = $this->makeUser();
         $username = 'zpx_autosync_null';
-        $plan     = Plan::factory()->create(['name' => 'P', 'price_toman' => 1, 'is_active' => true, 'traffic_gb' => 10, 'duration_days' => 10]);
-        $order    = Order::create([
+        $plan = Plan::factory()->create(['name' => 'P', 'price_toman' => 1, 'is_active' => true, 'traffic_gb' => 10, 'duration_days' => 10]);
+        $order = Order::create([
             'user_id' => $user->id, 'plan_id' => $plan->id, 'plan_name' => $plan->name,
             'price_toman' => 1, 'final_price_toman' => 1, 'traffic_gb' => 10, 'duration_days' => 10,
             'status' => Order::STATUS_PAID, 'payment_status' => Order::PAYMENT_PAID,
         ]);
-        $service  = UserService::create([
-            'user_id'          => $user->id,
-            'order_id'         => $order->id,
-            'plan_id'          => $plan->id,
-            'plan_name'        => $plan->name,
-            'vpn_panel_id'     => $panel->id,
+        $service = UserService::create([
+            'user_id' => $user->id,
+            'order_id' => $order->id,
+            'plan_id' => $plan->id,
+            'plan_name' => $plan->name,
+            'vpn_panel_id' => $panel->id,
             'traffic_total_gb' => 10,
-            'traffic_used_gb'  => 2,
-            'duration_days'    => 10,
-            'status'           => UserService::STATUS_ACTIVE,
+            'traffic_used_gb' => 2,
+            'duration_days' => 10,
+            'status' => UserService::STATUS_ACTIVE,
             'provision_status' => UserService::PROVISION_PROVISIONED,
-            'remote_username'  => $username,
+            'remote_username' => $username,
             'subscription_link' => 'https://panel.example.com/sub/OLD/',
-            'last_synced_at'   => null, // triggers auto-sync
+            'last_synced_at' => null, // triggers auto-sync
         ]);
 
         Http::fake([
-            '*/api/admin/token'      => Http::response(['access_token' => 'tok', 'token_type' => 'bearer'], 200),
+            '*/api/admin/token' => Http::response(['access_token' => 'tok', 'token_type' => 'bearer'], 200),
             "*/api/user/{$username}" => Http::response($this->fakeMarzbanUser($username), 200),
         ]);
 
@@ -329,33 +330,33 @@ class VpnPanelUserToggleTest extends TestCase
 
     public function test_auto_sync_fires_when_last_synced_at_is_old(): void
     {
-        $panel    = $this->makePanel();
-        $user     = $this->makeUser();
+        $panel = $this->makePanel();
+        $user = $this->makeUser();
         $username = 'zpx_autosync_old';
-        $plan     = Plan::factory()->create(['name' => 'P', 'price_toman' => 1, 'is_active' => true, 'traffic_gb' => 10, 'duration_days' => 10]);
-        $order    = Order::create([
+        $plan = Plan::factory()->create(['name' => 'P', 'price_toman' => 1, 'is_active' => true, 'traffic_gb' => 10, 'duration_days' => 10]);
+        $order = Order::create([
             'user_id' => $user->id, 'plan_id' => $plan->id, 'plan_name' => $plan->name,
             'price_toman' => 1, 'final_price_toman' => 1, 'traffic_gb' => 10, 'duration_days' => 10,
             'status' => Order::STATUS_PAID, 'payment_status' => Order::PAYMENT_PAID,
         ]);
-        $service  = UserService::create([
-            'user_id'          => $user->id,
-            'order_id'         => $order->id,
-            'plan_id'          => $plan->id,
-            'plan_name'        => $plan->name,
-            'vpn_panel_id'     => $panel->id,
+        $service = UserService::create([
+            'user_id' => $user->id,
+            'order_id' => $order->id,
+            'plan_id' => $plan->id,
+            'plan_name' => $plan->name,
+            'vpn_panel_id' => $panel->id,
             'traffic_total_gb' => 10,
-            'traffic_used_gb'  => 2,
-            'duration_days'    => 10,
-            'status'           => UserService::STATUS_ACTIVE,
+            'traffic_used_gb' => 2,
+            'duration_days' => 10,
+            'status' => UserService::STATUS_ACTIVE,
             'provision_status' => UserService::PROVISION_PROVISIONED,
-            'remote_username'  => $username,
+            'remote_username' => $username,
             'subscription_link' => 'https://panel.example.com/sub/OLD/',
-            'last_synced_at'   => now()->subMinutes(5), // 5 minutes ago → triggers
+            'last_synced_at' => now()->subMinutes(5), // 5 minutes ago → triggers
         ]);
 
         Http::fake([
-            '*/api/admin/token'      => Http::response(['access_token' => 'tok', 'token_type' => 'bearer'], 200),
+            '*/api/admin/token' => Http::response(['access_token' => 'tok', 'token_type' => 'bearer'], 200),
             "*/api/user/{$username}" => Http::response($this->fakeMarzbanUser($username), 200),
         ]);
 
@@ -369,10 +370,10 @@ class VpnPanelUserToggleTest extends TestCase
 
     public function test_auto_sync_skipped_when_last_synced_at_is_recent(): void
     {
-        $panel    = $this->makePanel();
-        $user     = $this->makeUser();
+        $panel = $this->makePanel();
+        $user = $this->makeUser();
         $username = 'zpx_autosync_skip';
-        $service  = $this->makeActiveService($user, $panel, $username); // last_synced_at = now()
+        $service = $this->makeActiveService($user, $panel, $username); // last_synced_at = now()
 
         // No HTTP mock — if auto-sync fires, it will throw
         Http::fake([]);
@@ -388,28 +389,28 @@ class VpnPanelUserToggleTest extends TestCase
 
     public function test_auto_sync_failure_shows_warning_but_does_not_crash(): void
     {
-        $panel    = $this->makePanel();
-        $user     = $this->makeUser();
+        $panel = $this->makePanel();
+        $user = $this->makeUser();
         $username = 'zpx_autosync_fail';
-        $plan     = Plan::factory()->create(['name' => 'P', 'price_toman' => 1, 'is_active' => true, 'traffic_gb' => 10, 'duration_days' => 10]);
-        $order    = Order::create([
+        $plan = Plan::factory()->create(['name' => 'P', 'price_toman' => 1, 'is_active' => true, 'traffic_gb' => 10, 'duration_days' => 10]);
+        $order = Order::create([
             'user_id' => $user->id, 'plan_id' => $plan->id, 'plan_name' => $plan->name,
             'price_toman' => 1, 'final_price_toman' => 1, 'traffic_gb' => 10, 'duration_days' => 10,
             'status' => Order::STATUS_PAID, 'payment_status' => Order::PAYMENT_PAID,
         ]);
-        $service  = UserService::create([
-            'user_id'          => $user->id,
-            'order_id'         => $order->id,
-            'plan_id'          => $plan->id,
-            'plan_name'        => $plan->name,
-            'vpn_panel_id'     => $panel->id,
+        $service = UserService::create([
+            'user_id' => $user->id,
+            'order_id' => $order->id,
+            'plan_id' => $plan->id,
+            'plan_name' => $plan->name,
+            'vpn_panel_id' => $panel->id,
             'traffic_total_gb' => 10,
-            'traffic_used_gb'  => 2,
-            'duration_days'    => 10,
-            'status'           => UserService::STATUS_ACTIVE,
+            'traffic_used_gb' => 2,
+            'duration_days' => 10,
+            'status' => UserService::STATUS_ACTIVE,
             'provision_status' => UserService::PROVISION_PROVISIONED,
-            'remote_username'  => $username,
-            'last_synced_at'   => null, // triggers auto-sync
+            'remote_username' => $username,
+            'last_synced_at' => null, // triggers auto-sync
         ]);
 
         Http::fake([
@@ -427,32 +428,32 @@ class VpnPanelUserToggleTest extends TestCase
 
     public function test_auto_sync_creates_provision_log_on_success(): void
     {
-        $panel    = $this->makePanel();
-        $user     = $this->makeUser();
+        $panel = $this->makePanel();
+        $user = $this->makeUser();
         $username = 'zpx_autosync_log';
-        $plan     = Plan::factory()->create(['name' => 'P', 'price_toman' => 1, 'is_active' => true, 'traffic_gb' => 10, 'duration_days' => 10]);
-        $order    = Order::create([
+        $plan = Plan::factory()->create(['name' => 'P', 'price_toman' => 1, 'is_active' => true, 'traffic_gb' => 10, 'duration_days' => 10]);
+        $order = Order::create([
             'user_id' => $user->id, 'plan_id' => $plan->id, 'plan_name' => $plan->name,
             'price_toman' => 1, 'final_price_toman' => 1, 'traffic_gb' => 10, 'duration_days' => 10,
             'status' => Order::STATUS_PAID, 'payment_status' => Order::PAYMENT_PAID,
         ]);
-        $service  = UserService::create([
-            'user_id'          => $user->id,
-            'order_id'         => $order->id,
-            'plan_id'          => $plan->id,
-            'plan_name'        => $plan->name,
-            'vpn_panel_id'     => $panel->id,
+        $service = UserService::create([
+            'user_id' => $user->id,
+            'order_id' => $order->id,
+            'plan_id' => $plan->id,
+            'plan_name' => $plan->name,
+            'vpn_panel_id' => $panel->id,
             'traffic_total_gb' => 10,
-            'traffic_used_gb'  => 2,
-            'duration_days'    => 10,
-            'status'           => UserService::STATUS_ACTIVE,
+            'traffic_used_gb' => 2,
+            'duration_days' => 10,
+            'status' => UserService::STATUS_ACTIVE,
             'provision_status' => UserService::PROVISION_PROVISIONED,
-            'remote_username'  => $username,
-            'last_synced_at'   => null,
+            'remote_username' => $username,
+            'last_synced_at' => null,
         ]);
 
         Http::fake([
-            '*/api/admin/token'      => Http::response(['access_token' => 'tok', 'token_type' => 'bearer'], 200),
+            '*/api/admin/token' => Http::response(['access_token' => 'tok', 'token_type' => 'bearer'], 200),
             "*/api/user/{$username}" => Http::response($this->fakeMarzbanUser($username), 200),
         ]);
 
@@ -470,9 +471,9 @@ class VpnPanelUserToggleTest extends TestCase
 
     public function test_show_page_denies_other_user(): void
     {
-        $panel   = $this->makePanel();
-        $owner   = $this->makeUser();
-        $other   = $this->makeUser();
+        $panel = $this->makePanel();
+        $owner = $this->makeUser();
+        $other = $this->makeUser();
         $service = $this->makeActiveService($owner, $panel, 'zpx_tgl_own');
 
         $this->actingAs($other)
@@ -484,8 +485,8 @@ class VpnPanelUserToggleTest extends TestCase
 
     public function test_show_page_hides_sync_button_when_panel_toggle_off(): void
     {
-        $panel   = $this->makePanel(['allow_user_sync_service' => false]);
-        $user    = $this->makeUser();
+        $panel = $this->makePanel(['allow_user_sync_service' => false]);
+        $user = $this->makeUser();
         $service = $this->makeActiveService($user, $panel, 'zpx_tgl_show_sync');
 
         $this->actingAs($user)
@@ -496,8 +497,8 @@ class VpnPanelUserToggleTest extends TestCase
 
     public function test_show_page_shows_sync_button_when_panel_toggle_on(): void
     {
-        $panel   = $this->makePanel(['allow_user_sync_service' => true]);
-        $user    = $this->makeUser();
+        $panel = $this->makePanel(['allow_user_sync_service' => true]);
+        $user = $this->makeUser();
         $service = $this->makeActiveService($user, $panel, 'zpx_tgl_show_sync_on');
 
         $this->actingAs($user)
@@ -508,8 +509,8 @@ class VpnPanelUserToggleTest extends TestCase
 
     public function test_show_page_shows_reset_traffic_when_toggle_on(): void
     {
-        $panel   = $this->makePanel(['allow_user_reset_traffic' => true]);
-        $user    = $this->makeUser();
+        $panel = $this->makePanel(['allow_user_reset_traffic' => true]);
+        $user = $this->makeUser();
         $service = $this->makeActiveService($user, $panel, 'zpx_tgl_show_rst');
 
         $this->actingAs($user)
@@ -520,8 +521,8 @@ class VpnPanelUserToggleTest extends TestCase
 
     public function test_show_page_hides_reset_traffic_when_toggle_off(): void
     {
-        $panel   = $this->makePanel(['allow_user_reset_traffic' => false]);
-        $user    = $this->makeUser();
+        $panel = $this->makePanel(['allow_user_reset_traffic' => false]);
+        $user = $this->makeUser();
         $service = $this->makeActiveService($user, $panel, 'zpx_tgl_hide_rst');
 
         $this->actingAs($user)

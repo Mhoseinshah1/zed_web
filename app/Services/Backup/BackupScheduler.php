@@ -38,6 +38,7 @@ class BackupScheduler
         // fixed_time: due once we pass today's slot and no scheduled run has
         // started at/after that slot yet.
         $slot = $this->todaySlot($now);
+
         return $now->gte($slot) && ($last === null || $last->lt($slot));
     }
 
@@ -53,6 +54,7 @@ class BackupScheduler
         if ($this->settings->scheduleMode() === BackupSettings::MODE_INTERVAL) {
             $last = $this->lastScheduledRunAt();
             $next = $last?->copy()->addMinutes($this->settings->intervalMinutes()) ?? $now;
+
             return $next->lt($now) ? $now : $next;
         }
 
@@ -61,6 +63,7 @@ class BackupScheduler
         if ($now->lt($slot)) {
             return $slot;
         }
+
         // Past today's slot: today's run either happened (→ tomorrow) or is due now.
         return ($last !== null && $last->gte($slot)) ? $slot->addDay() : $now;
     }
@@ -80,6 +83,7 @@ class BackupScheduler
     private function todaySlot(Carbon $now): Carbon
     {
         [$h, $m] = array_map('intval', explode(':', $this->settings->scheduleTime()));
+
         return $now->copy()->startOfDay()->addHours($h)->addMinutes($m);
     }
 }

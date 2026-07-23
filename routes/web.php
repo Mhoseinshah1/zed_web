@@ -1,27 +1,29 @@
 <?php
 
 use App\Http\Controllers\Auth\AuthController;
+use App\Http\Controllers\CentralPayController;
 use App\Http\Controllers\CheckoutController;
 use App\Http\Controllers\ContactController;
 use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\FaqController;
 use App\Http\Controllers\HealthController;
 use App\Http\Controllers\HomeController;
-use App\Http\Controllers\CentralPayController;
+use App\Http\Controllers\NotificationController;
 use App\Http\Controllers\NowPaymentsController;
 use App\Http\Controllers\OrderController;
 use App\Http\Controllers\PageController;
 use App\Http\Controllers\PaymentController;
 use App\Http\Controllers\PlansController;
-use App\Http\Controllers\NotificationController;
 use App\Http\Controllers\ProfileController;
 use App\Http\Controllers\RenewalController;
 use App\Http\Controllers\RepresentativeController;
+use App\Http\Controllers\RobotsController;
 use App\Http\Controllers\ServiceAddonController;
+use App\Http\Controllers\ServiceController;
+use App\Http\Controllers\SitemapController;
+use App\Http\Controllers\StatusController;
 use App\Http\Controllers\SupportTicketController;
 use App\Http\Controllers\TelegramWebhookController;
-use App\Http\Controllers\ServiceController;
-use App\Http\Controllers\StatusController;
 use App\Http\Controllers\ThemeController;
 use App\Http\Controllers\TutorialsController;
 use App\Http\Controllers\UserServiceActionController;
@@ -55,10 +57,10 @@ Route::get('/health/live', [HealthController::class, 'live'])
     ->name('health.live');
 
 // ── SEO: XML sitemaps + robots.txt ───────────────────────────────────────────
-Route::get('/sitemap.xml', [\App\Http\Controllers\SitemapController::class, 'index'])->name('sitemap.index');
-Route::get('/sitemap-pages.xml', [\App\Http\Controllers\SitemapController::class, 'pages'])->name('sitemap.pages');
-Route::get('/sitemap-tutorials.xml', [\App\Http\Controllers\SitemapController::class, 'tutorials'])->name('sitemap.tutorials');
-Route::get('/robots.txt', \App\Http\Controllers\RobotsController::class)->name('robots');
+Route::get('/sitemap.xml', [SitemapController::class, 'index'])->name('sitemap.index');
+Route::get('/sitemap-pages.xml', [SitemapController::class, 'pages'])->name('sitemap.pages');
+Route::get('/sitemap-tutorials.xml', [SitemapController::class, 'tutorials'])->name('sitemap.tutorials');
+Route::get('/robots.txt', RobotsController::class)->name('robots');
 
 // Public pages
 Route::get('/', [HomeController::class, 'index'])->name('home');

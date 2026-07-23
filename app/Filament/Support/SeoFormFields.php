@@ -3,6 +3,8 @@
 namespace App\Filament\Support;
 
 use Filament\Forms;
+use Illuminate\Support\HtmlString;
+use Illuminate\Support\Str;
 
 /**
  * Reusable Filament SEO form fragments shared by SeoPageResource, PageResource
@@ -16,7 +18,7 @@ class SeoFormFields
     {
         return fn ($state) => trim((string) $state) === ''
             ? "طول پیشنهادی حدود {$recommended} کاراکتر"
-            : mb_strlen((string) $state) . " / {$max} کاراکتر";
+            : mb_strlen((string) $state)." / {$max} کاراکتر";
     }
 
     /** Meta title/description/keywords/canonical with counters + previews. */
@@ -46,12 +48,12 @@ class SeoFormFields
             // Google result preview (live).
             Forms\Components\Placeholder::make('google_preview')
                 ->label('پیش‌نمایش نتیجه گوگل')
-                ->content(fn (Forms\Get $get) => new \Illuminate\Support\HtmlString(
+                ->content(fn (Forms\Get $get) => new HtmlString(
                     '<div style="border:1px solid var(--gray-200);border-radius:8px;padding:12px;max-width:600px" dir="rtl">'
-                    . '<div style="color:#1a0dab;font-size:18px;line-height:1.3">' . e($get('meta_title') ?: 'عنوان صفحه') . '</div>'
-                    . '<div style="color:#006621;font-size:13px">' . e(config('app.url')) . '</div>'
-                    . '<div style="color:#545454;font-size:13px">' . e(\Illuminate\Support\Str::limit($get('meta_description') ?: 'توضیحات صفحه اینجا نمایش داده می‌شود.', 160)) . '</div>'
-                    . '</div>'
+                    .'<div style="color:#1a0dab;font-size:18px;line-height:1.3">'.e($get('meta_title') ?: 'عنوان صفحه').'</div>'
+                    .'<div style="color:#006621;font-size:13px">'.e(config('app.url')).'</div>'
+                    .'<div style="color:#545454;font-size:13px">'.e(Str::limit($get('meta_description') ?: 'توضیحات صفحه اینجا نمایش داده می‌شود.', 160)).'</div>'
+                    .'</div>'
                 ))
                 ->columnSpanFull(),
 
@@ -70,9 +72,10 @@ class SeoFormFields
                         $warn[] = 'تصویر اشتراک‌گذاری تنظیم نشده — از تصویر پیش‌فرض استفاده می‌شود.';
                     }
                     if ($warn === []) {
-                        return new \Illuminate\Support\HtmlString('<span style="color:#16a34a">✓ سئوی این صفحه کامل است.</span>');
+                        return new HtmlString('<span style="color:#16a34a">✓ سئوی این صفحه کامل است.</span>');
                     }
-                    return new \Illuminate\Support\HtmlString('<span style="color:#d97706">⚠ ' . e(implode(' | ', $warn)) . '</span>');
+
+                    return new HtmlString('<span style="color:#d97706">⚠ '.e(implode(' | ', $warn)).'</span>');
                 })
                 ->columnSpanFull(),
         ];

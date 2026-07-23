@@ -9,21 +9,32 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 class WalletTransaction extends Model
 {
     use HasFactory;
-    const TYPE_MANUAL_CREDIT     = 'manual_credit';
-    const TYPE_MANUAL_DEBIT      = 'manual_debit';
-    const TYPE_ORDER_PAYMENT     = 'order_payment';
-    const TYPE_TOPUP             = 'topup';
-    const TYPE_REFUND            = 'refund';
-    const TYPE_ADJUSTMENT        = 'adjustment';
-    const TYPE_RENEWAL_CASHBACK  = 'renewal_cashback';
+
+    const TYPE_MANUAL_CREDIT = 'manual_credit';
+
+    const TYPE_MANUAL_DEBIT = 'manual_debit';
+
+    const TYPE_ORDER_PAYMENT = 'order_payment';
+
+    const TYPE_TOPUP = 'topup';
+
+    const TYPE_REFUND = 'refund';
+
+    const TYPE_ADJUSTMENT = 'adjustment';
+
+    const TYPE_RENEWAL_CASHBACK = 'renewal_cashback';
+
     const TYPE_REPRESENTATIVE_COMMISSION = 'representative_commission';
 
     const DIRECTION_CREDIT = 'credit';
-    const DIRECTION_DEBIT  = 'debit';
+
+    const DIRECTION_DEBIT = 'debit';
 
     const STATUS_COMPLETED = 'completed';
-    const STATUS_PENDING   = 'pending';
-    const STATUS_FAILED    = 'failed';
+
+    const STATUS_PENDING = 'pending';
+
+    const STATUS_FAILED = 'failed';
 
     protected $fillable = [
         'user_id',
@@ -42,9 +53,9 @@ class WalletTransaction extends Model
     ];
 
     protected $casts = [
-        'amount_toman'         => 'integer',
+        'amount_toman' => 'integer',
         'balance_before_toman' => 'integer',
-        'balance_after_toman'  => 'integer',
+        'balance_after_toman' => 'integer',
     ];
 
     public function user(): BelongsTo
@@ -69,16 +80,16 @@ class WalletTransaction extends Model
 
     public function typeLabel(): string
     {
-        return match($this->type) {
+        return match ($this->type) {
             self::TYPE_MANUAL_CREDIT => 'شارژ دستی',
-            self::TYPE_MANUAL_DEBIT  => 'برداشت دستی',
+            self::TYPE_MANUAL_DEBIT => 'برداشت دستی',
             self::TYPE_ORDER_PAYMENT => 'پرداخت سفارش',
-            self::TYPE_TOPUP         => 'شارژ کیف پول',
-            self::TYPE_REFUND        => 'برگشت وجه',
-            self::TYPE_ADJUSTMENT       => 'تعدیل',
+            self::TYPE_TOPUP => 'شارژ کیف پول',
+            self::TYPE_REFUND => 'برگشت وجه',
+            self::TYPE_ADJUSTMENT => 'تعدیل',
             self::TYPE_RENEWAL_CASHBACK => 'کش‌بک تمدید',
             self::TYPE_REPRESENTATIVE_COMMISSION => 'پورسانت نماینده',
-            default                     => $this->type,
+            default => $this->type,
         };
     }
 
@@ -86,11 +97,11 @@ class WalletTransaction extends Model
     {
         return [
             self::TYPE_MANUAL_CREDIT => 'شارژ دستی',
-            self::TYPE_MANUAL_DEBIT  => 'برداشت دستی',
+            self::TYPE_MANUAL_DEBIT => 'برداشت دستی',
             self::TYPE_ORDER_PAYMENT => 'پرداخت سفارش',
-            self::TYPE_TOPUP         => 'شارژ کیف پول',
-            self::TYPE_REFUND        => 'برگشت وجه',
-            self::TYPE_ADJUSTMENT       => 'تعدیل',
+            self::TYPE_TOPUP => 'شارژ کیف پول',
+            self::TYPE_REFUND => 'برگشت وجه',
+            self::TYPE_ADJUSTMENT => 'تعدیل',
             self::TYPE_RENEWAL_CASHBACK => 'کش‌بک تمدید',
             self::TYPE_REPRESENTATIVE_COMMISSION => 'پورسانت نماینده',
         ];

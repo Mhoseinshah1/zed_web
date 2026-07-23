@@ -35,7 +35,7 @@ return new class extends Migration
         if ($dupes > 0) {
             throw new RuntimeException(
                 "Cannot add unique index on notifications.dedupe_key: {$dupes} duplicate key(s) exist. "
-                . 'Resolve them first (nothing was deleted).'
+                .'Resolve them first (nothing was deleted).'
             );
         }
 
@@ -74,9 +74,10 @@ return new class extends Migration
             if ($driver === 'sqlite') {
                 return DB::table('sqlite_master')->where('type', 'index')->where('name', $this->indexName)->exists();
             }
-        } catch (\Throwable $e) {
+        } catch (Throwable $e) {
             return false;
         }
+
         return false;
     }
 };

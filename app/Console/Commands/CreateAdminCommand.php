@@ -18,18 +18,20 @@ class CreateAdminCommand extends Command
 
     public function handle(): int
     {
-        $email    = $this->option('email');
+        $email = $this->option('email');
         $username = $this->option('username');
-        $name     = $this->option('name') ?: $username;
+        $name = $this->option('name') ?: $username;
         $password = $this->option('password') ?: env('ZEDPROXY_ADMIN_PASS');
 
         if (empty($email) || empty($username) || empty($password)) {
             $this->error('--email, --username, and --password (or ZEDPROXY_ADMIN_PASS env var) are all required.');
+
             return self::FAILURE;
         }
 
         if (! filter_var($email, FILTER_VALIDATE_EMAIL)) {
             $this->error("Invalid email address: {$email}");
+
             return self::FAILURE;
         }
 
@@ -38,8 +40,8 @@ class CreateAdminCommand extends Command
 
         $attributes = [
             'username' => $username,
-            'name'     => $name,
-            'email'    => $email,
+            'name' => $name,
+            'email' => $email,
             'password' => Hash::make($password),
         ];
 

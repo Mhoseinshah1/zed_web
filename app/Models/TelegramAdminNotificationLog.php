@@ -12,10 +12,14 @@ use Illuminate\Database\Eloquent\Model;
 class TelegramAdminNotificationLog extends Model
 {
     public const STATUS_PENDING = 'pending';
-    public const STATUS_SENT    = 'sent';
-    public const STATUS_FAILED  = 'failed';
+
+    public const STATUS_SENT = 'sent';
+
+    public const STATUS_FAILED = 'failed';
+
     public const STATUS_SKIPPED = 'skipped';
-    public const STATUS_MUTED   = 'muted';
+
+    public const STATUS_MUTED = 'muted';
 
     protected $fillable = [
         'event_key', 'topic_key', 'chat_id', 'message_thread_id',
@@ -24,12 +28,12 @@ class TelegramAdminNotificationLog extends Model
     ];
 
     protected $casts = [
-        'message_thread_id'   => 'integer',
+        'message_thread_id' => 'integer',
         'telegram_message_id' => 'integer',
-        'related_id'          => 'integer',
-        'metadata'            => 'array',
-        'sent_at'             => 'datetime',
-        'failed_at'           => 'datetime',
+        'related_id' => 'integer',
+        'metadata' => 'array',
+        'sent_at' => 'datetime',
+        'failed_at' => 'datetime',
     ];
 
     /** @return array<string,string> */
@@ -37,10 +41,10 @@ class TelegramAdminNotificationLog extends Model
     {
         return [
             self::STATUS_PENDING => 'در صف',
-            self::STATUS_SENT    => 'ارسال‌شده',
-            self::STATUS_FAILED  => 'ناموفق',
+            self::STATUS_SENT => 'ارسال‌شده',
+            self::STATUS_FAILED => 'ناموفق',
             self::STATUS_SKIPPED => 'رد شده',
-            self::STATUS_MUTED   => 'محدودشده',
+            self::STATUS_MUTED => 'محدودشده',
         ];
     }
 }

@@ -2,6 +2,7 @@
 
 namespace App\Services\Provisioning;
 
+use App\Models\Notification;
 use App\Models\Order;
 use App\Models\ProvisioningAttempt;
 use App\Models\UserService;
@@ -9,6 +10,10 @@ use App\Models\VpnPanel;
 use App\Models\VpnServiceProvisionLog;
 use App\Services\Marzban\MarzbanClient;
 use App\Services\Marzban\MarzbanException;
+use App\Services\Notifications\NotificationService;
+use App\Services\Telegram\TelegramAdminNotifier;
+use App\Services\VpnPanels\RemnawaveProvider;
+use App\Services\VpnPanels\Sanaei3xUiProvider;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 
@@ -43,16 +48,16 @@ class ProvisioningService
         // unique index) so two concurrent provision paths can't create two
         // services for one order.
         if (! $service) {
-            [$service, ] = $this->firstOrCreateServiceForOrder($order, [
-                'user_id'          => $order->user_id,
-                'plan_id'          => $order->plan_id,
-                'plan_name'        => $order->plan_name,
+            [$service] = $this->firstOrCreateServiceForOrder($order, [
+                'user_id' => $order->user_id,
+                'plan_id' => $order->plan_id,
+                'plan_name' => $order->plan_name,
                 // Pin the plan's chosen panel (null = default fallback below).
-                'vpn_panel_id'     => $order->plan?->vpn_panel_id,
+                'vpn_panel_id' => $order->plan?->vpn_panel_id,
                 'traffic_total_gb' => $order->traffic_gb,
-                'traffic_used_gb'  => 0,
-                'duration_days'    => $order->duration_days,
-                'status'           => UserService::STATUS_PENDING_PROVISION,
+                'traffic_used_gb' => 0,
+                'duration_days' => $order->duration_days,
+                'status' => UserService::STATUS_PENDING_PROVISION,
                 'provision_status' => UserService::PROVISION_PENDING,
             ]);
 
@@ -66,9 +71,9 @@ class ProvisioningService
         // default Marzban panel, then any active default panel (e.g. 3X-UI).
         $panel = ($service->vpn_panel_id ? VpnPanel::find($service->vpn_panel_id) : null)
             ?? VpnPanel::where('type', VpnPanel::TYPE_MARZBAN)
-                   ->where('is_active', true)
-                   ->where('is_default', true)
-                   ->first()
+                ->where('is_active', true)
+                ->where('is_default', true)
+                ->first()
             ?? VpnPanel::where('is_active', true)->where('is_default', true)->first();
 
         if (! $panel) {
@@ -81,13 +86,13 @@ class ProvisioningService
         // Record this attempt
         $attemptNumber = ProvisioningAttempt::where('order_id', $order->id)->count() + 1;
         $attempt = ProvisioningAttempt::create([
-            'order_id'        => $order->id,
-            'user_id'         => $order->user_id,
+            'order_id' => $order->id,
+            'user_id' => $order->user_id,
             'user_service_id' => $service->id,
-            'vpn_panel_id'    => $panel->id,
-            'status'          => ProvisioningAttempt::STATUS_PROCESSING,
-            'attempt_number'  => $attemptNumber,
-            'started_at'      => now(),
+            'vpn_panel_id' => $panel->id,
+            'status' => ProvisioningAttempt::STATUS_PROCESSING,
+            'attempt_number' => $attemptNumber,
+            'started_at' => now(),
         ]);
 
         try {
@@ -98,8 +103,8 @@ class ProvisioningService
                 $service->save();
 
                 $provider = $panel->isSanaei()
-                    ? new \App\Services\VpnPanels\Sanaei3xUiProvider()
-                    : new \App\Services\VpnPanels\RemnawaveProvider();
+                    ? new Sanaei3xUiProvider
+                    : new RemnawaveProvider;
 
                 $result = $provider->provision($service->fresh());
                 if (! $result->ok) {
@@ -107,81 +112,81 @@ class ProvisioningService
                 }
 
                 $service->refresh();
-                $startsAt  = $service->starts_at ?? now();
+                $startsAt = $service->starts_at ?? now();
                 $expiresAt = $service->expires_at
                     ?? ($service->duration_days ? $startsAt->copy()->addDays($service->duration_days) : null);
                 $service->update([
-                    'status'           => UserService::STATUS_ACTIVE,
+                    'status' => UserService::STATUS_ACTIVE,
                     'provision_status' => UserService::PROVISION_PROVISIONED,
-                    'starts_at'        => $startsAt,
-                    'activated_at'     => $service->activated_at ?? now(),
-                    'expires_at'       => $expiresAt,
+                    'starts_at' => $startsAt,
+                    'activated_at' => $service->activated_at ?? now(),
+                    'expires_at' => $expiresAt,
                 ]);
 
                 $attempt->update([
-                    'status'           => ProvisioningAttempt::STATUS_SUCCESS,
+                    'status' => ProvisioningAttempt::STATUS_SUCCESS,
                     'response_payload' => ['username' => $service->remote_username, 'panel_type' => $panel->type],
-                    'finished_at'      => now(),
+                    'finished_at' => now(),
                 ]);
                 $order->update(['status' => Order::STATUS_COMPLETED, 'completed_at' => now()]);
 
                 if ($order->user) {
-                    app(\App\Services\Notifications\NotificationService::class)->notify(
-                        \App\Models\Notification::TYPE_NEW_SERVICE_CREATED,
+                    app(NotificationService::class)->notify(
+                        Notification::TYPE_NEW_SERVICE_CREATED,
                         $order->user,
                         [
-                            'user_name'    => $order->user->name ?? $order->user->username,
+                            'user_name' => $order->user->name ?? $order->user->username,
                             'service_name' => $service->plan_name ?? $service->service_number,
-                            'order_id'     => $order->order_number,
+                            'order_id' => $order->order_number,
                         ],
-                        'new_service_created:service:' . $service->id,
+                        'new_service_created:service:'.$service->id,
                     );
                 }
 
-                app(\App\Services\Telegram\TelegramAdminNotifier::class)->event('service_provisioned', [
-                    'user'    => $order->user?->name ?? $order->user?->username ?? '—',
+                app(TelegramAdminNotifier::class)->event('service_provisioned', [
+                    'user' => $order->user?->name ?? $order->user?->username ?? '—',
                     'service' => $service->plan_name ?? $service->service_number,
-                    'order'   => $order->order_number,
+                    'order' => $order->order_number,
                 ], $service);
 
                 return $service->fresh();
             }
 
-            $client   = new MarzbanClient($panel);
+            $client = new MarzbanClient($panel);
             $username = $service->remote_username ?? $this->generateUsername($service);
-            $payload  = array_merge(['username' => $username], $this->buildPayload($service));
+            $payload = array_merge(['username' => $username], $this->buildPayload($service));
 
             // Sanitized payload stored in attempt (no tokens/passwords)
             $attempt->update(['request_payload' => $this->sanitizePayload($payload)]);
 
             ['user' => $marzbanUser, 'logs' => $provisionLogs] = $this->fetchOrCreateUser($client, $username, $service);
 
-            $normalized       = $client->normalizeUserResponse($marzbanUser);
+            $normalized = $client->normalizeUserResponse($marzbanUser);
             $subscriptionLink = $client->extractSubscriptionLink($marzbanUser);
-            $configLink       = $marzbanUser['links'][0] ?? null;
-            $startsAt         = $service->starts_at ?? now();
-            $expiresAt        = $service->expires_at
+            $configLink = $marzbanUser['links'][0] ?? null;
+            $startsAt = $service->starts_at ?? now();
+            $expiresAt = $service->expires_at
                 ?? ($service->duration_days ? $startsAt->copy()->addDays($service->duration_days) : null);
 
             $service->update([
-                'status'            => UserService::STATUS_ACTIVE,
-                'provision_status'  => UserService::PROVISION_PROVISIONED,
-                'vpn_panel_id'      => $panel->id,
-                'remote_username'   => $username,
+                'status' => UserService::STATUS_ACTIVE,
+                'provision_status' => UserService::PROVISION_PROVISIONED,
+                'vpn_panel_id' => $panel->id,
+                'remote_username' => $username,
                 'subscription_link' => $subscriptionLink,
-                'config_link'       => $configLink,
-                'traffic_used_gb'   => $normalized['used_traffic_gb'] ?? 0,
-                'starts_at'         => $startsAt,
-                'activated_at'      => $service->activated_at ?? now(),
-                'expires_at'        => $expiresAt,
-                'last_synced_at'    => now(),
-                'sync_status'       => UserService::SYNC_SYNCED,
+                'config_link' => $configLink,
+                'traffic_used_gb' => $normalized['used_traffic_gb'] ?? 0,
+                'starts_at' => $startsAt,
+                'activated_at' => $service->activated_at ?? now(),
+                'expires_at' => $expiresAt,
+                'last_synced_at' => now(),
+                'sync_status' => UserService::SYNC_SYNCED,
             ]);
 
             $attempt->update([
-                'status'           => ProvisioningAttempt::STATUS_SUCCESS,
+                'status' => ProvisioningAttempt::STATUS_SUCCESS,
                 'response_payload' => [
-                    'status'   => $normalized['status'] ?? 'active',
+                    'status' => $normalized['status'] ?? 'active',
                     'username' => $username,
                 ],
                 'finished_at' => now(),
@@ -189,36 +194,36 @@ class ProvisioningService
 
             foreach ($provisionLogs as $logEntry) {
                 VpnServiceProvisionLog::create([
-                    'user_service_id'  => $service->id,
-                    'vpn_panel_id'     => $panel->id,
-                    'action'           => $logEntry['action'],
-                    'status'           => $logEntry['status'],
+                    'user_service_id' => $service->id,
+                    'vpn_panel_id' => $panel->id,
+                    'action' => $logEntry['action'],
+                    'status' => $logEntry['status'],
                 ]);
             }
 
             $order->update([
-                'status'       => Order::STATUS_COMPLETED,
+                'status' => Order::STATUS_COMPLETED,
                 'completed_at' => now(),
             ]);
 
             Log::info('ProvisioningService: service provisioned', [
-                'order_id'   => $order->id,
+                'order_id' => $order->id,
                 'service_id' => $service->id,
-                'username'   => $username,
-                'panel'      => $panel->name,
+                'username' => $username,
+                'panel' => $panel->name,
             ]);
 
             // Notify the user their service is now active. Idempotent per service.
             if ($order->user) {
-                app(\App\Services\Notifications\NotificationService::class)->notify(
-                    \App\Models\Notification::TYPE_NEW_SERVICE_CREATED,
+                app(NotificationService::class)->notify(
+                    Notification::TYPE_NEW_SERVICE_CREATED,
                     $order->user,
                     [
-                        'user_name'    => $order->user->name ?? $order->user->username,
+                        'user_name' => $order->user->name ?? $order->user->username,
                         'service_name' => $service->plan_name ?? $service->service_number,
-                        'order_id'     => $order->order_number,
+                        'order_id' => $order->order_number,
                     ],
-                    'new_service_created:service:' . $service->id,
+                    'new_service_created:service:'.$service->id,
                 );
             }
 
@@ -228,50 +233,50 @@ class ProvisioningService
             $safeMessage = $this->sanitizeError($e->getMessage());
 
             $attempt->update([
-                'status'           => ProvisioningAttempt::STATUS_FAILED,
-                'error_message'    => $safeMessage,
+                'status' => ProvisioningAttempt::STATUS_FAILED,
+                'error_message' => $safeMessage,
                 'response_payload' => $this->extractSafeResponsePayload($e),
-                'finished_at'      => now(),
+                'finished_at' => now(),
             ]);
 
             $service->update(['provision_status' => UserService::PROVISION_FAILED]);
 
             VpnServiceProvisionLog::create([
                 'user_service_id' => $service->id,
-                'vpn_panel_id'    => $panel->id,
-                'action'          => 'marzban_create_user',
-                'status'          => 'failed',
-                'message'         => $safeMessage,
+                'vpn_panel_id' => $panel->id,
+                'action' => 'marzban_create_user',
+                'status' => 'failed',
+                'message' => $safeMessage,
             ]);
 
             $order->update(['status' => Order::STATUS_PROVISIONING_FAILED]);
 
             Log::error('ProvisioningService: provisioning failed', [
-                'order_id'   => $order->id,
+                'order_id' => $order->id,
                 'service_id' => $service->id,
-                'attempt'    => $attemptNumber,
-                'error'      => $safeMessage,
+                'attempt' => $attemptNumber,
+                'error' => $safeMessage,
             ]);
 
             // System/admin warning — order paid but provisioning failed.
-            app(\App\Services\Notifications\NotificationService::class)->notifyAdmins(
-                \App\Models\Notification::TYPE_PROVISIONING_FAILED,
+            app(NotificationService::class)->notifyAdmins(
+                Notification::TYPE_PROVISIONING_FAILED,
                 [
-                    'user_name'  => $order->user?->name ?? $order->user?->username ?? '—',
-                    'order_id'   => $order->order_number,
+                    'user_name' => $order->user?->name ?? $order->user?->username ?? '—',
+                    'order_id' => $order->order_number,
                     'service_id' => $service->id,
-                    'error'      => $safeMessage,
+                    'error' => $safeMessage,
                 ],
-                'provisioning_failed:order:' . $order->id,
+                'provisioning_failed:order:'.$order->id,
             );
 
-            app(\App\Services\Telegram\TelegramAdminNotifier::class)->event('service_failed', [
-                'user'  => $order->user?->name ?? $order->user?->username ?? '—',
+            app(TelegramAdminNotifier::class)->event('service_failed', [
+                'user' => $order->user?->name ?? $order->user?->username ?? '—',
                 'order' => $order->order_number,
                 'error' => $safeMessage,
             ], $order);
 
-            throw new \RuntimeException('ساخت سرویس در Marzban با خطا مواجه شد: ' . $safeMessage);
+            throw new \RuntimeException('ساخت سرویس در Marzban با خطا مواجه شد: '.$safeMessage);
         }
     }
 
@@ -287,6 +292,7 @@ class ProvisioningService
             try {
                 $client->getUser($username);
                 $user = $client->updateUser($username, $this->buildPayload($service));
+
                 return ['user' => $user, 'logs' => [['action' => 'marzban_update_user', 'status' => 'success']]];
             } catch (MarzbanException $e) {
                 if ($e->getCode() !== 404) {
@@ -297,12 +303,14 @@ class ProvisioningService
 
         try {
             $user = $client->createUser(array_merge(['username' => $username], $this->buildPayload($service)));
+
             return ['user' => $user, 'logs' => [['action' => 'marzban_create_user', 'status' => 'success']]];
         } catch (MarzbanException $e) {
             // 409 Conflict — username exists on panel but wasn't linked locally
             if ($e->getCode() === 409) {
                 $client->getUser($username);
                 $user = $client->updateUser($username, $this->buildPayload($service));
+
                 return ['user' => $user, 'logs' => [
                     ['action' => 'marzban_create_user', 'status' => 'skipped'],
                     ['action' => 'marzban_update_user', 'status' => 'success'],
@@ -314,7 +322,8 @@ class ProvisioningService
 
     private function generateUsername(UserService $service): string
     {
-        $candidate = 'zpx_' . $service->user_id . '_' . $service->id . '_' . strtolower(Str::random(5));
+        $candidate = 'zpx_'.$service->user_id.'_'.$service->id.'_'.strtolower(Str::random(5));
+
         return substr($candidate, 0, 32);
     }
 
@@ -324,16 +333,16 @@ class ProvisioningService
             ? (int) ($service->traffic_total_gb * 1_073_741_824)
             : 0;
 
-        $startsAt  = $service->starts_at ?? now();
+        $startsAt = $service->starts_at ?? now();
         $expiresAt = $service->expires_at
             ?? ($service->duration_days ? $startsAt->copy()->addDays($service->duration_days) : null);
 
         $payload = [
-            'proxies'                   => ['vless' => new \stdClass()],
-            'data_limit'                => $dataLimitBytes,
+            'proxies' => ['vless' => new \stdClass],
+            'data_limit' => $dataLimitBytes,
             'data_limit_reset_strategy' => 'no_reset',
-            'status'                    => 'active',
-            'note'                      => "ZedProxy {$service->service_number}",
+            'status' => 'active',
+            'note' => "ZedProxy {$service->service_number}",
         ];
 
         if ($expiresAt) {
@@ -357,6 +366,7 @@ class ProvisioningService
             '/password[=:]\s*\S+/i',
             '/token[=:]\s*\S+/i',
         ];
+
         return preg_replace($patterns, '[REDACTED]', $message) ?? $message;
     }
 
@@ -364,14 +374,14 @@ class ProvisioningService
     {
         if ($e instanceof MarzbanException) {
             return [
-                'http_status'   => $e->getCode(),
-                'error_type'    => 'marzban_api_error',
+                'http_status' => $e->getCode(),
+                'error_type' => 'marzban_api_error',
                 'error_message' => $this->sanitizeError($e->getMessage()),
             ];
         }
 
         return [
-            'error_type'    => get_class($e),
+            'error_type' => get_class($e),
             'error_message' => $this->sanitizeError($e->getMessage()),
         ];
     }

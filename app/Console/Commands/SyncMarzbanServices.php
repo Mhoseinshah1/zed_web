@@ -31,28 +31,31 @@ class SyncMarzbanServices extends Command
             $service = UserService::find($id);
             if (! $service) {
                 $this->error("Service {$id} not found.");
+
                 return self::FAILURE;
             }
             $sync->syncService($service);
             $this->info("Synced service {$id} (status: {$service->fresh()->sync_status}).");
+
             return self::SUCCESS;
         }
 
         if ($username = $this->option('username')) {
             $service = $sync->syncUserByUsername($username);
             $this->info($service ? "Synced '{$username}'." : "No service with username '{$username}'.");
+
             return self::SUCCESS;
         }
 
         // Batched modes.
         $count = match (true) {
-            (bool) $this->option('failed-only')  => $sync->syncFailedServices($limit),
+            (bool) $this->option('failed-only') => $sync->syncFailedServices($limit),
             (bool) $this->option('pending-only') => $sync->syncPendingServices($limit),
-            (bool) $this->option('near-expiry')  => $sync->syncNearExpiryServices(
+            (bool) $this->option('near-expiry') => $sync->syncNearExpiryServices(
                 (int) SiteSetting::get('marzban_near_expiry_sync_days', 3),
                 $limit,
             ),
-            (bool) $this->option('active-only')  => $sync->syncBatch(
+            (bool) $this->option('active-only') => $sync->syncBatch(
                 UserService::whereNotNull('remote_username')
                     ->where('status', UserService::STATUS_ACTIVE)
                     ->limit($limit)->get()

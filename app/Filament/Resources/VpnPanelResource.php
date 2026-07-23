@@ -5,6 +5,9 @@ namespace App\Filament\Resources;
 use App\Filament\Resources\VpnPanelResource\Pages;
 use App\Models\VpnPanel;
 use App\Services\Marzban\MarzbanClient;
+use App\Services\VpnPanels\RemnawaveProvider;
+use App\Services\VpnPanels\Sanaei\Sanaei3xUiClient;
+use App\Services\VpnPanels\Sanaei3xUiProvider;
 use Filament\Forms;
 use Filament\Forms\Form;
 use Filament\Notifications\Notification;
@@ -12,17 +15,23 @@ use Filament\Resources\Resource;
 use Filament\Tables;
 use Filament\Tables\Table;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\HtmlString;
 
 class VpnPanelResource extends Resource
 {
     protected static ?string $model = VpnPanel::class;
 
-    protected static ?string $navigationIcon   = 'heroicon-o-server';
-    protected static ?string $navigationGroup  = 'سرویس‌ها و پنل‌های VPN';
-    protected static ?string $navigationLabel  = 'پنل‌های VPN';
-    protected static ?string $modelLabel       = 'پنل VPN';
+    protected static ?string $navigationIcon = 'heroicon-o-server';
+
+    protected static ?string $navigationGroup = 'سرویس‌ها و پنل‌های VPN';
+
+    protected static ?string $navigationLabel = 'پنل‌های VPN';
+
+    protected static ?string $modelLabel = 'پنل VPN';
+
     protected static ?string $pluralModelLabel = 'پنل‌های VPN';
-    protected static ?int    $navigationSort   = 20;
+
+    protected static ?int $navigationSort = 20;
 
     public static function form(Form $form): Form
     {
@@ -259,9 +268,9 @@ class VpnPanelResource extends Resource
                     ->label('نوع')
                     ->formatStateUsing(fn ($state) => VpnPanel::allTypes()[$state] ?? $state)
                     ->colors([
-                        'info'    => ['marzban'],
+                        'info' => ['marzban'],
                         'warning' => ['xui', 'sanaei_3xui'],
-                        'gray'    => ['other'],
+                        'gray' => ['other'],
                     ]),
 
                 Tables\Columns\TextColumn::make('base_url')
@@ -280,14 +289,14 @@ class VpnPanelResource extends Resource
                 Tables\Columns\BadgeColumn::make('health_status')
                     ->label('سلامت پنل')
                     ->formatStateUsing(fn ($state) => match ($state) {
-                        \App\Models\VpnPanel::HEALTH_ONLINE  => 'آنلاین',
-                        \App\Models\VpnPanel::HEALTH_OFFLINE => 'آفلاین',
-                        default                              => '—',
+                        VpnPanel::HEALTH_ONLINE => 'آنلاین',
+                        VpnPanel::HEALTH_OFFLINE => 'آفلاین',
+                        default => '—',
                     })
                     ->colors([
-                        'success' => [\App\Models\VpnPanel::HEALTH_ONLINE],
-                        'danger'  => [\App\Models\VpnPanel::HEALTH_OFFLINE],
-                        'gray'    => [null],
+                        'success' => [VpnPanel::HEALTH_ONLINE],
+                        'danger' => [VpnPanel::HEALTH_OFFLINE],
+                        'gray' => [null],
                     ]),
 
                 Tables\Columns\TextColumn::make('last_health_checked_at')
@@ -318,13 +327,13 @@ class VpnPanelResource extends Resource
                     ->color('info')
                     ->visible(fn (VpnPanel $record) => $record->type === VpnPanel::TYPE_SANAEI_XUI)
                     ->action(function (VpnPanel $record): void {
-                        $result = (new \App\Services\VpnPanels\Sanaei3xUiProvider())->testConnection($record);
+                        $result = (new Sanaei3xUiProvider)->testConnection($record);
                         $record->update([
-                            'last_checked_at'        => now(),
-                            'last_error'             => $result->ok ? null : $result->message,
+                            'last_checked_at' => now(),
+                            'last_error' => $result->ok ? null : $result->message,
                             'last_health_checked_at' => now(),
-                            'health_status'          => $result->ok ? VpnPanel::HEALTH_ONLINE : VpnPanel::HEALTH_OFFLINE,
-                            'health_error'           => $result->ok ? null : $result->message,
+                            'health_status' => $result->ok ? VpnPanel::HEALTH_ONLINE : VpnPanel::HEALTH_OFFLINE,
+                            'health_error' => $result->ok ? null : $result->message,
                         ]);
                         Notification::make()
                             ->title($result->ok ? 'اتصال موفق' : 'اتصال ناموفق')
@@ -343,22 +352,23 @@ class VpnPanelResource extends Resource
                     ->modalHeading('Inboundهای پنل سنایی')
                     ->modalContent(function (VpnPanel $record) {
                         try {
-                            $inbounds = (new \App\Services\VpnPanels\Sanaei\Sanaei3xUiClient($record))->getInbounds();
+                            $inbounds = (new Sanaei3xUiClient($record))->getInbounds();
                             $rows = collect($inbounds)->map(fn ($i) => [
-                                'id'       => $i['id'] ?? '—',
-                                'remark'   => $i['remark'] ?? '—',
+                                'id' => $i['id'] ?? '—',
+                                'remark' => $i['remark'] ?? '—',
                                 'protocol' => $i['protocol'] ?? '—',
-                                'port'     => $i['port'] ?? '—',
+                                'port' => $i['port'] ?? '—',
                             ]);
                             $html = '<table style="width:100%;font-size:13px"><thead><tr style="text-align:right">'
-                                . '<th>ID</th><th>نام</th><th>پروتکل</th><th>پورت</th></tr></thead><tbody>';
+                                .'<th>ID</th><th>نام</th><th>پروتکل</th><th>پورت</th></tr></thead><tbody>';
                             foreach ($rows as $r) {
-                                $html .= "<tr><td>{$r['id']}</td><td>" . e($r['remark']) . "</td><td>{$r['protocol']}</td><td>{$r['port']}</td></tr>";
+                                $html .= "<tr><td>{$r['id']}</td><td>".e($r['remark'])."</td><td>{$r['protocol']}</td><td>{$r['port']}</td></tr>";
                             }
                             $html .= '</tbody></table>';
-                            return new \Illuminate\Support\HtmlString($html);
+
+                            return new HtmlString($html);
                         } catch (\Throwable $e) {
-                            return new \Illuminate\Support\HtmlString('<p style="color:#f43f5e">دریافت لیست Inboundها ناموفق بود.</p>');
+                            return new HtmlString('<p style="color:#f43f5e">دریافت لیست Inboundها ناموفق بود.</p>');
                         }
                     }),
 
@@ -369,13 +379,13 @@ class VpnPanelResource extends Resource
                     ->color('info')
                     ->visible(fn (VpnPanel $record) => $record->type === VpnPanel::TYPE_REMNAWAVE)
                     ->action(function (VpnPanel $record): void {
-                        $result = (new \App\Services\VpnPanels\RemnawaveProvider())->testConnection($record);
+                        $result = (new RemnawaveProvider)->testConnection($record);
                         $record->update([
-                            'last_checked_at'        => now(),
-                            'last_error'             => $result->ok ? null : $result->message,
+                            'last_checked_at' => now(),
+                            'last_error' => $result->ok ? null : $result->message,
                             'last_health_checked_at' => now(),
-                            'health_status'          => $result->ok ? VpnPanel::HEALTH_ONLINE : VpnPanel::HEALTH_OFFLINE,
-                            'health_error'           => $result->ok ? null : $result->message,
+                            'health_status' => $result->ok ? VpnPanel::HEALTH_ONLINE : VpnPanel::HEALTH_OFFLINE,
+                            'health_error' => $result->ok ? null : $result->message,
                         ]);
                         Notification::make()
                             ->title($result->ok ? 'اتصال موفق' : 'اتصال ناموفق')
@@ -395,15 +405,15 @@ class VpnPanelResource extends Resource
                     ->action(function (VpnPanel $record): void {
                         try {
                             $client = new MarzbanClient($record);
-                            $info   = $client->testConnection();
+                            $info = $client->testConnection();
 
                             $record->update([
-                                'last_checked_at'        => now(),
-                                'last_error'             => null,
+                                'last_checked_at' => now(),
+                                'last_error' => null,
                                 'last_health_checked_at' => now(),
-                                'health_status'          => VpnPanel::HEALTH_ONLINE,
-                                'health_error'           => null,
-                                'system_info'            => collect($info)->only([
+                                'health_status' => VpnPanel::HEALTH_ONLINE,
+                                'health_error' => null,
+                                'system_info' => collect($info)->only([
                                     'version', 'mem_total', 'mem_used', 'cpu_cores', 'cpu_usage', 'total_user', 'users_active',
                                 ])->all(),
                             ]);
@@ -418,11 +428,11 @@ class VpnPanelResource extends Resource
 
                         } catch (\Throwable $e) {
                             $record->update([
-                                'last_checked_at'        => now(),
-                                'last_error'             => $e->getMessage(),
+                                'last_checked_at' => now(),
+                                'last_error' => $e->getMessage(),
                                 'last_health_checked_at' => now(),
-                                'health_status'          => VpnPanel::HEALTH_OFFLINE,
-                                'health_error'           => $e->getMessage(),
+                                'health_status' => VpnPanel::HEALTH_OFFLINE,
+                                'health_error' => $e->getMessage(),
                             ]);
 
                             Notification::make()
@@ -492,7 +502,7 @@ class VpnPanelResource extends Resource
                     ->icon('heroicon-o-document-text')
                     ->color('gray')
                     ->url(fn (VpnPanel $record) => $record->api_docs_url
-                        ?: ($record->base_url ? rtrim($record->base_url, '/') . '/docs' : null))
+                        ?: ($record->base_url ? rtrim($record->base_url, '/').'/docs' : null))
                     ->openUrlInNewTab()
                     ->visible(fn (VpnPanel $record) => filled($record->base_url) || filled($record->api_docs_url)),
 
@@ -506,9 +516,9 @@ class VpnPanelResource extends Resource
     public static function getPages(): array
     {
         return [
-            'index'  => Pages\ListVpnPanels::route('/'),
+            'index' => Pages\ListVpnPanels::route('/'),
             'create' => Pages\CreateVpnPanel::route('/create'),
-            'edit'   => Pages\EditVpnPanel::route('/{record}/edit'),
+            'edit' => Pages\EditVpnPanel::route('/{record}/edit'),
         ];
     }
 }

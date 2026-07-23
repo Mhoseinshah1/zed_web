@@ -6,6 +6,9 @@ use App\Models\Feature;
 use App\Models\Location;
 use App\Models\Plan;
 use App\Models\SiteText;
+use Database\Seeders\FeatureSeeder;
+use Database\Seeders\LocationSeeder;
+use Database\Seeders\SiteTextSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
@@ -109,7 +112,7 @@ class PlansTest extends TestCase
 
     public function test_plan_has_features_relation(): void
     {
-        $plan    = Plan::factory()->create();
+        $plan = Plan::factory()->create();
         $feature = Feature::factory()->create();
         $plan->features()->attach($feature->id);
 
@@ -121,7 +124,7 @@ class PlansTest extends TestCase
     public function test_site_setting_returns_db_value(): void
     {
         SiteText::create([
-            'key'   => 'test.greeting',
+            'key' => 'test.greeting',
             'value' => 'سلام از دیتابیس',
         ]);
 
@@ -136,12 +139,12 @@ class PlansTest extends TestCase
     public function test_site_text_seeder_does_not_overwrite_admin_edited_value(): void
     {
         SiteText::create([
-            'key'   => 'homepage.hero.title',
+            'key' => 'homepage.hero.title',
             'value' => 'عنوان ویرایش‌شده توسط ادمین',
         ]);
 
         // Run seeder again — should not overwrite
-        (new \Database\Seeders\SiteTextSeeder())->run();
+        (new SiteTextSeeder)->run();
 
         $this->assertEquals(
             'عنوان ویرایش‌شده توسط ادمین',
@@ -152,13 +155,13 @@ class PlansTest extends TestCase
     public function test_feature_seeder_does_not_overwrite_admin_edited_title(): void
     {
         Feature::create([
-            'title'      => 'ویژگی ویرایش‌شده',
-            'slug'       => 'feature-1',
-            'is_active'  => true,
+            'title' => 'ویژگی ویرایش‌شده',
+            'slug' => 'feature-1',
+            'is_active' => true,
             'sort_order' => 1,
         ]);
 
-        (new \Database\Seeders\FeatureSeeder())->run();
+        (new FeatureSeeder)->run();
 
         $this->assertEquals(
             'ویژگی ویرایش‌شده',
@@ -171,10 +174,10 @@ class PlansTest extends TestCase
         Location::create([
             'country_name' => 'آلمان ویرایش‌شده',
             'country_code' => 'DE',
-            'is_active'    => true,
+            'is_active' => true,
         ]);
 
-        (new \Database\Seeders\LocationSeeder())->run();
+        (new LocationSeeder)->run();
 
         $this->assertEquals(
             'آلمان ویرایش‌شده',

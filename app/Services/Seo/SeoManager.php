@@ -7,7 +7,6 @@ use App\Models\SeoPage;
 use App\Models\Tutorial;
 use App\Support\Seo\SeoData;
 use Illuminate\Database\Eloquent\Model;
-use Illuminate\Support\Str;
 
 /**
  * The single source of truth for on-page SEO. Registered as a request-scoped
@@ -34,11 +33,15 @@ class SeoManager
     ];
 
     private ?string $pageKey = null;
+
     private ?Model $model = null;
+
     /** @var array<string,mixed> */
     private array $overrides = [];
+
     /** @var array<int,array{name:string,url?:string}> */
     private array $breadcrumbs = [];
+
     /** @var array<int,string> query params kept in the canonical (e.g. pagination). */
     private array $allowedQueryParams = ['page'];
 
@@ -50,6 +53,7 @@ class SeoManager
     {
         $this->pageKey = $key;
         $this->resolved = null;
+
         return $this;
     }
 
@@ -57,6 +61,7 @@ class SeoManager
     {
         $this->model = $model;
         $this->resolved = null;
+
         return $this;
     }
 
@@ -65,6 +70,7 @@ class SeoManager
     {
         $this->overrides = array_merge($this->overrides, $overrides);
         $this->resolved = null;
+
         return $this;
     }
 
@@ -73,6 +79,7 @@ class SeoManager
     {
         $this->breadcrumbs = $items;
         $this->resolved = null;
+
         return $this;
     }
 
@@ -87,6 +94,7 @@ class SeoManager
     {
         $this->allowedQueryParams = $params;
         $this->resolved = null;
+
         return $this;
     }
 
@@ -105,7 +113,7 @@ class SeoManager
     private function build(): SeoData
     {
         $record = $this->pageKey ? SeoPage::findByKey($this->pageKey) : null;
-        $model  = $this->model;
+        $model = $this->model;
 
         $siteName = SeoSettings::siteName();
 
@@ -191,7 +199,7 @@ class SeoManager
 
         $twitterSite = SeoSettings::twitterUsername();
         if ($twitterSite !== '' && ! str_starts_with($twitterSite, '@')) {
-            $twitterSite = '@' . $twitterSite;
+            $twitterSite = '@'.$twitterSite;
         }
 
         $data = new SeoData(
@@ -247,6 +255,7 @@ class SeoManager
         if ($model && isset($model->robots_index)) {
             return [(bool) $model->robots_index, (bool) ($model->robots_follow ?? true)];
         }
+
         return [true, true];
     }
 
@@ -258,6 +267,7 @@ class SeoManager
             return false;
         }
         $first = explode('/', $path)[0];
+
         return in_array($first, self::FORCED_NOINDEX_PREFIXES, true);
     }
 
@@ -271,7 +281,7 @@ class SeoManager
 
         $path = request()?->path() ?? '/';
         $base = $this->baseUrl();
-        $url = $path === '/' ? $base . '/' : $base . '/' . $path;
+        $url = $path === '/' ? $base.'/' : $base.'/'.$path;
 
         // Keep only allowlisted query params (e.g. pagination) — this drops
         // category filters and tracking params so they never create duplicates.
@@ -283,7 +293,7 @@ class SeoManager
             }
         }
         if ($kept !== []) {
-            $url .= '?' . http_build_query($kept);
+            $url .= '?'.http_build_query($kept);
         }
 
         return $this->normalizeUrl($url);
@@ -299,11 +309,12 @@ class SeoManager
         // Reduce to scheme+host+port (drop any path in APP_URL).
         $parts = parse_url($url);
         if ($parts !== false && isset($parts['scheme'], $parts['host'])) {
-            $url = $parts['scheme'] . '://' . $parts['host'] . (isset($parts['port']) ? ':' . $parts['port'] : '');
+            $url = $parts['scheme'].'://'.$parts['host'].(isset($parts['port']) ? ':'.$parts['port'] : '');
         }
         if (app()->environment('production') && str_starts_with($url, 'http://')) {
-            $url = 'https://' . substr($url, 7);
+            $url = 'https://'.substr($url, 7);
         }
+
         return $url;
     }
 
@@ -318,7 +329,7 @@ class SeoManager
             return $path;
         }
         if (str_starts_with($path, '/')) {
-            return $this->baseUrl() . $path;
+            return $this->baseUrl().$path;
         }
         // Stored public-disk path → URL, then make absolute.
         $resolved = cms_asset_url($path) ?? '';
@@ -328,7 +339,8 @@ class SeoManager
         if (str_starts_with($resolved, 'http://') || str_starts_with($resolved, 'https://')) {
             return $resolved;
         }
-        return $this->baseUrl() . '/' . ltrim($resolved, '/');
+
+        return $this->baseUrl().'/'.ltrim($resolved, '/');
     }
 
     /** Remove tracking parameters (utm_*, gclid, fbclid, …) from a URL's query. */
@@ -344,12 +356,13 @@ class SeoManager
                 unset($params[$key]);
             }
         }
-        $scheme = isset($parts['scheme']) ? $parts['scheme'] . '://' : '';
-        $host   = $parts['host'] ?? '';
-        $port   = isset($parts['port']) ? ':' . $parts['port'] : '';
-        $path   = $parts['path'] ?? '';
-        $query  = $params !== [] ? '?' . http_build_query($params) : '';
-        return $scheme . $host . $port . $path . $query;
+        $scheme = isset($parts['scheme']) ? $parts['scheme'].'://' : '';
+        $host = $parts['host'] ?? '';
+        $port = isset($parts['port']) ? ':'.$parts['port'] : '';
+        $path = $parts['path'] ?? '';
+        $query = $params !== [] ? '?'.http_build_query($params) : '';
+
+        return $scheme.$host.$port.$path.$query;
     }
 
     /** Normalize trailing slashes (strip, except the bare root). */
@@ -363,11 +376,12 @@ class SeoManager
         if ($path !== '/' && str_ends_with($path, '/')) {
             $path = rtrim($path, '/');
         }
-        $scheme = isset($parts['scheme']) ? $parts['scheme'] . '://' : '';
-        $host   = $parts['host'] ?? '';
-        $port   = isset($parts['port']) ? ':' . $parts['port'] : '';
-        $query  = isset($parts['query']) ? '?' . $parts['query'] : '';
-        return $scheme . $host . $port . $path . $query;
+        $scheme = isset($parts['scheme']) ? $parts['scheme'].'://' : '';
+        $host = $parts['host'] ?? '';
+        $port = isset($parts['port']) ? ':'.$parts['port'] : '';
+        $query = isset($parts['query']) ? '?'.$parts['query'] : '';
+
+        return $scheme.$host.$port.$path.$query;
     }
 
     // ── Title ────────────────────────────────────────────────────────────────
@@ -382,7 +396,8 @@ class SeoManager
         if ($siteName === '' || mb_stripos($title, $siteName) !== false) {
             return $title;
         }
-        return $title . ' ' . SeoSettings::titleSeparator() . ' ' . $siteName;
+
+        return $title.' '.SeoSettings::titleSeparator().' '.$siteName;
     }
 
     // ── Structured data ──────────────────────────────────────────────────────
@@ -451,6 +466,7 @@ class SeoManager
             if (! isset($node['@context'])) {
                 return array_merge(['@context' => 'https://schema.org'], $node);
             }
+
             return $node;
         }, $nodes);
     }
@@ -466,6 +482,7 @@ class SeoManager
         if (! is_array($decoded) || json_last_error() !== JSON_ERROR_NONE) {
             return null;
         }
+
         return $decoded;
     }
 
@@ -478,6 +495,7 @@ class SeoManager
                 return trim((string) $v);
             }
         }
+
         return '';
     }
 }

@@ -2,14 +2,13 @@
 
 namespace Tests\Feature;
 
+use App\Filament\Resources\VpnPanelResource\Pages\CreateVpnPanel;
 use App\Models\Plan;
 use App\Models\User;
 use App\Models\UserService;
 use App\Models\VpnPanel;
 use App\Services\VpnPanels\PanelProviderFactory;
-use App\Services\VpnPanels\Remnawave\RemnawaveClient;
 use App\Services\VpnPanels\RemnawaveProvider;
-use App\Filament\Resources\VpnPanelResource\Pages\CreateVpnPanel;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
 use Livewire\Livewire;
@@ -22,14 +21,14 @@ class RemnawaveProviderTest extends TestCase
     private function panel(array $overrides = []): VpnPanel
     {
         return VpnPanel::create(array_merge([
-            'name'               => 'رمناویو تست',
-            'type'               => VpnPanel::TYPE_REMNAWAVE,
-            'base_url'           => 'https://panel.example.com',
-            'api_token'          => 'jwt-token-123',
+            'name' => 'رمناویو تست',
+            'type' => VpnPanel::TYPE_REMNAWAVE,
+            'base_url' => 'https://panel.example.com',
+            'api_token' => 'jwt-token-123',
             'default_squad_uuid' => 'squad-uuid-1',
-            'verify_ssl'         => true,
-            'timeout_seconds'    => 15,
-            'is_active'          => true,
+            'verify_ssl' => true,
+            'timeout_seconds' => 15,
+            'is_active' => true,
         ], $overrides));
     }
 
@@ -37,15 +36,16 @@ class RemnawaveProviderTest extends TestCase
     {
         $user = User::factory()->create();
         $plan = Plan::factory()->create(['traffic_gb' => 10, 'duration_days' => 30]);
+
         return UserService::create(array_merge([
-            'user_id'          => $user->id,
-            'plan_id'          => $plan->id,
-            'plan_name'        => 'p',
-            'status'           => UserService::STATUS_ACTIVE,
+            'user_id' => $user->id,
+            'plan_id' => $plan->id,
+            'plan_name' => 'p',
+            'status' => UserService::STATUS_ACTIVE,
             'provision_status' => UserService::PROVISION_PROVISIONED,
-            'vpn_panel_id'     => $panel->id,
+            'vpn_panel_id' => $panel->id,
             'traffic_total_gb' => 10,
-            'traffic_used_gb'  => 0,
+            'traffic_used_gb' => 0,
         ], $overrides));
     }
 
@@ -53,14 +53,14 @@ class RemnawaveProviderTest extends TestCase
     private function userObj(array $overrides = []): array
     {
         return array_merge([
-            'uuid'            => 'user-uuid-1',
-            'shortUuid'       => 'short1',
-            'username'        => 'zed-1',
-            'status'          => 'ACTIVE',
+            'uuid' => 'user-uuid-1',
+            'shortUuid' => 'short1',
+            'username' => 'zed-1',
+            'status' => 'ACTIVE',
             'trafficLimitBytes' => 10 * 1073741824,
-            'expireAt'        => '2026-08-02T00:00:00.000Z',
+            'expireAt' => '2026-08-02T00:00:00.000Z',
             'subscriptionUrl' => 'https://panel.example.com/sub/short1',
-            'userTraffic'     => ['usedTrafficBytes' => 0],
+            'userTraffic' => ['usedTrafficBytes' => 0],
         ], $overrides);
     }
 
@@ -101,7 +101,7 @@ class RemnawaveProviderTest extends TestCase
     {
         Http::fake(['*/api/users/tags' => Http::response(['response' => []], 200)]);
 
-        $result = (new RemnawaveProvider())->testConnection($this->panel());
+        $result = (new RemnawaveProvider)->testConnection($this->panel());
         $this->assertTrue($result->ok);
 
         Http::assertSent(fn ($r) => $r->hasHeader('Authorization', 'Bearer jwt-token-123')
@@ -114,11 +114,11 @@ class RemnawaveProviderTest extends TestCase
     {
         Http::fake([
             '*/api/users/by-username/*' => Http::response(['message' => 'not found'], 404),
-            '*/api/users'               => Http::response(['response' => $this->userObj()], 201),
+            '*/api/users' => Http::response(['response' => $this->userObj()], 201),
         ]);
 
         $service = $this->service($this->panel());
-        $result  = (new RemnawaveProvider())->provision($service);
+        $result = (new RemnawaveProvider)->provision($service);
 
         $this->assertTrue($result->ok);
         $service->refresh();
@@ -132,6 +132,7 @@ class RemnawaveProviderTest extends TestCase
                 return false;
             }
             $b = $r->data();
+
             return $r->hasHeader('Authorization', 'Bearer jwt-token-123')
                 && ($b['username'] ?? null) !== null
                 && ($b['trafficLimitBytes'] ?? null) === 10 * 1073741824      // bytes
@@ -147,11 +148,11 @@ class RemnawaveProviderTest extends TestCase
     {
         Http::fake([
             '*/api/users/by-username/*' => Http::response(['response' => $this->userObj()], 200),
-            '*/api/users'               => Http::response(['response' => $this->userObj()], 201),
+            '*/api/users' => Http::response(['response' => $this->userObj()], 201),
         ]);
 
         $service = $this->service($this->panel(), ['remote_username' => 'zed-existing']);
-        $result  = (new RemnawaveProvider())->provision($service);
+        $result = (new RemnawaveProvider)->provision($service);
 
         $this->assertTrue($result->ok);
         $this->assertTrue($result->data['existed'] ?? false);
@@ -165,10 +166,11 @@ class RemnawaveProviderTest extends TestCase
         Http::fake(['*/api/users' => Http::response(['response' => $this->userObj()], 200)]);
 
         $service = $this->service($this->panel(), ['remote_uuid' => 'user-uuid-1']);
-        (new RemnawaveProvider())->update($service, ['trafficLimitBytes' => 5368709120]);
+        (new RemnawaveProvider)->update($service, ['trafficLimitBytes' => 5368709120]);
 
         Http::assertSent(function ($r) {
             $b = $r->data();
+
             return $r->method() === 'PATCH'
                 && str_ends_with($r->url(), '/api/users')
                 && ($b['uuid'] ?? null) === 'user-uuid-1'
@@ -181,11 +183,12 @@ class RemnawaveProviderTest extends TestCase
         Http::fake(['*/api/users' => Http::response(['response' => $this->userObj()], 200)]);
 
         $service = $this->service($this->panel(), ['remote_uuid' => 'user-uuid-1', 'expires_at' => now()->addDays(5)]);
-        $result  = (new RemnawaveProvider())->addTime($service, 10);
+        $result = (new RemnawaveProvider)->addTime($service, 10);
 
         $this->assertTrue($result->ok);
         Http::assertSent(function ($r) {
             $b = $r->data();
+
             return $r->method() === 'PATCH'
                 && ($b['uuid'] ?? null) === 'user-uuid-1'
                 && is_string($b['expireAt'] ?? null)
@@ -198,13 +201,13 @@ class RemnawaveProviderTest extends TestCase
     public function test_enable_disable_reset_hit_action_endpoints(): void
     {
         Http::fake([
-            '*/actions/enable'        => Http::response(['response' => ['uuid' => 'user-uuid-1']], 200),
-            '*/actions/disable'       => Http::response(['response' => ['uuid' => 'user-uuid-1']], 200),
+            '*/actions/enable' => Http::response(['response' => ['uuid' => 'user-uuid-1']], 200),
+            '*/actions/disable' => Http::response(['response' => ['uuid' => 'user-uuid-1']], 200),
             '*/actions/reset-traffic' => Http::response(['response' => ['uuid' => 'user-uuid-1']], 200),
         ]);
 
-        $service  = $this->service($this->panel(), ['remote_uuid' => 'user-uuid-1']);
-        $provider = new RemnawaveProvider();
+        $service = $this->service($this->panel(), ['remote_uuid' => 'user-uuid-1']);
+        $provider = new RemnawaveProvider;
 
         $this->assertTrue($provider->enable($service)->ok);
         $this->assertTrue($provider->disable($service)->ok);
@@ -222,7 +225,7 @@ class RemnawaveProviderTest extends TestCase
         Http::fake(['*/api/users/user-uuid-1' => Http::response(['response' => ['isDeleted' => true]], 200)]);
 
         $service = $this->service($this->panel(), ['remote_uuid' => 'user-uuid-1']);
-        $result  = (new RemnawaveProvider())->delete($service);
+        $result = (new RemnawaveProvider)->delete($service);
 
         $this->assertTrue($result->ok);
         Http::assertSent(fn ($r) => $r->method() === 'DELETE' && str_ends_with($r->url(), '/api/users/user-uuid-1'));
@@ -233,7 +236,7 @@ class RemnawaveProviderTest extends TestCase
         Http::fake(['*/api/users/*' => Http::response(['message' => 'not found'], 404)]);
 
         $service = $this->service($this->panel(), ['remote_uuid' => 'gone-uuid']);
-        $result  = (new RemnawaveProvider())->delete($service);
+        $result = (new RemnawaveProvider)->delete($service);
 
         $this->assertTrue($result->ok); // 404 → idempotent success
     }
@@ -245,13 +248,13 @@ class RemnawaveProviderTest extends TestCase
         Http::fake(['*/api/users/user-uuid-1' => Http::response([
             'response' => $this->userObj([
                 'trafficLimitBytes' => 21474836480,
-                'userTraffic'       => ['usedTrafficBytes' => 300],
-                'status'            => 'ACTIVE',
+                'userTraffic' => ['usedTrafficBytes' => 300],
+                'status' => 'ACTIVE',
             ]),
         ], 200)]);
 
         $service = $this->service($this->panel(), ['remote_uuid' => 'user-uuid-1']);
-        $result  = (new RemnawaveProvider())->sync($service);
+        $result = (new RemnawaveProvider)->sync($service);
 
         $this->assertTrue($result->ok);
         $service->refresh();

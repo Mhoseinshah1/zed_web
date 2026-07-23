@@ -7,10 +7,13 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class ProvisioningAttempt extends Model
 {
-    const STATUS_PENDING    = 'pending';
+    const STATUS_PENDING = 'pending';
+
     const STATUS_PROCESSING = 'processing';
-    const STATUS_SUCCESS    = 'success';
-    const STATUS_FAILED     = 'failed';
+
+    const STATUS_SUCCESS = 'success';
+
+    const STATUS_FAILED = 'failed';
 
     protected $fillable = [
         'order_id',
@@ -27,11 +30,11 @@ class ProvisioningAttempt extends Model
     ];
 
     protected $casts = [
-        'request_payload'  => 'array',
+        'request_payload' => 'array',
         'response_payload' => 'array',
-        'started_at'       => 'datetime',
-        'finished_at'      => 'datetime',
-        'attempt_number'   => 'integer',
+        'started_at' => 'datetime',
+        'finished_at' => 'datetime',
+        'attempt_number' => 'integer',
     ];
 
     public function order(): BelongsTo
@@ -56,12 +59,12 @@ class ProvisioningAttempt extends Model
 
     public function statusLabel(): string
     {
-        return match($this->status) {
-            self::STATUS_PENDING    => 'در انتظار',
+        return match ($this->status) {
+            self::STATUS_PENDING => 'در انتظار',
             self::STATUS_PROCESSING => 'در حال انجام',
-            self::STATUS_SUCCESS    => 'موفق',
-            self::STATUS_FAILED     => 'ناموفق',
-            default                 => $this->status,
+            self::STATUS_SUCCESS => 'موفق',
+            self::STATUS_FAILED => 'ناموفق',
+            default => $this->status,
         };
     }
 }

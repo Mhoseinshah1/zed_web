@@ -4,7 +4,6 @@ namespace Tests\Feature;
 
 use App\Models\Order;
 use App\Models\Plan;
-use App\Models\SiteSetting;
 use App\Models\User;
 use App\Models\UserService;
 use App\Models\VpnPanel;
@@ -23,12 +22,12 @@ class MarzbanSyncTest extends TestCase
     private function panel(): VpnPanel
     {
         return VpnPanel::create([
-            'name'       => 'Test Marzban',
-            'type'       => VpnPanel::TYPE_MARZBAN,
-            'base_url'   => 'https://mz.test',
-            'username'   => 'admin',
-            'password'   => 'secret',
-            'is_active'  => true,
+            'name' => 'Test Marzban',
+            'type' => VpnPanel::TYPE_MARZBAN,
+            'base_url' => 'https://mz.test',
+            'username' => 'admin',
+            'password' => 'secret',
+            'is_active' => true,
             'is_default' => true,
         ]);
     }
@@ -36,20 +35,21 @@ class MarzbanSyncTest extends TestCase
     private function service(User $user, VpnPanel $panel, array $overrides = []): UserService
     {
         $plan = Plan::create([
-            'name' => 'p', 'slug' => 'p-' . uniqid(), 'price_toman' => 1000,
+            'name' => 'p', 'slug' => 'p-'.uniqid(), 'price_toman' => 1000,
             'duration_days' => 30, 'traffic_gb' => 10, 'is_active' => true, 'sort_order' => 0,
         ]);
+
         return UserService::create(array_merge([
-            'user_id'          => $user->id,
-            'plan_id'          => $plan->id,
-            'plan_name'        => 'p',
-            'status'           => UserService::STATUS_ACTIVE,
+            'user_id' => $user->id,
+            'plan_id' => $plan->id,
+            'plan_name' => 'p',
+            'status' => UserService::STATUS_ACTIVE,
             'provision_status' => UserService::PROVISION_PROVISIONED,
-            'vpn_panel_id'     => $panel->id,
-            'remote_username'  => 'zpx_user',
+            'vpn_panel_id' => $panel->id,
+            'remote_username' => 'zpx_user',
             'traffic_total_gb' => 10,
-            'traffic_used_gb'  => 0,
-            'expires_at'       => now()->addDays(20),
+            'traffic_used_gb' => 0,
+            'expires_at' => now()->addDays(20),
         ], $overrides));
     }
 
@@ -57,21 +57,21 @@ class MarzbanSyncTest extends TestCase
     {
         Http::fake([
             '*/api/admin/token' => Http::response(['access_token' => 'tok', 'token_type' => 'bearer'], 200),
-            '*/api/user/*'      => Http::response($user, $userStatus),
-            '*/api/system'      => Http::response(['version' => '0.5.2'], 200),
+            '*/api/user/*' => Http::response($user, $userStatus),
+            '*/api/system' => Http::response(['version' => '0.5.2'], 200),
         ]);
     }
 
     private function userPayload(): array
     {
         return [
-            'username'         => 'zpx_user',
-            'status'           => 'active',
-            'used_traffic'     => 3 * self::GB,
-            'data_limit'       => 25 * self::GB,
-            'expire'           => now()->addDays(40)->timestamp,
+            'username' => 'zpx_user',
+            'status' => 'active',
+            'used_traffic' => 3 * self::GB,
+            'data_limit' => 25 * self::GB,
+            'expire' => now()->addDays(40)->timestamp,
             'subscription_url' => 'https://mz.test/sub/abc',
-            'links'            => ['vless://link1'],
+            'links' => ['vless://link1'],
         ];
     }
 
@@ -151,7 +151,7 @@ class MarzbanSyncTest extends TestCase
     public function test_service_detail_does_not_sync_when_fresh(): void
     {
         Http::fake();
-        $user    = User::factory()->create();
+        $user = User::factory()->create();
         $service = $this->service($user, $this->panel(), ['last_synced_at' => now()->subSeconds(30)]);
 
         $this->actingAs($user)->get(route('dashboard.services.show', $service))->assertStatus(200);
@@ -161,7 +161,7 @@ class MarzbanSyncTest extends TestCase
     public function test_service_detail_syncs_when_stale(): void
     {
         $this->fakeMarzban($this->userPayload());
-        $user    = User::factory()->create();
+        $user = User::factory()->create();
         $service = $this->service($user, $this->panel(), ['last_synced_at' => now()->subMinutes(2)]);
 
         $this->actingAs($user)->get(route('dashboard.services.show', $service))->assertStatus(200);
@@ -173,7 +173,7 @@ class MarzbanSyncTest extends TestCase
     public function test_manual_refresh_blocked_within_cooldown(): void
     {
         Http::fake();
-        $user    = User::factory()->create();
+        $user = User::factory()->create();
         $service = $this->service($user, $this->panel(), ['last_manual_sync_at' => now()->subSeconds(30)]);
 
         $this->actingAs($user)
@@ -186,7 +186,7 @@ class MarzbanSyncTest extends TestCase
     public function test_user_can_refresh_own_service(): void
     {
         $this->fakeMarzban($this->userPayload());
-        $user    = User::factory()->create();
+        $user = User::factory()->create();
         $service = $this->service($user, $this->panel(), ['last_manual_sync_at' => null]);
 
         $this->actingAs($user)
@@ -210,7 +210,7 @@ class MarzbanSyncTest extends TestCase
     public function test_background_sync_respects_batch_size(): void
     {
         $this->fakeMarzban($this->userPayload());
-        $user  = User::factory()->create();
+        $user = User::factory()->create();
         $panel = $this->panel();
         for ($i = 0; $i < 5; $i++) {
             $this->service($user, $panel, ['sync_status' => UserService::SYNC_FAILED, 'remote_username' => "u{$i}"]);
@@ -226,7 +226,7 @@ class MarzbanSyncTest extends TestCase
     {
         Http::fake();
         $admin = User::factory()->create(['is_admin' => true]);
-        $user  = User::factory()->create();
+        $user = User::factory()->create();
         $panel = $this->panel();
         $this->service($user, $panel);
         $this->service($user, $panel, ['remote_username' => 'another']);
@@ -242,7 +242,7 @@ class MarzbanSyncTest extends TestCase
         $panel = $this->panel();
         Http::fake([
             '*/api/admin/token' => Http::response(['access_token' => 'tok'], 200),
-            '*/api/system'      => Http::response(['version' => '0.5.2'], 200),
+            '*/api/system' => Http::response(['version' => '0.5.2'], 200),
         ]);
 
         $this->artisan('zedproxy:check-marzban-panels')->assertExitCode(0);
@@ -256,7 +256,7 @@ class MarzbanSyncTest extends TestCase
         $panel = $this->panel();
         Http::fake([
             '*/api/admin/token' => Http::response(['access_token' => 'tok'], 200),
-            '*/api/system'      => Http::response('err', 500),
+            '*/api/system' => Http::response('err', 500),
         ]);
 
         $this->artisan('zedproxy:check-marzban-panels')->assertExitCode(0);
@@ -270,22 +270,22 @@ class MarzbanSyncTest extends TestCase
     private function order(User $user, string $type, string $status, array $overrides = []): Order
     {
         return Order::create(array_merge([
-            'order_type'        => $type,
-            'user_id'           => $user->id,
-            'plan_name'         => 'p',
-            'price_toman'       => 1000,
+            'order_type' => $type,
+            'user_id' => $user->id,
+            'plan_name' => 'p',
+            'price_toman' => 1000,
             'final_price_toman' => 1000,
-            'discount_toman'    => 0,
-            'status'            => $status,
-            'payment_status'    => Order::PAYMENT_PAID,
-            'paid_at'           => now(),
+            'discount_toman' => 0,
+            'status' => $status,
+            'payment_status' => Order::PAYMENT_PAID,
+            'paid_at' => now(),
         ], $overrides));
     }
 
     public function test_failed_operation_page_lists_failed_operations(): void
     {
         $admin = User::factory()->create(['is_admin' => true]);
-        $user  = User::factory()->create();
+        $user = User::factory()->create();
         $o1 = $this->order($user, Order::TYPE_RENEWAL, Order::STATUS_RENEWAL_FAILED);
         $o2 = $this->order($user, Order::TYPE_EXTRA_TRAFFIC, Order::STATUS_ADDON_FAILED);
         $o3 = $this->order($user, Order::TYPE_NEW_SERVICE, Order::STATUS_PROVISIONING_FAILED);
@@ -299,9 +299,9 @@ class MarzbanSyncTest extends TestCase
 
     public function test_retry_new_service_is_idempotent(): void
     {
-        $user  = User::factory()->create();
+        $user = User::factory()->create();
         $order = $this->order($user, Order::TYPE_NEW_SERVICE, Order::STATUS_PROVISIONING_FAILED, [
-            'plan_id' => Plan::create(['name' => 'p', 'slug' => 'p-' . uniqid(), 'price_toman' => 1000, 'duration_days' => 30, 'traffic_gb' => 10, 'is_active' => true, 'sort_order' => 0])->id,
+            'plan_id' => Plan::create(['name' => 'p', 'slug' => 'p-'.uniqid(), 'price_toman' => 1000, 'duration_days' => 30, 'traffic_gb' => 10, 'is_active' => true, 'sort_order' => 0])->id,
         ]);
         // Service already provisioned & active for this order.
         UserService::create([
@@ -319,7 +319,7 @@ class MarzbanSyncTest extends TestCase
 
     public function test_retry_renewal_is_idempotent(): void
     {
-        $user  = User::factory()->create();
+        $user = User::factory()->create();
         $order = $this->order($user, Order::TYPE_RENEWAL, Order::STATUS_RENEWAL_FAILED, [
             'renewal_applied_at' => now(),
         ]);
@@ -330,7 +330,7 @@ class MarzbanSyncTest extends TestCase
 
     public function test_retry_extra_traffic_is_idempotent(): void
     {
-        $user  = User::factory()->create();
+        $user = User::factory()->create();
         $order = $this->order($user, Order::TYPE_EXTRA_TRAFFIC, Order::STATUS_ADDON_FAILED, [
             'addon_applied_at' => now(),
         ]);
@@ -340,7 +340,7 @@ class MarzbanSyncTest extends TestCase
 
     public function test_retry_extra_time_is_idempotent(): void
     {
-        $user  = User::factory()->create();
+        $user = User::factory()->create();
         $order = $this->order($user, Order::TYPE_EXTRA_TIME, Order::STATUS_ADDON_FAILED, [
             'addon_applied_at' => now(),
         ]);
@@ -351,15 +351,15 @@ class MarzbanSyncTest extends TestCase
     public function test_duplicate_retry_does_not_apply_twice(): void
     {
         $this->fakeMarzban($this->userPayload());
-        $user    = User::factory()->create();
-        $panel   = $this->panel();
+        $user = User::factory()->create();
+        $panel = $this->panel();
         $service = $this->service($user, $panel, ['traffic_total_gb' => 20, 'remote_username' => 'zpx_user']);
 
         // A paid extra-traffic order not yet applied.
         $order = $this->order($user, Order::TYPE_EXTRA_TRAFFIC, Order::STATUS_ADDON_FAILED, [
-            'user_service_id'  => $service->id,
+            'user_service_id' => $service->id,
             'extra_traffic_gb' => 10,
-            'new_data_limit'   => 30 * self::GB,
+            'new_data_limit' => 30 * self::GB,
         ]);
 
         $svc = app(OrderApplyRetryService::class);

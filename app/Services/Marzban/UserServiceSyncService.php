@@ -7,6 +7,7 @@ use App\Models\SiteSetting;
 use App\Models\UserService;
 use App\Services\Notifications\NotificationService;
 use Carbon\Carbon;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Log;
 
 /**
@@ -29,6 +30,7 @@ class UserServiceSyncService
         // No remote user yet → nothing to pull; mark pending.
         if (blank($service->remote_username)) {
             $service->update(['sync_status' => UserService::SYNC_PENDING]);
+
             return $service->fresh();
         }
 
@@ -36,23 +38,26 @@ class UserServiceSyncService
         if (! $panel) {
             $service->update([
                 'sync_status' => UserService::SYNC_FAILED,
-                'sync_error'  => 'هیچ پنل Marzban فعالی یافت نشد.',
+                'sync_error' => 'هیچ پنل Marzban فعالی یافت نشد.',
             ]);
+
             return $service->fresh();
         }
 
         try {
-            $client      = new MarzbanClient($panel);
+            $client = new MarzbanClient($panel);
             $marzbanUser = $client->getUser($service->remote_username);
         } catch (MarzbanException $e) {
             if ($e->getCode() === 404) {
                 $service->update([
-                    'sync_status'    => UserService::SYNC_NOT_FOUND,
-                    'sync_error'     => null,
+                    'sync_status' => UserService::SYNC_NOT_FOUND,
+                    'sync_error' => null,
                     'last_synced_at' => now(),
                 ]);
+
                 return $service->fresh();
             }
+
             return $this->markFailed($service, $e);
         } catch (\Throwable $e) {
             return $this->markFailed($service, $e);
@@ -70,12 +75,14 @@ class UserServiceSyncService
             return false;
         }
         $cacheMinutes = (int) SiteSetting::get('marzban_user_sync_cache_minutes', 1);
+
         return $service->isSyncStale($cacheMinutes);
     }
 
     public function syncUserByUsername(string $username): ?UserService
     {
         $service = UserService::where('remote_username', $username)->first();
+
         return $service ? $this->syncService($service) : null;
     }
 
@@ -109,7 +116,7 @@ class UserServiceSyncService
     }
 
     /**
-     * @param \Illuminate\Support\Collection<int,UserService> $services
+     * @param  Collection<int,UserService>  $services
      */
     public function syncBatch($services): int
     {
@@ -122,10 +129,11 @@ class UserServiceSyncService
                 // One failure must not abort the whole batch.
                 Log::warning('UserServiceSyncService: batch item failed', [
                     'service_id' => $service->id,
-                    'error'      => $e->getMessage(),
+                    'error' => $e->getMessage(),
                 ]);
             }
         }
+
         return $count;
     }
 
@@ -134,17 +142,17 @@ class UserServiceSyncService
     private function applyMarzbanData(UserService $service, MarzbanClient $client, array $marzbanUser): UserService
     {
         $normalized = $client->normalizeUserResponse($marzbanUser);
-        $subLink    = $client->extractSubscriptionLink($marzbanUser);
+        $subLink = $client->extractSubscriptionLink($marzbanUser);
 
-        $usedBytes  = (int) ($marzbanUser['used_traffic'] ?? 0);
+        $usedBytes = (int) ($marzbanUser['used_traffic'] ?? 0);
         $limitBytes = (int) ($marzbanUser['data_limit'] ?? 0);
 
         // Build updates, never overwriting good local values with null/zero/bad data.
         $updates = [
-            'sync_status'    => UserService::SYNC_SYNCED,
-            'sync_error'     => null,
+            'sync_status' => UserService::SYNC_SYNCED,
+            'sync_error' => null,
             'last_synced_at' => now(),
-            'marzban_raw'    => $this->safeRaw($marzbanUser),
+            'marzban_raw' => $this->safeRaw($marzbanUser),
         ];
 
         if (! empty($normalized['status'])) {
@@ -188,6 +196,7 @@ class UserServiceSyncService
         }
 
         $service->update($updates);
+
         return $service->fresh();
     }
 
@@ -195,19 +204,19 @@ class UserServiceSyncService
     {
         $service->update([
             'sync_status' => UserService::SYNC_FAILED,
-            'sync_error'  => $this->sanitize($e->getMessage()),
+            'sync_error' => $this->sanitize($e->getMessage()),
         ]);
 
         Log::warning('UserServiceSyncService: sync failed', [
             'service_id' => $service->id,
-            'error'      => $this->sanitize($e->getMessage()),
+            'error' => $this->sanitize($e->getMessage()),
         ]);
 
         // Notify admins on repeated failures (idempotent within the hour).
         app(NotificationService::class)->notifyAdmins(
             Notification::TYPE_ADMIN_WARNING,
             ['message' => "سینک سرویس #{$service->id} با Marzban ناموفق بود."],
-            'sync_failed:' . $service->id . ':' . now()->format('YmdH'),
+            'sync_failed:'.$service->id.':'.now()->format('YmdH'),
         );
 
         return $service->fresh();
@@ -226,6 +235,7 @@ class UserServiceSyncService
     private function sanitize(string $message): string
     {
         $message = preg_replace('/Bearer\s+\S+/i', 'Bearer [redacted]', $message) ?? $message;
+
         return mb_substr($message, 0, 1000);
     }
 }

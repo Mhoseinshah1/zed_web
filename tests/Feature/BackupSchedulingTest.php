@@ -126,7 +126,7 @@ class BackupSchedulingTest extends TestCase
 
     public function test_scheduled_interval_run_executes_when_due(): void
     {
-        $tmp = sys_get_temp_dir() . '/zpbk_sched_' . uniqid();
+        $tmp = sys_get_temp_dir().'/zpbk_sched_'.uniqid();
         @mkdir($tmp, 0777, true);
 
         SiteSetting::set('backup_enabled', 'true');
@@ -145,6 +145,6 @@ class BackupSchedulingTest extends TestCase
         $this->artisan('zedproxy:backup --scheduled')->assertExitCode(0);
         $this->assertSame(1, BackupLog::count());
 
-        @exec('rm -rf ' . escapeshellarg($tmp));
+        @exec('rm -rf '.escapeshellarg($tmp));
     }
 }

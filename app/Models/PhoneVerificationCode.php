@@ -21,14 +21,16 @@ class PhoneVerificationCode extends Model
         'send_error',
     ];
 
-    const SEND_STATUS_SENT   = 'sent';
+    const SEND_STATUS_SENT = 'sent';
+
     const SEND_STATUS_FAILED = 'failed';
+
     const SEND_STATUS_SKIPPED = 'skipped';
 
     protected $casts = [
         'expires_at' => 'datetime',
-        'used_at'    => 'datetime',
-        'attempts'   => 'integer',
+        'used_at' => 'datetime',
+        'attempts' => 'integer',
     ];
 
     public function user(): BelongsTo

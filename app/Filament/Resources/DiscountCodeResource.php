@@ -5,11 +5,11 @@ namespace App\Filament\Resources;
 use App\Filament\Resources\DiscountCodeResource\Pages;
 use App\Models\DiscountCode;
 use App\Models\DiscountRedemption;
+use App\Models\Order;
 use App\Models\Plan;
 use Filament\Forms;
 use Filament\Forms\Form;
 use Filament\Forms\Get;
-use Filament\Notifications\Notification;
 use Filament\Resources\Resource;
 use Filament\Tables;
 use Filament\Tables\Filters\Filter;
@@ -22,12 +22,17 @@ class DiscountCodeResource extends Resource
 {
     protected static ?string $model = DiscountCode::class;
 
-    protected static ?string $navigationIcon   = 'heroicon-o-tag';
-    protected static ?string $navigationGroup  = 'سفارش‌ها و مالی';
-    protected static ?string $navigationLabel  = 'کدهای تخفیف';
-    protected static ?string $modelLabel       = 'کد تخفیف';
+    protected static ?string $navigationIcon = 'heroicon-o-tag';
+
+    protected static ?string $navigationGroup = 'سفارش‌ها و مالی';
+
+    protected static ?string $navigationLabel = 'کدهای تخفیف';
+
+    protected static ?string $modelLabel = 'کد تخفیف';
+
     protected static ?string $pluralModelLabel = 'کدهای تخفیف';
-    protected static ?int    $navigationSort   = 70;
+
+    protected static ?int $navigationSort = 70;
 
     public static function form(Form $form): Form
     {
@@ -52,7 +57,7 @@ class DiscountCodeResource extends Resource
                     ->required()
                     ->options([
                         DiscountCode::TYPE_PERCENT => 'درصدی',
-                        DiscountCode::TYPE_FIXED   => 'مبلغ ثابت (تومان)',
+                        DiscountCode::TYPE_FIXED => 'مبلغ ثابت (تومان)',
                     ])
                     ->live()
                     ->default(DiscountCode::TYPE_PERCENT),
@@ -129,10 +134,10 @@ class DiscountCodeResource extends Resource
                 Forms\Components\CheckboxList::make('allowed_order_types')
                     ->label('نوع خریدهای مجاز')
                     ->options([
-                        \App\Models\Order::TYPE_NEW_SERVICE   => 'خرید سرویس جدید',
-                        \App\Models\Order::TYPE_RENEWAL       => 'تمدید سرویس',
-                        \App\Models\Order::TYPE_EXTRA_TRAFFIC => 'خرید حجم اضافه',
-                        \App\Models\Order::TYPE_EXTRA_TIME    => 'خرید زمان اضافه',
+                        Order::TYPE_NEW_SERVICE => 'خرید سرویس جدید',
+                        Order::TYPE_RENEWAL => 'تمدید سرویس',
+                        Order::TYPE_EXTRA_TRAFFIC => 'خرید حجم اضافه',
+                        Order::TYPE_EXTRA_TIME => 'خرید زمان اضافه',
                     ])
                     ->columns(2)
                     ->helperText('خالی بگذارید تا کد برای همه انواع خرید (به‌جز شارژ کیف پول) فعال باشد.'),
@@ -168,7 +173,7 @@ class DiscountCodeResource extends Resource
                     ->label('نوع')
                     ->formatStateUsing(fn ($state) => $state === DiscountCode::TYPE_PERCENT ? 'درصدی' : 'مبلغ ثابت')
                     ->colors([
-                        'info'    => DiscountCode::TYPE_PERCENT,
+                        'info' => DiscountCode::TYPE_PERCENT,
                         'warning' => DiscountCode::TYPE_FIXED,
                     ]),
 
@@ -179,8 +184,9 @@ class DiscountCodeResource extends Resource
                 Tables\Columns\TextColumn::make('usage')
                     ->label('استفاده / سقف')
                     ->getStateUsing(function (DiscountCode $record): string {
-                        $used  = $record->usedCount();
+                        $used = $record->usedCount();
                         $limit = $record->total_usage_limit ?? '∞';
+
                         return "{$used} / {$limit}";
                     }),
 
@@ -200,13 +206,13 @@ class DiscountCodeResource extends Resource
                     ->getStateUsing(fn (DiscountCode $record) => $record->statusLabel())
                     ->colors([
                         'success' => 'فعال',
-                        'danger'  => fn ($state) => in_array($state, ['غیرفعال', 'منقضی']),
+                        'danger' => fn ($state) => in_array($state, ['غیرفعال', 'منقضی']),
                         'warning' => 'هنوز شروع نشده',
                     ]),
 
                 Tables\Columns\TextColumn::make('total_discount')
                     ->label('مجموع تخفیف')
-                    ->getStateUsing(fn (DiscountCode $record) => number_format($record->totalDiscountGiven()) . ' تومان')
+                    ->getStateUsing(fn (DiscountCode $record) => number_format($record->totalDiscountGiven()).' تومان')
                     ->toggleable(),
 
                 Tables\Columns\TextColumn::make('created_at')
@@ -236,7 +242,7 @@ class DiscountCodeResource extends Resource
                     ->label('نوع')
                     ->options([
                         DiscountCode::TYPE_PERCENT => 'درصدی',
-                        DiscountCode::TYPE_FIXED   => 'مبلغ ثابت',
+                        DiscountCode::TYPE_FIXED => 'مبلغ ثابت',
                     ]),
 
                 Filter::make('has_usage_limit')
@@ -251,7 +257,7 @@ class DiscountCodeResource extends Resource
                     ])
                     ->query(function (Builder $query, array $data) {
                         return $query
-                            ->when($data['from'],  fn ($q, $date) => $q->whereDate('created_at', '>=', $date))
+                            ->when($data['from'], fn ($q, $date) => $q->whereDate('created_at', '>=', $date))
                             ->when($data['until'], fn ($q, $date) => $q->whereDate('created_at', '<=', $date));
                     }),
             ])
@@ -266,9 +272,10 @@ class DiscountCodeResource extends Resource
                             ->latest()
                             ->limit(50)
                             ->get();
+
                         return view('filament.modals.discount-redemptions', compact('redemptions', 'record'));
                     })
-                    ->modalHeading(fn (DiscountCode $record) => 'سابقه استفاده: ' . $record->code)
+                    ->modalHeading(fn (DiscountCode $record) => 'سابقه استفاده: '.$record->code)
                     ->modalSubmitAction(false)
                     ->modalCancelActionLabel('بستن'),
 
@@ -282,9 +289,9 @@ class DiscountCodeResource extends Resource
     public static function getPages(): array
     {
         return [
-            'index'  => Pages\ListDiscountCodes::route('/'),
+            'index' => Pages\ListDiscountCodes::route('/'),
             'create' => Pages\CreateDiscountCode::route('/create'),
-            'edit'   => Pages\EditDiscountCode::route('/{record}/edit'),
+            'edit' => Pages\EditDiscountCode::route('/{record}/edit'),
         ];
     }
 

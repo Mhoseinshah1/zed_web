@@ -34,46 +34,53 @@ class BackupCommand extends Command
         if ($this->option('report-only')) {
             $last = BackupLog::latestLog();
             $text = $last
-                ? "💾 آخرین بکاپ: {$last->status} — " . $last->updated_at->format('Y/m/d H:i')
+                ? "💾 آخرین بکاپ: {$last->status} — ".$last->updated_at->format('Y/m/d H:i')
                 : '💾 هنوز بکاپی انجام نشده است.';
             $notifier->send('backup_status', 'backup_server', 'وضعیت بکاپ', $text);
             $this->info($text);
+
             return self::SUCCESS;
         }
 
         if (! $settings->enabled()) {
             $this->warn('سیستم بکاپ در حال حاضر غیرفعال است.');
+
             return self::SUCCESS;
         }
 
         if ($this->option('scheduled')) {
             if (! $settings->autoEnabled()) {
                 $this->line('Automatic backup is disabled (backup_auto_enabled is off).');
+
                 return self::SUCCESS;
             }
             if (! $scheduler->isDue()) {
                 // Not due yet — silent skip (local output only, never Telegram).
                 $this->line('Backup not due yet.');
+
                 return self::SUCCESS;
             }
         }
 
-        $type  = $this->option('scheduled') ? BackupLog::TYPE_SCHEDULED : BackupLog::TYPE_MANUAL;
+        $type = $this->option('scheduled') ? BackupLog::TYPE_SCHEDULED : BackupLog::TYPE_MANUAL;
         $force = $this->option('send-to-telegram') ? true : null;
 
         $result = $service->run($type, $force);
 
         if ($result['status'] === BackupService::STATUS_SKIPPED_LOCKED) {
             $this->warn('یک عملیات بکاپ دیگر در حال اجرا است.');
+
             return self::SUCCESS;
         }
 
         if ($result['status'] === BackupLog::STATUS_SUCCESS) {
-            $this->info('Backup succeeded: ' . ($result['path'] ?? '—') . ' (' . round($result['size'] / 1048576, 2) . ' MB)');
+            $this->info('Backup succeeded: '.($result['path'] ?? '—').' ('.round($result['size'] / 1048576, 2).' MB)');
+
             return self::SUCCESS;
         }
 
-        $this->error('Backup failed: ' . ($result['error'] ?? 'unknown'));
+        $this->error('Backup failed: '.($result['error'] ?? 'unknown'));
+
         return self::FAILURE;
     }
 }

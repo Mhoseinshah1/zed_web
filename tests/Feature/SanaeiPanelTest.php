@@ -2,15 +2,17 @@
 
 namespace Tests\Feature;
 
+use App\Filament\Resources\VpnPanelResource\Pages\CreateVpnPanel;
+use App\Models\Order;
 use App\Models\Plan;
 use App\Models\User;
 use App\Models\UserService;
 use App\Models\VpnPanel;
+use App\Services\Provisioning\ProvisioningService;
 use App\Services\VpnPanels\MarzbanProvider;
 use App\Services\VpnPanels\PanelProviderFactory;
 use App\Services\VpnPanels\Sanaei\Sanaei3xUiClient;
 use App\Services\VpnPanels\Sanaei3xUiProvider;
-use App\Filament\Resources\VpnPanelResource\Pages\CreateVpnPanel;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
 use Livewire\Livewire;
@@ -23,16 +25,16 @@ class SanaeiPanelTest extends TestCase
     private function panel(array $overrides = []): VpnPanel
     {
         return VpnPanel::create(array_merge([
-            'name'        => 'سنایی تست',
-            'type'        => VpnPanel::TYPE_SANAEI_XUI,
-            'base_url'    => 'https://panel.example.com:2053',
-            'panel_path'  => '/xui-panel-path',
+            'name' => 'سنایی تست',
+            'type' => VpnPanel::TYPE_SANAEI_XUI,
+            'base_url' => 'https://panel.example.com:2053',
+            'panel_path' => '/xui-panel-path',
             'auth_method' => VpnPanel::AUTH_API_TOKEN,
-            'api_token'   => 'secret-token-123',
+            'api_token' => 'secret-token-123',
             'default_inbound_id' => 1,
-            'verify_ssl'  => true,
+            'verify_ssl' => true,
             'timeout_seconds' => 15,
-            'is_active'   => true,
+            'is_active' => true,
         ], $overrides));
     }
 
@@ -40,15 +42,16 @@ class SanaeiPanelTest extends TestCase
     {
         $user = User::factory()->create();
         $plan = Plan::factory()->create(['traffic_gb' => 1, 'duration_days' => 30]);
+
         return UserService::create(array_merge([
-            'user_id'          => $user->id,
-            'plan_id'          => $plan->id,
-            'plan_name'        => 'p',
-            'status'           => UserService::STATUS_ACTIVE,
+            'user_id' => $user->id,
+            'plan_id' => $plan->id,
+            'plan_name' => 'p',
+            'status' => UserService::STATUS_ACTIVE,
             'provision_status' => UserService::PROVISION_PROVISIONED,
-            'vpn_panel_id'     => $panel->id,
+            'vpn_panel_id' => $panel->id,
             'traffic_total_gb' => 1,
-            'traffic_used_gb'  => 0,
+            'traffic_used_gb' => 0,
         ], $overrides));
     }
 
@@ -147,13 +150,13 @@ class SanaeiPanelTest extends TestCase
     public function test_provision_creates_client_and_fills_service(): void
     {
         Http::fake([
-            '*/panel/api/clients/get/*'   => Http::response(['success' => false], 200), // not found → create
-            '*/panel/api/clients/add'     => Http::response(['success' => true], 200),
+            '*/panel/api/clients/get/*' => Http::response(['success' => false], 200), // not found → create
+            '*/panel/api/clients/add' => Http::response(['success' => true], 200),
             '*/panel/api/clients/links/*' => Http::response(['success' => true, 'obj' => ['vless://abc']], 200),
         ]);
 
         $service = $this->service($this->panel());
-        $result  = (new Sanaei3xUiProvider())->provision($service);
+        $result = (new Sanaei3xUiProvider)->provision($service);
 
         $this->assertTrue($result->ok);
         $service->refresh();
@@ -167,6 +170,7 @@ class SanaeiPanelTest extends TestCase
                 return false;
             }
             $body = $r->data();
+
             return is_array($body['client'] ?? null)
                 && ($body['client']['email'] ?? null) !== null
                 && ($body['inboundIds'] ?? null) === [1]
@@ -177,13 +181,13 @@ class SanaeiPanelTest extends TestCase
     public function test_provision_is_idempotent_when_client_exists(): void
     {
         Http::fake([
-            '*/panel/api/clients/get/*'     => Http::response(['success' => true, 'obj' => ['email' => 'zed-1']], 200),
+            '*/panel/api/clients/get/*' => Http::response(['success' => true, 'obj' => ['email' => 'zed-1']], 200),
             '*/panel/api/clients/traffic/*' => Http::response(['success' => true, 'obj' => ['up' => 0, 'down' => 0, 'total' => 0]], 200),
-            '*/panel/api/clients/add'       => Http::response(['success' => true], 200),
+            '*/panel/api/clients/add' => Http::response(['success' => true], 200),
         ]);
 
         $service = $this->service($this->panel(), ['remote_username' => 'zed-existing']);
-        $result  = (new Sanaei3xUiProvider())->provision($service);
+        $result = (new Sanaei3xUiProvider)->provision($service);
 
         $this->assertTrue($result->ok);
         $this->assertTrue($result->data['existed'] ?? false);
@@ -201,7 +205,7 @@ class SanaeiPanelTest extends TestCase
         ], 200)]);
 
         $service = $this->service($this->panel(), ['remote_username' => 'zed-1']);
-        $result  = (new Sanaei3xUiProvider())->sync($service);
+        $result = (new Sanaei3xUiProvider)->sync($service);
 
         $this->assertTrue($result->ok);
         $service->refresh();
@@ -216,7 +220,7 @@ class SanaeiPanelTest extends TestCase
         Http::fake(['*/panel/api/clients/traffic/*' => Http::response(['success' => false], 500)]);
         $service = $this->service($this->panel(), ['remote_username' => 'zed-1', 'marzban_used_traffic' => 42]);
 
-        $result = (new Sanaei3xUiProvider())->sync($service);
+        $result = (new Sanaei3xUiProvider)->sync($service);
         $this->assertFalse($result->ok);
         $service->refresh();
         $this->assertSame(UserService::SYNC_FAILED, $service->sync_status);
@@ -228,12 +232,12 @@ class SanaeiPanelTest extends TestCase
     public function test_add_traffic_increases_quota_without_resetting_usage(): void
     {
         Http::fake([
-            '*/panel/api/clients/traffic/*'  => Http::response(['success' => true, 'obj' => ['total' => 1073741824]], 200),
-            '*/panel/api/clients/update/*'   => Http::response(['success' => true], 200),
+            '*/panel/api/clients/traffic/*' => Http::response(['success' => true, 'obj' => ['total' => 1073741824]], 200),
+            '*/panel/api/clients/update/*' => Http::response(['success' => true], 200),
         ]);
         $service = $this->service($this->panel(), ['remote_username' => 'zed-1', 'remote_uuid' => 'uuid-1', 'marzban_used_traffic' => 500]);
 
-        $result = (new Sanaei3xUiProvider())->addTraffic($service, 2 * 1073741824);
+        $result = (new Sanaei3xUiProvider)->addTraffic($service, 2 * 1073741824);
         $this->assertTrue($result->ok);
         $service->refresh();
         $this->assertSame(3 * 1073741824, $service->marzban_data_limit);
@@ -246,7 +250,7 @@ class SanaeiPanelTest extends TestCase
         $service = $this->service($this->panel(), ['remote_username' => 'zed-1', 'remote_uuid' => 'uuid-1', 'expires_at' => now()->addDays(5)]);
 
         $before = $service->expires_at->copy();
-        $result = (new Sanaei3xUiProvider())->addTime($service, 10);
+        $result = (new Sanaei3xUiProvider)->addTime($service, 10);
         $this->assertTrue($result->ok);
         $service->refresh();
         $this->assertEqualsWithDelta(15, now()->diffInDays($service->expires_at, false), 1);
@@ -258,14 +262,15 @@ class SanaeiPanelTest extends TestCase
         Http::fake(['*/panel/api/clients/update/*' => Http::response(['success' => true], 200)]);
 
         (new Sanaei3xUiClient($this->panel()))->updateClient('zed-1', 1, [
-            'id'         => 'uuid-1',
-            'totalGB'    => 1073741824,
+            'id' => 'uuid-1',
+            'totalGB' => 1073741824,
             'expiryTime' => 1767225600000,
         ]);
 
         Http::assertSent(function ($r) {
             // inboundIds is a query param; body is the client object directly.
             $body = $r->data();
+
             return str_contains($r->url(), '/panel/api/clients/update/zed-1')
                 && str_contains($r->url(), 'inboundIds=1')
                 && ($body['email'] ?? null) === 'zed-1'
@@ -279,11 +284,12 @@ class SanaeiPanelTest extends TestCase
         Http::fake(['*/panel/api/clients/zed-1/detach' => Http::response(['success' => true], 200)]);
 
         $service = $this->service($this->panel(), ['remote_username' => 'zed-1', 'remote_inbound_id' => 1]);
-        $result  = (new Sanaei3xUiProvider())->delete($service);
+        $result = (new Sanaei3xUiProvider)->delete($service);
 
         $this->assertTrue($result->ok);
         Http::assertSent(function ($r) {
             $body = $r->data();
+
             return str_contains($r->url(), '/panel/api/clients/zed-1/detach')
                 && ($body['inboundIds'] ?? null) === [1];
         });
@@ -296,48 +302,49 @@ class SanaeiPanelTest extends TestCase
         Http::fake(['*/detach' => Http::response(['success' => false, 'msg' => 'not found'], 200)]);
 
         $service = $this->service($this->panel(), ['remote_username' => 'gone', 'remote_inbound_id' => 1]);
-        $result  = (new Sanaei3xUiProvider())->delete($service);
+        $result = (new Sanaei3xUiProvider)->delete($service);
 
         $this->assertTrue($result->ok); // not-found → success
     }
 
     // ── Order-level provisioning (paid order → 3X-UI client) ─────────────────
 
-    private function paidOrderOnSanaei(VpnPanel $panel): \App\Models\Order
+    private function paidOrderOnSanaei(VpnPanel $panel): Order
     {
         $user = User::factory()->create();
         $plan = Plan::factory()->create(['traffic_gb' => 10, 'duration_days' => 30]);
-        return \App\Models\Order::create([
-            'user_id'           => $user->id,
-            'plan_id'           => $plan->id,
-            'plan_name'         => $plan->name,
-            'price_toman'       => $plan->price_toman,
+
+        return Order::create([
+            'user_id' => $user->id,
+            'plan_id' => $plan->id,
+            'plan_name' => $plan->name,
+            'price_toman' => $plan->price_toman,
             'final_price_toman' => $plan->price_toman,
-            'traffic_gb'        => 10,
-            'duration_days'     => 30,
-            'status'            => \App\Models\Order::STATUS_PAID,
-            'payment_status'    => \App\Models\Order::PAYMENT_PAID,
-            'paid_at'           => now(),
+            'traffic_gb' => 10,
+            'duration_days' => 30,
+            'status' => Order::STATUS_PAID,
+            'payment_status' => Order::PAYMENT_PAID,
+            'paid_at' => now(),
         ]);
     }
 
     public function test_paid_order_provisions_sanaei_client(): void
     {
         Http::fake([
-            '*/panel/api/clients/get/*'   => Http::response(['success' => false], 200),
-            '*/panel/api/clients/add'     => Http::response(['success' => true], 200),
+            '*/panel/api/clients/get/*' => Http::response(['success' => false], 200),
+            '*/panel/api/clients/add' => Http::response(['success' => true], 200),
             '*/panel/api/clients/links/*' => Http::response(['success' => true, 'obj' => ['vless://abc']], 200),
         ]);
 
         $panel = $this->panel(['is_default' => true]);
         $order = $this->paidOrderOnSanaei($panel);
 
-        $service = app(\App\Services\Provisioning\ProvisioningService::class)->provisionOrder($order);
+        $service = app(ProvisioningService::class)->provisionOrder($order);
 
         $this->assertSame(UserService::STATUS_ACTIVE, $service->status);
         $this->assertSame($panel->id, $service->vpn_panel_id);
         $this->assertNotEmpty($service->remote_username);
-        $this->assertSame(\App\Models\Order::STATUS_COMPLETED, $order->fresh()->status);
+        $this->assertSame(Order::STATUS_COMPLETED, $order->fresh()->status);
     }
 
     public function test_failed_provisioning_keeps_payment_paid_and_marks_order_failed(): void
@@ -345,20 +352,20 @@ class SanaeiPanelTest extends TestCase
         // create fails → order provisioning_failed, payment stays paid, no duplicate service.
         Http::fake([
             '*/panel/api/clients/get/*' => Http::response(['success' => false], 200),
-            '*/panel/api/clients/add'   => Http::response(['success' => false], 500),
+            '*/panel/api/clients/add' => Http::response(['success' => false], 500),
         ]);
 
         $panel = $this->panel(['is_default' => true]);
         $order = $this->paidOrderOnSanaei($panel);
 
         try {
-            app(\App\Services\Provisioning\ProvisioningService::class)->provisionOrder($order);
+            app(ProvisioningService::class)->provisionOrder($order);
         } catch (\Throwable $e) {
             // provisioning failure is surfaced as an exception by design
         }
 
-        $this->assertSame(\App\Models\Order::STATUS_PROVISIONING_FAILED, $order->fresh()->status);
-        $this->assertSame(\App\Models\Order::PAYMENT_PAID, $order->fresh()->payment_status);
+        $this->assertSame(Order::STATUS_PROVISIONING_FAILED, $order->fresh()->status);
+        $this->assertSame(Order::PAYMENT_PAID, $order->fresh()->payment_status);
         $this->assertSame(1, UserService::where('order_id', $order->id)->count());
         $this->assertSame(UserService::PROVISION_FAILED, UserService::where('order_id', $order->id)->value('provision_status'));
     }
@@ -397,8 +404,8 @@ class SanaeiPanelTest extends TestCase
         Livewire::actingAs($this->admin())
             ->test(CreateVpnPanel::class)
             ->fillForm([
-                'name'     => 'مرزبان تست',
-                'type'     => VpnPanel::TYPE_MARZBAN,
+                'name' => 'مرزبان تست',
+                'type' => VpnPanel::TYPE_MARZBAN,
                 'base_url' => 'https://m.example.com',
                 'username' => 'admin',
                 'password' => 'pass',
@@ -416,12 +423,12 @@ class SanaeiPanelTest extends TestCase
         Livewire::actingAs($this->admin())
             ->test(CreateVpnPanel::class)
             ->fillForm([
-                'name'        => 'سنایی تست فرم',
-                'type'        => VpnPanel::TYPE_SANAEI_XUI,
-                'base_url'    => 'https://panel.example.com:2053',
-                'panel_path'  => '/xui-panel-path',
+                'name' => 'سنایی تست فرم',
+                'type' => VpnPanel::TYPE_SANAEI_XUI,
+                'base_url' => 'https://panel.example.com:2053',
+                'panel_path' => '/xui-panel-path',
                 'auth_method' => VpnPanel::AUTH_API_TOKEN,
-                'api_token'   => 'tok-abc',
+                'api_token' => 'tok-abc',
                 'default_inbound_id' => 1,
             ])
             ->call('create')

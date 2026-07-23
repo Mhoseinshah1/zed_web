@@ -5,6 +5,7 @@ namespace App\Filament\Resources;
 use App\Filament\Resources\PlanResource\Pages;
 use App\Models\Feature;
 use App\Models\Plan;
+use App\Models\VpnPanel;
 use Filament\Forms;
 use Filament\Forms\Form;
 use Filament\Resources\Resource;
@@ -16,12 +17,17 @@ class PlanResource extends Resource
 {
     protected static ?string $model = Plan::class;
 
-    protected static ?string $navigationIcon  = 'heroicon-o-credit-card';
+    protected static ?string $navigationIcon = 'heroicon-o-credit-card';
+
     protected static ?string $navigationGroup = 'فروشگاه و پلن‌ها';
+
     protected static ?string $navigationLabel = 'پلن‌ها';
-    protected static ?string $modelLabel      = 'پلن';
+
+    protected static ?string $modelLabel = 'پلن';
+
     protected static ?string $pluralModelLabel = 'پلن‌ها';
-    protected static ?int $navigationSort     = 10;
+
+    protected static ?int $navigationSort = 10;
 
     public static function form(Form $form): Form
     {
@@ -116,9 +122,9 @@ class PlanResource extends Resource
 
                 Forms\Components\Select::make('vpn_panel_id')
                     ->label('سرور / پنل')
-                    ->options(fn () => \App\Models\VpnPanel::where('is_active', true)
+                    ->options(fn () => VpnPanel::where('is_active', true)
                         ->get()
-                        ->mapWithKeys(fn ($p) => [$p->id => $p->name . ' (' . $p->typeLabel() . ')'])
+                        ->mapWithKeys(fn ($p) => [$p->id => $p->name.' ('.$p->typeLabel().')'])
                         ->all())
                     ->searchable()
                     ->native(false)
@@ -182,7 +188,7 @@ class PlanResource extends Resource
                         ->label('نوع کش‌بک تمدید')
                         ->options([
                             'percent' => 'درصدی',
-                            'fixed'   => 'مبلغ ثابت',
+                            'fixed' => 'مبلغ ثابت',
                         ])
                         ->visible(fn (Forms\Get $get) => $get('renewal_cashback_enabled')),
 
@@ -214,11 +220,11 @@ class PlanResource extends Resource
                     ->sortable(),
                 Tables\Columns\TextColumn::make('traffic_gb')
                     ->label('حجم')
-                    ->formatStateUsing(fn ($state) => $state ? $state . ' GB' : 'نامحدود')
+                    ->formatStateUsing(fn ($state) => $state ? $state.' GB' : 'نامحدود')
                     ->sortable(),
                 Tables\Columns\TextColumn::make('duration_days')
                     ->label('مدت')
-                    ->formatStateUsing(fn ($state) => $state ? $state . ' روز' : 'نامحدود')
+                    ->formatStateUsing(fn ($state) => $state ? $state.' روز' : 'نامحدود')
                     ->sortable(),
                 Tables\Columns\IconColumn::make('is_active')->label('فعال')->boolean(),
                 Tables\Columns\IconColumn::make('renewal_enabled')->label('تمدید')->boolean()
@@ -248,9 +254,9 @@ class PlanResource extends Resource
     public static function getPages(): array
     {
         return [
-            'index'  => Pages\ListPlans::route('/'),
+            'index' => Pages\ListPlans::route('/'),
             'create' => Pages\CreatePlan::route('/create'),
-            'edit'   => Pages\EditPlan::route('/{record}/edit'),
+            'edit' => Pages\EditPlan::route('/{record}/edit'),
         ];
     }
 }

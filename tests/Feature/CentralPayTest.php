@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Filament\Resources\PaymentTransactionResource;
 use App\Http\Controllers\CentralPayController;
 use App\Models\Order;
 use App\Models\PaymentMethod;
@@ -34,29 +35,29 @@ class CentralPayTest extends TestCase
     private function makeOrder(User $user, Plan $plan): Order
     {
         return Order::create([
-            'user_id'           => $user->id,
-            'plan_id'           => $plan->id,
-            'plan_name'         => $plan->name,
-            'price_toman'       => $plan->price_toman,
+            'user_id' => $user->id,
+            'plan_id' => $plan->id,
+            'plan_name' => $plan->name,
+            'price_toman' => $plan->price_toman,
             'final_price_toman' => $plan->price_toman,
-            'status'            => Order::STATUS_PENDING,
-            'payment_status'    => Order::PAYMENT_UNPAID,
+            'status' => Order::STATUS_PENDING,
+            'payment_status' => Order::PAYMENT_UNPAID,
         ]);
     }
 
     private function makeCentralPayMethod(array $attrs = []): PaymentMethod
     {
         return PaymentMethod::create(array_merge([
-            'title'      => 'پرداخت ریالی',
-            'slug'       => 'centralpay',
-            'type'       => PaymentMethod::TYPE_CENTRALPAY,
-            'is_active'  => true,
+            'title' => 'پرداخت ریالی',
+            'slug' => 'centralpay',
+            'type' => PaymentMethod::TYPE_CENTRALPAY,
+            'is_active' => true,
             'sort_order' => 3,
-            'api_key'    => 'test-api-key-cp',
-            'config'     => [
-                'base_url'      => 'https://centralapi.org/webservice/basic',
-                'type'          => 'deposit',
-                'amount_unit'   => 'TOMAN',
+            'api_key' => 'test-api-key-cp',
+            'config' => [
+                'base_url' => 'https://centralapi.org/webservice/basic',
+                'type' => 'deposit',
+                'amount_unit' => 'TOMAN',
                 'callback_path' => '/payments/centralpay/callback',
             ],
         ], $attrs));
@@ -71,17 +72,17 @@ class CentralPayTest extends TestCase
     private function makeTx(Order $order, PaymentMethod $method, array $attrs = []): PaymentTransaction
     {
         return PaymentTransaction::create(array_merge([
-            'order_id'          => $order->id,
-            'user_id'           => $order->user_id,
+            'order_id' => $order->id,
+            'user_id' => $order->user_id,
             'payment_method_id' => $method->id,
-            'provider'          => 'centralpay',
-            'method'            => 'centralpay',
-            'status'            => PaymentTransaction::STATUS_WAITING,
-            'amount_toman'      => $order->final_price_toman,
-            'gateway_amount'    => $order->final_price_toman,
-            'gateway_currency'  => 'TOMAN',
-            'gateway_status'    => 'created',
-            'gateway_url'       => 'https://gateway.centralapi.org/#/test123',
+            'provider' => 'centralpay',
+            'method' => 'centralpay',
+            'status' => PaymentTransaction::STATUS_WAITING,
+            'amount_toman' => $order->final_price_toman,
+            'gateway_amount' => $order->final_price_toman,
+            'gateway_currency' => 'TOMAN',
+            'gateway_status' => 'created',
+            'gateway_url' => 'https://gateway.centralapi.org/#/test123',
         ], $attrs));
     }
 
@@ -108,7 +109,7 @@ class CentralPayTest extends TestCase
     {
         // api_key is in $hidden — must never appear in toArray() / JSON serialization
         $method = $this->makeCentralPayMethod();
-        $json   = $method->toArray();
+        $json = $method->toArray();
         $this->assertArrayNotHasKey('api_key', $json);
     }
 
@@ -116,9 +117,9 @@ class CentralPayTest extends TestCase
 
     public function test_centralpay_option_shows_on_pay_page_when_active(): void
     {
-        $user   = $this->makeUser();
-        $plan   = $this->makePlan();
-        $order  = $this->makeOrder($user, $plan);
+        $user = $this->makeUser();
+        $plan = $this->makePlan();
+        $order = $this->makeOrder($user, $plan);
         $this->makeCentralPayMethod();
 
         $response = $this->actingAs($user)->get(route('dashboard.orders.pay', $order));
@@ -128,15 +129,15 @@ class CentralPayTest extends TestCase
 
     public function test_centralpay_option_hidden_when_inactive(): void
     {
-        $user  = $this->makeUser();
-        $plan  = $this->makePlan();
+        $user = $this->makeUser();
+        $plan = $this->makePlan();
         $order = $this->makeOrder($user, $plan);
 
         PaymentMethod::create([
-            'title'      => 'پرداخت ریالی',
-            'slug'       => 'centralpay-off',
-            'type'       => PaymentMethod::TYPE_CENTRALPAY,
-            'is_active'  => false,
+            'title' => 'پرداخت ریالی',
+            'slug' => 'centralpay-off',
+            'type' => PaymentMethod::TYPE_CENTRALPAY,
+            'is_active' => false,
             'sort_order' => 3,
         ]);
 
@@ -151,14 +152,14 @@ class CentralPayTest extends TestCase
     public function test_getlink_sends_json_post_to_correct_endpoint(): void
     {
         $this->enableCentralPay();
-        $user   = $this->makeUser();
-        $plan   = $this->makePlan();
-        $order  = $this->makeOrder($user, $plan);
+        $user = $this->makeUser();
+        $plan = $this->makePlan();
+        $order = $this->makeOrder($user, $plan);
         $method = $this->makeCentralPayMethod();
 
         Http::fake(['*' => Http::response([
             'success' => true,
-            'data'    => ['redirectUrl' => 'https://gateway.centralapi.org/#/abc123'],
+            'data' => ['redirectUrl' => 'https://gateway.centralapi.org/#/abc123'],
         ], 200)]);
 
         $this->actingAs($user)->post(route('dashboard.orders.pay.submit', $order), [
@@ -175,14 +176,14 @@ class CentralPayTest extends TestCase
     public function test_getlink_sends_type_deposit(): void
     {
         $this->enableCentralPay();
-        $user   = $this->makeUser();
-        $plan   = $this->makePlan();
-        $order  = $this->makeOrder($user, $plan);
+        $user = $this->makeUser();
+        $plan = $this->makePlan();
+        $order = $this->makeOrder($user, $plan);
         $method = $this->makeCentralPayMethod();
 
         Http::fake(['*' => Http::response([
             'success' => true,
-            'data'    => ['redirectUrl' => 'https://gateway.centralapi.org/#/abc'],
+            'data' => ['redirectUrl' => 'https://gateway.centralapi.org/#/abc'],
         ], 200)]);
 
         $this->actingAs($user)->post(route('dashboard.orders.pay.submit', $order), [
@@ -192,6 +193,7 @@ class CentralPayTest extends TestCase
         Http::assertSent(function ($request) {
             $body = json_decode($request->body(), true) ?? [];
             $this->assertEquals('deposit', $body['type']);
+
             return true;
         });
     }
@@ -199,14 +201,14 @@ class CentralPayTest extends TestCase
     public function test_getlink_sends_amount_in_toman(): void
     {
         $this->enableCentralPay();
-        $user   = $this->makeUser();
-        $plan   = $this->makePlan(300000);
-        $order  = $this->makeOrder($user, $plan);
+        $user = $this->makeUser();
+        $plan = $this->makePlan(300000);
+        $order = $this->makeOrder($user, $plan);
         $method = $this->makeCentralPayMethod();
 
         Http::fake(['*' => Http::response([
             'success' => true,
-            'data'    => ['redirectUrl' => 'https://gateway.centralapi.org/#/x'],
+            'data' => ['redirectUrl' => 'https://gateway.centralapi.org/#/x'],
         ], 200)]);
 
         $this->actingAs($user)->post(route('dashboard.orders.pay.submit', $order), [
@@ -216,6 +218,7 @@ class CentralPayTest extends TestCase
         Http::assertSent(function ($request) {
             $body = json_decode($request->body(), true) ?? [];
             $this->assertEquals(300000, $body['amount']);
+
             return true;
         });
     }
@@ -223,14 +226,14 @@ class CentralPayTest extends TestCase
     public function test_getlink_includes_order_id_in_return_url(): void
     {
         $this->enableCentralPay();
-        $user   = $this->makeUser();
-        $plan   = $this->makePlan();
-        $order  = $this->makeOrder($user, $plan);
+        $user = $this->makeUser();
+        $plan = $this->makePlan();
+        $order = $this->makeOrder($user, $plan);
         $method = $this->makeCentralPayMethod();
 
         Http::fake(['*' => Http::response([
             'success' => true,
-            'data'    => ['redirectUrl' => 'https://gateway.centralapi.org/#/y'],
+            'data' => ['redirectUrl' => 'https://gateway.centralapi.org/#/y'],
         ], 200)]);
 
         $this->actingAs($user)->post(route('dashboard.orders.pay.submit', $order), [
@@ -240,6 +243,7 @@ class CentralPayTest extends TestCase
         Http::assertSent(function ($request) {
             $body = json_decode($request->body(), true) ?? [];
             $this->assertStringContainsString('orderId=', $body['returnUrl']);
+
             return true;
         });
     }
@@ -247,14 +251,14 @@ class CentralPayTest extends TestCase
     public function test_getlink_does_not_include_api_key_in_stored_payload(): void
     {
         $this->enableCentralPay();
-        $user   = $this->makeUser();
-        $plan   = $this->makePlan();
-        $order  = $this->makeOrder($user, $plan);
+        $user = $this->makeUser();
+        $plan = $this->makePlan();
+        $order = $this->makeOrder($user, $plan);
         $method = $this->makeCentralPayMethod();
 
         Http::fake(['*' => Http::response([
             'success' => true,
-            'data'    => ['redirectUrl' => 'https://gateway.centralapi.org/#/z'],
+            'data' => ['redirectUrl' => 'https://gateway.centralapi.org/#/z'],
         ], 200)]);
 
         $this->actingAs($user)->post(route('dashboard.orders.pay.submit', $order), [
@@ -269,14 +273,14 @@ class CentralPayTest extends TestCase
     public function test_successful_getlink_saves_redirect_url_and_redirects_user(): void
     {
         $this->enableCentralPay();
-        $user   = $this->makeUser();
-        $plan   = $this->makePlan();
-        $order  = $this->makeOrder($user, $plan);
+        $user = $this->makeUser();
+        $plan = $this->makePlan();
+        $order = $this->makeOrder($user, $plan);
         $method = $this->makeCentralPayMethod();
 
         Http::fake(['*' => Http::response([
             'success' => true,
-            'data'    => ['redirectUrl' => 'https://gateway.centralapi.org/#/pay123'],
+            'data' => ['redirectUrl' => 'https://gateway.centralapi.org/#/pay123'],
         ], 200)]);
 
         $response = $this->actingAs($user)->post(route('dashboard.orders.pay.submit', $order), [
@@ -295,14 +299,14 @@ class CentralPayTest extends TestCase
     public function test_failed_getlink_does_not_mark_order_paid(): void
     {
         $this->enableCentralPay();
-        $user   = $this->makeUser();
-        $plan   = $this->makePlan();
-        $order  = $this->makeOrder($user, $plan);
+        $user = $this->makeUser();
+        $plan = $this->makePlan();
+        $order = $this->makeOrder($user, $plan);
         $method = $this->makeCentralPayMethod();
 
         Http::fake(['*' => Http::response([
             'success' => false,
-            'data'    => ['message' => 'invalid_api_key'],
+            'data' => ['message' => 'invalid_api_key'],
         ], 200)]);
 
         $response = $this->actingAs($user)->post(route('dashboard.orders.pay.submit', $order), [
@@ -315,9 +319,9 @@ class CentralPayTest extends TestCase
 
     public function test_centralpay_inactive_method_returns_422(): void
     {
-        $user   = $this->makeUser();
-        $plan   = $this->makePlan();
-        $order  = $this->makeOrder($user, $plan);
+        $user = $this->makeUser();
+        $plan = $this->makePlan();
+        $order = $this->makeOrder($user, $plan);
         $method = $this->makeCentralPayMethod(['is_active' => false]);
 
         Http::fake();
@@ -333,9 +337,9 @@ class CentralPayTest extends TestCase
     public function test_duplicate_active_transaction_reuses_gateway_url(): void
     {
         $this->enableCentralPay();
-        $user   = $this->makeUser();
-        $plan   = $this->makePlan();
-        $order  = $this->makeOrder($user, $plan);
+        $user = $this->makeUser();
+        $plan = $this->makePlan();
+        $order = $this->makeOrder($user, $plan);
         $method = $this->makeCentralPayMethod();
 
         // Create an existing active transaction
@@ -354,9 +358,9 @@ class CentralPayTest extends TestCase
     public function test_create_blocked_for_wrong_user(): void
     {
         $this->enableCentralPay();
-        $user  = $this->makeUser();
+        $user = $this->makeUser();
         $other = $this->makeUser();
-        $plan  = $this->makePlan();
+        $plan = $this->makePlan();
         $order = $this->makeOrder($user, $plan);
         $method = $this->makeCentralPayMethod();
 
@@ -370,8 +374,8 @@ class CentralPayTest extends TestCase
     public function test_create_blocked_for_already_paid_order(): void
     {
         $this->enableCentralPay();
-        $user  = $this->makeUser();
-        $plan  = $this->makePlan();
+        $user = $this->makeUser();
+        $plan = $this->makePlan();
         $order = $this->makeOrder($user, $plan);
         $order->update(['payment_status' => Order::PAYMENT_PAID]);
         $method = $this->makeCentralPayMethod();
@@ -395,15 +399,15 @@ class CentralPayTest extends TestCase
     public function test_callback_calls_verify_for_unpaid_order(): void
     {
         $this->enableCentralPay();
-        $user   = $this->makeUser();
-        $plan   = $this->makePlan();
-        $order  = $this->makeOrder($user, $plan);
+        $user = $this->makeUser();
+        $plan = $this->makePlan();
+        $order = $this->makeOrder($user, $plan);
         $method = $this->makeCentralPayMethod();
-        $tx     = $this->makeTx($order, $method);
+        $tx = $this->makeTx($order, $method);
 
         Http::fake(['*' => Http::response([
             'success' => false,
-            'data'    => ['message' => 'invalid_orderId'],
+            'data' => ['message' => 'invalid_orderId'],
         ], 200)]);
 
         $this->actingAs($user)->get(route('payments.centralpay.callback', ['orderId' => $tx->id]));
@@ -414,12 +418,12 @@ class CentralPayTest extends TestCase
     public function test_callback_does_not_call_verify_for_already_paid_order(): void
     {
         $this->enableCentralPay();
-        $user   = $this->makeUser();
-        $plan   = $this->makePlan();
-        $order  = $this->makeOrder($user, $plan);
+        $user = $this->makeUser();
+        $plan = $this->makePlan();
+        $order = $this->makeOrder($user, $plan);
         $order->update(['payment_status' => Order::PAYMENT_PAID]);
         $method = $this->makeCentralPayMethod();
-        $tx     = $this->makeTx($order, $method);
+        $tx = $this->makeTx($order, $method);
 
         Http::fake();
 
@@ -435,18 +439,18 @@ class CentralPayTest extends TestCase
     public function test_successful_verify_marks_transaction_paid(): void
     {
         $this->enableCentralPay();
-        $user   = $this->makeUser();
-        $plan   = $this->makePlan(200000);
-        $order  = $this->makeOrder($user, $plan);
+        $user = $this->makeUser();
+        $plan = $this->makePlan(200000);
+        $order = $this->makeOrder($user, $plan);
         $method = $this->makeCentralPayMethod();
-        $tx     = $this->makeTx($order, $method, ['gateway_amount' => 200000]);
+        $tx = $this->makeTx($order, $method, ['gateway_amount' => 200000]);
 
         Http::fake(['*' => Http::response([
             'success' => true,
-            'data'    => [
-                'referenceId'    => 99887766,
-                'amount'         => 200000,
-                'userId'         => $user->id,
+            'data' => [
+                'referenceId' => 99887766,
+                'amount' => 200000,
+                'userId' => $user->id,
                 'userCardNumber' => 1111222233334444,
             ],
         ], 200)]);
@@ -463,18 +467,18 @@ class CentralPayTest extends TestCase
     public function test_successful_verify_marks_order_paid(): void
     {
         $this->enableCentralPay();
-        $user   = $this->makeUser();
-        $plan   = $this->makePlan(200000);
-        $order  = $this->makeOrder($user, $plan);
+        $user = $this->makeUser();
+        $plan = $this->makePlan(200000);
+        $order = $this->makeOrder($user, $plan);
         $method = $this->makeCentralPayMethod();
-        $tx     = $this->makeTx($order, $method, ['gateway_amount' => 200000]);
+        $tx = $this->makeTx($order, $method, ['gateway_amount' => 200000]);
 
         Http::fake(['*' => Http::response([
             'success' => true,
-            'data'    => [
-                'referenceId'    => 99887766,
-                'amount'         => 200000,
-                'userId'         => $user->id,
+            'data' => [
+                'referenceId' => 99887766,
+                'amount' => 200000,
+                'userId' => $user->id,
                 'userCardNumber' => 1111222233334444,
             ],
         ], 200)]);
@@ -491,18 +495,18 @@ class CentralPayTest extends TestCase
     public function test_successful_verify_triggers_provisioning_once(): void
     {
         $this->enableCentralPay();
-        $user   = $this->makeUser();
-        $plan   = $this->makePlan(200000);
-        $order  = $this->makeOrder($user, $plan);
+        $user = $this->makeUser();
+        $plan = $this->makePlan(200000);
+        $order = $this->makeOrder($user, $plan);
         $method = $this->makeCentralPayMethod();
-        $tx     = $this->makeTx($order, $method, ['gateway_amount' => 200000]);
+        $tx = $this->makeTx($order, $method, ['gateway_amount' => 200000]);
 
         Http::fake(['*' => Http::response([
             'success' => true,
-            'data'    => [
-                'referenceId'    => 12345,
-                'amount'         => 200000,
-                'userId'         => $user->id,
+            'data' => [
+                'referenceId' => 12345,
+                'amount' => 200000,
+                'userId' => $user->id,
                 'userCardNumber' => 1111222233334444,
             ],
         ], 200)]);
@@ -515,18 +519,18 @@ class CentralPayTest extends TestCase
     public function test_duplicate_callback_does_not_duplicate_service(): void
     {
         $this->enableCentralPay();
-        $user   = $this->makeUser();
-        $plan   = $this->makePlan(200000);
-        $order  = $this->makeOrder($user, $plan);
+        $user = $this->makeUser();
+        $plan = $this->makePlan(200000);
+        $order = $this->makeOrder($user, $plan);
         $method = $this->makeCentralPayMethod();
-        $tx     = $this->makeTx($order, $method, ['gateway_amount' => 200000]);
+        $tx = $this->makeTx($order, $method, ['gateway_amount' => 200000]);
 
         Http::fake(['*' => Http::response([
             'success' => true,
-            'data'    => [
-                'referenceId'    => 12345,
-                'amount'         => 200000,
-                'userId'         => $user->id,
+            'data' => [
+                'referenceId' => 12345,
+                'amount' => 200000,
+                'userId' => $user->id,
                 'userCardNumber' => 1111222233334444,
             ],
         ], 200)]);
@@ -542,15 +546,15 @@ class CentralPayTest extends TestCase
     public function test_failed_verify_shows_safe_error(): void
     {
         $this->enableCentralPay();
-        $user   = $this->makeUser();
-        $plan   = $this->makePlan();
-        $order  = $this->makeOrder($user, $plan);
+        $user = $this->makeUser();
+        $plan = $this->makePlan();
+        $order = $this->makeOrder($user, $plan);
         $method = $this->makeCentralPayMethod();
-        $tx     = $this->makeTx($order, $method);
+        $tx = $this->makeTx($order, $method);
 
         Http::fake(['*' => Http::response([
             'success' => false,
-            'data'    => ['message' => 'invalid_orderId'],
+            'data' => ['message' => 'invalid_orderId'],
         ], 200)]);
 
         $response = $this->actingAs($user)->get(route('payments.centralpay.callback', ['orderId' => $tx->id]));
@@ -565,18 +569,18 @@ class CentralPayTest extends TestCase
     public function test_amount_mismatch_does_not_mark_order_paid(): void
     {
         $this->enableCentralPay();
-        $user   = $this->makeUser();
-        $plan   = $this->makePlan(200000);
-        $order  = $this->makeOrder($user, $plan);
+        $user = $this->makeUser();
+        $plan = $this->makePlan(200000);
+        $order = $this->makeOrder($user, $plan);
         $method = $this->makeCentralPayMethod();
-        $tx     = $this->makeTx($order, $method, ['gateway_amount' => 200000]);
+        $tx = $this->makeTx($order, $method, ['gateway_amount' => 200000]);
 
         Http::fake(['*' => Http::response([
             'success' => true,
-            'data'    => [
-                'referenceId'    => 9999,
-                'amount'         => 100000, // MISMATCH: expected 200000
-                'userId'         => $user->id,
+            'data' => [
+                'referenceId' => 9999,
+                'amount' => 100000, // MISMATCH: expected 200000
+                'userId' => $user->id,
                 'userCardNumber' => 1111222233334444,
             ],
         ], 200)]);
@@ -594,18 +598,18 @@ class CentralPayTest extends TestCase
     public function test_amount_mismatch_saves_failure_reason(): void
     {
         $this->enableCentralPay();
-        $user   = $this->makeUser();
-        $plan   = $this->makePlan(200000);
-        $order  = $this->makeOrder($user, $plan);
+        $user = $this->makeUser();
+        $plan = $this->makePlan(200000);
+        $order = $this->makeOrder($user, $plan);
         $method = $this->makeCentralPayMethod();
-        $tx     = $this->makeTx($order, $method, ['gateway_amount' => 200000]);
+        $tx = $this->makeTx($order, $method, ['gateway_amount' => 200000]);
 
         Http::fake(['*' => Http::response([
             'success' => true,
-            'data'    => [
-                'referenceId'    => 9999,
-                'amount'         => 1,
-                'userId'         => $user->id,
+            'data' => [
+                'referenceId' => 9999,
+                'amount' => 1,
+                'userId' => $user->id,
                 'userCardNumber' => 1111222233334444,
             ],
         ], 200)]);
@@ -620,18 +624,18 @@ class CentralPayTest extends TestCase
     public function test_userid_mismatch_does_not_mark_order_paid(): void
     {
         $this->enableCentralPay();
-        $user   = $this->makeUser();
-        $plan   = $this->makePlan(200000);
-        $order  = $this->makeOrder($user, $plan);
+        $user = $this->makeUser();
+        $plan = $this->makePlan(200000);
+        $order = $this->makeOrder($user, $plan);
         $method = $this->makeCentralPayMethod();
-        $tx     = $this->makeTx($order, $method, ['gateway_amount' => 200000]);
+        $tx = $this->makeTx($order, $method, ['gateway_amount' => 200000]);
 
         Http::fake(['*' => Http::response([
             'success' => true,
-            'data'    => [
-                'referenceId'    => 7777,
-                'amount'         => 200000,
-                'userId'         => 99999, // MISMATCH: different user
+            'data' => [
+                'referenceId' => 7777,
+                'amount' => 200000,
+                'userId' => 99999, // MISMATCH: different user
                 'userCardNumber' => 1111222233334444,
             ],
         ], 200)]);
@@ -649,18 +653,18 @@ class CentralPayTest extends TestCase
     public function test_card_number_is_masked_before_storage(): void
     {
         $this->enableCentralPay();
-        $user   = $this->makeUser();
-        $plan   = $this->makePlan(200000);
-        $order  = $this->makeOrder($user, $plan);
+        $user = $this->makeUser();
+        $plan = $this->makePlan(200000);
+        $order = $this->makeOrder($user, $plan);
         $method = $this->makeCentralPayMethod();
-        $tx     = $this->makeTx($order, $method, ['gateway_amount' => 200000]);
+        $tx = $this->makeTx($order, $method, ['gateway_amount' => 200000]);
 
         Http::fake(['*' => Http::response([
             'success' => true,
-            'data'    => [
-                'referenceId'    => 55443322,
-                'amount'         => 200000,
-                'userId'         => $user->id,
+            'data' => [
+                'referenceId' => 55443322,
+                'amount' => 200000,
+                'userId' => $user->id,
                 'userCardNumber' => 1111222233334444,
             ],
         ], 200)]);
@@ -692,19 +696,19 @@ class CentralPayTest extends TestCase
     public function test_user_cannot_access_another_users_callback(): void
     {
         $this->enableCentralPay();
-        $user1  = $this->makeUser();
-        $user2  = $this->makeUser();
-        $plan   = $this->makePlan(200000);
-        $order  = $this->makeOrder($user1, $plan);
+        $user1 = $this->makeUser();
+        $user2 = $this->makeUser();
+        $plan = $this->makePlan(200000);
+        $order = $this->makeOrder($user1, $plan);
         $method = $this->makeCentralPayMethod();
-        $tx     = $this->makeTx($order, $method, ['gateway_amount' => 200000]);
+        $tx = $this->makeTx($order, $method, ['gateway_amount' => 200000]);
 
         Http::fake(['*' => Http::response([
             'success' => true,
-            'data'    => [
-                'referenceId'    => 111,
-                'amount'         => 200000,
-                'userId'         => $user1->id, // correct user
+            'data' => [
+                'referenceId' => 111,
+                'amount' => 200000,
+                'userId' => $user1->id, // correct user
                 'userCardNumber' => 1111222233334444,
             ],
         ], 200)]);
@@ -724,24 +728,24 @@ class CentralPayTest extends TestCase
     public function test_admin_check_status_action_exists_in_filament(): void
     {
         // Verify the method is accessible (compiled earlier via Filament resource)
-        $this->assertTrue(method_exists(\App\Filament\Resources\PaymentTransactionResource::class, 'table'));
+        $this->assertTrue(method_exists(PaymentTransactionResource::class, 'table'));
     }
 
     public function test_admin_verify_static_method_works_on_success(): void
     {
         $this->enableCentralPay();
-        $user   = $this->makeUser();
-        $plan   = $this->makePlan(200000);
-        $order  = $this->makeOrder($user, $plan);
+        $user = $this->makeUser();
+        $plan = $this->makePlan(200000);
+        $order = $this->makeOrder($user, $plan);
         $method = $this->makeCentralPayMethod();
-        $tx     = $this->makeTx($order, $method, ['gateway_amount' => 200000]);
+        $tx = $this->makeTx($order, $method, ['gateway_amount' => 200000]);
 
         Http::fake(['*' => Http::response([
             'success' => true,
-            'data'    => [
-                'referenceId'    => 99999,
-                'amount'         => 200000,
-                'userId'         => $user->id,
+            'data' => [
+                'referenceId' => 99999,
+                'amount' => 200000,
+                'userId' => $user->id,
                 'userCardNumber' => 9988776655443322,
             ],
         ], 200)]);
@@ -757,12 +761,12 @@ class CentralPayTest extends TestCase
     public function test_admin_verify_throws_if_order_already_paid(): void
     {
         $this->enableCentralPay();
-        $user   = $this->makeUser();
-        $plan   = $this->makePlan(200000);
-        $order  = $this->makeOrder($user, $plan);
+        $user = $this->makeUser();
+        $plan = $this->makePlan(200000);
+        $order = $this->makeOrder($user, $plan);
         $order->update(['payment_status' => Order::PAYMENT_PAID]);
         $method = $this->makeCentralPayMethod();
-        $tx     = $this->makeTx($order, $method, ['gateway_amount' => 200000]);
+        $tx = $this->makeTx($order, $method, ['gateway_amount' => 200000]);
 
         Http::fake();
 
@@ -777,15 +781,15 @@ class CentralPayTest extends TestCase
     public function test_invalid_order_id_shows_safe_error(): void
     {
         $this->enableCentralPay();
-        $user   = $this->makeUser();
-        $plan   = $this->makePlan();
-        $order  = $this->makeOrder($user, $plan);
+        $user = $this->makeUser();
+        $plan = $this->makePlan();
+        $order = $this->makeOrder($user, $plan);
         $method = $this->makeCentralPayMethod();
-        $tx     = $this->makeTx($order, $method);
+        $tx = $this->makeTx($order, $method);
 
         Http::fake(['*' => Http::response([
             'success' => false,
-            'data'    => ['message' => 'invalid_orderId'],
+            'data' => ['message' => 'invalid_orderId'],
         ], 200)]);
 
         $response = $this->actingAs($user)->get(route('payments.centralpay.callback', ['orderId' => $tx->id]));
@@ -800,15 +804,15 @@ class CentralPayTest extends TestCase
     public function test_invalid_api_key_shows_safe_error(): void
     {
         $this->enableCentralPay();
-        $user   = $this->makeUser();
-        $plan   = $this->makePlan();
-        $order  = $this->makeOrder($user, $plan);
+        $user = $this->makeUser();
+        $plan = $this->makePlan();
+        $order = $this->makeOrder($user, $plan);
         $method = $this->makeCentralPayMethod();
-        $tx     = $this->makeTx($order, $method);
+        $tx = $this->makeTx($order, $method);
 
         Http::fake(['*' => Http::response([
             'success' => false,
-            'data'    => ['message' => 'invalid_api_key'],
+            'data' => ['message' => 'invalid_api_key'],
         ], 200)]);
 
         $response = $this->actingAs($user)->get(route('payments.centralpay.callback', ['orderId' => $tx->id]));
@@ -825,14 +829,14 @@ class CentralPayTest extends TestCase
     public function test_gateway_amount_is_stored_in_toman_on_initiate(): void
     {
         $this->enableCentralPay();
-        $user   = $this->makeUser();
-        $plan   = $this->makePlan(500000);
-        $order  = $this->makeOrder($user, $plan);
+        $user = $this->makeUser();
+        $plan = $this->makePlan(500000);
+        $order = $this->makeOrder($user, $plan);
         $method = $this->makeCentralPayMethod();
 
         Http::fake(['*' => Http::response([
             'success' => true,
-            'data'    => ['redirectUrl' => 'https://gateway.centralapi.org/#/t'],
+            'data' => ['redirectUrl' => 'https://gateway.centralapi.org/#/t'],
         ], 200)]);
 
         $this->actingAs($user)->post(route('dashboard.orders.pay.submit', $order), [
@@ -849,14 +853,14 @@ class CentralPayTest extends TestCase
 
     public function test_client_reads_api_key_from_payment_method_not_env(): void
     {
-        $user   = $this->makeUser();
-        $plan   = $this->makePlan();
-        $order  = $this->makeOrder($user, $plan);
+        $user = $this->makeUser();
+        $plan = $this->makePlan();
+        $order = $this->makeOrder($user, $plan);
         $method = $this->makeCentralPayMethod(['api_key' => 'model-api-key-xyz']);
 
         Http::fake(['*' => Http::response([
             'success' => true,
-            'data'    => ['redirectUrl' => 'https://gateway.centralapi.org/#/m'],
+            'data' => ['redirectUrl' => 'https://gateway.centralapi.org/#/m'],
         ], 200)]);
 
         $this->actingAs($user)->post(route('dashboard.orders.pay.submit', $order), [
@@ -865,27 +869,28 @@ class CentralPayTest extends TestCase
 
         Http::assertSent(function ($request) {
             $body = json_decode($request->body(), true) ?? [];
+
             return ($body['api_key'] ?? '') === 'model-api-key-xyz';
         });
     }
 
     public function test_client_reads_base_url_from_payment_method_config(): void
     {
-        $user   = $this->makeUser();
-        $plan   = $this->makePlan();
-        $order  = $this->makeOrder($user, $plan);
+        $user = $this->makeUser();
+        $plan = $this->makePlan();
+        $order = $this->makeOrder($user, $plan);
         $method = $this->makeCentralPayMethod([
             'config' => [
-                'base_url'      => 'https://custom-central.example.com/api',
-                'type'          => 'deposit',
-                'amount_unit'   => 'TOMAN',
+                'base_url' => 'https://custom-central.example.com/api',
+                'type' => 'deposit',
+                'amount_unit' => 'TOMAN',
                 'callback_path' => '/payments/centralpay/callback',
             ],
         ]);
 
         Http::fake(['https://custom-central.example.com/*' => Http::response([
             'success' => true,
-            'data'    => ['redirectUrl' => 'https://gateway.centralapi.org/#/cu'],
+            'data' => ['redirectUrl' => 'https://gateway.centralapi.org/#/cu'],
         ], 200)]);
 
         $this->actingAs($user)->post(route('dashboard.orders.pay.submit', $order), [
@@ -897,9 +902,9 @@ class CentralPayTest extends TestCase
 
     public function test_missing_api_key_shows_persian_safe_error(): void
     {
-        $user   = $this->makeUser();
-        $plan   = $this->makePlan();
-        $order  = $this->makeOrder($user, $plan);
+        $user = $this->makeUser();
+        $plan = $this->makePlan();
+        $order = $this->makeOrder($user, $plan);
         $method = $this->makeCentralPayMethod(['api_key' => null]);
 
         Http::fake();
@@ -910,7 +915,7 @@ class CentralPayTest extends TestCase
 
         $response->assertSessionHasErrors(['payment']);
         $errors = session('errors')->get('payment');
-        $error  = implode(' ', $errors);
+        $error = implode(' ', $errors);
         $this->assertStringNotContainsString('validation.required', $error);
         $this->assertStringContainsString('پشتیبانی', $error);
         Http::assertNothingSent();
@@ -918,14 +923,14 @@ class CentralPayTest extends TestCase
 
     public function test_return_url_uses_callback_path_from_admin_config(): void
     {
-        $user   = $this->makeUser();
-        $plan   = $this->makePlan();
-        $order  = $this->makeOrder($user, $plan);
+        $user = $this->makeUser();
+        $plan = $this->makePlan();
+        $order = $this->makeOrder($user, $plan);
         $method = $this->makeCentralPayMethod();
 
         Http::fake(['*' => Http::response([
             'success' => true,
-            'data'    => ['redirectUrl' => 'https://gateway.centralapi.org/#/ru'],
+            'data' => ['redirectUrl' => 'https://gateway.centralapi.org/#/ru'],
         ], 200)]);
 
         $this->actingAs($user)->post(route('dashboard.orders.pay.submit', $order), [
@@ -934,6 +939,7 @@ class CentralPayTest extends TestCase
 
         Http::assertSent(function ($request) {
             $body = json_decode($request->body(), true) ?? [];
+
             return str_contains($body['returnUrl'] ?? '', '/payments/centralpay/callback');
         });
     }
@@ -941,14 +947,14 @@ class CentralPayTest extends TestCase
     public function test_removing_env_values_does_not_break_centralpay(): void
     {
         // Simulate env with no CentralPay keys at all
-        $user   = $this->makeUser();
-        $plan   = $this->makePlan();
-        $order  = $this->makeOrder($user, $plan);
+        $user = $this->makeUser();
+        $plan = $this->makePlan();
+        $order = $this->makeOrder($user, $plan);
         $method = $this->makeCentralPayMethod();
 
         Http::fake(['*' => Http::response([
             'success' => true,
-            'data'    => ['redirectUrl' => 'https://gateway.centralapi.org/#/nenv'],
+            'data' => ['redirectUrl' => 'https://gateway.centralapi.org/#/nenv'],
         ], 200)]);
 
         $response = $this->actingAs($user)->post(route('dashboard.orders.pay.submit', $order), [
@@ -962,10 +968,10 @@ class CentralPayTest extends TestCase
     {
         // Create centralpay method with no api_key and no config
         PaymentMethod::create([
-            'title'      => 'پرداخت ریالی',
-            'slug'       => 'centralpay',
-            'type'       => PaymentMethod::TYPE_CENTRALPAY,
-            'is_active'  => false,
+            'title' => 'پرداخت ریالی',
+            'slug' => 'centralpay',
+            'type' => PaymentMethod::TYPE_CENTRALPAY,
+            'is_active' => false,
             'sort_order' => 3,
         ]);
 
@@ -978,7 +984,7 @@ class CentralPayTest extends TestCase
         $this->setEnvVar('CENTRALPAY_CALLBACK_PATH', '/payments/centralpay/callback');
 
         try {
-            (new PaymentMethodSeeder())->run();
+            (new PaymentMethodSeeder)->run();
 
             $method = PaymentMethod::where('slug', 'centralpay')->first();
             $this->assertNotNull($method);
@@ -997,7 +1003,7 @@ class CentralPayTest extends TestCase
     /** Set an env var so Laravel's env() resolves it regardless of a prior .env load. */
     private function setEnvVar(string $key, string $value): void
     {
-        $_ENV[$key]    = $value;
+        $_ENV[$key] = $value;
         $_SERVER[$key] = $value;
         putenv("{$key}={$value}");
     }
@@ -1012,25 +1018,25 @@ class CentralPayTest extends TestCase
     {
         // Create centralpay method with admin-configured values
         $method = PaymentMethod::create([
-            'title'      => 'پرداخت ریالی',
-            'slug'       => 'centralpay',
-            'type'       => PaymentMethod::TYPE_CENTRALPAY,
-            'is_active'  => true,
+            'title' => 'پرداخت ریالی',
+            'slug' => 'centralpay',
+            'type' => PaymentMethod::TYPE_CENTRALPAY,
+            'is_active' => true,
             'sort_order' => 3,
-            'api_key'    => 'admin-set-key',
-            'config'     => [
-                'base_url'      => 'https://admin-set-base.example.com/api',
-                'type'          => 'deposit',
-                'amount_unit'   => 'TOMAN',
+            'api_key' => 'admin-set-key',
+            'config' => [
+                'base_url' => 'https://admin-set-base.example.com/api',
+                'type' => 'deposit',
+                'amount_unit' => 'TOMAN',
                 'callback_path' => '/payments/centralpay/callback',
             ],
         ]);
 
-        $_ENV['CENTRALPAY_API_KEY']  = 'env-key-should-not-overwrite';
+        $_ENV['CENTRALPAY_API_KEY'] = 'env-key-should-not-overwrite';
         $_ENV['CENTRALPAY_BASE_URL'] = 'https://env-base-should-not-overwrite.example.com/api';
 
         try {
-            (new PaymentMethodSeeder())->run();
+            (new PaymentMethodSeeder)->run();
 
             $method->refresh();
             // Admin-set api_key must NOT be overwritten by env

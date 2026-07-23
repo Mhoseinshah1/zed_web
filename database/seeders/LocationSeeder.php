@@ -26,11 +26,11 @@ class LocationSeeder extends Seeder
             Location::firstOrCreate(
                 ['country_code' => $item['country_code']],
                 [
-                    'country_name'     => $item['country_name'],
-                    'flag_emoji'       => $item['flag_emoji'],
-                    'is_active'        => true,
+                    'country_name' => $item['country_name'],
+                    'flag_emoji' => $item['flag_emoji'],
+                    'is_active' => true,
                     'is_youtube_special' => false,
-                    'sort_order'       => $item['sort_order'],
+                    'sort_order' => $item['sort_order'],
                 ]
             );
         }

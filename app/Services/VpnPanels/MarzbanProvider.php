@@ -22,6 +22,7 @@ class MarzbanProvider implements VpnPanelProviderInterface
     {
         try {
             (new MarzbanClient($panel))->testConnection();
+
             return ProviderResult::success('اتصال به پنل مرزبان با موفقیت برقرار شد.');
         } catch (MarzbanException $e) {
             return ProviderResult::failure('اتصال به پنل مرزبان ناموفق بود.');

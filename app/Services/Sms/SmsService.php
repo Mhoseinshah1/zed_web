@@ -22,9 +22,9 @@ class SmsService
 {
     public const PROVIDERS = [
         'kavenegar' => 'کاوه‌نگار',
-        'sms_ir'    => 'SMS.ir',
-        'farazsms'  => 'فراز اس‌ام‌اس',
-        'custom'    => 'سفارشی',
+        'sms_ir' => 'SMS.ir',
+        'farazsms' => 'فراز اس‌ام‌اس',
+        'custom' => 'سفارشی',
     ];
 
     public const DEFAULT_OTP_MESSAGE = "کد تایید شما در زدپروکسی: {code}\nاعتبار کد: {minutes} دقیقه";
@@ -108,9 +108,9 @@ class SmsService
 
         return match ($config['provider']) {
             'kavenegar' => new KavenegarSmsProvider($config),
-            'sms_ir'    => new SmsIrProvider($config),
-            'farazsms'  => new FarazSmsProvider($config),
-            default     => new CustomSmsProvider($config),
+            'sms_ir' => new SmsIrProvider($config),
+            'farazsms' => new FarazSmsProvider($config),
+            default => new CustomSmsProvider($config),
         };
     }
 
@@ -122,15 +122,15 @@ class SmsService
     public function config(): array
     {
         return [
-            'provider'             => (string) SiteSetting::get('sms_provider', 'custom'),
-            'api_key'              => $this->apiKey(),
-            'sender'               => (string) SiteSetting::get('sms_sender', ''),
-            'pattern_code'         => (string) SiteSetting::get('sms_pattern_code', ''),
-            'otp_message'          => (string) SiteSetting::get('sms_otp_message', self::DEFAULT_OTP_MESSAGE),
-            'otp_ttl_minutes'      => (int) SiteSetting::get('otp_ttl_minutes', 5),
-            'custom_url'           => (string) SiteSetting::get('sms_custom_url', ''),
-            'custom_method'        => (string) SiteSetting::get('sms_custom_method', 'POST'),
-            'custom_headers'       => SiteSetting::get('sms_custom_headers', null),
+            'provider' => (string) SiteSetting::get('sms_provider', 'custom'),
+            'api_key' => $this->apiKey(),
+            'sender' => (string) SiteSetting::get('sms_sender', ''),
+            'pattern_code' => (string) SiteSetting::get('sms_pattern_code', ''),
+            'otp_message' => (string) SiteSetting::get('sms_otp_message', self::DEFAULT_OTP_MESSAGE),
+            'otp_ttl_minutes' => (int) SiteSetting::get('otp_ttl_minutes', 5),
+            'custom_url' => (string) SiteSetting::get('sms_custom_url', ''),
+            'custom_method' => (string) SiteSetting::get('sms_custom_method', 'POST'),
+            'custom_headers' => SiteSetting::get('sms_custom_headers', null),
             'custom_body_template' => (string) SiteSetting::get('sms_custom_body_template', ''),
         ];
     }
@@ -160,6 +160,7 @@ class SmsService
     {
         if ($plain === null || $plain === '') {
             SiteSetting::set('sms_api_key', '');
+
             return;
         }
         SiteSetting::set('sms_api_key', Crypt::encryptString($plain));
@@ -174,6 +175,7 @@ class SmsService
             Log::info('SmsService: SMS disabled/unconfigured — message not sent', [
                 'phone' => $this->maskPhone($normalizedPhone),
             ]);
+
             return false;
         }
 
@@ -182,15 +184,16 @@ class SmsService
         } catch (\Throwable $e) {
             Log::error('SmsService: send failed', [
                 'provider' => (string) SiteSetting::get('sms_provider', ''),
-                'phone'    => $this->maskPhone($normalizedPhone),
-                'error'    => $e->getMessage(), // adapters keep credentials out of messages
+                'phone' => $this->maskPhone($normalizedPhone),
+                'error' => $e->getMessage(), // adapters keep credentials out of messages
             ]);
+
             return false;
         }
     }
 
     private function maskPhone(string $phone): string
     {
-        return strlen($phone) > 4 ? substr($phone, 0, -4) . '****' : '****';
+        return strlen($phone) > 4 ? substr($phone, 0, -4).'****' : '****';
     }
 }

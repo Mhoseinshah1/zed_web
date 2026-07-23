@@ -28,7 +28,7 @@ class StatsOverviewWidget extends BaseWidget
         ];
 
         // ── Orders (total + MoM trend on order count) ────────────────────────
-        $totalOrders     = Order::count();
+        $totalOrders = Order::count();
         $ordersThisMonth = Order::where('created_at', '>=', $startThis)->count();
         $ordersLastMonth = Order::whereBetween('created_at', [$startLast, $endLast])->count();
 
@@ -44,7 +44,7 @@ class StatsOverviewWidget extends BaseWidget
         $newUsersThisMonth = User::where('created_at', '>=', $startThis)->count();
 
         // ── Active services ──────────────────────────────────────────────────
-        $activeServices  = UserService::where('status', UserService::STATUS_ACTIVE)->count();
+        $activeServices = UserService::where('status', UserService::STATUS_ACTIVE)->count();
         $pendingServices = UserService::where('status', UserService::STATUS_PENDING_PROVISION)->count();
 
         return [
@@ -57,11 +57,11 @@ class StatsOverviewWidget extends BaseWidget
                 $revenueThisMonth, $revenueLastMonth, 'success', 'heroicon-m-banknotes',
             ),
             Stat::make('کاربران فعال', number_format($activeUsers))
-                ->description($newUsersThisMonth . ' کاربر جدید این ماه')
+                ->description($newUsersThisMonth.' کاربر جدید این ماه')
                 ->descriptionIcon('heroicon-m-user-plus')
                 ->color('info'),
             Stat::make('سرویس‌های فعال', number_format($activeServices))
-                ->description($pendingServices > 0 ? $pendingServices . ' در انتظار ساخت' : 'همه فعال')
+                ->description($pendingServices > 0 ? $pendingServices.' در انتظار ساخت' : 'همه فعال')
                 ->descriptionIcon('heroicon-m-bolt')
                 ->color($pendingServices > 0 ? 'warning' : 'success'),
         ];
@@ -71,12 +71,12 @@ class StatsOverviewWidget extends BaseWidget
     private function trendStat(string $label, string $value, int $current, int $previous, string $color, string $icon): Stat
     {
         if ($previous > 0) {
-            $pct   = (int) round((($current - $previous) / $previous) * 100);
-            $up    = $pct >= 0;
-            $desc  = ($up ? '+' : '') . $pct . '٪ نسبت به ماه قبل';
+            $pct = (int) round((($current - $previous) / $previous) * 100);
+            $up = $pct >= 0;
+            $desc = ($up ? '+' : '').$pct.'٪ نسبت به ماه قبل';
             $trend = $up ? 'heroicon-m-arrow-trending-up' : 'heroicon-m-arrow-trending-down';
         } else {
-            $desc  = $current > 0 ? 'شروع فعالیت این ماه' : 'بدون داده‌ی ماه قبل';
+            $desc = $current > 0 ? 'شروع فعالیت این ماه' : 'بدون داده‌ی ماه قبل';
             $trend = $icon;
         }
 

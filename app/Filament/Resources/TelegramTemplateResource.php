@@ -14,12 +14,17 @@ class TelegramTemplateResource extends Resource
 {
     protected static ?string $model = TelegramTemplate::class;
 
-    protected static ?string $navigationIcon   = 'heroicon-o-document-text';
-    protected static ?string $navigationGroup   = 'اعلان‌ها و پیام‌ها';
-    protected static ?string $navigationLabel   = 'قالب پیام‌های تلگرام';
-    protected static ?string $modelLabel        = 'قالب پیام تلگرام';
-    protected static ?string $pluralModelLabel  = 'قالب پیام‌های تلگرام';
-    protected static ?int    $navigationSort    = 33;
+    protected static ?string $navigationIcon = 'heroicon-o-document-text';
+
+    protected static ?string $navigationGroup = 'اعلان‌ها و پیام‌ها';
+
+    protected static ?string $navigationLabel = 'قالب پیام‌های تلگرام';
+
+    protected static ?string $modelLabel = 'قالب پیام تلگرام';
+
+    protected static ?string $pluralModelLabel = 'قالب پیام‌های تلگرام';
+
+    protected static ?int $navigationSort = 33;
 
     public static function form(Form $form): Form
     {
@@ -56,7 +61,7 @@ class TelegramTemplateResource extends Resource
     {
         return [
             'index' => Pages\ListTelegramTemplates::route('/'),
-            'edit'  => Pages\EditTelegramTemplate::route('/{record}/edit'),
+            'edit' => Pages\EditTelegramTemplate::route('/{record}/edit'),
         ];
     }
 }

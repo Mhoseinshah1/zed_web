@@ -13,13 +13,14 @@ class FeatureFactory extends Factory
     public function definition(): array
     {
         $title = fake()->words(2, true);
-        $slug  = Str::slug($title);
+        $slug = Str::slug($title);
+
         return [
-            'title'      => $title,
-            'slug'       => ($slug ?: 'feature') . '-' . Str::random(4),
+            'title' => $title,
+            'slug' => ($slug ?: 'feature').'-'.Str::random(4),
             'description' => null,
-            'icon'       => fake()->randomElement(['⚡', '🔒', '🌍', '📱', '🎧', null]),
-            'is_active'  => true,
+            'icon' => fake()->randomElement(['⚡', '🔒', '🌍', '📱', '🎧', null]),
+            'is_active' => true,
             'sort_order' => 0,
         ];
     }

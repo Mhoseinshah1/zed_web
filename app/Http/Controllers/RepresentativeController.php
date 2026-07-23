@@ -26,7 +26,7 @@ class RepresentativeController extends Controller
         $canInvite = $mode === ReferralSettings::MODE_ALL_USERS || $user->isApprovedRepresentative();
 
         $referredUsers = $user->referredUsers()->latest()->limit(10)->get();
-        $referredIds   = $user->referredUsers()->pluck('id');
+        $referredIds = $user->referredUsers()->pluck('id');
 
         $recentOrders = Order::whereIn('user_id', $referredIds)
             ->where('payment_status', Order::PAYMENT_PAID)
@@ -38,17 +38,17 @@ class RepresentativeController extends Controller
         $commissions = $user->commissionsAsRepresentative()->latest()->limit(20)->get();
 
         return view('dashboard.representative.index', [
-            'user'              => $user,
-            'mode'              => $mode,
-            'canInvite'         => $canInvite,
-            'systemEnabled'     => ReferralSettings::representativeSystemEnabled(),
-            'referredCount'     => $user->referredUsers()->count(),
-            'paidOrdersCount'   => Order::whereIn('user_id', $referredIds)->where('payment_status', Order::PAYMENT_PAID)->count(),
-            'totalCommission'   => (int) $user->total_commission_earned,
+            'user' => $user,
+            'mode' => $mode,
+            'canInvite' => $canInvite,
+            'systemEnabled' => ReferralSettings::representativeSystemEnabled(),
+            'referredCount' => $user->referredUsers()->count(),
+            'paidOrdersCount' => Order::whereIn('user_id', $referredIds)->where('payment_status', Order::PAYMENT_PAID)->count(),
+            'totalCommission' => (int) $user->total_commission_earned,
             'pendingCommission' => (int) $user->commissionsAsRepresentative()->where('status', Commission::STATUS_PENDING)->sum('commission_amount'),
-            'referredUsers'     => $referredUsers,
-            'recentOrders'      => $recentOrders,
-            'commissions'       => $commissions,
+            'referredUsers' => $referredUsers,
+            'recentOrders' => $recentOrders,
+            'commissions' => $commissions,
         ]);
     }
 
@@ -69,7 +69,7 @@ class RepresentativeController extends Controller
         }
 
         $validated = $request->validate([
-            'message'      => ['nullable', 'string', 'max:1000'],
+            'message' => ['nullable', 'string', 'max:1000'],
             'contact_info' => ['nullable', 'string', 'max:255'],
         ]);
 

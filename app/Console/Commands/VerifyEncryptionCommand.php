@@ -29,13 +29,13 @@ class VerifyEncryptionCommand extends Command
      * @var array<class-string, array{table:string, fields:array<int,string>}>
      */
     private array $targets = [
-        VpnPanel::class      => ['table' => 'vpn_panels',     'fields' => ['password', 'token', 'api_token']],
+        VpnPanel::class => ['table' => 'vpn_panels',     'fields' => ['password', 'token', 'api_token']],
         PaymentMethod::class => ['table' => 'payment_methods', 'fields' => ['api_key', 'ipn_secret']],
     ];
 
     public function handle(): int
     {
-        $checked  = 0;
+        $checked = 0;
         $failures = 0;
 
         foreach ($this->targets as $model => $meta) {
@@ -85,11 +85,13 @@ class VerifyEncryptionCommand extends Command
 
         if ($checked === 0) {
             $this->info('هیچ داده رمزگذاری‌شده‌ای برای بررسی وجود ندارد.');
+
             return self::SUCCESS;
         }
 
         if ($failures > 0) {
             $this->error('خطا در رمزگشایی اطلاعات حساس. APP_KEY یا اطلاعات رمزگذاری‌شده معتبر نیستند.');
+
             return self::FAILURE;
         }
 

@@ -5,9 +5,15 @@ namespace App\Http\Controllers\Auth;
 use App\Http\Controllers\Controller;
 use App\Models\User;
 use App\Services\Auth\LoginThrottleSettings;
+use App\Services\Phone\PhoneVerificationService;
+use App\Services\Referrals\ReferralService;
+use App\Services\Referrals\ReferralSettings;
+use App\Services\Seo\SeoManager;
+use App\Services\Telegram\TelegramAdminNotifier;
 use App\Support\PhoneNumber;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Cookie;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\RateLimiter;
@@ -18,7 +24,8 @@ class AuthController extends Controller
 {
     public function showLogin()
     {
-        app(\App\Services\Seo\SeoManager::class)->forKey('login');
+        app(SeoManager::class)->forKey('login');
+
         return view('auth.login');
     }
 
@@ -38,8 +45,8 @@ class AuthController extends Controller
 
             Log::warning('Login throttled — too many failed attempts', [
                 'username' => $request->input('username'),
-                'ip'       => $request->ip(),
-                'seconds'  => $seconds,
+                'ip' => $request->ip(),
+                'seconds' => $seconds,
             ]);
 
             return back()->withErrors([
@@ -50,6 +57,7 @@ class AuthController extends Controller
         if (Auth::attempt($credentials, $request->boolean('remember'))) {
             RateLimiter::clear($throttleKey);
             $request->session()->regenerate();
+
             return redirect()->intended(route('dashboard.index'));
         }
 
@@ -58,7 +66,7 @@ class AuthController extends Controller
 
         Log::warning('Failed login attempt', [
             'username' => $request->input('username'),
-            'ip'       => $request->ip(),
+            'ip' => $request->ip(),
         ]);
 
         return back()->withErrors([
@@ -72,7 +80,7 @@ class AuthController extends Controller
      */
     private function loginThrottleKey(Request $request): string
     {
-        return 'login:' . Str::lower((string) $request->input('username')) . '|' . $request->ip();
+        return 'login:'.Str::lower((string) $request->input('username')).'|'.$request->ip();
     }
 
     /**
@@ -82,6 +90,7 @@ class AuthController extends Controller
     {
         if ($seconds >= 60) {
             $minutes = (int) ceil($seconds / 60);
+
             return "تعداد تلاش‌های ناموفق بیش از حد مجاز است. لطفاً پس از {$minutes} دقیقه دوباره تلاش کنید.";
         }
 
@@ -94,30 +103,31 @@ class AuthController extends Controller
         if ($request->filled('ref')) {
             $code = strtoupper(trim((string) $request->query('ref')));
             $request->session()->put('referral_code', $code);
-            \Illuminate\Support\Facades\Cookie::queue(
+            Cookie::queue(
                 'referral_code',
                 $code,
-                60 * 24 * \App\Services\Referrals\ReferralSettings::referralCookieDays(),
+                60 * 24 * ReferralSettings::referralCookieDays(),
             );
         }
 
-        app(\App\Services\Seo\SeoManager::class)->forKey('register');
+        app(SeoManager::class)->forKey('register');
+
         return view('auth.register');
     }
 
     public function register(Request $request)
     {
         $validated = $request->validate([
-            'name'     => ['required', 'string', 'max:255'],
+            'name' => ['required', 'string', 'max:255'],
             'username' => ['required', 'string', 'max:64', 'unique:users,username', 'regex:/^[a-zA-Z0-9_]+$/'],
-            'email'    => ['required', 'email', 'max:255', 'unique:users,email'],
-            'phone'    => ['required', 'string', 'max:32'],
+            'email' => ['required', 'email', 'max:255', 'unique:users,email'],
+            'phone' => ['required', 'string', 'max:32'],
             'password' => ['required', 'confirmed', Password::min(8)],
         ], [
-            'username.regex'  => 'نام کاربری فقط می‌تواند شامل حروف انگلیسی، اعداد و خط زیر باشد.',
+            'username.regex' => 'نام کاربری فقط می‌تواند شامل حروف انگلیسی، اعداد و خط زیر باشد.',
             'username.unique' => 'این نام کاربری قبلاً ثبت شده است.',
-            'email.unique'    => 'این ایمیل قبلاً ثبت شده است.',
-            'phone.required'  => 'وارد کردن شماره موبایل الزامی است.',
+            'email.unique' => 'این ایمیل قبلاً ثبت شده است.',
+            'phone.required' => 'وارد کردن شماره موبایل الزامی است.',
         ]);
 
         // Normalize and validate the Iranian mobile number.
@@ -131,24 +141,24 @@ class AuthController extends Controller
         }
 
         $user = User::create([
-            'name'             => $validated['name'],
-            'username'         => $validated['username'],
-            'email'            => $validated['email'],
-            'phone'            => $validated['phone'],
+            'name' => $validated['name'],
+            'username' => $validated['username'],
+            'email' => $validated['email'],
+            'phone' => $validated['phone'],
             'normalized_phone' => $normalized,
-            'password'         => Hash::make($validated['password']),
+            'password' => Hash::make($validated['password']),
         ]);
 
         // Attach the referrer from ?ref= / session / cookie (mode-aware, safe).
         $referralCode = $request->input('ref')
             ?? $request->session()->pull('referral_code')
             ?? $request->cookie('referral_code');
-        app(\App\Services\Referrals\ReferralService::class)->attachReferrer($user, $referralCode);
-        \Illuminate\Support\Facades\Cookie::queue(\Illuminate\Support\Facades\Cookie::forget('referral_code'));
+        app(ReferralService::class)->attachReferrer($user, $referralCode);
+        Cookie::queue(Cookie::forget('referral_code'));
 
         // Admin Telegram — new registration (safe summary only; no credentials).
-        app(\App\Services\Telegram\TelegramAdminNotifier::class)->event('user_registered', [
-            'user'    => $user->name ?? $user->username,
+        app(TelegramAdminNotifier::class)->event('user_registered', [
+            'user' => $user->name ?? $user->username,
             'account' => (string) $user->id,
         ], $user);
 
@@ -156,10 +166,10 @@ class AuthController extends Controller
 
         // When OTP verification is mandatory at registration, send the code and
         // route the user to the verification page before they can do anything.
-        $phoneVerification = app(\App\Services\Phone\PhoneVerificationService::class);
+        $phoneVerification = app(PhoneVerificationService::class);
         if ($phoneVerification->isRequiredOnRegister()) {
             $phoneVerification->requestCode($user, [
-                'ip'         => $request->ip(),
+                'ip' => $request->ip(),
                 'user_agent' => substr((string) $request->userAgent(), 0, 255),
             ]);
 
@@ -176,6 +186,7 @@ class AuthController extends Controller
         Auth::logout();
         $request->session()->invalidate();
         $request->session()->regenerateToken();
+
         return redirect()->route('home');
     }
 }

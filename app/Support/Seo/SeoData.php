@@ -39,6 +39,6 @@ class SeoData
     /** Robots meta content, e.g. "index, follow" / "noindex, nofollow". */
     public function robots(): string
     {
-        return ($this->index ? 'index' : 'noindex') . ', ' . ($this->follow ? 'follow' : 'nofollow');
+        return ($this->index ? 'index' : 'noindex').', '.($this->follow ? 'follow' : 'nofollow');
     }
 }

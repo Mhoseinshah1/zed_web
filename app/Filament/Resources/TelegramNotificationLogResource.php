@@ -18,12 +18,17 @@ class TelegramNotificationLogResource extends Resource
 {
     protected static ?string $model = TelegramAdminNotificationLog::class;
 
-    protected static ?string $navigationIcon   = 'heroicon-o-clipboard-document-list';
-    protected static ?string $navigationGroup   = 'اعلان‌ها و پیام‌ها';
-    protected static ?string $navigationLabel   = 'لاگ بات تلگرام';
-    protected static ?string $modelLabel        = 'لاگ تلگرام';
-    protected static ?string $pluralModelLabel  = 'لاگ بات تلگرام';
-    protected static ?int    $navigationSort    = 32;
+    protected static ?string $navigationIcon = 'heroicon-o-clipboard-document-list';
+
+    protected static ?string $navigationGroup = 'اعلان‌ها و پیام‌ها';
+
+    protected static ?string $navigationLabel = 'لاگ بات تلگرام';
+
+    protected static ?string $modelLabel = 'لاگ تلگرام';
+
+    protected static ?string $pluralModelLabel = 'لاگ بات تلگرام';
+
+    protected static ?int $navigationSort = 32;
 
     public static function canCreate(): bool
     {
@@ -41,10 +46,10 @@ class TelegramNotificationLogResource extends Resource
                 Tables\Columns\TextColumn::make('status')->label('وضعیت')->badge()
                     ->formatStateUsing(fn ($state) => TelegramAdminNotificationLog::statusLabels()[$state] ?? $state)
                     ->color(fn ($state) => match ($state) {
-                        TelegramAdminNotificationLog::STATUS_SENT    => 'success',
-                        TelegramAdminNotificationLog::STATUS_FAILED  => 'danger',
+                        TelegramAdminNotificationLog::STATUS_SENT => 'success',
+                        TelegramAdminNotificationLog::STATUS_FAILED => 'danger',
                         TelegramAdminNotificationLog::STATUS_PENDING => 'warning',
-                        default                                      => 'gray',
+                        default => 'gray',
                     }),
                 Tables\Columns\TextColumn::make('error')->label('خطا')->limit(40)->placeholder('—')->toggleable(),
                 Tables\Columns\TextColumn::make('sent_at')->label('ارسال')->dateTime('Y/m/d H:i')->placeholder('—')->toggleable(),

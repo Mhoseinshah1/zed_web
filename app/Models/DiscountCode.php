@@ -11,7 +11,8 @@ class DiscountCode extends Model
     use SoftDeletes;
 
     const TYPE_PERCENT = 'percent';
-    const TYPE_FIXED   = 'fixed';
+
+    const TYPE_FIXED = 'fixed';
 
     protected $fillable = [
         'title',
@@ -33,18 +34,18 @@ class DiscountCode extends Model
     ];
 
     protected $casts = [
-        'starts_at'           => 'datetime',
-        'expires_at'          => 'datetime',
-        'is_active'           => 'boolean',
+        'starts_at' => 'datetime',
+        'expires_at' => 'datetime',
+        'is_active' => 'boolean',
         'first_purchase_only' => 'boolean',
-        'new_users_only'      => 'boolean',
-        'allowed_plan_ids'    => 'array',
+        'new_users_only' => 'boolean',
+        'allowed_plan_ids' => 'array',
         'allowed_order_types' => 'array',
-        'value'               => 'integer',
+        'value' => 'integer',
         'max_discount_amount' => 'integer',
-        'min_order_amount'    => 'integer',
-        'total_usage_limit'   => 'integer',
-        'per_user_usage_limit'=> 'integer',
+        'min_order_amount' => 'integer',
+        'total_usage_limit' => 'integer',
+        'per_user_usage_limit' => 'integer',
     ];
 
     public function redemptions(): HasMany
@@ -61,6 +62,7 @@ class DiscountCode extends Model
         if (empty($this->allowed_order_types)) {
             return true;
         }
+
         return in_array($orderType, $this->allowed_order_types, true);
     }
 
@@ -84,11 +86,13 @@ class DiscountCode extends Model
         if ($this->type === self::TYPE_PERCENT) {
             $label = "{$this->value}٪";
             if ($this->max_discount_amount) {
-                $label .= ' (حداکثر ' . number_format($this->max_discount_amount) . ' تومان)';
+                $label .= ' (حداکثر '.number_format($this->max_discount_amount).' تومان)';
             }
+
             return $label;
         }
-        return number_format($this->value) . ' تومان';
+
+        return number_format($this->value).' تومان';
     }
 
     public function statusLabel(): string
@@ -102,6 +106,7 @@ class DiscountCode extends Model
         if ($this->starts_at && $this->starts_at->isFuture()) {
             return 'هنوز شروع نشده';
         }
+
         return 'فعال';
     }
 }

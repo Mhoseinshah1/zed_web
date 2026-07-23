@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Livewire\AdminTicketReplyComposer;
+use App\Models\Notification;
 use App\Models\SupportTicket;
 use App\Models\SupportTicketMessage;
 use App\Models\User;
@@ -21,9 +22,9 @@ class SupportTicketConversationTest extends TestCase
     private function ticket(User $user): SupportTicket
     {
         return SupportTicket::create([
-            'user_id'  => $user->id,
-            'subject'  => 'موضوع',
-            'status'   => SupportTicket::STATUS_WAITING_ADMIN,
+            'user_id' => $user->id,
+            'subject' => 'موضوع',
+            'status' => SupportTicket::STATUS_WAITING_ADMIN,
             'priority' => SupportTicket::PRIORITY_NORMAL,
         ]);
     }
@@ -32,8 +33,8 @@ class SupportTicketConversationTest extends TestCase
     {
         return SupportTicketMessage::create(array_merge([
             'support_ticket_id' => $ticket->id,
-            'user_id'           => $ticket->user_id,
-            'body'              => 'سلام',
+            'user_id' => $ticket->user_id,
+            'body' => 'سلام',
         ], $overrides));
     }
 
@@ -42,9 +43,9 @@ class SupportTicketConversationTest extends TestCase
     public function test_image_attachment_renders_preview(): void
     {
         Storage::fake('public');
-        $user   = User::factory()->create();
+        $user = User::factory()->create();
         $ticket = $this->ticket($user);
-        $msg    = $this->message($ticket);
+        $msg = $this->message($ticket);
         // Place a real file so exists() is true.
         Storage::disk('public')->put('support-tickets/pic.png', 'x');
         $msg->attachments()->create(['path' => 'support-tickets/pic.png', 'original_name' => 'pic.png']);
@@ -59,9 +60,9 @@ class SupportTicketConversationTest extends TestCase
     public function test_non_image_attachment_renders_download_link(): void
     {
         Storage::fake('public');
-        $user   = User::factory()->create();
+        $user = User::factory()->create();
         $ticket = $this->ticket($user);
-        $msg    = $this->message($ticket);
+        $msg = $this->message($ticket);
         Storage::disk('public')->put('support-tickets/doc.pdf', 'x');
         $msg->attachments()->create(['path' => 'support-tickets/doc.pdf', 'original_name' => 'doc.pdf']);
 
@@ -75,9 +76,9 @@ class SupportTicketConversationTest extends TestCase
     public function test_missing_attachment_does_not_crash_page(): void
     {
         Storage::fake('public');
-        $user   = User::factory()->create();
+        $user = User::factory()->create();
         $ticket = $this->ticket($user);
-        $msg    = $this->message($ticket);
+        $msg = $this->message($ticket);
         // Reference a file that does not exist on disk.
         $msg->attachments()->create(['path' => 'support-tickets/missing.png', 'original_name' => 'missing.png']);
 
@@ -90,11 +91,11 @@ class SupportTicketConversationTest extends TestCase
     public function test_multiple_attachments_supported_per_message(): void
     {
         Storage::fake('public');
-        $user   = User::factory()->create();
+        $user = User::factory()->create();
         $ticket = $this->ticket($user);
 
         $response = $this->actingAs($user)->post(route('dashboard.tickets.reply', $ticket), [
-            'body'        => 'با دو فایل',
+            'body' => 'با دو فایل',
             'attachments' => [
                 UploadedFile::fake()->image('a.png'),
                 UploadedFile::fake()->create('b.pdf', 100, 'application/pdf'),
@@ -125,7 +126,7 @@ class SupportTicketConversationTest extends TestCase
 
     public function test_message_body_is_escaped_in_view(): void
     {
-        $user   = User::factory()->create();
+        $user = User::factory()->create();
         $ticket = $this->ticket($user);
         $this->message($ticket, ['body' => '<b>xss</b> <script>alert(1)</script>']);
 
@@ -140,8 +141,8 @@ class SupportTicketConversationTest extends TestCase
 
     public function test_admin_can_reply_from_inline_form(): void
     {
-        $admin  = User::factory()->create(['is_admin' => true]);
-        $user   = User::factory()->create();
+        $admin = User::factory()->create(['is_admin' => true]);
+        $user = User::factory()->create();
         $ticket = $this->ticket($user);
 
         Livewire::actingAs($admin)
@@ -153,9 +154,9 @@ class SupportTicketConversationTest extends TestCase
 
         $this->assertDatabaseHas('support_ticket_messages', [
             'support_ticket_id' => $ticket->id,
-            'is_admin'          => true,
-            'is_internal_note'  => false,
-            'body'              => 'پاسخ از فرم درون‌خطی',
+            'is_admin' => true,
+            'is_internal_note' => false,
+            'body' => 'پاسخ از فرم درون‌خطی',
         ]);
 
         // Status moved to answered + user notified.
@@ -163,14 +164,14 @@ class SupportTicketConversationTest extends TestCase
         $this->assertTrue($ticket->fresh()->user_unread);
         $this->assertDatabaseHas('notifications', [
             'user_id' => $user->id,
-            'type'    => \App\Models\Notification::TYPE_TICKET_ADMIN_REPLY,
+            'type' => Notification::TYPE_TICKET_ADMIN_REPLY,
         ]);
     }
 
     public function test_admin_inline_internal_note_hidden_from_user(): void
     {
-        $admin  = User::factory()->create(['is_admin' => true]);
-        $user   = User::factory()->create();
+        $admin = User::factory()->create(['is_admin' => true]);
+        $user = User::factory()->create();
         $ticket = $this->ticket($user);
 
         Livewire::actingAs($admin)
@@ -189,8 +190,8 @@ class SupportTicketConversationTest extends TestCase
 
     public function test_user_sees_admin_inline_reply(): void
     {
-        $admin  = User::factory()->create(['is_admin' => true]);
-        $user   = User::factory()->create();
+        $admin = User::factory()->create(['is_admin' => true]);
+        $user = User::factory()->create();
         $ticket = $this->ticket($user);
 
         app(SupportTicketService::class)->adminReply($ticket, $admin, 'پاسخ قابل مشاهده', internal: false);
@@ -204,12 +205,12 @@ class SupportTicketConversationTest extends TestCase
 
     public function test_attachment_validation_rejects_unsafe_file_types(): void
     {
-        $user   = User::factory()->create();
+        $user = User::factory()->create();
         $ticket = $this->ticket($user);
 
         $this->actingAs($user)
             ->post(route('dashboard.tickets.reply', $ticket), [
-                'body'        => 'با فایل خطرناک',
+                'body' => 'با فایل خطرناک',
                 'attachments' => [UploadedFile::fake()->create('evil.php', 10, 'application/x-php')],
             ])
             ->assertSessionHasErrors('attachments.0');

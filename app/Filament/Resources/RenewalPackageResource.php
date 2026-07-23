@@ -17,13 +17,19 @@ class RenewalPackageResource extends Resource
 {
     protected static ?string $model = RenewalPackage::class;
 
-    protected static ?string $navigationIcon   = 'heroicon-o-arrow-path';
-    protected static ?string $navigationGroup  = 'فروشگاه و پلن‌ها';
-    protected static bool   $shouldRegisterNavigation = false;
-    protected static ?string $navigationLabel  = 'بسته‌های تمدید';
-    protected static ?string $modelLabel       = 'بسته تمدید';
+    protected static ?string $navigationIcon = 'heroicon-o-arrow-path';
+
+    protected static ?string $navigationGroup = 'فروشگاه و پلن‌ها';
+
+    protected static bool $shouldRegisterNavigation = false;
+
+    protected static ?string $navigationLabel = 'بسته‌های تمدید';
+
+    protected static ?string $modelLabel = 'بسته تمدید';
+
     protected static ?string $pluralModelLabel = 'بسته‌های تمدید';
-    protected static ?int    $navigationSort   = 60;
+
+    protected static ?int $navigationSort = 60;
 
     public static function form(Form $form): Form
     {
@@ -99,11 +105,11 @@ class RenewalPackageResource extends Resource
                 Tables\Columns\TextColumn::make('duration_days')
                     ->label('مدت تمدید')
                     ->sortable()
-                    ->formatStateUsing(fn ($state) => $state . ' روز'),
+                    ->formatStateUsing(fn ($state) => $state.' روز'),
 
                 Tables\Columns\TextColumn::make('price_toman')
                     ->label('قیمت')
-                    ->formatStateUsing(fn ($state) => number_format($state) . ' تومان')
+                    ->formatStateUsing(fn ($state) => number_format($state).' تومان')
                     ->sortable(),
 
                 Tables\Columns\TextColumn::make('allowed_plan_ids')
@@ -113,6 +119,7 @@ class RenewalPackageResource extends Resource
                             return 'همه پلن‌ها';
                         }
                         $names = Plan::whereIn('id', $record->allowed_plan_ids)->pluck('name');
+
                         return $names->implode('، ');
                     })
                     ->default('همه پلن‌ها')
@@ -167,9 +174,9 @@ class RenewalPackageResource extends Resource
     public static function getPages(): array
     {
         return [
-            'index'  => Pages\ListRenewalPackages::route('/'),
+            'index' => Pages\ListRenewalPackages::route('/'),
             'create' => Pages\CreateRenewalPackage::route('/create'),
-            'edit'   => Pages\EditRenewalPackage::route('/{record}/edit'),
+            'edit' => Pages\EditRenewalPackage::route('/{record}/edit'),
         ];
     }
 

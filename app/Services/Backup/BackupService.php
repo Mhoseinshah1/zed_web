@@ -23,7 +23,8 @@ use Illuminate\Support\Facades\Process;
 class BackupService
 {
     /** Overlap-protection lock name + max seconds a backup may hold it. */
-    public const LOCK_NAME    = 'zedproxy-backup-running';
+    public const LOCK_NAME = 'zedproxy-backup-running';
+
     public const LOCK_SECONDS = 1800;
 
     public const STATUS_SKIPPED_LOCKED = 'skipped_locked';
@@ -46,8 +47,9 @@ class BackupService
         if (! $lock->get()) {
             $msg = 'یک عملیات بکاپ دیگر در حال اجرا است.';
             if ($type === BackupLog::TYPE_MANUAL && $this->settings->sendReportToTelegram()) {
-                $this->notifier->send('backup_status', $this->settings->topicKey(), 'بکاپ', '💾 ' . $msg);
+                $this->notifier->send('backup_status', $this->settings->topicKey(), 'بکاپ', '💾 '.$msg);
             }
+
             return ['status' => self::STATUS_SKIPPED_LOCKED, 'log_id' => null, 'path' => null, 'size' => 0, 'duration_ms' => 0, 'error' => $msg];
         }
 
@@ -61,18 +63,18 @@ class BackupService
     /** @return array{status:string, log_id:?int, path:?string, size:int, duration_ms:int, error:?string} */
     private function runLocked(string $type, ?bool $forceSendFile = null): array
     {
-        $log   = BackupLog::create(['type' => $type, 'status' => BackupLog::STATUS_STARTED, 'started_at' => now()]);
+        $log = BackupLog::create(['type' => $type, 'status' => BackupLog::STATUS_STARTED, 'started_at' => now()]);
         $start = microtime(true);
 
         try {
             @mkdir($this->settings->storagePath(), 0750, true);
-            $work = rtrim($this->settings->storagePath(), '/') . '/.work_' . uniqid();
+            $work = rtrim($this->settings->storagePath(), '/').'/.work_'.uniqid();
             @mkdir($work, 0750, true);
 
             $sources = [];
 
             if ($this->settings->includeDatabase()) {
-                $dump = $work . '/database.sql';
+                $dump = $work.'/database.sql';
                 $this->dumpDatabase($dump);
                 $sources[] = $dump;
             }
@@ -90,7 +92,7 @@ class BackupService
             }
 
             $archive = rtrim($this->settings->storagePath(), '/')
-                . '/zedproxy-backup-' . now()->format('Ymd-His') . '.tar.gz';
+                .'/zedproxy-backup-'.now()->format('Ymd-His').'.tar.gz';
 
             $this->createArchive($archive, $sources, $this->excludePatterns());
 
@@ -100,17 +102,17 @@ class BackupService
 
             $this->removeDir($work);
 
-            $size     = (int) (is_file($archive) ? filesize($archive) : 0);
-            $cleaned  = $this->cleanupOld();
+            $size = (int) (is_file($archive) ? filesize($archive) : 0);
+            $cleaned = $this->cleanupOld();
             $duration = (int) round((microtime(true) - $start) * 1000);
 
             $log->update([
-                'status'      => BackupLog::STATUS_SUCCESS,
-                'file_path'   => $archive,
-                'file_size'   => $size,
+                'status' => BackupLog::STATUS_SUCCESS,
+                'file_path' => $archive,
+                'file_size' => $size,
                 'duration_ms' => $duration,
                 'finished_at' => now(),
-                'metadata'    => ['cleaned' => $cleaned],
+                'metadata' => ['cleaned' => $cleaned],
             ]);
 
             $this->reportSuccess($log, $archive, $size, $duration, $cleaned, $forceSendFile);
@@ -152,7 +154,7 @@ class BackupService
     {
         $cmd = ['tar', '-czf', $dest];
         foreach ($excludes as $pat) {
-            $cmd[] = '--exclude=' . $pat;
+            $cmd[] = '--exclude='.$pat;
         }
         $added = 0;
         foreach ($sources as $src) {
@@ -170,7 +172,7 @@ class BackupService
 
         $result = Process::path(base_path())->timeout(900)->run($cmd);
         if (! $result->successful()) {
-            throw new \RuntimeException('tar failed: ' . mb_substr($result->errorOutput() ?: 'unknown', 0, 200));
+            throw new \RuntimeException('tar failed: '.mb_substr($result->errorOutput() ?: 'unknown', 0, 200));
         }
     }
 
@@ -178,7 +180,7 @@ class BackupService
     private function dumpDatabase(string $target): void
     {
         $conn = (string) config('database.default');
-        $cfg  = (array) config("database.connections.{$conn}", []);
+        $cfg = (array) config("database.connections.{$conn}", []);
 
         $cmd = [
             'pg_dump',
@@ -196,22 +198,23 @@ class BackupService
 
         if (! $result->successful()) {
             // errorOutput from pg_dump does not contain the password (it's in env).
-            throw new \RuntimeException('pg_dump failed: ' . mb_substr($result->errorOutput() ?: 'unknown', 0, 200));
+            throw new \RuntimeException('pg_dump failed: '.mb_substr($result->errorOutput() ?: 'unknown', 0, 200));
         }
     }
 
     /** Encrypt the archive with openssl (password via env). Returns new path. */
     private function encryptArchive(string $archive, string $password): string
     {
-        $enc = $archive . '.enc';
+        $enc = $archive.'.enc';
         $result = Process::timeout(900)
             ->env(['ZP_BK_PASS' => $password])
             ->run(['openssl', 'enc', '-aes-256-cbc', '-salt', '-pbkdf2', '-pass', 'env:ZP_BK_PASS', '-in', $archive, '-out', $enc]);
 
         if (! $result->successful()) {
-            throw new \RuntimeException('encryption failed: ' . mb_substr($result->errorOutput() ?: 'unknown', 0, 120));
+            throw new \RuntimeException('encryption failed: '.mb_substr($result->errorOutput() ?: 'unknown', 0, 120));
         }
         @unlink($archive);
+
         return $enc;
     }
 
@@ -221,12 +224,13 @@ class BackupService
         $dir = rtrim($this->settings->storagePath(), '/');
         $cutoff = now()->subDays($this->settings->retentionDays())->getTimestamp();
         $removed = 0;
-        foreach (glob($dir . '/zedproxy-backup-*') ?: [] as $file) {
+        foreach (glob($dir.'/zedproxy-backup-*') ?: [] as $file) {
             if (is_file($file) && filemtime($file) < $cutoff) {
                 @unlink($file);
                 $removed++;
             }
         }
+
         return $removed;
     }
 
@@ -237,16 +241,16 @@ class BackupService
         $sendFile = $forceSendFile ?? $this->settings->sendFileToTelegram();
         if ($this->settings->sendReportToTelegram()) {
             $this->notifier->event('backup_success', [
-                'size'     => number_format(round($size / 1048576, 2), 2),
+                'size' => number_format(round($size / 1048576, 2), 2),
                 'duration' => (string) round($durationMs / 1000, 1),
-                'path'     => $this->settings->storagePath(),
-                'cleaned'  => (string) $cleaned,
+                'path' => $this->settings->storagePath(),
+                'cleaned' => (string) $cleaned,
             ], $log);
         }
 
         if ($sendFile && $this->fitsTelegramLimit($size) && is_file($archive)) {
             $thread = TelegramAdminTopic::findByKey($this->settings->topicKey())?->message_thread_id;
-            SendTelegramDocumentJob::dispatch($archive, '💾 بکاپ زدپروکسی — ' . now()->format('Y/m/d H:i'), $thread, $log->id);
+            SendTelegramDocumentJob::dispatch($archive, '💾 بکاپ زدپروکسی — '.now()->format('Y/m/d H:i'), $thread, $log->id);
         }
     }
 
@@ -272,7 +276,7 @@ class BackupService
             if ($f === '.' || $f === '..') {
                 continue;
             }
-            $path = $dir . '/' . $f;
+            $path = $dir.'/'.$f;
             is_dir($path) ? $this->removeDir($path) : @unlink($path);
         }
         @rmdir($dir);

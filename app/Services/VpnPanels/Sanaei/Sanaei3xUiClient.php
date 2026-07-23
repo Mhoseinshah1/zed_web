@@ -42,7 +42,7 @@ class Sanaei3xUiClient
     /** base_url + panel_path + endpoint, with safe slash normalisation. */
     public function url(string $endpoint): string
     {
-        return $this->panel->apiBaseUrl() . '/' . ltrim($endpoint, '/');
+        return $this->panel->apiBaseUrl().'/'.ltrim($endpoint, '/');
     }
 
     // ── HTTP plumbing ─────────────────────────────────────────────────────────
@@ -86,6 +86,7 @@ class Sanaei3xUiClient
         if ($response->status() === 401 && $this->panel->effectiveAuthMethod() === VpnPanel::AUTH_API_LOGIN && ! $retried) {
             $this->forgetCookie();
             $this->login();
+
             return $this->request($method, $endpoint, $data, true);
         }
 
@@ -125,7 +126,7 @@ class Sanaei3xUiClient
 
     private function cookieKey(): string
     {
-        return 'sanaei_cookie:' . $this->panel->id;
+        return 'sanaei_cookie:'.$this->panel->id;
     }
 
     private function cookie(): ?string
@@ -164,7 +165,7 @@ class Sanaei3xUiClient
 
         // Capture the session cookie (3X-UI sets `3x-ui` / session cookie).
         $cookies = collect($response->cookies()->toArray())
-            ->map(fn ($c) => $c['Name'] . '=' . $c['Value'])
+            ->map(fn ($c) => $c['Name'].'='.$c['Value'])
             ->implode('; ');
 
         if ($cookies !== '') {
@@ -180,6 +181,7 @@ class Sanaei3xUiClient
         if ($this->panel->effectiveAuthMethod() === VpnPanel::AUTH_API_LOGIN && $this->cookie() === null) {
             return $this->login();
         }
+
         return ['ok' => true];
     }
 
@@ -189,6 +191,7 @@ class Sanaei3xUiClient
     {
         $this->authenticate();
         $this->getInbounds();
+
         return true;
     }
 
@@ -198,6 +201,7 @@ class Sanaei3xUiClient
         $this->authenticate();
         $json = $this->request('get', '/panel/api/inbounds/list');
         $obj = $json['obj'] ?? $json;
+
         return is_array($obj) ? array_values($obj) : [];
     }
 
@@ -205,7 +209,8 @@ class Sanaei3xUiClient
     public function getInbound(int $inboundId): array
     {
         $this->authenticate();
-        $json = $this->request('get', '/panel/api/inbounds/get/' . $inboundId);
+        $json = $this->request('get', '/panel/api/inbounds/get/'.$inboundId);
+
         return is_array($json['obj'] ?? null) ? $json['obj'] : $json;
     }
 
@@ -215,7 +220,8 @@ class Sanaei3xUiClient
     public function getClient(string $email): array
     {
         $this->authenticate();
-        $json = $this->request('get', '/panel/api/clients/get/' . rawurlencode($email));
+        $json = $this->request('get', '/panel/api/clients/get/'.rawurlencode($email));
+
         return is_array($json['obj'] ?? null) ? $json['obj'] : $json;
     }
 
@@ -223,6 +229,7 @@ class Sanaei3xUiClient
     {
         try {
             $client = $this->getClient($email);
+
             return ! empty($client);
         } catch (Sanaei3xUiException $e) {
             return false;
@@ -233,7 +240,8 @@ class Sanaei3xUiClient
     public function getClientTraffic(string $email): array
     {
         $this->authenticate();
-        $json = $this->request('get', '/panel/api/clients/traffic/' . rawurlencode($email));
+        $json = $this->request('get', '/panel/api/clients/traffic/'.rawurlencode($email));
+
         return is_array($json['obj'] ?? null) ? $json['obj'] : $json;
     }
 
@@ -241,7 +249,8 @@ class Sanaei3xUiClient
     public function getClientLinks(string $email): array
     {
         $this->authenticate();
-        $json = $this->request('get', '/panel/api/clients/links/' . rawurlencode($email));
+        $json = $this->request('get', '/panel/api/clients/links/'.rawurlencode($email));
+
         return is_array($json['obj'] ?? null) ? ['links' => $json['obj']] : $json;
     }
 
@@ -256,30 +265,30 @@ class Sanaei3xUiClient
     {
         $this->authenticate();
 
-        $email    = $options['email']    ?? $service->remote_username ?? $this->makeEmail($service);
-        $uuid     = $options['uuid']     ?? $service->remote_uuid     ?? (string) Str::uuid();
-        $subId    = $options['subId']    ?? $service->remote_sub_id   ?? Str::lower(Str::random(16));
-        $inbound  = (int) ($options['inboundId'] ?? $service->remote_inbound_id ?? $this->panel->default_inbound_id ?? 0);
-        $totalGB  = (int) ($options['totalGB'] ?? 0);              // 0 = unlimited
+        $email = $options['email'] ?? $service->remote_username ?? $this->makeEmail($service);
+        $uuid = $options['uuid'] ?? $service->remote_uuid ?? (string) Str::uuid();
+        $subId = $options['subId'] ?? $service->remote_sub_id ?? Str::lower(Str::random(16));
+        $inbound = (int) ($options['inboundId'] ?? $service->remote_inbound_id ?? $this->panel->default_inbound_id ?? 0);
+        $totalGB = (int) ($options['totalGB'] ?? 0);              // 0 = unlimited
         $expiryMs = (int) ($options['expiryTime'] ?? 0);          // 0 = no expiry, ms epoch
 
         $client = [
-            'id'         => $uuid,                            // UUID for VLESS/VMess
-            'email'      => $email,
-            'enable'     => (bool) ($options['enable'] ?? true),
-            'totalGB'    => $totalGB,                         // int64 bytes (0 = unlimited)
+            'id' => $uuid,                            // UUID for VLESS/VMess
+            'email' => $email,
+            'enable' => (bool) ($options['enable'] ?? true),
+            'totalGB' => $totalGB,                         // int64 bytes (0 = unlimited)
             'expiryTime' => $expiryMs,                        // int64 epoch ms (0 = none)
-            'limitIp'    => (int) ($options['limitIp'] ?? 0),
-            'flow'       => (string) ($options['flow'] ?? ''),
-            'subId'      => $subId,
-            'tgId'       => (int) ($options['tgId'] ?? 0),
-            'comment'    => (string) ($options['comment'] ?? ''),
-            'reset'      => 0,
+            'limitIp' => (int) ($options['limitIp'] ?? 0),
+            'flow' => (string) ($options['flow'] ?? ''),
+            'subId' => $subId,
+            'tgId' => (int) ($options['tgId'] ?? 0),
+            'comment' => (string) ($options['comment'] ?? ''),
+            'reset' => 0,
         ];
 
         // New 3x-ui API: {client:{…}, inboundIds:[…]} — no stringified settings.
         $payload = [
-            'client'     => $client,
+            'client' => $client,
             'inboundIds' => [$inbound],
         ];
 
@@ -300,8 +309,8 @@ class Sanaei3xUiClient
 
         // New 3x-ui API: body is the client object directly; the target inbound
         // travels as an ?inboundIds= query param. No stringified settings.
-        $body     = array_merge(['email' => $email], $payload);
-        $endpoint = '/panel/api/clients/update/' . rawurlencode($email) . '?inboundIds=' . $inboundId;
+        $body = array_merge(['email' => $email], $payload);
+        $endpoint = '/panel/api/clients/update/'.rawurlencode($email).'?inboundIds='.$inboundId;
 
         return $this->request('post', $endpoint, $body);
     }
@@ -314,12 +323,13 @@ class Sanaei3xUiClient
     {
         $this->authenticate();
         try {
-            $this->request('post', '/panel/api/clients/' . rawurlencode($email) . '/detach', [
+            $this->request('post', '/panel/api/clients/'.rawurlencode($email).'/detach', [
                 'inboundIds' => [$inboundId],
             ]);
         } catch (Sanaei3xUiException $e) {
             // Already gone / not found → idempotent success.
         }
+
         return true;
     }
 
@@ -327,13 +337,15 @@ class Sanaei3xUiClient
     {
         $this->authenticate();
         // New API keys the reset by email only; no body/inbound id required.
-        $this->request('post', '/panel/api/clients/resetTraffic/' . rawurlencode($email));
+        $this->request('post', '/panel/api/clients/resetTraffic/'.rawurlencode($email));
+
         return true;
     }
 
     public function setClientEnabled(string $email, int $inboundId, bool $enabled): bool
     {
         $this->updateClient($email, $inboundId, ['enable' => $enabled]);
+
         return true;
     }
 
@@ -355,7 +367,8 @@ class Sanaei3xUiClient
         if (filled($service->remote_username)) {
             return $service->remote_username;
         }
-        $base = 'zed-' . ($service->id ?: Str::lower(Str::random(6)));
+        $base = 'zed-'.($service->id ?: Str::lower(Str::random(6)));
+
         return $base;
     }
 }

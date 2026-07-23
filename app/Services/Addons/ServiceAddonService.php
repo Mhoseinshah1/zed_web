@@ -2,12 +2,14 @@
 
 namespace App\Services\Addons;
 
+use App\Models\Notification;
 use App\Models\Order;
 use App\Models\SiteSetting;
 use App\Models\User;
 use App\Models\UserService;
 use App\Models\VpnServiceProvisionLog;
 use App\Services\Marzban\MarzbanClient;
+use App\Services\Notifications\NotificationService;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -43,12 +45,14 @@ class ServiceAddonService
     public function pricePerGb(): ?int
     {
         $value = SiteSetting::get('extra_traffic_price_per_gb', null);
+
         return ($value === null || $value === '') ? null : (int) $value;
     }
 
     public function pricePerDay(): ?int
     {
         $value = SiteSetting::get('extra_time_price_per_day', null);
+
         return ($value === null || $value === '') ? null : (int) $value;
     }
 
@@ -83,6 +87,7 @@ class ServiceAddonService
         if ($price === null) {
             throw new \InvalidArgumentException('قیمت هر گیگ حجم اضافه تنظیم نشده است.');
         }
+
         return $gb * $price;
     }
 
@@ -92,6 +97,7 @@ class ServiceAddonService
         if ($price === null) {
             throw new \InvalidArgumentException('قیمت هر روز زمان اضافه تنظیم نشده است.');
         }
+
         return $days * $price;
     }
 
@@ -115,33 +121,33 @@ class ServiceAddonService
             throw new \InvalidArgumentException('قیمت هر گیگ حجم اضافه تنظیم نشده است.');
         }
         if ($gb < $this->minGb()) {
-            throw new \InvalidArgumentException('حداقل حجم قابل خرید ' . $this->minGb() . ' گیگابایت است.');
+            throw new \InvalidArgumentException('حداقل حجم قابل خرید '.$this->minGb().' گیگابایت است.');
         }
         if ($gb > $this->maxGb()) {
-            throw new \InvalidArgumentException('حداکثر حجم قابل خرید ' . $this->maxGb() . ' گیگابایت است.');
+            throw new \InvalidArgumentException('حداکثر حجم قابل خرید '.$this->maxGb().' گیگابایت است.');
         }
 
-        $amount          = $gb * $pricePerGb;
-        $originalLimit   = (int) ($service->traffic_total_gb * self::BYTES_PER_GB);
-        $newLimit        = $originalLimit + ($gb * self::BYTES_PER_GB);
+        $amount = $gb * $pricePerGb;
+        $originalLimit = (int) ($service->traffic_total_gb * self::BYTES_PER_GB);
+        $newLimit = $originalLimit + ($gb * self::BYTES_PER_GB);
 
         return DB::transaction(function () use ($service, $gb, $pricePerGb, $amount, $originalLimit, $newLimit, $purchaseFingerprint) {
             return Order::create([
-                'order_type'          => Order::TYPE_EXTRA_TRAFFIC,
-                'user_id'             => $service->user_id,
-                'purchase_fingerprint'=> $purchaseFingerprint,
-                'user_service_id'     => $service->id,
-                'plan_name'           => $service->plan_name,
-                'extra_traffic_gb'    => $gb,
-                'unit_price'          => $pricePerGb,
+                'order_type' => Order::TYPE_EXTRA_TRAFFIC,
+                'user_id' => $service->user_id,
+                'purchase_fingerprint' => $purchaseFingerprint,
+                'user_service_id' => $service->id,
+                'plan_name' => $service->plan_name,
+                'extra_traffic_gb' => $gb,
+                'unit_price' => $pricePerGb,
                 'original_data_limit' => $originalLimit,
-                'new_data_limit'      => $newLimit,
-                'price_toman'         => $amount,
-                'final_price_toman'   => $amount,
-                'discount_toman'      => 0,
-                'status'              => Order::STATUS_AWAITING_PAYMENT,
-                'payment_status'      => Order::PAYMENT_UNPAID,
-                'notes'               => "خرید {$gb} گیگابایت حجم اضافه برای سرویس {$service->service_number}",
+                'new_data_limit' => $newLimit,
+                'price_toman' => $amount,
+                'final_price_toman' => $amount,
+                'discount_toman' => 0,
+                'status' => Order::STATUS_AWAITING_PAYMENT,
+                'payment_status' => Order::PAYMENT_UNPAID,
+                'notes' => "خرید {$gb} گیگابایت حجم اضافه برای سرویس {$service->service_number}",
             ]);
         });
     }
@@ -164,32 +170,32 @@ class ServiceAddonService
             throw new \InvalidArgumentException('قیمت هر روز زمان اضافه تنظیم نشده است.');
         }
         if ($days < $this->minDays()) {
-            throw new \InvalidArgumentException('حداقل زمان قابل خرید ' . $this->minDays() . ' روز است.');
+            throw new \InvalidArgumentException('حداقل زمان قابل خرید '.$this->minDays().' روز است.');
         }
         if ($days > $this->maxDays()) {
-            throw new \InvalidArgumentException('حداکثر زمان قابل خرید ' . $this->maxDays() . ' روز است.');
+            throw new \InvalidArgumentException('حداکثر زمان قابل خرید '.$this->maxDays().' روز است.');
         }
 
-        $amount    = $days * $pricePerDay;
+        $amount = $days * $pricePerDay;
         $newExpiry = $this->calculateNewExpiry($service, $days);
 
         return DB::transaction(function () use ($service, $days, $pricePerDay, $amount, $newExpiry, $purchaseFingerprint) {
             return Order::create([
-                'order_type'         => Order::TYPE_EXTRA_TIME,
-                'user_id'            => $service->user_id,
-                'purchase_fingerprint'=> $purchaseFingerprint,
-                'user_service_id'    => $service->id,
-                'plan_name'          => $service->plan_name,
-                'extra_time_days'    => $days,
-                'unit_price'         => $pricePerDay,
+                'order_type' => Order::TYPE_EXTRA_TIME,
+                'user_id' => $service->user_id,
+                'purchase_fingerprint' => $purchaseFingerprint,
+                'user_service_id' => $service->id,
+                'plan_name' => $service->plan_name,
+                'extra_time_days' => $days,
+                'unit_price' => $pricePerDay,
                 'original_expire_at' => $service->expires_at,
-                'new_expire_at'      => $newExpiry,
-                'price_toman'        => $amount,
-                'final_price_toman'  => $amount,
-                'discount_toman'     => 0,
-                'status'             => Order::STATUS_AWAITING_PAYMENT,
-                'payment_status'     => Order::PAYMENT_UNPAID,
-                'notes'              => "خرید {$days} روز زمان اضافه برای سرویس {$service->service_number}",
+                'new_expire_at' => $newExpiry,
+                'price_toman' => $amount,
+                'final_price_toman' => $amount,
+                'discount_toman' => 0,
+                'status' => Order::STATUS_AWAITING_PAYMENT,
+                'payment_status' => Order::PAYMENT_UNPAID,
+                'notes' => "خرید {$days} روز زمان اضافه برای سرویس {$service->service_number}",
             ]);
         });
     }
@@ -223,15 +229,15 @@ class ServiceAddonService
         if (! $service) {
             Log::error('ServiceAddonService: userService missing for extra-traffic order', ['order_id' => $order->id]);
             $order->update([
-                'status'                    => Order::STATUS_ADDON_FAILED,
+                'status' => Order::STATUS_ADDON_FAILED,
                 'addon_apply_failed_reason' => 'سرویس مرتبط یافت نشد.',
             ]);
             throw new \RuntimeException('سرویس مرتبط یافت نشد.');
         }
 
-        $gb            = (int) $order->extra_traffic_gb;
-        $currentTotal  = (int) ($service->traffic_total_gb ?? 0);
-        $newTotalGb    = $currentTotal + $gb;
+        $gb = (int) $order->extra_traffic_gb;
+        $currentTotal = (int) ($service->traffic_total_gb ?? 0);
+        $newTotalGb = $currentTotal + $gb;
         $newLimitBytes = $order->new_data_limit ?? ($newTotalGb * self::BYTES_PER_GB);
 
         // Update Marzban first — data_limit only, preserving expire / used / links.
@@ -249,35 +255,35 @@ class ServiceAddonService
         DB::transaction(function () use ($order, $service, $newTotalGb) {
             $service->update([
                 'traffic_total_gb' => $newTotalGb,
-                'last_synced_at'   => now(),
-                'sync_status'      => UserService::SYNC_SYNCED,
+                'last_synced_at' => now(),
+                'sync_status' => UserService::SYNC_SYNCED,
             ]);
             $order->update([
-                'status'           => Order::STATUS_COMPLETED,
-                'completed_at'     => now(),
+                'status' => Order::STATUS_COMPLETED,
+                'completed_at' => now(),
                 'addon_applied_at' => now(),
             ]);
         });
 
         VpnServiceProvisionLog::create([
             'user_service_id' => $service->id,
-            'vpn_panel_id'    => $service->vpn_panel_id,
-            'action'          => 'addon_extra_traffic',
-            'status'          => 'success',
-            'message'         => "+{$gb} GB extra traffic applied (order {$order->order_number}). New total: {$newTotalGb} GB.",
+            'vpn_panel_id' => $service->vpn_panel_id,
+            'action' => 'addon_extra_traffic',
+            'status' => 'success',
+            'message' => "+{$gb} GB extra traffic applied (order {$order->order_number}). New total: {$newTotalGb} GB.",
         ]);
 
         if ($order->user) {
-            app(\App\Services\Notifications\NotificationService::class)->notify(
-                \App\Models\Notification::TYPE_EXTRA_TRAFFIC_SUCCESS,
+            app(NotificationService::class)->notify(
+                Notification::TYPE_EXTRA_TRAFFIC_SUCCESS,
                 $order->user,
                 [
-                    'user_name'    => $order->user->name ?? $order->user->username,
+                    'user_name' => $order->user->name ?? $order->user->username,
                     'service_name' => $service->plan_name ?? $service->service_number,
-                    'order_id'     => $order->order_number,
-                    'traffic_gb'   => $gb,
+                    'order_id' => $order->order_number,
+                    'traffic_gb' => $gb,
                 ],
-                'extra_traffic_success:order:' . $order->id,
+                'extra_traffic_success:order:'.$order->id,
             );
         }
 
@@ -298,13 +304,13 @@ class ServiceAddonService
         if (! $service) {
             Log::error('ServiceAddonService: userService missing for extra-time order', ['order_id' => $order->id]);
             $order->update([
-                'status'                    => Order::STATUS_ADDON_FAILED,
+                'status' => Order::STATUS_ADDON_FAILED,
                 'addon_apply_failed_reason' => 'سرویس مرتبط یافت نشد.',
             ]);
             throw new \RuntimeException('سرویس مرتبط یافت نشد.');
         }
 
-        $days      = (int) $order->extra_time_days;
+        $days = (int) $order->extra_time_days;
         $newExpiry = $this->calculateNewExpiry($service, $days);
 
         if ($service->remote_username) {
@@ -320,39 +326,39 @@ class ServiceAddonService
 
         DB::transaction(function () use ($order, $service, $newExpiry) {
             $service->update([
-                'expires_at'     => $newExpiry,
-                'status'         => UserService::STATUS_ACTIVE,
+                'expires_at' => $newExpiry,
+                'status' => UserService::STATUS_ACTIVE,
                 'last_synced_at' => now(),
-                'sync_status'    => UserService::SYNC_SYNCED,
+                'sync_status' => UserService::SYNC_SYNCED,
             ]);
             $order->update([
-                'status'           => Order::STATUS_COMPLETED,
-                'completed_at'     => now(),
-                'new_expire_at'    => $newExpiry,
+                'status' => Order::STATUS_COMPLETED,
+                'completed_at' => now(),
+                'new_expire_at' => $newExpiry,
                 'addon_applied_at' => now(),
             ]);
         });
 
         VpnServiceProvisionLog::create([
             'user_service_id' => $service->id,
-            'vpn_panel_id'    => $service->vpn_panel_id,
-            'action'          => 'addon_extra_time',
-            'status'          => 'success',
-            'message'         => "+{$days} days extra time applied (order {$order->order_number}). New expiry: {$newExpiry->toDateTimeString()}.",
+            'vpn_panel_id' => $service->vpn_panel_id,
+            'action' => 'addon_extra_time',
+            'status' => 'success',
+            'message' => "+{$days} days extra time applied (order {$order->order_number}). New expiry: {$newExpiry->toDateTimeString()}.",
         ]);
 
         if ($order->user) {
-            app(\App\Services\Notifications\NotificationService::class)->notify(
-                \App\Models\Notification::TYPE_EXTRA_TIME_SUCCESS,
+            app(NotificationService::class)->notify(
+                Notification::TYPE_EXTRA_TIME_SUCCESS,
                 $order->user,
                 [
-                    'user_name'    => $order->user->name ?? $order->user->username,
+                    'user_name' => $order->user->name ?? $order->user->username,
                     'service_name' => $service->plan_name ?? $service->service_number,
-                    'order_id'     => $order->order_number,
-                    'days'         => $days,
-                    'expiry_date'  => $newExpiry->format('Y/m/d'),
+                    'order_id' => $order->order_number,
+                    'days' => $days,
+                    'expiry_date' => $newExpiry->format('Y/m/d'),
                 ],
-                'extra_time_success:order:' . $order->id,
+                'extra_time_success:order:'.$order->id,
             );
         }
 
@@ -382,36 +388,36 @@ class ServiceAddonService
     private function markApplyFailed(Order $order, UserService $service, string $action, \Throwable $e): UserService
     {
         Log::error('ServiceAddonService: Marzban update failed', [
-            'order_id'        => $order->id,
-            'service_id'      => $service->id,
+            'order_id' => $order->id,
+            'service_id' => $service->id,
             'remote_username' => $service->remote_username,
-            'error'           => $e->getMessage(),
+            'error' => $e->getMessage(),
         ]);
 
         $order->update([
-            'status'                    => Order::STATUS_ADDON_FAILED,
+            'status' => Order::STATUS_ADDON_FAILED,
             'addon_apply_failed_reason' => $e->getMessage(),
         ]);
 
         VpnServiceProvisionLog::create([
             'user_service_id' => $service->id,
-            'vpn_panel_id'    => $service->vpn_panel_id,
-            'action'          => $action,
-            'status'          => 'failed',
-            'message'         => $e->getMessage(),
+            'vpn_panel_id' => $service->vpn_panel_id,
+            'action' => $action,
+            'status' => 'failed',
+            'message' => $e->getMessage(),
         ]);
 
         // System/admin warning — payment is confirmed but the Marzban add-on
         // update failed; admin can retry. Idempotent per order.
-        app(\App\Services\Notifications\NotificationService::class)->notifyAdmins(
-            \App\Models\Notification::TYPE_MARZBAN_UPDATE_FAILED,
+        app(NotificationService::class)->notifyAdmins(
+            Notification::TYPE_MARZBAN_UPDATE_FAILED,
             [
-                'user_name'  => $order->user?->name ?? $order->user?->username ?? '—',
-                'order_id'   => $order->order_number,
+                'user_name' => $order->user?->name ?? $order->user?->username ?? '—',
+                'order_id' => $order->order_number,
                 'service_id' => $service->id,
-                'error'      => $e->getMessage(),
+                'error' => $e->getMessage(),
             ],
-            'marzban_update_failed:' . $action . ':' . $order->id,
+            'marzban_update_failed:'.$action.':'.$order->id,
         );
 
         return $service->fresh();

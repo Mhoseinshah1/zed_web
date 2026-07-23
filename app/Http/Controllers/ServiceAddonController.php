@@ -37,10 +37,10 @@ class ServiceAddonController extends Controller
         }
 
         return view('dashboard.services.extra-traffic', [
-            'service'    => $service,
+            'service' => $service,
             'pricePerGb' => $this->addonService->pricePerGb(),
-            'minGb'      => $this->addonService->minGb(),
-            'maxGb'      => $this->addonService->maxGb(),
+            'minGb' => $this->addonService->minGb(),
+            'maxGb' => $this->addonService->maxGb(),
         ]);
     }
 
@@ -55,13 +55,13 @@ class ServiceAddonController extends Controller
             'amount_gb' => ['required', 'integer', "min:{$minGb}", "max:{$maxGb}"],
         ], [
             'amount_gb.required' => 'مقدار حجم اضافه معتبر نیست.',
-            'amount_gb.integer'  => 'مقدار حجم اضافه معتبر نیست.',
-            'amount_gb.min'      => "حداقل حجم قابل خرید {$minGb} گیگابایت است.",
-            'amount_gb.max'      => "حداکثر حجم قابل خرید {$maxGb} گیگابایت است.",
+            'amount_gb.integer' => 'مقدار حجم اضافه معتبر نیست.',
+            'amount_gb.min' => "حداقل حجم قابل خرید {$minGb} گیگابایت است.",
+            'amount_gb.max' => "حداکثر حجم قابل خرید {$maxGb} گیگابایت است.",
         ]);
 
         $user = auth()->user();
-        $gb   = (int) $validated['amount_gb'];
+        $gb = (int) $validated['amount_gb'];
 
         try {
             $result = $this->idempotency->createOrReturn(
@@ -99,10 +99,10 @@ class ServiceAddonController extends Controller
         }
 
         return view('dashboard.services.extra-time', [
-            'service'     => $service,
+            'service' => $service,
             'pricePerDay' => $this->addonService->pricePerDay(),
-            'minDays'     => $this->addonService->minDays(),
-            'maxDays'     => $this->addonService->maxDays(),
+            'minDays' => $this->addonService->minDays(),
+            'maxDays' => $this->addonService->maxDays(),
         ]);
     }
 
@@ -117,9 +117,9 @@ class ServiceAddonController extends Controller
             'amount_days' => ['required', 'integer', "min:{$minDays}", "max:{$maxDays}"],
         ], [
             'amount_days.required' => 'مقدار زمان اضافه معتبر نیست.',
-            'amount_days.integer'  => 'مقدار زمان اضافه معتبر نیست.',
-            'amount_days.min'      => "حداقل زمان قابل خرید {$minDays} روز است.",
-            'amount_days.max'      => "حداکثر زمان قابل خرید {$maxDays} روز است.",
+            'amount_days.integer' => 'مقدار زمان اضافه معتبر نیست.',
+            'amount_days.min' => "حداقل زمان قابل خرید {$minDays} روز است.",
+            'amount_days.max' => "حداکثر زمان قابل خرید {$maxDays} روز است.",
         ]);
 
         $user = auth()->user();

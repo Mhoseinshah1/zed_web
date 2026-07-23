@@ -15,9 +15,9 @@ class LandingSection extends Model
     ];
 
     protected $casts = [
-        'items'      => 'array',
-        'settings'   => 'array',
-        'is_active'  => 'boolean',
+        'items' => 'array',
+        'settings' => 'array',
+        'is_active' => 'boolean',
         'sort_order' => 'integer',
     ];
 
@@ -25,18 +25,18 @@ class LandingSection extends Model
     public static function types(): array
     {
         return [
-            'hero'          => 'هیرو',
-            'features'      => 'ویژگی‌ها',
-            'stats'         => 'آمار',
-            'locations'     => 'لوکیشن‌ها',
+            'hero' => 'هیرو',
+            'features' => 'ویژگی‌ها',
+            'stats' => 'آمار',
+            'locations' => 'لوکیشن‌ها',
             'plans_preview' => 'پیش‌نمایش پلن‌ها',
-            'banners'       => 'بنرها',
-            'faq'           => 'سوالات متداول',
-            'testimonials'  => 'نظرات کاربران',
-            'trust'         => 'اعتمادسازی',
-            'steps'         => 'مراحل',
+            'banners' => 'بنرها',
+            'faq' => 'سوالات متداول',
+            'testimonials' => 'نظرات کاربران',
+            'trust' => 'اعتمادسازی',
+            'steps' => 'مراحل',
             'call_to_action' => 'دعوت به اقدام',
-            'custom'        => 'سفارشی',
+            'custom' => 'سفارشی',
         ];
     }
 

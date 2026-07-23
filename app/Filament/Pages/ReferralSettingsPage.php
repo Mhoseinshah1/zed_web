@@ -21,12 +21,17 @@ class ReferralSettingsPage extends Page implements HasForms
 
     protected static string $view = 'filament.pages.referral-settings';
 
-    protected static ?string $navigationIcon   = 'heroicon-o-megaphone';
-    protected static ?string $navigationGroup   = 'نمایندگان و بازاریابی';
-    protected static ?string $navigationLabel   = 'تنظیمات نمایندگان';
-    protected static ?string $title             = 'تنظیمات نمایندگان و پورسانت';
-    protected static ?string $slug              = 'settings/referral';
-    protected static ?int    $navigationSort    = 10;
+    protected static ?string $navigationIcon = 'heroicon-o-megaphone';
+
+    protected static ?string $navigationGroup = 'نمایندگان و بازاریابی';
+
+    protected static ?string $navigationLabel = 'تنظیمات نمایندگان';
+
+    protected static ?string $title = 'تنظیمات نمایندگان و پورسانت';
+
+    protected static ?string $slug = 'settings/referral';
+
+    protected static ?int $navigationSort = 10;
 
     /** @var array<string,mixed> */
     public array $data = [];
@@ -34,17 +39,17 @@ class ReferralSettingsPage extends Page implements HasForms
     public function mount(): void
     {
         $this->form->fill([
-            'referral_mode'                  => ReferralSettings::mode(),
-            'representative_system_enabled'  => ReferralSettings::representativeSystemEnabled(),
-            'auto_approve_representatives'   => ReferralSettings::autoApproveRepresentatives(),
-            'default_commission_type'        => ReferralSettings::defaultCommissionType(),
-            'default_commission_value'       => ReferralSettings::defaultCommissionValue(),
-            'commission_on_new_service'      => (bool) SiteSetting::get('commission_on_new_service', true),
-            'commission_on_renewal'          => (bool) SiteSetting::get('commission_on_renewal', true),
-            'commission_on_extra_traffic'    => (bool) SiteSetting::get('commission_on_extra_traffic', true),
-            'commission_on_extra_time'       => (bool) SiteSetting::get('commission_on_extra_time', true),
-            'commission_after_discount'      => ReferralSettings::commissionAfterDiscount(),
-            'referral_cookie_days'           => ReferralSettings::referralCookieDays(),
+            'referral_mode' => ReferralSettings::mode(),
+            'representative_system_enabled' => ReferralSettings::representativeSystemEnabled(),
+            'auto_approve_representatives' => ReferralSettings::autoApproveRepresentatives(),
+            'default_commission_type' => ReferralSettings::defaultCommissionType(),
+            'default_commission_value' => ReferralSettings::defaultCommissionValue(),
+            'commission_on_new_service' => (bool) SiteSetting::get('commission_on_new_service', true),
+            'commission_on_renewal' => (bool) SiteSetting::get('commission_on_renewal', true),
+            'commission_on_extra_traffic' => (bool) SiteSetting::get('commission_on_extra_traffic', true),
+            'commission_on_extra_time' => (bool) SiteSetting::get('commission_on_extra_time', true),
+            'commission_after_discount' => ReferralSettings::commissionAfterDiscount(),
+            'referral_cookie_days' => ReferralSettings::referralCookieDays(),
         ]);
     }
 
@@ -57,7 +62,7 @@ class ReferralSettingsPage extends Page implements HasForms
                         Forms\Components\Radio::make('referral_mode')
                             ->label('چه کسانی می‌توانند کاربر معرفی کنند؟')
                             ->options([
-                                ReferralSettings::MODE_ALL_USERS       => 'فعال بودن زیرمجموعه‌گیری برای همه کاربران (همه کاربران)',
+                                ReferralSettings::MODE_ALL_USERS => 'فعال بودن زیرمجموعه‌گیری برای همه کاربران (همه کاربران)',
                                 ReferralSettings::MODE_REPRESENTATIVES => 'فعال بودن زیرمجموعه‌گیری فقط برای نماینده‌ها (فقط نماینده‌های تاییدشده)',
                             ])
                             ->default(ReferralSettings::MODE_ALL_USERS)

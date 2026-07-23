@@ -15,6 +15,7 @@ use App\Models\VpnPanel;
 use App\Services\Notifications\NotificationService;
 use App\Services\Orders\MarkOrderAsPaidService;
 use App\Services\Provisioning\ProvisioningService;
+use App\Services\Referrals\ReferralSettings;
 use App\Services\ServiceProvisioner;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Database\QueryException;
@@ -45,6 +46,7 @@ class ProvisioningConcurrencyTest extends TestCase
     {
         $user ??= User::factory()->create();
         $plan = Plan::factory()->create(['price_toman' => 50000, 'traffic_gb' => 20, 'duration_days' => 30, 'is_active' => true]);
+
         return Order::create(array_merge([
             'user_id' => $user->id, 'plan_id' => $plan->id, 'plan_name' => $plan->name,
             'order_type' => Order::TYPE_NEW_SERVICE,
@@ -122,14 +124,14 @@ class ProvisioningConcurrencyTest extends TestCase
         Http::fake();
         $this->panel();
         $order = $this->paidOrder(attrs: ['payment_status' => Order::PAYMENT_PENDING, 'status' => Order::STATUS_PENDING]);
-        $tx    = $this->paidTx($order);
-        $svc   = app(MarkOrderAsPaidService::class);
+        $tx = $this->paidTx($order);
+        $svc = app(MarkOrderAsPaidService::class);
 
         $svc->markPaid($order->fresh(), $tx->fresh());
         $svc->markPaid($order->fresh(), $tx->fresh()); // duplicate webhook/callback
 
         $this->assertSame(1, UserService::where('order_id', $order->id)->count());
-        $this->assertSame(1, Notification::where('dedupe_key', 'payment_success:order:' . $order->id)->count());
+        $this->assertSame(1, Notification::where('dedupe_key', 'payment_success:order:'.$order->id)->count());
         Queue::assertPushed(ProvisionMarzbanServiceJob::class, 1);
     }
 
@@ -139,16 +141,16 @@ class ProvisioningConcurrencyTest extends TestCase
     {
         Queue::fake();
         Http::fake();
-        SiteSetting::set('referral_mode', \App\Services\Referrals\ReferralSettings::MODE_ALL_USERS);
+        SiteSetting::set('referral_mode', ReferralSettings::MODE_ALL_USERS);
         SiteSetting::set('default_commission_type', 'percent');
         SiteSetting::set('default_commission_value', '10');
 
         $referrer = User::factory()->create();
-        $buyer    = User::factory()->create(['referred_by_user_id' => $referrer->id]);
+        $buyer = User::factory()->create(['referred_by_user_id' => $referrer->id]);
         $this->panel();
         $order = $this->paidOrder($buyer, ['payment_status' => Order::PAYMENT_PENDING, 'status' => Order::STATUS_PENDING]);
-        $tx    = $this->paidTx($order);
-        $svc   = app(MarkOrderAsPaidService::class);
+        $tx = $this->paidTx($order);
+        $svc = app(MarkOrderAsPaidService::class);
 
         $svc->markPaid($order->fresh(), $tx->fresh());
         $svc->markPaid($order->fresh(), $tx->fresh());
@@ -163,11 +165,11 @@ class ProvisioningConcurrencyTest extends TestCase
         $this->panel();
         Http::fake([
             '*/api/admin/token' => Http::response(['access_token' => 't', 'token_type' => 'bearer'], 200),
-            '*/api/user'   => Http::response($this->marzbanUser(), 200),
+            '*/api/user' => Http::response($this->marzbanUser(), 200),
             '*/api/user/*' => Http::response($this->marzbanUser(), 200),
         ]);
         $order = $this->paidOrder();
-        $prov  = app(ProvisioningService::class);
+        $prov = app(ProvisioningService::class);
 
         $prov->provisionOrder($order);
         $prov->provisionOrder($order->fresh()); // retry / second job

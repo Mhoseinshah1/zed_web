@@ -7,13 +7,17 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class Commission extends Model
 {
-    const STATUS_PENDING   = 'pending';
-    const STATUS_CREDITED  = 'credited';
+    const STATUS_PENDING = 'pending';
+
+    const STATUS_CREDITED = 'credited';
+
     const STATUS_CANCELLED = 'cancelled';
-    const STATUS_REVERSED  = 'reversed';
+
+    const STATUS_REVERSED = 'reversed';
 
     const TYPE_PERCENT = 'percent';
-    const TYPE_FIXED   = 'fixed';
+
+    const TYPE_FIXED = 'fixed';
 
     protected $fillable = [
         'representative_user_id',
@@ -33,13 +37,13 @@ class Commission extends Model
     ];
 
     protected $casts = [
-        'original_amount'   => 'integer',
-        'final_amount'      => 'integer',
-        'commission_value'  => 'integer',
+        'original_amount' => 'integer',
+        'final_amount' => 'integer',
+        'commission_value' => 'integer',
         'commission_amount' => 'integer',
-        'credited_at'       => 'datetime',
-        'cancelled_at'      => 'datetime',
-        'metadata'          => 'array',
+        'credited_at' => 'datetime',
+        'cancelled_at' => 'datetime',
+        'metadata' => 'array',
     ];
 
     public function representative(): BelongsTo
@@ -65,10 +69,10 @@ class Commission extends Model
     public static function statuses(): array
     {
         return [
-            self::STATUS_PENDING   => 'در انتظار',
-            self::STATUS_CREDITED  => 'پرداخت‌شده',
+            self::STATUS_PENDING => 'در انتظار',
+            self::STATUS_CREDITED => 'پرداخت‌شده',
             self::STATUS_CANCELLED => 'لغوشده',
-            self::STATUS_REVERSED  => 'برگشت‌خورده',
+            self::STATUS_REVERSED => 'برگشت‌خورده',
         ];
     }
 }
