@@ -1,0 +1,596 @@
+name: CI
+
+# Production-quality CI pipeline for the ZedProxy Laravel application.
+#
+# One workflow, seven independently-named jobs so branch protection can require
+# each check by a stable name:
+#
+#   PHP Tests (SQLite)            — fast full suite + boot + config/route/view cache
+#   Integration Tests (PostgreSQL) — real Postgres + Redis: financial/concurrency flows
+#   Code Style                   — Pint, composer metadata, autoload, PHP syntax
+#   Frontend Build               — npm ci + vite build (locked)
+#   Shell Tests                  — installer/deploy shell scripts (mocked, no real infra)
+#   Security Audit               — composer/npm audit, secret + private-key scanning
+#   Migration Validation         — fresh Postgres migrate + status + pg index checks
+#
+# See README.md ("Continuous Integration") for versions, required checks, local
+# equivalents, and the recommended branch-protection policy.
+
+on:
+  push:
+    branches:
+      - main
+      - 'fix/**'
+      - 'feat/**'
+      - 'chore/**'
+      - 'hardening/**'
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+# Cancel superseded runs on the same ref so pushes don't pile up.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Least privilege by default; individual jobs opt into more only when needed.
+permissions:
+  contents: read
+
+env:
+  PHP_VERSION: '8.3'
+  NODE_VERSION: '22'
+
+jobs:
+  # ── Job 1 ──────────────────────────────────────────────────────────────────
+  php-tests-sqlite:
+    name: PHP Tests (SQLite)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      APP_ENV: testing
+      # phpunit.xml already forces these for the suite; setting them as real env
+      # vars also pins the config:/route:/view: cache compilation below.
+      DB_CONNECTION: sqlite
+      DB_DATABASE: ':memory:'
+      CACHE_STORE: array
+      QUEUE_CONNECTION: sync
+      SESSION_DRIVER: array
+      MAIL_MAILER: array
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ env.PHP_VERSION }}
+          extensions: mbstring, bcmath, intl, gd, redis, zip, sqlite3, pdo_sqlite
+          coverage: none
+          tools: composer:v2
+
+      - name: Cache Composer packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/composer
+          key: composer-${{ runner.os }}-php${{ env.PHP_VERSION }}-${{ hashFiles('composer.lock') }}
+          restore-keys: composer-${{ runner.os }}-php${{ env.PHP_VERSION }}-
+
+      - name: Install dependencies (locked)
+        run: composer install --no-interaction --prefer-dist --no-progress
+
+      - name: Prepare predictable testing environment
+        run: |
+          cp .env.example .env
+          php artisan key:generate --force
+
+      - name: Run test suite (SQLite)
+        run: php artisan test
+
+      - name: Compile config cache
+        run: php artisan config:cache
+
+      - name: Compile route cache
+        run: php artisan route:cache
+
+      - name: Compile view cache
+        run: php artisan view:cache
+
+  # ── Job 2 ──────────────────────────────────────────────────────────────────
+  integration-postgres:
+    name: Integration Tests (PostgreSQL)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: zedproxy_test
+          POSTGRES_USER: zedproxy
+          POSTGRES_PASSWORD: secret
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U zedproxy"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+
+    env:
+      APP_ENV: testing
+      DB_CONNECTION: pgsql
+      DB_HOST: 127.0.0.1
+      DB_PORT: 5432
+      DB_DATABASE: zedproxy_test
+      DB_USERNAME: zedproxy
+      DB_PASSWORD: secret
+      # Default store is array (matches the suite's own expectations); the
+      # dedicated "Redis-backed" step below overrides CACHE_STORE=redis so
+      # Cache::lock runs against the real Redis service.
+      CACHE_STORE: array
+      REDIS_CLIENT: phpredis
+      REDIS_HOST: 127.0.0.1
+      REDIS_PORT: 6379
+      QUEUE_CONNECTION: sync
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ env.PHP_VERSION }}
+          extensions: pdo_pgsql, pgsql, mbstring, bcmath, intl, gd, redis, zip, pcntl
+          coverage: none
+          tools: composer:v2
+
+      - name: Cache Composer packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/composer
+          key: composer-${{ runner.os }}-php${{ env.PHP_VERSION }}-${{ hashFiles('composer.lock') }}
+          restore-keys: composer-${{ runner.os }}-php${{ env.PHP_VERSION }}-
+
+      - name: Install dependencies (locked)
+        run: composer install --no-interaction --prefer-dist --no-progress
+
+      - name: Prepare environment
+        run: |
+          cp .env.example .env
+          php artisan key:generate --force
+
+      - name: Verify Redis connectivity
+        run: |
+          php -r '$r = new Redis(); $r->connect("127.0.0.1", 6379); $r->set("ci_ping", "ok"); exit($r->get("ci_ping") === "ok" ? 0 : 1);'
+
+      - name: Migrate (fresh, PostgreSQL)
+        run: php artisan migrate --force
+
+      - name: Provisioning + payment + wallet + commission (PostgreSQL)
+        run: php artisan test --testsuite=Feature --filter='ProvisioningConcurrencyTest|ProvisioningTest|PaymentTest|WalletTest|ReferralCommissionTest|RenewalTest|ServiceAddonTest'
+
+      - name: Discount concurrency + lifecycle (PostgreSQL)
+        run: php artisan test --testsuite=Feature --filter='DiscountConcurrencyTest|DiscountConcurrencyPgTest|DiscountTest|DiscountAllFlowsTest'
+
+      - name: Order idempotency + real-concurrency (PostgreSQL)
+        run: php artisan test --testsuite=Feature --filter='OrderIdempotencyTest|OrderIdempotencyPgTest'
+
+      - name: Scheduler locking + Redis-outage resilience
+        run: php artisan test --testsuite=Feature --filter='SchedulerTest'
+
+      - name: Backup lock against real Redis
+        # Override the default store so Cache::lock is exercised on the live
+        # Redis service rather than the array store.
+        env:
+          CACHE_STORE: redis
+        run: php artisan test --testsuite=Feature --filter='BackupSchedulingTest'
+
+  # ── Job 3 ──────────────────────────────────────────────────────────────────
+  code-style:
+    name: Code Style
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      # Keep composer's post-autoload artisan hooks (package:discover) on the
+      # predictable in-memory SQLite config — no database is needed here.
+      APP_ENV: testing
+      DB_CONNECTION: sqlite
+      DB_DATABASE: ':memory:'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ env.PHP_VERSION }}
+          extensions: mbstring, bcmath, intl, zip
+          coverage: none
+          tools: composer:v2
+
+      - name: Validate composer metadata
+        run: composer validate --strict --no-check-publish
+
+      - name: Cache Composer packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/composer
+          key: composer-${{ runner.os }}-php${{ env.PHP_VERSION }}-${{ hashFiles('composer.lock') }}
+          restore-keys: composer-${{ runner.os }}-php${{ env.PHP_VERSION }}-
+
+      - name: Install dependencies (locked)
+        run: composer install --no-interaction --prefer-dist --no-progress
+
+      - name: Verify optimized autoloader generates cleanly
+        run: composer dump-autoload --optimize --strict-psr
+
+      - name: PHP syntax check (lint)
+        run: |
+          set -euo pipefail
+          find app config database routes tests bootstrap -name '*.php' -print0 \
+            | xargs -0 -n1 -P4 php -l >/dev/null
+
+      - name: Laravel Pint (check only)
+        run: vendor/bin/pint --test
+
+  # ── Job 4 ──────────────────────────────────────────────────────────────────
+  frontend-build:
+    name: Frontend Build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fail if lock file is missing
+        run: test -f package-lock.json || { echo '::error::package-lock.json is required'; exit 1; }
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies (locked)
+        run: npm ci
+
+      - name: Build assets
+        run: npm run build
+
+      - name: Verify Vite build output exists
+        run: |
+          test -f public/build/manifest.json \
+            || { echo '::error::Vite build did not produce public/build/manifest.json'; exit 1; }
+
+      - name: Upload build logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-build-logs
+          path: |
+            npm-debug.log*
+            public/build/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  # ── Job 5 ──────────────────────────────────────────────────────────────────
+  shell-tests:
+    name: Shell Tests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Syntax-check all shell scripts
+        run: |
+          set -euo pipefail
+          bash -n install.sh
+          bash -n update.sh
+          for f in $(find scripts tests -name '*.sh'); do
+            echo "bash -n $f"
+            bash -n "$f"
+          done
+
+      - name: Install shellcheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+
+      - name: ShellCheck (errors only, documented exclusions)
+        # -S error: only hard errors fail the build (style/info excluded).
+        # -x: follow sourced files so shared libs are analysed in context.
+        run: |
+          shellcheck -S error -x \
+            scripts/lib/deploy-lib.sh \
+            scripts/deploy/deploy.sh \
+            scripts/deploy/rollback.sh \
+            scripts/deploy/deploy-status.sh \
+            scripts/lib/installer-lib.sh \
+            tests/deploy/run-tests.sh \
+            tests/installer/run-tests.sh
+
+      - name: Installer helper tests (mocked)
+        run: bash tests/installer/run-tests.sh | tee installer-tests.log
+
+      - name: Deployment scenario tests (mocked)
+        run: bash tests/deploy/run-tests.sh | tee deploy-tests.log
+
+      - name: Upload shell test logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: shell-test-logs
+          path: |
+            installer-tests.log
+            deploy-tests.log
+          if-no-files-found: ignore
+          retention-days: 7
+
+  # ── Job 6 ──────────────────────────────────────────────────────────────────
+  security-audit:
+    name: Security Audit
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      APP_ENV: testing
+      DB_CONNECTION: sqlite
+      DB_DATABASE: ':memory:'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ env.PHP_VERSION }}
+          extensions: mbstring, bcmath, intl, zip
+          coverage: none
+          tools: composer:v2
+
+      - name: Cache Composer packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/composer
+          key: composer-${{ runner.os }}-php${{ env.PHP_VERSION }}-${{ hashFiles('composer.lock') }}
+          restore-keys: composer-${{ runner.os }}-php${{ env.PHP_VERSION }}-
+
+      - name: Install dependencies (locked)
+        run: composer install --no-interaction --prefer-dist --no-progress
+
+      # Policy: HIGH and CRITICAL PHP advisories fail the build; medium/low are
+      # reported as warnings (consistent with the npm policy below). Abandoned
+      # packages are ignored here so unrelated deprecations never block.
+      - name: Composer security audit (high/critical fails)
+        shell: bash
+        run: |
+          report="$(composer audit --format=json --abandoned=ignore --no-interaction 2>/dev/null || true)"
+          printf '%s' "$report" | php -r '
+            $data = json_decode(stream_get_contents(STDIN), true) ?: [];
+            $advs = $data["advisories"] ?? [];
+            $blocking = [];
+            $reported = [];
+            foreach ($advs as $pkg => $list) {
+              foreach ($list as $a) {
+                $sev = strtolower($a["severity"] ?? "unknown");
+                $line = sprintf("%s: %s [%s]", $pkg, $a["title"] ?? "advisory", $sev);
+                if (in_array($sev, ["high", "critical"], true)) { $blocking[] = $line; }
+                else { $reported[] = $line; }
+              }
+            }
+            if ($reported) { fwrite(STDOUT, "::warning::Non-blocking composer advisories (medium/low):\n" . implode("\n", $reported) . "\n"); }
+            if ($blocking) { fwrite(STDERR, "::error::High/critical composer advisories:\n" . implode("\n", $blocking) . "\n"); exit(1); }
+            echo "No high/critical composer advisories.\n";
+          '
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      # Policy: fail on high or critical npm advisories; lower severities are
+      # reported for awareness but do not block.
+      - name: NPM security audit (high+ fails)
+        run: |
+          npm audit --audit-level=high || { echo '::error::npm reported high/critical advisories'; exit 1; }
+          npm audit || echo '::warning::npm reported low/moderate advisories (non-blocking)'
+
+      - name: Fail if a real .env file is committed
+        run: |
+          if git ls-files | grep -E '(^|/)\.env$'; then
+            echo '::error::A real .env file is tracked in git. Remove it and use .env.example.'
+            exit 1
+          fi
+          echo 'No committed .env files.'
+
+      - name: Scan for committed private keys / credentials (values redacted)
+        run: |
+          set -uo pipefail
+          # Search tracked files only; print file names and matched keywords, never values.
+          if git grep -I -l -E 'BEGIN( RSA| OPENSSH| DSA| EC| PGP)? PRIVATE KEY' -- . ':!*.example' ':!README.md'; then
+            echo '::error::A private key appears to be committed (value not shown).'
+            exit 1
+          fi
+          echo 'No committed private keys detected.'
+
+      - name: Install gitleaks (pinned)
+        run: |
+          curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.21.2/gitleaks_8.21.2_linux_x64.tar.gz \
+            | sudo tar -xz -C /usr/local/bin gitleaks
+          gitleaks version
+
+      - name: Secret scan (gitleaks, redacted)
+        # Scan the working tree (--no-git) with the repo allowlist; --redact
+        # ensures any finding is reported without printing the secret value.
+        run: gitleaks detect --source . --no-git --config .gitleaks.toml --no-banner --redact --exit-code 1
+
+      # Supplementary: GitHub Dependency Review augments the audits above on PRs.
+      # It requires the Dependency Graph API, which may be unavailable on some
+      # private plans; it fails gracefully here because composer/npm audit above
+      # are the enforced dependency gates.
+      - name: Dependency review (PRs only, best-effort)
+        if: github.event_name == 'pull_request'
+        continue-on-error: true
+        uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: high
+
+  # ── Job 7 ──────────────────────────────────────────────────────────────────
+  migration-validation:
+    name: Migration Validation
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: zedproxy_migrate
+          POSTGRES_USER: zedproxy
+          POSTGRES_PASSWORD: secret
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U zedproxy"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+
+    env:
+      APP_ENV: testing
+      DB_CONNECTION: pgsql
+      DB_HOST: 127.0.0.1
+      DB_PORT: 5432
+      DB_DATABASE: zedproxy_migrate
+      DB_USERNAME: zedproxy
+      DB_PASSWORD: secret
+      CACHE_STORE: array
+      QUEUE_CONNECTION: sync
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ env.PHP_VERSION }}
+          extensions: pdo_pgsql, pgsql, mbstring, bcmath, intl, zip
+          coverage: none
+          tools: composer:v2
+
+      - name: Cache Composer packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/composer
+          key: composer-${{ runner.os }}-php${{ env.PHP_VERSION }}-${{ hashFiles('composer.lock') }}
+          restore-keys: composer-${{ runner.os }}-php${{ env.PHP_VERSION }}-
+
+      - name: Install dependencies (locked)
+        run: composer install --no-interaction --prefer-dist --no-progress
+
+      - name: Prepare environment
+        run: |
+          cp .env.example .env
+          php artisan key:generate --force
+
+      - name: Fresh migration succeeds
+        run: php artisan migrate --force
+
+      - name: No pending migrations remain
+        run: |
+          php artisan migrate:status
+          if php artisan migrate:status | grep -i 'Pending'; then
+            echo '::error::Pending migrations detected after a fresh migrate.'
+            exit 1
+          fi
+
+      - name: Re-running migrate is a no-op (idempotent)
+        run: |
+          out="$(php artisan migrate --force)"
+          echo "$out"
+          echo "$out" | grep -qi 'Nothing to migrate' \
+            || { echo '::error::A second migrate should be a no-op.'; exit 1; }
+
+      - name: PostgreSQL-specific partial indexes are created
+        run: |
+          php -r '
+            $c = new PDO("pgsql:host=127.0.0.1;port=5432;dbname=zedproxy_migrate", "zedproxy", "secret");
+            $required = [
+              "orders_user_fingerprint_unpaid_unique",
+              "user_services_order_id_unique",
+            ];
+            $have = $c->query("SELECT indexname FROM pg_indexes")->fetchAll(PDO::FETCH_COLUMN);
+            foreach ($required as $idx) {
+              if (!in_array($idx, $have, true)) {
+                fwrite(STDERR, "::error::Expected PostgreSQL index missing: $idx\n");
+                exit(1);
+              }
+              echo "index present: $idx\n";
+            }
+          '
+
+      - name: Duplicate-data guard fails clearly
+        # The purchase-fingerprint migration refuses to add its unique index when
+        # conflicting unpaid orders already exist. We seed a conflict, drop the
+        # index, and invoke the migration's up() directly (the migrator would
+        # skip an already-run migration) — it must abort with a clear "duplicate"
+        # error and delete nothing.
+        run: |
+          cat > /tmp/guard_check.php <<'PHP'
+          <?php
+          require __DIR__.'/vendor/autoload.php';
+          $app = require __DIR__.'/bootstrap/app.php';
+          $app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
+
+          $u = \App\Models\User::factory()->create();
+          $p = \App\Models\Plan::factory()->create(['is_active' => true]);
+
+          \Illuminate\Support\Facades\DB::statement('DROP INDEX IF EXISTS orders_user_fingerprint_unpaid_unique');
+
+          foreach ([1, 2] as $i) {
+              \App\Models\Order::create([
+                  'user_id'              => $u->id,
+                  'plan_id'              => $p->id,
+                  'plan_name'            => $p->name,
+                  'purchase_fingerprint' => 'dup-fingerprint',
+                  'price_toman'          => 1000,
+                  'final_price_toman'    => 1000,
+                  'payment_status'       => 'unpaid',
+                  'status'               => 'pending',
+              ]);
+          }
+
+          $before = \Illuminate\Support\Facades\DB::table('orders')->count();
+          $migration = require __DIR__.'/database/migrations/2026_07_23_160100_add_purchase_fingerprint_to_orders.php';
+
+          try {
+              $migration->up();
+              fwrite(STDERR, "::error::Duplicate-data guard did NOT fail as expected.\n");
+              exit(1);
+          } catch (\Throwable $e) {
+              $after = \Illuminate\Support\Facades\DB::table('orders')->count();
+              if ($after !== $before) {
+                  fwrite(STDERR, "::error::Guard deleted data (before=$before after=$after).\n");
+                  exit(1);
+              }
+              if (stripos($e->getMessage(), 'duplicate') === false) {
+                  fwrite(STDERR, "::error::Guard failed without a clear duplicate message: {$e->getMessage()}\n");
+                  exit(1);
+              }
+              echo "Guard aborted clearly and preserved all rows: {$e->getMessage()}\n";
+              exit(0);
+          }
+          PHP
+          php /tmp/guard_check.php
