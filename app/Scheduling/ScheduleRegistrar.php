@@ -26,6 +26,12 @@ class ScheduleRegistrar
             ->everyMinute()
             ->withoutOverlapping();
 
+        // Reclaim abandoned discount reservations so their capacity is freed.
+        // Always registered; the command is a no-op when nothing is due.
+        $schedule->command('zedproxy:expire-discount-reservations')
+            ->everyFiveMinutes()
+            ->withoutOverlapping();
+
         // The rest depend on admin settings; guard the table so this is safe to
         // build before migrations have run.
         if (! Schema::hasTable('site_settings')) {

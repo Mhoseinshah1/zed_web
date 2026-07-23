@@ -295,6 +295,10 @@ class NotificationTest extends TestCase
             'discount_code'    => 'NOTI10',
             'discount_toman'   => 10000,
             'final_price_toman'=> 90000,
+            // markUsed only consumes a redemption for a genuinely PAID order.
+            'status'           => Order::STATUS_PAID,
+            'payment_status'   => Order::PAYMENT_PAID,
+            'paid_at'          => now(),
         ]);
         \App\Models\DiscountRedemption::create([
             'discount_code_id' => $code->id,

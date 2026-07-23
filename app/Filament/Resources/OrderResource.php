@@ -408,6 +408,9 @@ class OrderResource extends Resource
                             'cancelled_at' => now(),
                             'admin_notes'  => $data['admin_notes'] ?? $record->admin_notes,
                         ]);
+                        // Admin invalidates the order → free any held discount capacity.
+                        app(\App\Services\Discounts\DiscountService::class)
+                            ->releaseReservation($record, 'admin_cancelled');
                         Notification::make()->title('سفارش لغو شد.')->warning()->send();
                     })
                     ->requiresConfirmation()

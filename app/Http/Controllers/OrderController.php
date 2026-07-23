@@ -40,7 +40,7 @@ class OrderController extends Controller
             return back()->withErrors(['discount_code' => $e->getMessage()]);
         }
 
-        return back()->with('discount_success', 'کد تخفیف با موفقیت اعمال شد.');
+        return back()->with('discount_success', \App\Services\Discounts\DiscountService::MSG_APPLIED);
     }
 
     public function removeDiscount(Order $order, DiscountService $discountService)
@@ -53,6 +53,6 @@ class OrderController extends Controller
 
         $discountService->removeFromOrder($order);
 
-        return back()->with('discount_success', 'کد تخفیف حذف شد.');
+        return back()->with('discount_success', \App\Services\Discounts\DiscountService::MSG_REMOVED);
     }
 }
