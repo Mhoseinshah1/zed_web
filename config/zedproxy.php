@@ -31,4 +31,29 @@ return [
         'heartbeat_threshold' => (int) env('SCHEDULER_HEARTBEAT_THRESHOLD', 300),
     ],
 
+    /*
+    |--------------------------------------------------------------------------
+    | Discount reservations
+    |--------------------------------------------------------------------------
+    |
+    | reservation_ttl_minutes: how long a `reserved` discount temporarily holds
+    | capacity before an abandoned reservation is expired by
+    | `zedproxy:expire-discount-reservations` (default 30 minutes). A reserved
+    | code that is not paid within this window is released back to the pool.
+    |
+    | deadlock_retries / deadlock_backoff_ms: bounded retry for a DB deadlock or
+    | serialization failure while applying/replacing a discount under load.
+    | Validation failures are NEVER retried.
+    |
+    | expire_batch_size: rows processed per batch by the expiration command.
+    |
+    */
+
+    'discounts' => [
+        'reservation_ttl_minutes' => (int) env('DISCOUNT_RESERVATION_TTL_MINUTES', 30),
+        'deadlock_retries'        => (int) env('DISCOUNT_DEADLOCK_RETRIES', 3),
+        'deadlock_backoff_ms'     => (int) env('DISCOUNT_DEADLOCK_BACKOFF_MS', 100),
+        'expire_batch_size'       => (int) env('DISCOUNT_EXPIRE_BATCH_SIZE', 500),
+    ],
+
 ];
