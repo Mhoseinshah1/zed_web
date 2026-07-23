@@ -47,7 +47,7 @@ jobs:
         uses: shivammathur/setup-php@v2
         with:
           php-version: '8.3'
-          extensions: pdo_pgsql, pgsql, mbstring, bcmath, intl, gd, redis, zip
+          extensions: pdo_pgsql, pgsql, mbstring, bcmath, intl, gd, redis, zip, pcntl
           coverage: none
 
       - name: Install dependencies
@@ -63,3 +63,6 @@ jobs:
 
       - name: Provisioning concurrency + payment suite (PostgreSQL)
         run: php artisan test --testsuite=Feature --filter='ProvisioningConcurrencyTest|ProvisioningTest|PaymentTest|ReferralCommissionTest|RenewalTest|ServiceAddonTest'
+
+      - name: Discount concurrency + reservation lifecycle (PostgreSQL)
+        run: php artisan test --testsuite=Feature --filter='DiscountConcurrencyTest|DiscountConcurrencyPgTest|DiscountTest|DiscountAllFlowsTest'

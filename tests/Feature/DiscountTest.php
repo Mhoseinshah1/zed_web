@@ -240,7 +240,7 @@ class DiscountTest extends TestCase
         $result = app(DiscountService::class)->validateCode($user3, $order, 'TEST10');
 
         $this->assertFalse($result['valid']);
-        $this->assertStringContainsString('سقف', $result['message']);
+        $this->assertStringContainsString('ظرفیت استفاده از این کد', $result['message']);
     }
 
     public function test_per_user_usage_limit_works(): void
@@ -568,27 +568,57 @@ class DiscountTest extends TestCase
             ->assertSessionHasErrors('discount_code');
     }
 
-    public function test_reserved_redemption_does_not_count_toward_usage_limit(): void
+    public function test_non_expired_reservation_consumes_capacity(): void
     {
+        // Capacity policy: a non-expired `reserved` redemption temporarily
+        // consumes capacity, so a second user cannot reserve past the limit.
         $code  = $this->makeDiscountCode(['total_usage_limit' => 1]);
         $user1 = $this->makeUser();
         $user2 = $this->makeUser();
         $plan  = $this->makePlan();
 
-        // Create a RESERVED (not used) redemption
         DiscountRedemption::create([
             'discount_code_id' => $code->id,
             'user_id'          => $user1->id,
+            'order_id'         => $this->makeOrder($user1, $plan)->id,
             'status'           => DiscountRedemption::STATUS_RESERVED,
             'original_amount'  => 100000,
             'discount_amount'  => 10000,
             'final_amount'     => 90000,
+            'reserved_at'      => now(),
+            'expires_at'       => now()->addMinutes(30),
         ]);
 
         $order  = $this->makeOrder($user2, $plan);
         $result = app(DiscountService::class)->validateCode($user2, $order, 'TEST10');
 
-        // Reserved should NOT count toward the total usage limit
+        $this->assertFalse($result['valid']);
+        $this->assertStringContainsString('ظرفیت', $result['message']);
+    }
+
+    public function test_expired_reservation_does_not_consume_capacity(): void
+    {
+        // A reservation whose hold has lapsed frees capacity for others.
+        $code  = $this->makeDiscountCode(['total_usage_limit' => 1]);
+        $user1 = $this->makeUser();
+        $user2 = $this->makeUser();
+        $plan  = $this->makePlan();
+
+        DiscountRedemption::create([
+            'discount_code_id' => $code->id,
+            'user_id'          => $user1->id,
+            'order_id'         => $this->makeOrder($user1, $plan)->id,
+            'status'           => DiscountRedemption::STATUS_RESERVED,
+            'original_amount'  => 100000,
+            'discount_amount'  => 10000,
+            'final_amount'     => 90000,
+            'reserved_at'      => now()->subHour(),
+            'expires_at'       => now()->subMinutes(5),
+        ]);
+
+        $order  = $this->makeOrder($user2, $plan);
+        $result = app(DiscountService::class)->validateCode($user2, $order, 'TEST10');
+
         $this->assertTrue($result['valid']);
     }
 
