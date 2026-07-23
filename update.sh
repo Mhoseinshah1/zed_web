@@ -242,6 +242,30 @@ else
     nginx -t
 fi
 
+# ─── Scheduler cron (ensure installed + retire legacy backup cron) ────────────
+# Idempotent: the dedicated cron.d file is fully replaced, so no duplicates.
+log "Ensuring Laravel scheduler cron is installed..."
+SCHED_LOG="/var/log/zedproxy-scheduler.log"
+SCHED_CRON_FILE="/etc/cron.d/zedproxy-scheduler"
+cat > "${SCHED_CRON_FILE}" <<CRON
+# Managed by ZedProxy updater — do not edit by hand.
+* * * * * www-data cd ${PROJECT_DIR} && php artisan schedule:run >> ${SCHED_LOG} 2>&1
+CRON
+chmod 0644 "${SCHED_CRON_FILE}"
+touch "${SCHED_LOG}" && chown www-data:www-data "${SCHED_LOG}" 2>/dev/null || true
+chmod 0640 "${SCHED_LOG}" 2>/dev/null || true
+# Backups now run only via the Laravel scheduler — remove the legacy backup cron.
+[ -e /etc/cron.d/zedproxy-backup ] && rm -f /etc/cron.d/zedproxy-backup && ok "Removed legacy backup cron"
+ok "Scheduler cron ensured"
+
+# Verify the scheduler heartbeat (informational — the heartbeat updates within a
+# minute of cron firing schedule:run).
+if sudo -u www-data php "${PROJECT_DIR}/artisan" zedproxy:scheduler-status 2>/dev/null; then
+    ok "Scheduler heartbeat is healthy"
+else
+    warn "Scheduler heartbeat not yet fresh — verify with: cd ${PROJECT_DIR} && php artisan zedproxy:scheduler-status"
+fi
+
 # ─── Health check ─────────────────────────────────────────────────────────────
 log "Running health check..."
 sleep 2

@@ -3,6 +3,7 @@
 namespace App\Console\Commands;
 
 use App\Services\Health\HealthCheckService;
+use App\Support\SchedulerHeartbeat;
 use Illuminate\Console\Command;
 
 /**
@@ -24,10 +25,20 @@ class HealthCommand extends Command
         $results = $health->collect();
         $allOk   = collect($results)->every(fn (array $r) => $r['ok'] === true);
 
+        // Scheduler health is reported informationally — a stale heartbeat does
+        // not fail the infra health check (a fresh install has no heartbeat yet),
+        // but it is surfaced so operators can see the scheduler state.
+        $scheduler = [
+            'healthy'     => SchedulerHeartbeat::isHealthy(),
+            'last_run_at' => SchedulerHeartbeat::lastRunAt()?->toIso8601String(),
+            'age_seconds' => SchedulerHeartbeat::ageSeconds(),
+        ];
+
         if ($this->option('json')) {
             $this->line((string) json_encode([
                 'status'     => $allOk ? 'ok' : 'error',
                 'components' => $results,
+                'scheduler'  => $scheduler,
             ], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
 
             return $allOk ? self::SUCCESS : self::FAILURE;
@@ -52,6 +63,16 @@ class HealthCommand extends Command
                 $result['ok'] ? '—' : ($this->reasonFor($name, $labels) . ($result['error'] ? "  ({$result['error']})" : '')),
             ];
         }
+
+        // Scheduler row — informational, does not affect the infra exit code.
+        $rows[] = [
+            'scheduler',
+            $scheduler['healthy'] ? '✅' : '⚠️',
+            $scheduler['last_run_at'] === null
+                ? 'زمان‌بندی وظایف به‌درستی اجرا نمی‌شود. (آخرین اجرای موفق: —)'
+                : ('آخرین اجرای موفق: ' . $scheduler['last_run_at'] . " ({$scheduler['age_seconds']}s)"
+                    . ($scheduler['healthy'] ? '' : ' — زمان‌بندی وظایف به‌درستی اجرا نمی‌شود.')),
+        ];
 
         $this->table(['Component', 'OK', 'Detail'], $rows);
 

@@ -122,6 +122,35 @@ assert_eq "$(zp_mask_secret 'supersecretvalue')" 'su****ue' "secret masked"
 assert_eq "$(zp_mask_secret 'abc')" '****' "short secret fully masked"
 rm -rf "$T12"
 
+# ── Scheduler cron: fresh install writes exactly one entry ──
+TC="$(mktemp -d)"
+CRON="$TC/cron.d/zedproxy-scheduler"
+mkdir -p "$TC/cron.d"
+LINE="$(zp_scheduler_cron_line /var/www/zedproxy www-data php /var/log/zedproxy-scheduler.log)"
+assert_eq "$LINE" '* * * * * www-data cd /var/www/zedproxy && php artisan schedule:run >> /var/log/zedproxy-scheduler.log 2>&1' "scheduler cron line matches required format"
+zp_write_cron_file "$CRON" "$LINE"
+assert_true test -f "$CRON"
+assert_eq "$(stat -c %a "$CRON")" '644' "cron file is mode 644"
+assert_eq "$(zp_count_lines_matching "$CRON" 'schedule:run')" '1' "fresh install: exactly one schedule:run entry"
+
+# ── Installer re-run: duplicate cron prevention (file fully replaced) ──
+zp_write_cron_file "$CRON" "$LINE"
+zp_write_cron_file "$CRON" "$LINE"
+assert_eq "$(zp_count_lines_matching "$CRON" 'schedule:run')" '1' "re-run: still exactly one schedule:run entry (no duplicates)"
+
+# ── Default arguments produce the documented www-data/php line ──
+assert_eq "$(zp_scheduler_cron_line /var/www/zedproxy)" '* * * * * www-data cd /var/www/zedproxy && php artisan schedule:run >> /var/log/zedproxy-scheduler.log 2>&1' "defaults match required entry"
+
+# ── Legacy backup cron is removed (backups run from only one system) ──
+LEGACY="$TC/cron.d/zedproxy-backup"
+echo "0 3 * * * www-data bash /var/www/zedproxy/scripts/backup.sh" > "$LEGACY"
+assert_true  test -f "$LEGACY"
+assert_true  zp_remove_file "$LEGACY"
+assert_false test -f "$LEGACY"
+# Removing an absent file is still success (idempotent).
+assert_true  zp_remove_file "$LEGACY"
+rm -rf "$TC"
+
 echo ""
 echo "== results: ${PASS} passed, ${FAIL} failed =="
 [ "$FAIL" -eq 0 ]

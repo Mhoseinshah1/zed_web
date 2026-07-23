@@ -130,6 +130,62 @@ zp_mask_secret() {
 }
 
 # -----------------------------------------------------------------------------
+# zp_scheduler_cron_line APP_DIR RUN_USER PHP_BIN LOG
+#
+# Print the single cron line that drives the Laravel scheduler every minute.
+# Defaults: RUN_USER=www-data, PHP_BIN=php, LOG=/var/log/zedproxy-scheduler.log.
+# -----------------------------------------------------------------------------
+zp_scheduler_cron_line() {
+    local app_dir="$1" user="${2:-www-data}" php="${3:-php}" log="${4:-/var/log/zedproxy-scheduler.log}"
+    [ -n "$app_dir" ] || return 1
+    printf '* * * * * %s cd %s && %s artisan schedule:run >> %s 2>&1' "$user" "$app_dir" "$php" "$log"
+}
+
+# -----------------------------------------------------------------------------
+# zp_write_cron_file FILE CONTENT
+#
+# Write CONTENT as the *entire* contents of a /etc/cron.d file (mode 644),
+# atomically. Because the file is fully replaced (not appended), re-running the
+# installer can never create duplicate entries — the file always holds exactly
+# one scheduler line. A header comment is added for clarity.
+# -----------------------------------------------------------------------------
+zp_write_cron_file() {
+    local file="$1" content="$2" tmp
+    [ -n "$file" ] || return 1
+    tmp="$(mktemp)" || return 1
+    {
+        printf '# Managed by ZedProxy installer — do not edit by hand.\n'
+        printf '%s\n' "$content"
+    } > "$tmp" || { rm -f "$tmp"; return 1; }
+    # cron.d files must not be group/world writable.
+    chmod 0644 "$tmp" 2>/dev/null || true
+    mv "$tmp" "$file" 2>/dev/null || { rm -f "$tmp"; return 1; }
+}
+
+# -----------------------------------------------------------------------------
+# zp_remove_file FILE — remove FILE if it exists. Returns 0 whether or not it
+# was present (idempotent). Used to retire the legacy backup cron once the
+# Laravel scheduler controls backups, so backups run from only one system.
+# -----------------------------------------------------------------------------
+zp_remove_file() {
+    local file="$1"
+    [ -n "$file" ] || return 1
+    [ -e "$file" ] && rm -f "$file"
+    return 0
+}
+
+# -----------------------------------------------------------------------------
+# zp_count_lines_matching FILE PATTERN — count lines in FILE matching (fixed
+# string) PATTERN. Prints 0 when FILE is absent. Used by tests to prove no
+# duplicate scheduler entries accumulate across re-runs.
+# -----------------------------------------------------------------------------
+zp_count_lines_matching() {
+    local file="$1" pattern="$2"
+    [ -f "$file" ] || { printf '0'; return 0; }
+    grep -cF "$pattern" "$file" 2>/dev/null | tr -d '[:space:]' || printf '0'
+}
+
+# -----------------------------------------------------------------------------
 # zp_git_has_local_changes DIR
 #
 # Return 0 when the git tree at DIR has local modifications OR untracked,

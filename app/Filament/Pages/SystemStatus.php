@@ -2,6 +2,7 @@
 
 namespace App\Filament\Pages;
 
+use App\Support\SchedulerHeartbeat;
 use Filament\Pages\Page;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
@@ -19,9 +20,30 @@ class SystemStatus extends Page
 
     public array $checks = [];
 
+    public array $scheduler = [];
+
     public function mount(): void
     {
-        $this->checks = $this->runChecks();
+        $this->checks    = $this->runChecks();
+        $this->scheduler = $this->schedulerStatus();
+    }
+
+    /**
+     * Scheduler heartbeat status for the "وضعیت زمان‌بندی وظایف" panel.
+     */
+    private function schedulerStatus(): array
+    {
+        $last     = SchedulerHeartbeat::lastRunAt();
+        $healthy  = SchedulerHeartbeat::isHealthy();
+        $timezone = (string) config('app.timezone', 'UTC');
+
+        return [
+            'ok'          => $healthy,
+            'last_run'    => $last?->setTimezone($timezone)->format('Y-m-d H:i:s'),
+            'age_seconds' => SchedulerHeartbeat::ageSeconds(),
+            'timezone'    => $timezone,
+            'message'     => $healthy ? null : 'زمان‌بندی وظایف به‌درستی اجرا نمی‌شود.',
+        ];
     }
 
     private function runChecks(): array

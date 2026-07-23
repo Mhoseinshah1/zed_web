@@ -26,6 +26,36 @@
     <div class="mt-8 fi-section rounded-xl bg-white shadow-sm ring-1 ring-gray-950/5 dark:bg-gray-900 dark:ring-white/10">
         <div class="fi-section-header flex flex-col gap-y-1 px-6 py-4">
             <h3 class="fi-section-heading text-base font-semibold leading-6 text-gray-950 dark:text-white">
+                وضعیت زمان‌بندی وظایف
+            </h3>
+        </div>
+        <div class="fi-section-content border-t border-gray-200 px-6 py-4 dark:border-white/10">
+            <div class="flex items-center gap-3">
+                <div class="flex h-10 w-10 items-center justify-center rounded-full
+                    {{ $scheduler['ok'] ? 'bg-green-100 dark:bg-green-500/10' : 'bg-red-100 dark:bg-red-500/10' }}">
+                    @if ($scheduler['ok'])
+                        <x-heroicon-o-check-circle class="h-6 w-6 text-green-600 dark:text-green-400"/>
+                    @else
+                        <x-heroicon-o-exclamation-triangle class="h-6 w-6 text-red-600 dark:text-red-400"/>
+                    @endif
+                </div>
+                <div>
+                    <p class="text-sm font-medium {{ $scheduler['ok'] ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400' }}">
+                        {{ $scheduler['ok'] ? 'زمان‌بندی وظایف فعال است.' : $scheduler['message'] }}
+                    </p>
+                    <p class="text-xs mt-0.5 text-gray-500 dark:text-gray-400">
+                        آخرین اجرای موفق: {{ $scheduler['last_run'] ?? '—' }}
+                        <span class="mx-1">·</span>
+                        منطقه زمانی: {{ $scheduler['timezone'] }}
+                    </p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="mt-8 fi-section rounded-xl bg-white shadow-sm ring-1 ring-gray-950/5 dark:bg-gray-900 dark:ring-white/10">
+        <div class="fi-section-header flex flex-col gap-y-1 px-6 py-4">
+            <h3 class="fi-section-heading text-base font-semibold leading-6 text-gray-950 dark:text-white">
                 اطلاعات سیستم
             </h3>
         </div>

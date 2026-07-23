@@ -198,14 +198,40 @@ zedproxy_2026-06-27_03-00.dump
 
 ### Automate daily backups
 
-The `install.sh` automatically sets up a cron at 3:00 AM. Backups older than 30 days are deleted automatically.
+Backups are driven by the **Laravel scheduler** (`zedproxy:backup --scheduled`),
+configured from the admin panel — there is no separate backup cron. Make sure
+the scheduler cron below is installed (the installer does this automatically);
+everything else (backups, Telegram reports, panel health, Marzban sync) runs
+through it. Backups older than the configured retention are removed automatically.
 
-To add manually:
+## Scheduler (production-critical)
+
+The single supported scheduling method is one cron entry that runs the Laravel
+scheduler every minute. `install.sh` installs it idempotently (re-running never
+creates duplicates) and removes the legacy backup cron:
 
 ```bash
-echo "0 3 * * * www-data bash /var/www/zedproxy/scripts/backup.sh >> /var/log/zedproxy-backup.log 2>&1" \
-    | sudo tee /etc/cron.d/zedproxy-backup
+echo "* * * * * www-data cd /var/www/zedproxy && php artisan schedule:run >> /var/log/zedproxy-scheduler.log 2>&1" \
+    | sudo tee /etc/cron.d/zedproxy-scheduler
 ```
+
+- **Timezone:** schedule times use `APP_TIMEZONE` (default `UTC`). Keep the
+  server clock/cron in the same timezone to avoid surprises.
+- **Overlap + Redis outages:** `withoutOverlapping()` locks use the **file**
+  cache store (`SCHEDULER_LOCK_STORE=file`, wired to `cache.schedule_store`), so
+  overlap prevention keeps working even if Redis is down.
+- **Log rotation:** `/etc/logrotate.d/zedproxy-scheduler` rotates the log.
+
+### Verify the scheduler is running
+
+```bash
+php artisan schedule:list              # list registered tasks
+php artisan zedproxy:scheduler-status  # last successful heartbeat (exit 0 healthy)
+```
+
+A heartbeat is recorded every minute; the admin **وضعیت سیستم** page and
+`php artisan zedproxy:health` also show the scheduler status. If it reports
+"زمان‌بندی وظایف به‌درستی اجرا نمی‌شود." the cron above is not firing.
 
 ## Restore from backup
 
