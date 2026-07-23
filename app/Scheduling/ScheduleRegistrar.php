@@ -32,6 +32,11 @@ class ScheduleRegistrar
             ->everyFiveMinutes()
             ->withoutOverlapping();
 
+        // Prune expired, unconsumed purchase idempotency intents.
+        $schedule->command('zedproxy:prune-purchase-intents')
+            ->everyFifteenMinutes()
+            ->withoutOverlapping();
+
         // The rest depend on admin settings; guard the table so this is safe to
         // build before migrations have run.
         if (! Schema::hasTable('site_settings')) {

@@ -26,7 +26,7 @@ class RenewalService
      *
      * @throws \InvalidArgumentException if the service or plan is ineligible
      */
-    public function createRenewalOrder(UserService $service, Plan $plan, User $user): Order
+    public function createRenewalOrder(UserService $service, Plan $plan, User $user, ?string $purchaseFingerprint = null): Order
     {
         if (! SiteSetting::get('renewal_enabled', true)) {
             throw new \InvalidArgumentException('تمدید سرویس در حال حاضر غیرفعال است.');
@@ -52,10 +52,11 @@ class RenewalService
         $renewalDays    = $plan->effectiveRenewalDays();
         $cashbackAmount = $plan->effectiveCashbackAmount();
 
-        return DB::transaction(function () use ($service, $plan, $renewalPrice, $renewalDays, $cashbackAmount) {
+        return DB::transaction(function () use ($service, $plan, $renewalPrice, $renewalDays, $cashbackAmount, $purchaseFingerprint) {
             return Order::create([
                 'order_type'              => Order::TYPE_RENEWAL,
                 'user_id'                 => $service->user_id,
+                'purchase_fingerprint'    => $purchaseFingerprint,
                 'user_service_id'         => $service->id,
                 'plan_id'                 => $plan->id,
                 'original_plan_id'        => $service->plan_id,

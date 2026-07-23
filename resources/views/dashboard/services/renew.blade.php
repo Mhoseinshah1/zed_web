@@ -54,8 +54,9 @@
             <p class="text-xs text-gray-400">اگر کد تخفیف دارید، در مرحله بعد (صفحه سفارش) می‌توانید آن را اعمال کنید.</p>
         </div>
 
-        <form action="{{ route('dashboard.services.renew.submit', $service) }}" method="POST" id="renewal-form">
+        <form action="{{ route('dashboard.services.renew.submit', $service) }}" method="POST" id="renewal-form" data-idempotent-form>
             @csrf
+            @include('partials.purchase-token', ['op' => 'renewal', 'serviceId' => $service->id])
             <div class="space-y-3">
                 @foreach($plans as $plan)
                 @php

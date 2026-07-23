@@ -8,6 +8,7 @@ use App\Models\PaymentTransaction;
 use App\Models\SiteText;
 use App\Services\PaymentService;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 
 class PaymentController extends Controller
 {
@@ -55,13 +56,23 @@ class PaymentController extends Controller
                 ->initiate($request, $order);
         }
 
-        // Check for existing pending/submitted payment
-        $existing = PaymentTransaction::where('order_id', $order->id)
-            ->whereIn('status', [PaymentTransaction::STATUS_PENDING, PaymentTransaction::STATUS_SUBMITTED])
-            ->exists();
+        // Guard against duplicate active payment transactions for this order.
+        // A repeated / concurrent submit must not create a second live manual
+        // transaction; the order row is locked so two racing submits serialize
+        // and the loser sees the winner's transaction (never a duplicate).
+        $duplicate = DB::transaction(function () use ($order) {
+            // Lock the order so concurrent submits for the same order serialize.
+            Order::where('id', $order->id)->lockForUpdate()->first();
 
-        if ($existing) {
-            // If there's an active NOWPayments transaction, redirect to its page
+            $existing = PaymentTransaction::where('order_id', $order->id)
+                ->whereIn('status', [PaymentTransaction::STATUS_PENDING, PaymentTransaction::STATUS_SUBMITTED])
+                ->exists();
+
+            if (! $existing) {
+                return null;
+            }
+
+            // If there's an active NOWPayments transaction, redirect to its page.
             $activeNowpayments = PaymentTransaction::where('order_id', $order->id)
                 ->whereIn('status', [
                     PaymentTransaction::STATUS_WAITING,
@@ -71,10 +82,13 @@ class PaymentController extends Controller
                 ->where('provider', 'nowpayments')
                 ->exists();
 
-            if ($activeNowpayments) {
-                return redirect()->route('dashboard.orders.nowpayments', $order);
-            }
+            return $activeNowpayments ? 'nowpayments' : 'pending';
+        });
 
+        if ($duplicate === 'nowpayments') {
+            return redirect()->route('dashboard.orders.nowpayments', $order);
+        }
+        if ($duplicate === 'pending') {
             return back()->withErrors(['payment_method_id' => 'یک پرداخت در انتظار تایید برای این سفارش وجود دارد.']);
         }
 
@@ -103,23 +117,43 @@ class PaymentController extends Controller
                 ->with('success', 'پرداخت از کیف پول با موفقیت انجام شد.');
         }
 
-        // Manual payment — awaiting admin review
-        PaymentTransaction::create([
-            'order_id'              => $order->id,
-            'user_id'               => auth()->id(),
-            'payment_method_id'     => $method->id,
-            'provider'              => 'manual',
-            'method'                => $method->type,
-            'status'                => PaymentTransaction::STATUS_SUBMITTED,
-            'amount_toman'          => $order->final_price_toman,
-            'transaction_reference' => $request->transaction_reference,
-            'user_note'             => $request->user_note,
-        ]);
+        // Manual payment — awaiting admin review. Lock the order and re-check so
+        // two concurrent submits that both passed the guard above cannot both
+        // insert a live transaction; the loser returns the winner's message.
+        $created = DB::transaction(function () use ($order, $method, $request) {
+            Order::where('id', $order->id)->lockForUpdate()->first();
 
-        $order->update([
-            'payment_status' => Order::PAYMENT_PENDING,
-            'status'         => Order::STATUS_AWAITING_PAYMENT,
-        ]);
+            $existing = PaymentTransaction::where('order_id', $order->id)
+                ->whereIn('status', [PaymentTransaction::STATUS_PENDING, PaymentTransaction::STATUS_SUBMITTED])
+                ->exists();
+
+            if ($existing) {
+                return false;
+            }
+
+            PaymentTransaction::create([
+                'order_id'              => $order->id,
+                'user_id'               => $order->user_id,
+                'payment_method_id'     => $method->id,
+                'provider'              => 'manual',
+                'method'                => $method->type,
+                'status'                => PaymentTransaction::STATUS_SUBMITTED,
+                'amount_toman'          => $order->final_price_toman,
+                'transaction_reference' => $request->transaction_reference,
+                'user_note'             => $request->user_note,
+            ]);
+
+            $order->update([
+                'payment_status' => Order::PAYMENT_PENDING,
+                'status'         => Order::STATUS_AWAITING_PAYMENT,
+            ]);
+
+            return true;
+        });
+
+        if (! $created) {
+            return back()->withErrors(['payment_method_id' => 'یک پرداخت در انتظار تایید برای این سفارش وجود دارد.']);
+        }
 
         return redirect()->route('dashboard.orders.show', $order)
             ->with('success', 'رسید پرداخت ثبت شد و پس از تایید مدیریت، سفارش شما پردازش می‌شود.');

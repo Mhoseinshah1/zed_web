@@ -65,6 +65,7 @@
 
     {{-- Optional per-template body suffix (e.g. mobile-menu toggle, matrix JS). --}}
     @includeIf("templates.$tpl.body_bottom")
+    @include('partials.double-submit-script')
     @stack('scripts')
 </body>
 </html>

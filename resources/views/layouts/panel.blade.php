@@ -355,6 +355,7 @@
     document.addEventListener('keydown', function (e) { if (e.key === 'Escape') closeMenu(); });
 })();
 </script>
+@include('partials.double-submit-script')
 @stack('scripts')
 </body>
 </html>
