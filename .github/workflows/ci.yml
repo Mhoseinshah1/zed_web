@@ -313,18 +313,75 @@ jobs:
         run: |
           shellcheck -S error -x \
             scripts/lib/deploy-lib.sh \
+            scripts/lib/installer-lib.sh \
+            scripts/lib/supply-chain-lib.sh \
             scripts/deploy/deploy.sh \
             scripts/deploy/rollback.sh \
             scripts/deploy/deploy-status.sh \
-            scripts/lib/installer-lib.sh \
             tests/deploy/run-tests.sh \
-            tests/installer/run-tests.sh
+            tests/installer/run-tests.sh \
+            tests/supply-chain/run-tests.sh
+          shellcheck -S error install.sh
 
       - name: Installer helper tests (mocked)
         run: bash tests/installer/run-tests.sh | tee installer-tests.log
 
       - name: Deployment scenario tests (mocked)
         run: bash tests/deploy/run-tests.sh | tee deploy-tests.log
+
+      - name: Supply-chain helper tests (25 mocked scenarios)
+        run: bash tests/supply-chain/run-tests.sh | tee supply-chain-tests.log
+
+      # ── Supply-chain verification (authoritative home; formerly the separate
+      #    supply-chain.yml workflow, folded in here to remove duplicate jobs). ──
+      - name: Assert no forbidden supply-chain patterns remain
+        run: |
+          set -euo pipefail
+          source scripts/lib/supply-chain-lib.sh
+          if ! zsc_scan_forbidden install.sh update.sh \
+                 scripts/deploy/deploy.sh scripts/deploy/rollback.sh \
+                 scripts/deploy/deploy-status.sh scripts/backup.sh; then
+            echo '::error::Unsafe supply-chain pattern found (curl|bash, curl|php, npm fallback, composer update).'
+            exit 1
+          fi
+          # Belt-and-braces raw grep for the two banned pipes (ignore comments).
+          if grep -REn '(curl|wget)[^|]*\|[[:space:]]*(bash|sh|php)([[:space:]]|-|$)' \
+               install.sh update.sh scripts/ | grep -vE ':[[:space:]]*#'; then
+            echo '::error::A curl|bash / curl|php pattern is present.'
+            exit 1
+          fi
+          echo 'No unsafe supply-chain patterns.'
+
+      - name: Lock files, version policy, and version-drift check
+        run: |
+          set -euo pipefail
+          source scripts/lib/supply-chain-lib.sh
+          zsc_require_lockfiles . >/dev/null || { echo '::error::composer.lock / package-lock.json missing'; exit 1; }
+          test -n "$ZSC_SUPPORTED_UBUNTU" && test -n "$ZSC_NODE_MAJOR" && test -n "$ZSC_PHP_MIN"
+          # The supply-chain lib is the authoritative runtime-version source;
+          # assert the workflow + installer + README do not drift from it.
+          ci_php="$(grep -E '^  PHP_VERSION:' .github/workflows/ci.yml | grep -oE '[0-9]+\.[0-9]+' | head -1)"
+          ci_node="$(grep -E '^  NODE_VERSION:' .github/workflows/ci.yml | grep -oE '[0-9]+' | head -1)"
+          inst_node="$(grep -E '^NODE_VERSION=' install.sh | grep -oE '[0-9]+' | head -1)"
+          zsc_check_php "$ci_php" || { echo "::error::ci.yml PHP_VERSION $ci_php outside policy $ZSC_PHP_MIN-$ZSC_PHP_MAX"; exit 1; }
+          [ "$ci_node" = "$ZSC_NODE_MAJOR" ]   || { echo "::error::ci.yml NODE_VERSION $ci_node != policy $ZSC_NODE_MAJOR"; exit 1; }
+          [ "$inst_node" = "$ZSC_NODE_MAJOR" ] || { echo "::error::install.sh NODE_VERSION $inst_node != policy $ZSC_NODE_MAJOR"; exit 1; }
+          grep -qF "${ZSC_PHP_MIN} – ${ZSC_PHP_MAX}" README.md \
+            || grep -qF "${ZSC_PHP_MIN}-${ZSC_PHP_MAX}" README.md \
+            || { echo '::error::README PHP version range drifted from supply-chain-lib policy'; exit 1; }
+          echo "Version policy OK: Ubuntu[$ZSC_SUPPORTED_UBUNTU] PHP[$ZSC_PHP_MIN-$ZSC_PHP_MAX] Node[$ZSC_NODE_MAJOR] PG[$ZSC_PG_MIN-$ZSC_PG_MAX] Redis[$ZSC_REDIS_MIN-$ZSC_REDIS_MAX]"
+
+      - name: Validate deployment version-metadata generation
+        run: |
+          set -euo pipefail
+          source scripts/lib/supply-chain-lib.sh
+          sha="$(zsc_git_resolve . HEAD)"
+          printf '%s' "$sha" | grep -Eq '^[0-9a-f]{40}$' \
+            || { echo '::error::resolved commit SHA is not a full 40-hex value'; exit 1; }
+          tag="$(zsc_git_tag_for . "$sha" || true)"
+          php_v="$(zsc_tool_version php)"
+          printf '{"commit":"%s","tag":"%s","php_version":"%s"}\n' "$sha" "$tag" "$php_v"
+          echo 'Version metadata generation OK.'
 
       - name: Upload shell test logs on failure
         if: failure()
@@ -334,6 +391,7 @@ jobs:
           path: |
             installer-tests.log
             deploy-tests.log
+            supply-chain-tests.log
           if-no-files-found: ignore
           retention-days: 7
 
@@ -347,6 +405,10 @@ jobs:
       APP_ENV: testing
       DB_CONNECTION: sqlite
       DB_DATABASE: ':memory:'
+      # The audit policy + allowlist are the SAME ones the installer and the
+      # atomic deploy use (scripts/lib/supply-chain-lib.sh + this file), so CI
+      # can never pass an advisory the installer would reject, or vice-versa.
+      AUDIT_ALLOWLIST: .zedproxy/audit-allowlist
     steps:
       - uses: actions/checkout@v4
 
@@ -368,43 +430,46 @@ jobs:
       - name: Install dependencies (locked)
         run: composer install --no-interaction --prefer-dist --no-progress
 
-      # Policy: HIGH and CRITICAL PHP advisories fail the build; medium/low are
-      # reported as warnings (consistent with the npm policy below). Abandoned
-      # packages are ignored here so unrelated deprecations never block.
-      - name: Composer security audit (high/critical fails)
-        shell: bash
-        run: |
-          report="$(composer audit --format=json --abandoned=ignore --no-interaction 2>/dev/null || true)"
-          printf '%s' "$report" | php -r '
-            $data = json_decode(stream_get_contents(STDIN), true) ?: [];
-            $advs = $data["advisories"] ?? [];
-            $blocking = [];
-            $reported = [];
-            foreach ($advs as $pkg => $list) {
-              foreach ($list as $a) {
-                $sev = strtolower($a["severity"] ?? "unknown");
-                $line = sprintf("%s: %s [%s]", $pkg, $a["title"] ?? "advisory", $sev);
-                if (in_array($sev, ["high", "critical"], true)) { $blocking[] = $line; }
-                else { $reported[] = $line; }
-              }
-            }
-            if ($reported) { fwrite(STDOUT, "::warning::Non-blocking composer advisories (medium/low):\n" . implode("\n", $reported) . "\n"); }
-            if ($blocking) { fwrite(STDERR, "::error::High/critical composer advisories:\n" . implode("\n", $blocking) . "\n"); exit(1); }
-            echo "No high/critical composer advisories.\n";
-          '
-
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
 
-      # Policy: fail on high or critical npm advisories; lower severities are
-      # reported for awareness but do not block.
-      - name: NPM security audit (high+ fails)
+      # Single authoritative audit implementation (composer + npm) driving the
+      # documented severity policy from supply-chain-lib.sh:
+      #   critical → fail; high → fail unless an UNEXPIRED allowlist entry;
+      #   moderate/low → report. Abandoned/malformed/expired entries never
+      #   suppress. Output is masked; failures are never swallowed.
+      - name: Dependency audit under documented policy (composer + npm)
+        shell: bash
         run: |
-          npm audit --audit-level=high || { echo '::error::npm reported high/critical advisories'; exit 1; }
-          npm audit || echo '::warning::npm reported low/moderate advisories (non-blocking)'
+          set -uo pipefail
+          source scripts/lib/supply-chain-lib.sh
+          today="$(date -u +%Y-%m-%d)"
+          tmp="$(mktemp)"
+          composer audit --format=json --no-interaction 2>/dev/null \
+            | php -r '$d=json_decode(stream_get_contents(STDIN),true)?:[]; foreach(($d["advisories"]??[]) as $p=>$as){foreach($as as $a){printf("%s\t%s\t%s\n",$p,$a["advisoryId"]??($a["cve"]??"unknown"),strtolower($a["severity"]??"unknown"));}}' \
+            >> "$tmp" || true
+          npm audit --json 2>/dev/null \
+            | php -r '$d=json_decode(stream_get_contents(STDIN),true)?:[]; foreach(($d["vulnerabilities"]??[]) as $n=>$v){$sev=strtolower($v["severity"]??"unknown");$id="npm"; if(!empty($v["via"])&&is_array($v["via"])){foreach($v["via"] as $via){if(is_array($via)){$id=(string)($via["url"]??$via["source"]??"npm");break;}}} printf("%s\t%s\t%s\n",$n,$id,$sev);}' \
+            >> "$tmp" || true
+          fails=0; findings=0
+          while IFS=$'\t' read -r pkg adv sev; do
+            [ -n "$pkg" ] || continue
+            findings=$((findings+1))
+            allowed=0
+            zsc_allowlist_entry_active "$AUDIT_ALLOWLIST" "$pkg" "$adv" "$today" && allowed=1
+            decision="$(zsc_audit_decision "$sev" "$allowed")"
+            line="$(printf '%s advisory=%s severity=%s' "$pkg" "$adv" "$sev" | zsc_mask_secrets)"
+            case "$decision" in
+              fail)   echo "::error::[audit] BLOCKING $line"; fails=$((fails+1)) ;;
+              report) [ "$allowed" = 1 ] && echo "[audit] allowlisted $line" || echo "::warning::[audit] $line" ;;
+            esac
+          done < "$tmp"
+          rm -f "$tmp"
+          echo "audit findings: $findings, blocking: $fails"
+          [ "$fails" -eq 0 ] || { echo '::error::Critical/high (non-allowlisted) advisories present.'; exit 1; }
 
       - name: Fail if a real .env file is committed
         run: |
