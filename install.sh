@@ -68,6 +68,26 @@ INSTALL_REF="${ZP_REF:-}"
 APP_DIR="${APP_DIR:-/var/www/zedproxy}"
 REPO_URL="https://github.com/${GITHUB_OWNER}/${REPO_NAME}.git"
 
+# ─── Atomic release layout ───────────────────────────────────────────────────
+# ZedProxy uses the SAME release-based layout the atomic updater uses, from the
+# very first install — there is no separate "legacy single-dir" install path:
+#   $ZPD_BASE/current -> releases/<id>            (Nginx root; worker/scheduler)
+#   $ZPD_BASE/releases/<id>/                       (one release's application code)
+#   $ZPD_BASE/shared/{.env,storage,persistent}    (state shared across releases)
+# During a fresh install $APP_DIR is repointed at the initial release directory
+# so every existing build/config step operates on it transparently, while the
+# operational services and shortcuts always target $ACTIVE_APP_DIR ($ZPD_CURRENT).
+ZPD_BASE="${APP_DIR}"
+ZPD_RELEASES="${ZPD_BASE}/releases"
+ZPD_SHARED="${ZPD_BASE}/shared"
+ZPD_CURRENT="${ZPD_BASE}/current"
+ACTIVE_APP_DIR="${ZPD_CURRENT}"          # services + shortcuts always target current/
+INITIAL_RELEASE_ID=""
+INITIAL_RELEASE_DIR=""
+INSTALL_LAYOUT="fresh"                    # fresh | atomic | legacy
+DEPLOY_ENV_FILE="/etc/zedproxy/deploy.env"
+export ZPD_BASE
+
 # ─── Fail-safe traps ─────────────────────────────────────────────────────────
 INSTALL_SUCCESS=false
 
@@ -139,6 +159,9 @@ load_lib() {
 }
 load_lib "$LIB_REL"       || error "Could not load installer helper library (${LIB_REL}). Check network access to GitHub and retry."
 load_lib "$SUPPLY_LIB_REL" || error "Could not load supply-chain helper library (${SUPPLY_LIB_REL}). Check network access to GitHub and retry."
+# Deploy library provides the atomic-layout helpers (zpd_write_deploy_env,
+# zpd_switch_current, …) shared verbatim with the updater.
+load_lib "scripts/lib/deploy-lib.sh" || error "Could not load deploy helper library (scripts/lib/deploy-lib.sh)."
 
 # ─── Secret-safe output channel ───────────────────────────────────────────────
 # Credentials are delivered ONLY through log_secret_once(): to the controlling
@@ -205,12 +228,30 @@ EXISTING_DOMAIN=""
 RESET_ADMIN_PASSWORD=false
 
 detect_install_mode() {
-    if zp_detect_existing_installation "$APP_DIR"; then
+    if [ -L "${ZPD_CURRENT}" ] && [ -e "${ZPD_CURRENT}/.env" ]; then
+        # Already using the atomic release layout → safe repair of the active
+        # release. Code updates go through the atomic deployer, never a git
+        # reset --hard of the live release.
         IS_EXISTING=true
         INSTALL_MODE="reinstall"
+        INSTALL_LAYOUT="atomic"
+        APP_DIR="${ZPD_CURRENT}"
+    elif zp_detect_existing_installation "$ZPD_BASE"; then
+        # Legacy single-directory install. The installer performs idempotent
+        # infrastructure repair in place; migrating it to the atomic layout is
+        # done by the updater (`zedproxy-update`), which keeps a legacy rollback.
+        IS_EXISTING=true
+        INSTALL_MODE="reinstall"
+        INSTALL_LAYOUT="legacy"
+        APP_DIR="${ZPD_BASE}"
+        # A legacy install has no `current` symlink; keep services on the legacy
+        # path until the updater performs the atomic migration.
+        ACTIVE_APP_DIR="${ZPD_BASE}"
     else
         IS_EXISTING=false
         INSTALL_MODE="fresh"
+        INSTALL_LAYOUT="fresh"
+        # $APP_DIR is repointed at the initial release directory after clone.
     fi
 }
 
@@ -1109,7 +1150,15 @@ prepare_project_directory() {
             || ( cd "$APP_DIR" && php artisan down >/dev/null 2>&1 ) || true
         MAINT_MODE_ON=true
 
-        if zp_is_git_repo "$APP_DIR"; then
+        if [ "$INSTALL_LAYOUT" = "atomic" ]; then
+            # Already-atomic safe repair: NEVER git reset --hard the live release.
+            # Code changes must go through the atomic updater (zedproxy-update);
+            # the installer only repairs infrastructure + re-runs deps/migrations
+            # idempotently against the active release.
+            warn "نصب اتمیک شناسایی شد — کد نسخهٔ فعال تغییر نمی‌کند."
+            warn "برای به‌روزرسانی کد از دستور zedproxy-update استفاده کنید."
+            ok "تعمیر ایمن زیرساخت روی نسخهٔ فعال انجام می‌شود (بدون بازنشانی کد)."
+        elif zp_is_git_repo "$APP_DIR"; then
             PRE_UPDATE_COMMIT=$(git -C "$APP_DIR" rev-parse HEAD 2>/dev/null || echo "")
             [ -n "$PRE_UPDATE_COMMIT" ] && ok "کامیت فعلی برای بازگردانی ثبت شد: ${PRE_UPDATE_COMMIT}"
 
@@ -1137,48 +1186,96 @@ prepare_project_directory() {
         return 0
     fi
 
-    # ── Fresh installation ──
-    if [ ! -d "$APP_DIR" ]; then
-        log "Cloning ${REPO_URL} (branch: ${BRANCH}) into ${APP_DIR}..."
-        git clone -b "$BRANCH" "$REPO_URL" "$APP_DIR"
-        ok "Repository cloned to ${APP_DIR}"
+    # ── Fresh installation → build directly into the atomic release layout ──
+    # A non-empty, non-atomic base directory that is not our layout is backed up.
+    if [ -e "$ZPD_BASE" ] && [ ! -d "$ZPD_RELEASES" ] && [ -n "$(ls -A "$ZPD_BASE" 2>/dev/null || true)" ]; then
+        local backup_dir="/var/www/zedproxy_backup_$(date +%Y%m%d_%H%M%S)"
+        warn "${ZPD_BASE} exists and is not a ZedProxy atomic layout."
+        warn "Backing it up to ${backup_dir} before creating a fresh release layout..."
+        mv "$ZPD_BASE" "$backup_dir"
+        ok "Backup saved to ${backup_dir}"
+    fi
 
-    elif [ -d "${APP_DIR}/.git" ]; then
-        log "${APP_DIR} already contains a git repository — updating to origin/${BRANCH}..."
-        git -C "$APP_DIR" fetch origin "$BRANCH"
-        git -C "$APP_DIR" reset --hard "origin/${BRANCH}"
-        git -C "$APP_DIR" clean -fd
-        ok "Repository updated to origin/${BRANCH}"
+    mkdir -p "$ZPD_RELEASES" "$ZPD_SHARED"
 
+    # Clone into a private pending directory, resolve the EXACT commit, then name
+    # the release from it — a release id can never end in "-nogit".
+    local ref pending sha
+    ref="${INSTALL_REF:-$BRANCH}"
+    pending="${ZPD_RELEASES}/.pending.$$"
+    rm -rf "$pending" 2>/dev/null || true
+
+    log "Cloning ${REPO_URL} (ref: ${ref}) into a new release…"
+    git clone "$REPO_URL" "$pending" \
+        || { rm -rf "$pending"; error "دریافت کد پروژه از GitHub ناموفق بود. نصب متوقف شد."; }
+    git -C "$pending" fetch --tags --force --quiet origin 2>/dev/null || true
+    git -C "$pending" checkout --quiet --detach "$ref" 2>/dev/null \
+        || { rm -rf "$pending"; error "ref موردنظر برای نصب (${ref}) قابل‌بازیابی نبود. نصب متوقف شد."; }
+
+    sha="$(git -C "$pending" rev-parse HEAD 2>/dev/null || echo "")"
+    [ -n "$sha" ] || { rm -rf "$pending"; error "commit مقصد قابل‌تشخیص نبود. نصب متوقف شد."; }
+    INITIAL_RELEASE_ID="$(date -u +%Y%m%d%H%M%S)-$(printf '%s' "$sha" | tr -cd '0-9a-fA-F' | cut -c1-12)"
+    INITIAL_RELEASE_DIR="${ZPD_RELEASES}/${INITIAL_RELEASE_ID}"
+    mv "$pending" "$INITIAL_RELEASE_DIR" \
+        || { rm -rf "$pending"; error "ایجاد دایرکتوری نسخه ناموفق بود. نصب متوقف شد."; }
+
+    # From here on APP_DIR is the initial release directory; every existing build
+    # and configuration step operates on it, while shared state lives in $ZPD_SHARED.
+    APP_DIR="$INITIAL_RELEASE_DIR"
+    ok "Initial release created: ${INITIAL_RELEASE_ID}"
+
+    prepare_shared_and_link "$APP_DIR"
+    ok "Shared storage prepared and linked (.env, storage, public/storage)"
+}
+
+# ─── Shared-state provisioning for a fresh release ───────────────────────────
+# Seed $ZPD_SHARED from the freshly-cloned release, then replace the release's
+# .env / storage / public/storage with symlinks into shared so every future
+# release sees the same encryption key and uploads.
+prepare_shared_and_link() {
+    local rel="$1"
+    mkdir -p "${ZPD_SHARED}/persistent" 2>/dev/null || true
+
+    # Seed shared storage from the cloned skeleton (first release only).
+    if [ -d "${rel}/storage" ] && [ ! -e "${ZPD_SHARED}/storage" ]; then
+        mv "${rel}/storage" "${ZPD_SHARED}/storage"
+    fi
+    mkdir -p "${ZPD_SHARED}/storage/app/public" \
+             "${ZPD_SHARED}/storage/framework/cache" \
+             "${ZPD_SHARED}/storage/framework/sessions" \
+             "${ZPD_SHARED}/storage/framework/views" \
+             "${ZPD_SHARED}/storage/logs" 2>/dev/null || true
+
+    # .env placeholder so the release symlink resolves before .env is written.
+    if [ ! -e "${ZPD_SHARED}/.env" ]; then
+        : > "${ZPD_SHARED}/.env"
+        chmod 600 "${ZPD_SHARED}/.env" 2>/dev/null || true
+    fi
+
+    # Wire release → shared.
+    rm -rf "${rel}/.env" "${rel}/storage" 2>/dev/null || true
+    ln -s "${ZPD_SHARED}/.env" "${rel}/.env"
+    ln -s "${ZPD_SHARED}/storage" "${rel}/storage"
+    mkdir -p "${rel}/public" 2>/dev/null || true
+    rm -rf "${rel}/public/storage" 2>/dev/null || true
+    ln -s "${ZPD_SHARED}/storage/app/public" "${rel}/public/storage"
+}
+
+# ─── Atomic activation of the initial release ────────────────────────────────
+# Point $ZPD_CURRENT at the initial release via an atomic symlink swap, exactly
+# like the updater, so services can target current/ from the very first install.
+activate_initial_release() {
+    [ -n "$INITIAL_RELEASE_ID" ] || return 0
+    if declare -F zpd_switch_current >/dev/null 2>&1; then
+        ZPD_BASE="$ZPD_BASE" zpd_switch_current "$INITIAL_RELEASE_ID" \
+            || error "فعال‌سازی نسخهٔ اولیه (symlink current) ناموفق بود."
     else
-        # Directory exists but is not a git repo
-        if [ -z "$(ls -A "$APP_DIR" 2>/dev/null)" ]; then
-            log "${APP_DIR} is empty — cloning repository..."
-            rmdir "$APP_DIR"
-            git clone -b "$BRANCH" "$REPO_URL" "$APP_DIR"
-            ok "Repository cloned to ${APP_DIR}"
-        else
-            # Non-empty, non-git directory — back it up then clone fresh
-            local backup_dir="/var/www/zedproxy_backup_$(date +%Y%m%d_%H%M%S)"
-            warn "${APP_DIR} exists but is not a git repository."
-            warn "Backing it up to ${backup_dir} and cloning fresh..."
-            mv "$APP_DIR" "$backup_dir"
-            git clone -b "$BRANCH" "$REPO_URL" "$APP_DIR"
-            ok "Backup saved to ${backup_dir}"
-            ok "Repository cloned to ${APP_DIR}"
-        fi
+        local tmp="${ZPD_CURRENT}.tmp.$$"
+        ln -s "releases/${INITIAL_RELEASE_ID}" "$tmp" \
+            && mv -Tf "$tmp" "$ZPD_CURRENT" \
+            || { rm -f "$tmp"; error "فعال‌سازی نسخهٔ اولیه (symlink current) ناموفق بود."; }
     fi
-
-    # Optional explicit pin (tag / commit / branch). Only for fresh installs —
-    # re-runs preserve the operator's deployed code and return earlier above.
-    if [ -n "$INSTALL_REF" ] && [ -d "${APP_DIR}/.git" ]; then
-        log "Pinning install to explicit ref: ${INSTALL_REF}"
-        git -C "$APP_DIR" fetch --tags --quiet origin "$INSTALL_REF" 2>/dev/null \
-            || git -C "$APP_DIR" fetch --tags --quiet origin 2>/dev/null || true
-        git -C "$APP_DIR" checkout --quiet --detach "$INSTALL_REF" 2>/dev/null \
-            || error "ref موردنظر برای نصب (${INSTALL_REF}) قابل‌بازیابی نبود. نصب متوقف شد."
-        ok "Checked out ${INSTALL_REF}"
-    fi
+    ok "Active release symlink: current → releases/${INITIAL_RELEASE_ID}"
 }
 
 # ─── Release / commit metadata (records the RESOLVED SHA, never just a branch) ─
@@ -1499,13 +1596,32 @@ fi
 # ─── Permissions ─────────────────────────────────────────────────────────────
 log "Setting file permissions..."
 chown -R www-data:www-data "$APP_DIR"
+# `find` does not follow the symlinked .env/storage, so shared state is handled
+# separately below.
 find "$APP_DIR" -type f -exec chmod 644 {} \;
 find "$APP_DIR" -type d -exec chmod 755 {} \;
 chmod -R 775 storage bootstrap/cache
 chmod 600 .env
 chmod +x scripts/backup.sh
 
+# Shared state (owned by www-data, .env root-readable only) — applies to every
+# release through the symlinks.
+if [ -d "$ZPD_SHARED" ]; then
+    chown -R www-data:www-data "$ZPD_SHARED" 2>/dev/null || true
+    chmod -R 775 "${ZPD_SHARED}/storage" 2>/dev/null || true
+    chmod 600 "${ZPD_SHARED}/.env" 2>/dev/null || true
+fi
+[ -L "$ZPD_CURRENT" ] && chown -h www-data:www-data "$ZPD_CURRENT" 2>/dev/null || true
+
 ok "Permissions set"
+
+# ─── Activate the initial release (fresh install only) ───────────────────────
+# Point current → releases/<id> BEFORE configuring Nginx/Supervisor/scheduler so
+# every service targets the active release from the first install.
+if [ "$INSTALL_LAYOUT" = "fresh" ]; then
+    activate_initial_release
+    [ -L "$ZPD_CURRENT" ] && chown -h www-data:www-data "$ZPD_CURRENT" 2>/dev/null || true
+fi
 
 # ─── Nginx configuration ─────────────────────────────────────────────────────
 log "Configuring Nginx for domain: ${DOMAIN}..."
@@ -1524,7 +1640,7 @@ else
 server {
     listen 80;
     server_name ${DOMAIN} www.${DOMAIN};
-    root ${APP_DIR}/public;
+    root ${ACTIVE_APP_DIR}/public;
     index index.php;
 
     charset utf-8;
@@ -1592,7 +1708,7 @@ log "Configuring queue worker..."
 cat > /etc/supervisor/conf.d/zedproxy-worker.conf <<SUPERVISOR
 [program:zedproxy-worker]
 process_name=%(program_name)s_%(process_num)02d
-command=php ${APP_DIR}/artisan queue:work redis --sleep=3 --tries=3 --max-time=3600
+command=php ${ACTIVE_APP_DIR}/artisan queue:work redis --sleep=3 --tries=3 --max-time=3600
 autostart=true
 autorestart=true
 stopasgroup=true
@@ -1600,7 +1716,7 @@ killasgroup=true
 user=www-data
 numprocs=2
 redirect_stderr=true
-stdout_logfile=${APP_DIR}/storage/logs/worker.log
+stdout_logfile=${ACTIVE_APP_DIR}/storage/logs/worker.log
 stopwaitsecs=3600
 SUPERVISOR
 
@@ -1610,37 +1726,95 @@ supervisorctl reread
 supervisorctl update
 ok "Queue workers configured"
 
-# ─── Deployment command shortcuts ────────────────────────────────────────────
-# zedproxy-update / zedproxy-rollback / zedproxy-deploy-status wrap the atomic
-# release-based deployment scripts shipped in the repo (scripts/deploy/*). They
-# resolve the deploy scripts from the active release so they always run the
-# version that matches the deployed code.
+# ─── Persistent deployment configuration (/etc/zedproxy/deploy.env) ───────────
+# Non-secret configuration loaded by every update/rollback/deploy-status
+# entrypoint. NEVER contains passwords, tokens, APP_KEY, DB credentials, or an
+# authenticated repository URL. Existing custom values are preserved on re-run.
+log "Writing deployment configuration (${DEPLOY_ENV_FILE})..."
+zpd_load_deploy_env   # load any existing non-secret custom values (no override)
+zpd_write_deploy_env "$DEPLOY_ENV_FILE" \
+    "ZPD_BASE=${ZPD_BASE}" \
+    "ZPD_REPO_URL=${ZPD_REPO_URL:-$REPO_URL}" \
+    "ZPD_REF=${ZPD_REF:-${INSTALL_REF:-$BRANCH}}" \
+    "ZPD_HEALTH_URL=${ZPD_HEALTH_URL:-http://127.0.0.1}" \
+    || warn "Could not write ${DEPLOY_ENV_FILE}"
+ok "Deployment configuration written (repo/ref/base/health — no secrets)"
+
+# ─── Deployment command shortcuts (stable bootstrap wrappers) ─────────────────
+# The shortcuts resolve their target script at run time from a small bootstrap
+# helper: they load /etc/zedproxy/deploy.env, prefer the ACTIVE release
+# (current/), fall back to a detected install, and never depend on the caller's
+# working directory. `zedproxy-update` runs the SELF-BOOTSTRAPPING update.sh,
+# which fetches fresh deploy logic rather than blindly executing an on-disk copy.
 log "Installing deployment command shortcuts..."
 
-cat > /usr/local/bin/zedproxy-update <<UPDATESCRIPT
+mkdir -p /usr/local/lib/zedproxy
+cat > /usr/local/lib/zedproxy/bootstrap.sh <<'BOOTSTRAP'
 #!/usr/bin/env bash
-# Atomic release-based deployment. Falls back to the in-repo script.
-exec sudo bash "${APP_DIR}/scripts/deploy/deploy.sh" "\$@"
+# Shared resolver for the zedproxy-* command shortcuts. Sourced, never executed.
+# Resolves ZPD_BASE from deploy.env (parsed, not sourced) and locates a script
+# from the active release first, then a detected install — independent of $PWD.
+_zpd_deploy_env="${ZPD_DEPLOY_ENV:-/etc/zedproxy/deploy.env}"
+if [ -z "${ZPD_BASE:-}" ] && [ -r "$_zpd_deploy_env" ]; then
+    ZPD_BASE="$(sed -nE 's/^[[:space:]]*ZPD_BASE[[:space:]]*=[[:space:]]*"?([^"#[:space:]]+)"?.*/\1/p' "$_zpd_deploy_env" | tail -n1)"
+fi
+ZPD_BASE="${ZPD_BASE:-/var/www/zedproxy}"
+export ZPD_BASE
+
+# zpd_resolve_script REL — echo the first existing "<dir>/REL" among the active
+# release and the base install; return 1 if none exists.
+zpd_resolve_script() {
+    local rel="$1" d
+    for d in "${ZPD_BASE}/current" "${ZPD_BASE}"; do
+        if [ -f "${d}/${rel}" ]; then printf '%s' "${d}/${rel}"; return 0; fi
+    done
+    return 1
+}
+
+# zpd_exec_root SCRIPT ARGS... — run SCRIPT as root without unnecessary nested
+# sudo (exec directly when already root).
+zpd_exec_root() {
+    local s="$1"; shift
+    if [ "$(id -u)" = "0" ]; then exec bash "$s" "$@"; else exec sudo -E bash "$s" "$@"; fi
+}
+BOOTSTRAP
+chmod 644 /usr/local/lib/zedproxy/bootstrap.sh
+
+cat > /usr/local/bin/zedproxy-update <<'UPDATESCRIPT'
+#!/usr/bin/env bash
+# Self-bootstrapping atomic update (works from any directory).
+. /usr/local/lib/zedproxy/bootstrap.sh
+s="$(zpd_resolve_script update.sh)" \
+  || { echo "به‌روزرسان یافت نشد. برای بازیابی از دستور نصب curl استفاده کنید." >&2; exit 1; }
+zpd_exec_root "$s" "$@"
 UPDATESCRIPT
 chmod +x /usr/local/bin/zedproxy-update
 
-cat > /usr/local/bin/zedproxy-rollback <<ROLLBACKSCRIPT
+cat > /usr/local/bin/zedproxy-rollback <<'ROLLBACKSCRIPT'
 #!/usr/bin/env bash
-exec sudo bash "${APP_DIR}/scripts/deploy/rollback.sh" "\$@"
+. /usr/local/lib/zedproxy/bootstrap.sh
+s="$(zpd_resolve_script scripts/deploy/rollback.sh)" \
+  || { echo "اسکریپت بازگردانی یافت نشد." >&2; exit 1; }
+zpd_exec_root "$s" "$@"
 ROLLBACKSCRIPT
 chmod +x /usr/local/bin/zedproxy-rollback
 
-cat > /usr/local/bin/zedproxy-deploy-status <<STATUSSCRIPT
+cat > /usr/local/bin/zedproxy-deploy-status <<'STATUSSCRIPT'
 #!/usr/bin/env bash
-exec bash "${APP_DIR}/scripts/deploy/deploy-status.sh" "\$@"
+. /usr/local/lib/zedproxy/bootstrap.sh
+s="$(zpd_resolve_script scripts/deploy/deploy-status.sh)" \
+  || { echo "اسکریپت وضعیت استقرار یافت نشد." >&2; exit 1; }
+exec bash "$s" "$@"
 STATUSSCRIPT
 chmod +x /usr/local/bin/zedproxy-deploy-status
 
-# zedproxy-sanitize-install-log removes plaintext credentials that older
-# installer versions may have written into /var/log/zedproxy-install.log.
-cat > /usr/local/bin/zedproxy-sanitize-install-log <<SANITIZESCRIPT
+cat > /usr/local/bin/zedproxy-sanitize-install-log <<'SANITIZESCRIPT'
 #!/usr/bin/env bash
-exec sudo bash "${APP_DIR}/scripts/zedproxy-sanitize-install-log.sh" "\$@"
+# Removes plaintext credentials older installers may have written into the log.
+. /usr/local/lib/zedproxy/bootstrap.sh
+s="$(zpd_resolve_script scripts/zedproxy-sanitize-install-log.sh)" \
+  || { echo "اسکریپت پاک‌سازی لاگ یافت نشد." >&2; exit 1; }
+zpd_exec_root "$s" "$@"
 SANITIZESCRIPT
 chmod +x /usr/local/bin/zedproxy-sanitize-install-log
 
@@ -1655,7 +1829,7 @@ log "Installing Laravel scheduler cron..."
 SCHED_USER="www-data"
 SCHED_LOG="/var/log/zedproxy-scheduler.log"
 SCHED_CRON_FILE="/etc/cron.d/zedproxy-scheduler"
-SCHED_LINE="$(zp_scheduler_cron_line "${APP_DIR}" "${SCHED_USER}" "php" "${SCHED_LOG}")"
+SCHED_LINE="$(zp_scheduler_cron_line "${ACTIVE_APP_DIR}" "${SCHED_USER}" "php" "${SCHED_LOG}")"
 zp_write_cron_file "${SCHED_CRON_FILE}" "${SCHED_LINE}"
 ok "Scheduler cron installed (runs every minute → ${SCHED_LOG})"
 

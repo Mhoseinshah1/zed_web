@@ -323,7 +323,7 @@ jobs:
             tests/installer/run-tests.sh \
             tests/supply-chain/run-tests.sh \
             tests/security/run-tests.sh
-          shellcheck -S error install.sh
+          shellcheck -S error install.sh update.sh
 
       - name: Installer helper tests (mocked)
         run: bash tests/installer/run-tests.sh | tee installer-tests.log
@@ -348,6 +348,31 @@ jobs:
             exit 1
           fi
           echo 'No canary secret leaked into credential-safety output.'
+
+      - name: Assert atomic-updater invariants (no "." repo fallback; services use current)
+        run: |
+          set -euo pipefail
+          # Root cause #1: a production clone must never fall back to "." (the
+          # caller's working directory). No deploy path may clone "${ZPD_REPO_URL:-.}".
+          if grep -REn 'clone[^\n]*\$\{ZPD_REPO_URL:-\.\}' install.sh update.sh scripts/; then
+            echo '::error::A deploy clone falls back to "." (the caller working directory).'
+            exit 1
+          fi
+          # The updater must resolve a repository, never blindly clone ".".
+          if grep -REn 'clone[^\n]*"\."' install.sh update.sh scripts/deploy/; then
+            echo '::error::A literal clone of "." is present.'
+            exit 1
+          fi
+          # Fresh install + services must target the atomic layout (current/).
+          grep -q 'root ${ACTIVE_APP_DIR}/public;' install.sh \
+            || { echo '::error::Nginx root does not use ACTIVE_APP_DIR/public (current).'; exit 1; }
+          grep -q 'command=php ${ACTIVE_APP_DIR}/artisan queue:work' install.sh \
+            || { echo '::error::Supervisor worker does not use ACTIVE_APP_DIR/artisan (current).'; exit 1; }
+          grep -q 'zp_scheduler_cron_line "${ACTIVE_APP_DIR}"' install.sh \
+            || { echo '::error::Scheduler cron does not use ACTIVE_APP_DIR (current).'; exit 1; }
+          grep -q 'zpd_write_deploy_env "$DEPLOY_ENV_FILE"' install.sh \
+            || { echo '::error::Installer does not create /etc/zedproxy/deploy.env.'; exit 1; }
+          echo 'Atomic-updater invariants hold.'
 
       # ── Supply-chain verification (authoritative home; formerly the separate
       #    supply-chain.yml workflow, folded in here to remove duplicate jobs). ──

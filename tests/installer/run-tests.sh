@@ -151,6 +151,59 @@ assert_false test -f "$LEGACY"
 assert_true  zp_remove_file "$LEGACY"
 rm -rf "$TC"
 
+# =============================================================================
+# Atomic-layout wiring in install.sh / update.sh (static assertions).
+# These validate acceptance criteria that a fresh install uses the release
+# layout and every service targets `current`, at the config-generation level
+# (the same level CI validates the installer: bash -n + shellcheck).
+# =============================================================================
+INSTALL_SH="${REPO_ROOT}/install.sh"
+UPDATE_SH="${REPO_ROOT}/update.sh"
+
+grep_has()  { if grep -Eq "$1" "$2"; then ok "$3"; else bad "$3"; fi; }
+grep_none() { if grep -Eq "$1" "$2"; then bad "$3"; else ok "$3"; fi; }
+
+# 20. Fresh install builds the release/shared/current layout.
+grep_has 'ZPD_RELEASES="\$\{ZPD_BASE\}/releases"' "$INSTALL_SH" "install.sh defines releases dir"
+grep_has 'ZPD_SHARED="\$\{ZPD_BASE\}/shared"'      "$INSTALL_SH" "install.sh defines shared dir"
+grep_has 'ZPD_CURRENT="\$\{ZPD_BASE\}/current"'    "$INSTALL_SH" "install.sh defines current link"
+grep_has 'activate_initial_release'                "$INSTALL_SH" "install.sh activates an initial release"
+grep_has 'prepare_shared_and_link'                 "$INSTALL_SH" "install.sh links release → shared"
+
+# 21. Nginx root uses current/public (via ACTIVE_APP_DIR), never a bare APP_DIR.
+grep_has  'root \$\{ACTIVE_APP_DIR\}/public;' "$INSTALL_SH" "nginx root uses ACTIVE_APP_DIR/public"
+grep_none 'root \$\{APP_DIR\}/public;'        "$INSTALL_SH" "nginx root no longer hardcodes APP_DIR/public"
+
+# 22. Supervisor worker uses current/artisan.
+grep_has  'command=php \$\{ACTIVE_APP_DIR\}/artisan queue:work' "$INSTALL_SH" "supervisor worker uses ACTIVE_APP_DIR/artisan"
+grep_none 'command=php \$\{APP_DIR\}/artisan queue:work'        "$INSTALL_SH" "supervisor worker no longer hardcodes APP_DIR/artisan"
+
+# 23. Scheduler cron uses current/artisan (ACTIVE_APP_DIR).
+grep_has 'zp_scheduler_cron_line "\$\{ACTIVE_APP_DIR\}"' "$INSTALL_SH" "scheduler cron uses ACTIVE_APP_DIR"
+
+# 24. Shortcuts use the stable bootstrap resolver (active release), not a
+#     hardcoded legacy checkout path.
+grep_has  'zpd_resolve_script'                                   "$INSTALL_SH" "shortcuts resolve the active release at runtime"
+grep_none 'exec sudo bash "\$\{APP_DIR\}/scripts/deploy/deploy.sh"' "$INSTALL_SH" "no hardcoded legacy deploy.sh in shortcuts"
+
+# deploy.env is created by the installer (non-secret persistent config).
+grep_has 'zpd_write_deploy_env "\$DEPLOY_ENV_FILE"' "$INSTALL_SH" "installer writes /etc/zedproxy/deploy.env"
+
+# ACTIVE_APP_DIR defaults to current/ (services target the active release).
+grep_has 'ACTIVE_APP_DIR="\$\{ZPD_CURRENT\}"' "$INSTALL_SH" "ACTIVE_APP_DIR defaults to current/"
+
+# 25. Standalone updater is pwd-independent + self-bootstraps (never blindly
+#     runs an on-disk deploy script; clones the exact source into a temp dir).
+grep_has  'mktemp -d'                 "$UPDATE_SH" "update.sh fetches into a temp bootstrap dir"
+grep_has  'clone "\$repo"'            "$UPDATE_SH" "update.sh clones the resolved repository"
+grep_has  "DEFAULT_REPO='https://github.com/Mhoseinshah1/zed_web.git'" "$UPDATE_SH" "update.sh has a safe public default repo"
+grep_none '\bcd \$\(pwd\)'            "$UPDATE_SH" "update.sh does not depend on \$(pwd)"
+# update.sh must reject an implicit "." repository source.
+grep_has  '\.\|\./\*\|\.\./\*'        "$UPDATE_SH" "update.sh rejects implicit '.' repo source"
+
+# No production repository fallback anywhere may be "." (root cause #1).
+grep_none 'clone[^\n]*"\$\{ZPD_REPO_URL:-\.\}"' "${REPO_ROOT}/scripts/deploy/deploy.sh" "deploy.sh has no '.' repo fallback"
+
 echo ""
 echo "== results: ${PASS} passed, ${FAIL} failed =="
 [ "$FAIL" -eq 0 ]

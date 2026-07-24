@@ -40,20 +40,28 @@ zpd_state_file()  { printf '%s' "${ZPD_STATE_FILE:-$(zpd_shared_dir)/deploy/stat
 zpd_backup_dir()  { printf '%s' "${ZPD_BACKUP_DIR:-/var/backups/zedproxy/deploys}"; }
 
 # -----------------------------------------------------------------------------
-# zpd_release_id [SHA] [EPOCH]
+# zpd_release_id SHA [EPOCH]
 #
-# Immutable release identifier: YYYYMMDDHHMMSS-<short-sha>. SHA/epoch may be
-# passed for deterministic tests; otherwise the current git short SHA (or
-# "nogit") and current time are used.
+# Immutable release identifier: YYYYMMDDHHMMSS-<first-12-of-sha>.
+#
+# The SHA of the commit that will actually be deployed MUST be supplied by the
+# caller — it is resolved from the remote (zpd_resolve_sha) BEFORE the release is
+# named, so a production release can never be named from the caller's current
+# working directory (root cause of the "-nogit" bug). A release ending in
+# "nogit" is only produced under the explicit test fixture ZPD_ALLOW_NOGIT=1.
+# Returns 1 (no output) when no SHA is available and nogit is not permitted.
 # -----------------------------------------------------------------------------
 zpd_release_id() {
     local sha="${1:-}" epoch="${2:-}"
-    if [ -z "$sha" ]; then
-        sha="$(git rev-parse --short=12 HEAD 2>/dev/null || echo nogit)"
-    fi
-    # Keep only the first 12 hex chars; fall back to "nogit".
+    # Keep only the first 12 hex chars.
     sha="$(printf '%s' "$sha" | tr -cd '0-9a-fA-F' | cut -c1-12)"
-    [ -n "$sha" ] || sha="nogit"
+    if [ -z "$sha" ]; then
+        if [ "${ZPD_ALLOW_NOGIT:-0}" = "1" ]; then
+            sha="nogit"
+        else
+            return 1
+        fi
+    fi
     local ts
     if [ -n "$epoch" ]; then
         ts="$(date -u -d "@${epoch}" +%Y%m%d%H%M%S 2>/dev/null || date -u +%Y%m%d%H%M%S)"
@@ -82,6 +90,346 @@ zpd_mask_secrets() {
         -e 's/(APP_KEY|DB_PASSWORD|REDIS_PASSWORD|MAIL_PASSWORD)=[^[:space:]]*/\1=***/gI' \
         -e 's/((password|passwd|pass|secret|token|api[_-]?key|auth)[[:space:]]*[=:][[:space:]]*)[^[:space:]"'"'"']+/\1***/gI' \
         -e 's#(://)[^/@[:space:]:]+:[^/@[:space:]]+@#\1***:***@#g'
+}
+
+# -----------------------------------------------------------------------------
+# zpd_redact_file FILE — print FILE through the secret-redaction layer so a
+# captured git error (which may embed an authenticated URL) never leaks a
+# credential. Missing/empty file prints nothing.
+# -----------------------------------------------------------------------------
+zpd_redact_file() {
+    local f="${1:-}"
+    [ -f "$f" ] || return 0
+    zpd_mask_secrets < "$f"
+}
+
+# ── Persistent deploy configuration (/etc/zedproxy/deploy.env) ───────────────
+#
+# Non-secret deployment configuration shared by update/rollback/deploy-status.
+# It MUST NEVER contain passwords, tokens, APP_KEY, DB credentials, or an
+# authenticated repository URL.
+
+zpd_deploy_env_file()  { printf '%s' "${ZPD_DEPLOY_ENV:-/etc/zedproxy/deploy.env}"; }
+zpd_default_repo_url() { printf '%s' 'https://github.com/Mhoseinshah1/zed_web.git'; }
+zpd_default_ref()      { printf '%s' "${ZPD_DEFAULT_REF:-main}"; }
+
+# Keys that may appear in deploy.env. Anything else in the file is ignored.
+_zpd_deploy_env_keys() {
+    printf '%s\n' ZPD_BASE ZPD_REPO_URL ZPD_REF ZPD_HEALTH_URL ZPD_KEEP_RELEASES ZPD_MIN_DISK_MB
+}
+
+# -----------------------------------------------------------------------------
+# zpd_load_deploy_env — populate deployment configuration from deploy.env, but
+# only for whitelisted keys that are NOT already set in the environment, so an
+# explicit environment variable always overrides the file. Safe to call from
+# every entrypoint before any default assignment. Ignores unknown/secret-looking
+# keys entirely.
+# -----------------------------------------------------------------------------
+zpd_load_deploy_env() {
+    local f; f="$(zpd_deploy_env_file)"
+    [ -f "$f" ] || return 0
+    local line key val allowed
+    while IFS= read -r line || [ -n "$line" ]; do
+        case "$line" in ''|\#*) continue ;; esac
+        case "$line" in *=*) ;; *) continue ;; esac
+        key="${line%%=*}"; val="${line#*=}"
+        key="$(printf '%s' "$key" | tr -d '[:space:]')"
+        # Strip one layer of surrounding quotes and trailing CR.
+        val="${val%$'\r'}"
+        val="${val#\"}"; val="${val%\"}"
+        val="${val#\'}"; val="${val%\'}"
+        allowed=0
+        case "$key" in
+            ZPD_BASE|ZPD_REPO_URL|ZPD_REF|ZPD_HEALTH_URL|ZPD_KEEP_RELEASES|ZPD_MIN_DISK_MB) allowed=1 ;;
+        esac
+        [ "$allowed" = "1" ] || continue
+        # Explicit environment wins over the file.
+        if [ -z "${!key:-}" ]; then
+            export "$key=$val"
+        fi
+    done < "$f"
+}
+
+# -----------------------------------------------------------------------------
+# zpd_write_deploy_env FILE key=value...
+#
+# Atomically write a root-only (600) non-secret deploy.env. Any key that looks
+# like a secret is refused (never written). Existing custom values are the
+# caller's responsibility to pass through (the installer merges before calling).
+# -----------------------------------------------------------------------------
+zpd_write_deploy_env() {
+    local file="$1"; shift
+    [ -n "$file" ] || return 1
+    mkdir -p "$(dirname "$file")" 2>/dev/null || return 1
+    local tmp; tmp="$(cd "$(dirname "$file")" && mktemp ".zpdenv.XXXXXX" 2>/dev/null)" || return 1
+    tmp="$(dirname "$file")/$tmp"
+    {
+        printf '# ZedProxy deployment configuration (non-secret).\n'
+        printf '# Managed by the installer; safe to edit. NEVER put passwords/tokens/APP_KEY here.\n'
+        local pair key val
+        for pair in "$@"; do
+            key="${pair%%=*}"; val="${pair#*=}"
+            case "$key" in
+                *PASSWORD*|*PASSWD*|*SECRET*|*TOKEN*|*APP_KEY*|*APIKEY*|*API_KEY*) continue ;;
+            esac
+            printf '%s=%s\n' "$key" "$val"
+        done
+    } > "$tmp" || { rm -f "$tmp"; return 1; }
+    chmod 600 "$tmp" 2>/dev/null || true
+    chown 0:0 "$tmp" 2>/dev/null || true
+    mv -f "$tmp" "$file" 2>/dev/null || { rm -f "$tmp"; return 1; }
+}
+
+# ── Repository source resolution ─────────────────────────────────────────────
+
+# -----------------------------------------------------------------------------
+# zpd_is_safe_repo_url URL
+#
+# Return 0 only for a repository source safe to use as a production fallback:
+#   - non-empty
+#   - NOT "." and NOT a relative filesystem path (the "clone the caller's CWD"
+#     bug must be impossible)
+#   - a remote URL (scheme://… or scp-style user@host:path) is always allowed
+#   - an ABSOLUTE local path is allowed ONLY under the explicit test/dev flag
+#     ZPD_ALLOW_LOCAL_REPO=1
+# -----------------------------------------------------------------------------
+zpd_is_safe_repo_url() {
+    local url="${1:-}"
+    [ -n "$url" ] || return 1
+    case "$url" in
+        .|./*|../*|..) return 1 ;;
+    esac
+    case "$url" in
+        *://*)  return 0 ;;   # https://, git://, ssh://, file:// …
+        *@*:*)  return 0 ;;   # scp-style git@github.com:owner/repo.git
+    esac
+    case "$url" in
+        /*) [ "${ZPD_ALLOW_LOCAL_REPO:-0}" = "1" ] && return 0 || return 1 ;;
+        *)  return 1 ;;       # bare/relative name — never an implicit fallback
+    esac
+}
+
+# zpd_git_origin_of DIR — print the `origin` remote URL of a git work tree.
+zpd_git_origin_of() {
+    local dir="${1:-}"
+    [ -n "$dir" ] || return 1
+    [ -e "$dir/.git" ] || return 1
+    "${ZPD_GIT:-git}" -C "$dir" remote get-url origin 2>/dev/null
+}
+
+# -----------------------------------------------------------------------------
+# zpd_resolve_repo_url
+#
+# Resolve the repository source by precedence:
+#   1. explicit $ZPD_REPO_URL   (also carries a deploy.env value, since
+#      zpd_load_deploy_env exports it into the environment when unset)
+#   2. git origin of the active release (current/)
+#   3. git origin of a detected legacy install ($ZPD_BASE)
+#   4. built-in public default (https://github.com/Mhoseinshah1/zed_web.git)
+# The resolved URL must pass zpd_is_safe_repo_url; otherwise returns 1 so the
+# caller aborts (never silently clones ".").
+# -----------------------------------------------------------------------------
+zpd_resolve_repo_url() {
+    local url=""
+    if [ -n "${ZPD_REPO_URL:-}" ]; then
+        url="$ZPD_REPO_URL"
+    else
+        url="$(zpd_git_origin_of "$(zpd_current_link)" 2>/dev/null || true)"
+        [ -n "$url" ] || url="$(zpd_git_origin_of "$(zpd_base)" 2>/dev/null || true)"
+        [ -n "$url" ] || url="$(zpd_default_repo_url)"
+    fi
+    zpd_is_safe_repo_url "$url" || return 1
+    printf '%s' "$url"
+}
+
+# ── Ref → exact SHA resolution ───────────────────────────────────────────────
+
+# -----------------------------------------------------------------------------
+# zpd_resolve_sha REPO REF [ERRFILE]
+#
+# Resolve REF (branch / lightweight tag / annotated tag / full 40-hex SHA) to
+# the exact full commit SHA using a bounded `git ls-remote`. Annotated tags are
+# peeled to their commit (the ^{} line wins). A full-SHA REF with no matching
+# remote ref is accepted as-is (direct commit deploy). git output goes to
+# ERRFILE for redacted display. Prints the SHA; returns 1 if REF cannot be
+# resolved (so the migration never starts against an unknown ref).
+# -----------------------------------------------------------------------------
+zpd_resolve_sha() {
+    local repo="$1" ref="$2" errfile="${3:-/dev/null}"
+    [ -n "$repo" ] && [ -n "$ref" ] || return 1
+    local out rc
+    out="$("${ZPD_GIT:-git}" ls-remote "$repo" "$ref" "${ref}^{}" 2>"$errfile")"; rc=$?
+    if [ "$rc" -ne 0 ]; then
+        # Remote unreachable/denied. Only a full SHA can still be deployed.
+        printf '%s' "$ref" | grep -Eq '^[0-9a-f]{40}$' && { printf '%s' "$ref"; return 0; }
+        return 1
+    fi
+    local sha
+    sha="$(printf '%s\n' "$out" | awk '/\^\{\}$/ {print $1; exit}')"
+    [ -n "$sha" ] || sha="$(printf '%s\n' "$out" | awk 'NF {print $1; exit}')"
+    if [ -z "$sha" ]; then
+        # No ref matched. Accept a full SHA directly; otherwise fail.
+        printf '%s' "$ref" | grep -Eq '^[0-9a-f]{40}$' && { printf '%s' "$ref"; return 0; }
+        return 1
+    fi
+    printf '%s' "$sha"
+}
+
+# ── Clone the exact ref ──────────────────────────────────────────────────────
+
+# -----------------------------------------------------------------------------
+# zpd_git_clone_ref REPO REF DEST [ERRFILE]
+#
+# Clone REPO into DEST and check out the EXACT REF (branch/tag/SHA). A full clone
+# (not --depth 1) is used so any branch, tag, or commit can be checked out. All
+# git output is appended to ERRFILE for redacted reporting — never sent to
+# /dev/null. On any failure DEST is removed so no partial/`.nogit` release is
+# left behind. Returns 0 with DEST checked out at REF.
+# -----------------------------------------------------------------------------
+zpd_git_clone_ref() {
+    local repo="$1" ref="$2" dest="$3" err="${4:-/dev/null}"
+    local git="${ZPD_GIT:-git}"
+    [ -n "$repo" ] && [ -n "$ref" ] && [ -n "$dest" ] || return 1
+    rm -rf "$dest" 2>/dev/null || true
+    if ! "$git" clone "$repo" "$dest" >>"$err" 2>&1; then
+        rm -rf "$dest" 2>/dev/null || true
+        return 1
+    fi
+    # Ensure tags are present (annotated + lightweight) for tag refs.
+    "$git" -C "$dest" fetch --tags --force --quiet origin >>"$err" 2>&1 || true
+    if ! "$git" -C "$dest" checkout --quiet --detach "$ref" >>"$err" 2>&1; then
+        rm -rf "$dest" 2>/dev/null || true
+        return 1
+    fi
+    return 0
+}
+
+# zpd_git_head_sha DIR — full 40-hex HEAD SHA of a checked-out release.
+zpd_git_head_sha() {
+    "${ZPD_GIT:-git}" -C "${1:?}" rev-parse HEAD 2>/dev/null
+}
+
+# ── Legacy (pre-atomic) installation detection ───────────────────────────────
+
+# -----------------------------------------------------------------------------
+# zpd_is_atomic_layout — return 0 when $ZPD_BASE already uses the release layout
+# (a `current` symlink exists). Used to distinguish a normal update from a
+# first-time legacy migration.
+# -----------------------------------------------------------------------------
+zpd_is_atomic_layout() {
+    [ -L "$(zpd_current_link)" ]
+}
+
+# -----------------------------------------------------------------------------
+# zpd_is_legacy_layout — return 0 when $ZPD_BASE looks like a legacy single-dir
+# Laravel app (artisan + .env present at the base, no `current` symlink).
+# -----------------------------------------------------------------------------
+zpd_is_legacy_layout() {
+    local base; base="$(zpd_base)"
+    ! zpd_is_atomic_layout || return 1
+    [ -f "${base}/artisan" ] && [ -f "${base}/.env" ]
+}
+
+# ── Nginx / Supervisor / Scheduler cutover to current/ ───────────────────────
+#
+# These rewrite operational config to serve the active release through
+# `<base>/current`. They are pure text transforms on a given file (injectable
+# for tests) — the caller runs `nginx -t`, backs up, and reloads.
+
+# zpd_nginx_conf_path — the ZedProxy Nginx site config (overridable in tests).
+zpd_nginx_conf_path()      { printf '%s' "${ZPD_NGINX_CONF:-/etc/nginx/sites-available/zedproxy}"; }
+zpd_supervisor_conf_path() { printf '%s' "${ZPD_SUPERVISOR_CONF:-/etc/supervisor/conf.d/zedproxy-worker.conf}"; }
+zpd_scheduler_cron_path()  { printf '%s' "${ZPD_SCHED_CRON:-/etc/cron.d/zedproxy-scheduler}"; }
+
+# -----------------------------------------------------------------------------
+# zpd_nginx_rewrite_root CONF BASE
+#
+# Rewrite every `root <BASE>...public;` directive (legacy direct path OR a
+# release path) to `root <BASE>/current/public;`, in both the HTTP and HTTPS
+# server blocks, leaving SSL and all other directives untouched. Idempotent.
+# The caller is responsible for backup + `nginx -t` + reload/restore.
+# -----------------------------------------------------------------------------
+zpd_nginx_rewrite_root() {
+    local conf="$1" base="$2"
+    [ -f "$conf" ] || return 1
+    [ -n "$base" ] || return 1
+    # `#` delimiter: BASE is a filesystem path with no `#`.
+    sed -i "s#root[[:space:]]\{1,\}${base}[^;]*;#root ${base}/current/public;#g" "$conf"
+}
+
+# zpd_nginx_root_ok CONF BASE — return 0 iff every zedproxy root goes through
+# current/ (no legacy direct-root directive remains).
+zpd_nginx_root_ok() {
+    local conf="$1" base="$2"
+    [ -f "$conf" ] || return 1
+    grep -Eq "root[[:space:]]+${base}/current/public;" "$conf" || return 1
+    # Fail if any zedproxy root does NOT go through current/.
+    if grep -E "root[[:space:]]+${base}[^;]*;" "$conf" | grep -vq "/current/public;"; then
+        return 1
+    fi
+    return 0
+}
+
+# -----------------------------------------------------------------------------
+# zpd_supervisor_rewrite CONF BASE
+#
+# Point the worker at `<BASE>/current/artisan` and its log at shared storage,
+# preserving all other supervisor directives. Idempotent.
+# -----------------------------------------------------------------------------
+zpd_supervisor_rewrite() {
+    local conf="$1" base="$2"
+    [ -f "$conf" ] || return 1
+    [ -n "$base" ] || return 1
+    sed -i "s#\(command=[^ ]* \)[^ ]*/artisan #\1${base}/current/artisan #g" "$conf"
+    sed -i "s#stdout_logfile=.*#stdout_logfile=${base}/shared/storage/logs/worker.log#g" "$conf"
+}
+
+# zpd_supervisor_ok CONF BASE — worker command runs current/artisan.
+zpd_supervisor_ok() {
+    local conf="$1" base="$2"
+    [ -f "$conf" ] || return 1
+    grep -Eq "command=[^ ]* ${base}/current/artisan " "$conf"
+}
+
+# ── First-cutover (legacy → first release) rollback bookkeeping ──────────────
+#
+# On the very first legacy→release migration there is no previous release id.
+# The legacy application itself is the rollback target. We record the legacy
+# operational paths so a failed first activation can restore them exactly.
+
+zpd_legacy_marker_file() { printf '%s/shared/deploy/legacy-rollback.json' "$(zpd_base)"; }
+
+# zpd_save_legacy_rollback BASE NGINX_CONF SUPERVISOR_CONF SCHED_CRON — snapshot
+# the pre-cutover config files so first-cutover rollback can restore them.
+zpd_save_legacy_rollback() {
+    local base="$1" nginx="$2" super="$3" cron="$4"
+    local dir; dir="$(dirname "$(zpd_legacy_marker_file)")"
+    mkdir -p "$dir" 2>/dev/null || return 1
+    [ -f "$nginx" ] && cp -a "$nginx" "${dir}/nginx.legacy" 2>/dev/null || true
+    [ -f "$super" ] && cp -a "$super" "${dir}/supervisor.legacy" 2>/dev/null || true
+    [ -f "$cron" ]  && cp -a "$cron"  "${dir}/scheduler.legacy" 2>/dev/null || true
+    zpd_write_manifest "$(zpd_legacy_marker_file)" \
+        "legacy_base=${base}" "nginx_conf=${nginx}" "supervisor_conf=${super}" \
+        "scheduler_cron=${cron}" "created_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+}
+
+# zpd_has_legacy_rollback — return 0 if a saved legacy snapshot exists.
+zpd_has_legacy_rollback() { [ -f "$(zpd_legacy_marker_file)" ]; }
+
+# zpd_restore_legacy_rollback — restore the snapshotted nginx/supervisor/cron
+# files (used when the first cutover fails). Returns 0 on success.
+zpd_restore_legacy_rollback() {
+    local marker; marker="$(zpd_legacy_marker_file)"
+    [ -f "$marker" ] || return 1
+    local dir nginx super cron
+    dir="$(dirname "$marker")"
+    nginx="$(zpd_manifest_get "$marker" nginx_conf)"
+    super="$(zpd_manifest_get "$marker" supervisor_conf)"
+    cron="$(zpd_manifest_get "$marker" scheduler_cron)"
+    [ -f "${dir}/nginx.legacy" ] && [ -n "$nginx" ] && cp -a "${dir}/nginx.legacy" "$nginx" 2>/dev/null || true
+    [ -f "${dir}/supervisor.legacy" ] && [ -n "$super" ] && cp -a "${dir}/supervisor.legacy" "$super" 2>/dev/null || true
+    [ -f "${dir}/scheduler.legacy" ] && [ -n "$cron" ] && cp -a "${dir}/scheduler.legacy" "$cron" 2>/dev/null || true
+    return 0
 }
 
 # ── JSON manifest / state (no secrets) ──────────────────────────────────────
@@ -348,6 +696,14 @@ zpd_link_shared() {
         rm -rf "$rel/storage" 2>/dev/null || true
         ln -s "$shared/storage" "$rel/storage" 2>/dev/null || return 1
     fi
+
+    # public/storage must resolve to the shared public disk so uploads survive
+    # every release/rollback (equivalent to `php artisan storage:link`).
+    if [ -d "$rel/public" ] || mkdir -p "$rel/public" 2>/dev/null; then
+        mkdir -p "$shared/storage/app/public" 2>/dev/null || true
+        rm -rf "$rel/public/storage" 2>/dev/null || true
+        ln -s "$shared/storage/app/public" "$rel/public/storage" 2>/dev/null || return 1
+    fi
     return 0
 }
 
@@ -388,3 +744,7 @@ zpd_msg_success()          { printf 'به‌روزرسانی با موفقیت �
 zpd_msg_rolled_back()      { printf 'به‌روزرسانی ناموفق بود و نسخه قبلی بازیابی شد.'; }
 zpd_msg_previous_active()  { printf 'نسخه قبلی با موفقیت فعال شد.'; }
 zpd_msg_db_needs_review()  { printf 'بازیابی خودکار کد انجام شد، اما مهاجرت‌های دیتابیس نیاز به بررسی دارند.'; }
+zpd_msg_no_repo()          { printf 'آدرس مخزن پروژه قابل تشخیص نیست. فایل /etc/zedproxy/deploy.env را بررسی کنید.'; }
+zpd_msg_git_fetch_failed() { printf 'دریافت کد پروژه از GitHub ناموفق بود.\nدلیل غیرحساس خطا در خروجی بالا نمایش داده شد و نسخه فعال تغییر نکرد.'; }
+zpd_msg_nginx_restored()   { printf 'تغییر مسیر Nginx ناموفق بود و تنظیمات قبلی بازیابی شد.'; }
+zpd_msg_legacy_restored()  { printf 'فعال‌سازی نسخه جدید ناموفق بود و نصب قبلی (legacy) بازیابی شد.'; }

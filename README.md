@@ -112,9 +112,22 @@ Private-repository authentication behaviour is unchanged by any of the above.
 
 Composer uses its default trusted repositories and npm the default registry (no arbitrary registries from untrusted environment variables; TLS verification is never disabled; no integrity-disabling flags). Root is used only for apt, filesystem ownership, and service configuration; application files are never made world-writable and shared storage/cache ownership is preserved.
 
-### Safe upgrade process
+### Unified atomic deployment architecture
 
-Re-running `install.sh` on an existing install preserves `.env`, `APP_KEY`, uploads and the database (a DB backup is taken before migrations). The atomic deploy (`scripts/deploy/deploy.sh`) builds a new release in isolation, runs lock-file + `composer validate` + audit gates, and only switches the `current` symlink after a successful build + smoke test; a failed build never touches the live release.
+Fresh installs, updates, and rollbacks all use **one** release-based layout — a fresh `install.sh` builds it from the very first install (there is no "install directly into `/var/www/zedproxy` then migrate later" step):
+
+```
+/var/www/zedproxy/
+├── current -> releases/<id>          # Nginx root; Supervisor + scheduler target
+├── releases/<id>/                    # one release's application code
+└── shared/{.env,storage,persistent}  # state shared across releases
+```
+
+Nginx serves `current/public`, the queue worker runs `current/artisan`, and the scheduler runs `current/artisan` — the cutover is **automatic** (no manual step). The installer also writes a non-secret **`/etc/zedproxy/deploy.env`** (`ZPD_BASE`, `ZPD_REPO_URL`, `ZPD_REF`, `ZPD_HEALTH_URL`; never any secret) that every update/rollback/status entrypoint loads.
+
+`zedproxy-update` works **from any directory** — it self-bootstraps by resolving the repository (explicit `ZPD_REPO_URL` → `deploy.env` → active-release origin → legacy origin → the public default `https://github.com/Mhoseinshah1/zed_web.git`; the fallback is **never** `.`), resolving `ZPD_REF` to an exact commit SHA before naming the release (so an id can never end in `-nogit`), fetching the exact source, verifying the deployed HEAD matches, and activating atomically with automatic rollback. Git failures are shown with the real (redacted) cause. A legacy single-directory install is migrated automatically on the first update, keeping a rollback path to the legacy app until the first release is healthy. See **[docs/deployment.md](docs/deployment.md)**.
+
+Re-running `install.sh` on an existing install preserves `.env`, `APP_KEY`, uploads and the database (a DB backup is taken before migrations); on an already-atomic install it repairs infrastructure idempotently and **never** `git reset --hard`s the active release — code changes go through `zedproxy-update`.
 
 ### Troubleshooting verification failures
 
