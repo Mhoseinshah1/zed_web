@@ -63,22 +63,65 @@ case "$repo" in
         exit 1 ;;
 esac
 
-# ── Fetch the exact updater source into a protected temp dir ──────────────────
+# ── Redact credentials that might appear in an authenticated URL ─────────────
+redact() { sed -E 's#(://)[^/@[:space:]:]+:[^/@[:space:]]+@#\1***:***@#g'; }
+
 BOOTSTRAP="$(mktemp -d)"
 chmod 700 "$BOOTSTRAP" 2>/dev/null || true
 cleanup() { rm -rf "$BOOTSTRAP" 2>/dev/null || true; }
 trap cleanup EXIT INT TERM
-
-log "Bootstrapping deployer from ${repo} (ref: ${REF})…"
 _err="${BOOTSTRAP}/git.log"
-if ! "$GIT" clone "$repo" "${BOOTSTRAP}/src" >>"$_err" 2>&1; then
-    err "دریافت کد به‌روزرسان از GitHub ناموفق بود."
-    # Redact any credential that might appear in an authenticated URL before showing.
-    sed -E 's#(://)[^/@[:space:]:]+:[^/@[:space:]]+@#\1***:***@#g' "$_err" >&2 || true
+
+# ── Resolve the EXACT updater commit BEFORE fetching (strict, no silent
+#    fallback to the default branch when a custom ref was requested) ──────────
+# Supports branch / lightweight tag / annotated tag (peeled) / full 40-hex SHA.
+resolve_sha() {
+    local out sha
+    out="$("$GIT" ls-remote "$repo" "$REF" "${REF}^{}" 2>>"$_err")" || {
+        printf '%s' "$REF" | grep -Eq '^[0-9a-f]{40}$' && { printf '%s' "$REF"; return 0; }
+        return 1
+    }
+    sha="$(printf '%s\n' "$out" | awk '/\^\{\}$/ {print $1; exit}')"
+    [ -n "$sha" ] || sha="$(printf '%s\n' "$out" | awk 'NF {print $1; exit}')"
+    if [ -z "$sha" ]; then
+        printf '%s' "$REF" | grep -Eq '^[0-9a-f]{40}$' && { printf '%s' "$REF"; return 0; }
+        return 1
+    fi
+    printf '%s' "$sha"
+}
+
+log "Resolving updater ref '${REF}' from ${repo}…"
+if ! RESOLVED_SHA="$(resolve_sha)" || [ -z "$RESOLVED_SHA" ]; then
+    err "نسخه درخواستی به‌روزرسان قابل بازیابی نیست. عملیات متوقف شد."
+    redact < "$_err" >&2 || true
     exit 1
 fi
+
+# ── Fetch the exact updater source into the protected temp dir ────────────────
+log "Fetching updater source (${REF} → ${RESOLVED_SHA:0:12})…"
+if ! "$GIT" clone "$repo" "${BOOTSTRAP}/src" >>"$_err" 2>&1; then
+    err "دریافت کد به‌روزرسان از GitHub ناموفق بود."
+    redact < "$_err" >&2 || true
+    exit 1
+fi
+# Tags may be needed for a tag ref. A fetch failure here is not fatal on its own,
+# but the checkout below is STRICT.
 "$GIT" -C "${BOOTSTRAP}/src" fetch --tags --force --quiet origin >>"$_err" 2>&1 || true
-"$GIT" -C "${BOOTSTRAP}/src" checkout --quiet --detach "$REF" >>"$_err" 2>&1 || true
+
+# STRICT checkout — a missing/invalid ref must stop immediately (no `|| true`).
+if ! "$GIT" -C "${BOOTSTRAP}/src" checkout --quiet --detach "$REF" >>"$_err" 2>&1; then
+    err "نسخه درخواستی به‌روزرسان قابل بازیابی نیست. عملیات متوقف شد."
+    redact < "$_err" >&2 || true
+    exit 1
+fi
+
+# Verify the fetched updater HEAD equals the resolved commit.
+GOT_SHA="$("$GIT" -C "${BOOTSTRAP}/src" rev-parse HEAD 2>>"$_err" || true)"
+if [ "$GOT_SHA" != "$RESOLVED_SHA" ]; then
+    err "نسخه درخواستی به‌روزرسان قابل بازیابی نیست. عملیات متوقف شد."
+    err "(checked out ${GOT_SHA:-<none>}, expected ${RESOLVED_SHA})"
+    exit 1
+fi
 
 DEPLOY="${BOOTSTRAP}/src/scripts/deploy/deploy.sh"
 if [ ! -f "$DEPLOY" ]; then
@@ -87,5 +130,5 @@ if [ ! -f "$DEPLOY" ]; then
 fi
 
 # The fetched deploy script re-resolves + re-clones the exact release itself.
-log "Running atomic deployment…"
+log "Running atomic deployment from verified updater ${RESOLVED_SHA:0:12}…"
 exec bash "$DEPLOY" "$@"

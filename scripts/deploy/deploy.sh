@@ -36,6 +36,17 @@ for _cand in "${_DEP_DIR}/../lib/supply-chain-lib.sh" "${ZPD_SUPPLY_LIB:-}"; do
     fi
 done
 
+# shellcheck source=scripts/deploy/install-command-wrappers.sh
+# Same command-wrapper implementation install.sh uses. Installing/refreshing the
+# wrappers on every activation is what upgrades a LEGACY server (which migrates
+# via update.sh→deploy.sh, never install.sh) off the old broken zedproxy-update.
+for _cand in "${_DEP_DIR}/install-command-wrappers.sh" "${ZPD_WRAPPERS_LIB:-}"; do
+    if [ -n "${_cand:-}" ] && [ -f "$_cand" ]; then
+        # shellcheck disable=SC1090
+        source "$_cand"; break
+    fi
+done
+
 # Load persistent, non-secret deployment configuration (repo URL, ref, base,
 # health URL) BEFORE any default assignment, so deploy.env values take effect
 # but explicit environment variables still override them.
@@ -51,6 +62,8 @@ ZPD_NGINX="${ZPD_NGINX:-nginx}"
 ZPD_SUPERVISORCTL="${ZPD_SUPERVISORCTL:-supervisorctl}"
 ZPD_CURL="${ZPD_CURL:-curl}"
 ZPD_GIT="${ZPD_GIT:-git}"
+ZPD_PSQL="${ZPD_PSQL:-psql}"
+ZPD_REDIS_CLI="${ZPD_REDIS_CLI:-redis-cli}"
 
 ZPD_HEALTH_URL="${ZPD_HEALTH_URL:-http://localhost}"
 ZPD_MIN_DISK_MB="${ZPD_MIN_DISK_MB:-1024}"
@@ -231,60 +244,173 @@ dep_restart_workers() {
 
 # ── Activation (atomic) ──────────────────────────────────────────────────────
 
-# dep_cutover_services BASE
-#
-# On the FIRST legacy→release migration, repoint Nginx, Supervisor, and the
-# scheduler cron at `<BASE>/current` so the new release is actually served. Each
-# file is backed up before rewriting; if the rewritten Nginx config fails
-# `nginx -t`, the previous config is restored and the function returns 1 (the
-# caller then rolls back to the legacy application). Idempotent — safe to run on
-# an already-atomic install.
-dep_cutover_services() {
-    local base="$1"
-    local nginx_conf super_conf cron
-    nginx_conf="$(zpd_nginx_conf_path)"
-    super_conf="$(zpd_supervisor_conf_path)"
-    cron="$(zpd_scheduler_cron_path)"
+# ── Connectivity + worker-status probes (injectable, mockable) ───────────────
 
-    if [ -f "$nginx_conf" ]; then
-        cp -a "$nginx_conf" "${nginx_conf}.zpd-precutover" 2>/dev/null || true
-        zpd_nginx_rewrite_root "$nginx_conf" "$base" || { dep_err "nginx root rewrite failed"; return 1; }
-        if ! dep_validate_nginx; then
-            dep_err "$(zpd_msg_nginx_restored)"
-            cp -a "${nginx_conf}.zpd-precutover" "$nginx_conf" 2>/dev/null || true
-            return 1
-        fi
+# dep_check_pg ENV_FILE — PostgreSQL connectivity via `psql -tAc 'SELECT 1'`.
+dep_check_pg() {
+    local env_file="$1" db user pass host port
+    [ -f "$env_file" ] || return 1
+    db="$(_dep_env_get "$env_file" DB_DATABASE)"
+    user="$(_dep_env_get "$env_file" DB_USERNAME)"
+    pass="$(_dep_env_get "$env_file" DB_PASSWORD)"
+    host="$(_dep_env_get "$env_file" DB_HOST)"; host="${host:-127.0.0.1}"
+    port="$(_dep_env_get "$env_file" DB_PORT)"; port="${port:-5432}"
+    [ -n "$db" ] && [ -n "$user" ] || return 1
+    PGPASSWORD="$pass" "$ZPD_PSQL" -h "$host" -p "$port" -U "$user" -d "$db" -tAc 'SELECT 1' >/dev/null 2>&1
+}
+
+# dep_check_redis ENV_FILE — Redis connectivity via `redis-cli ping` → PONG.
+dep_check_redis() {
+    local env_file="$1" host port pass out
+    [ -f "$env_file" ] || return 1
+    host="$(_dep_env_get "$env_file" REDIS_HOST)"; host="${host:-127.0.0.1}"
+    port="$(_dep_env_get "$env_file" REDIS_PORT)"; port="${port:-6379}"
+    pass="$(_dep_env_get "$env_file" REDIS_PASSWORD)"
+    if [ -n "$pass" ] && [ "$pass" != "null" ]; then
+        out="$("$ZPD_REDIS_CLI" -h "$host" -p "$port" -a "$pass" ping 2>/dev/null)"
+    else
+        out="$("$ZPD_REDIS_CLI" -h "$host" -p "$port" ping 2>/dev/null)"
     fi
+    printf '%s' "$out" | grep -qi 'PONG'
+}
 
-    if [ -f "$super_conf" ]; then
-        cp -a "$super_conf" "${super_conf}.zpd-precutover" 2>/dev/null || true
-        zpd_supervisor_rewrite "$super_conf" "$base" || true
-        "$ZPD_SUPERVISORCTL" reread >/dev/null 2>&1 || true
-        "$ZPD_SUPERVISORCTL" update >/dev/null 2>&1 || true
-    fi
+# dep_supervisor_group_running — the worker group exists AND every process is
+# RUNNING (no FATAL/BACKOFF/STOPPED/EXITED). Uses `supervisorctl status`.
+dep_supervisor_group_running() {
+    local group out; group="$(zpd_supervisor_worker_group)"
+    out="$("$ZPD_SUPERVISORCTL" status "${group}:*" 2>/dev/null)"
+    [ -n "$out" ] || return 1
+    printf '%s\n' "$out" | grep -q 'RUNNING' || return 1
+    if printf '%s\n' "$out" | grep -Eq 'FATAL|BACKOFF|STOPPED|EXITED'; then return 1; fi
+    return 0
+}
 
-    if [ -f "$cron" ]; then
-        cp -a "$cron" "${cron}.zpd-precutover" 2>/dev/null || true
-        sed -i "s#php [^ ]*/artisan schedule:run#php ${base}/current/artisan schedule:run#g" "$cron"
+# ── Strict legacy→current cutover (fail-closed; each step verified) ──────────
+
+# dep_cutover_nginx BASE — backup, rewrite root → current/public, verify, and
+# `nginx -t`; restore the previous config and fail on any error.
+dep_cutover_nginx() {
+    local base="$1" conf; conf="$(zpd_nginx_conf_path)"
+    [ -f "$conf" ] || { dep_err "nginx config missing: ${conf}"; return 1; }
+    cp -a "$conf" "${conf}.zpd-precutover" 2>/dev/null || true
+    zpd_nginx_rewrite_root "$conf" "$base" || { dep_err "$(zpd_msg_nginx_restored)"; cp -a "${conf}.zpd-precutover" "$conf" 2>/dev/null || true; return 1; }
+    if ! zpd_nginx_root_ok "$conf" "$base" || ! dep_validate_nginx; then
+        dep_err "$(zpd_msg_nginx_restored)"
+        cp -a "${conf}.zpd-precutover" "$conf" 2>/dev/null || true
+        return 1
     fi
     return 0
 }
 
-# dep_activate RELEASE_ID PHP_FPM_SVC CURRENT_BEFORE [LEGACY]
+# dep_cutover_supervisor BASE — STRICT: config exists or is created explicitly;
+# rewritten to current/artisan; verified; reread + update must both succeed. No
+# `|| true` on any required operation. Returns 1 (→ rollback) on any failure.
+dep_cutover_supervisor() {
+    local base="$1" conf; conf="$(zpd_supervisor_conf_path)"
+    if [ -f "$conf" ]; then
+        cp -a "$conf" "${conf}.zpd-precutover" 2>/dev/null || true
+        zpd_supervisor_rewrite "$conf" "$base" || { dep_err "$(zpd_msg_supervisor_failed)"; return 1; }
+    else
+        dep_warn "supervisor config missing — creating ${conf} explicitly"
+        mkdir -p "$(dirname "$conf")" 2>/dev/null || true
+        zpd_supervisor_conf_content "$base" > "$conf" || { dep_err "$(zpd_msg_supervisor_failed)"; return 1; }
+    fi
+    zpd_supervisor_ok "$conf" "$base"   || { dep_err "$(zpd_msg_supervisor_failed)"; return 1; }
+    "$ZPD_SUPERVISORCTL" reread         || { dep_err "$(zpd_msg_supervisor_failed)"; return 1; }
+    "$ZPD_SUPERVISORCTL" update         || { dep_err "$(zpd_msg_supervisor_failed)"; return 1; }
+    return 0
+}
+
+# dep_cutover_scheduler BASE — STRICT: write the COMPLETE expected cron file
+# atomically (root:root 644), then verify exactly one current/-based
+# schedule:run entry and the file mode. Returns 1 (→ rollback) on any failure.
+dep_cutover_scheduler() {
+    local base="$1" cron dir tmp mode; cron="$(zpd_scheduler_cron_path)"
+    [ -f "$cron" ] && cp -a "$cron" "${cron}.zpd-precutover" 2>/dev/null || true
+    dir="$(dirname "$cron")"; mkdir -p "$dir" 2>/dev/null || true
+    tmp="$(cd "$dir" && mktemp ".zpdcron.XXXXXX" 2>/dev/null)" || { dep_err "$(zpd_msg_scheduler_failed)"; return 1; }
+    tmp="${dir}/${tmp}"
+    if ! zpd_scheduler_cron_content "$base" > "$tmp"; then rm -f "$tmp"; dep_err "$(zpd_msg_scheduler_failed)"; return 1; fi
+    chmod 644 "$tmp" 2>/dev/null || true
+    chown 0:0 "$tmp" 2>/dev/null || true
+    mv -f "$tmp" "$cron" || { rm -f "$tmp"; dep_err "$(zpd_msg_scheduler_failed)"; return 1; }
+    zpd_scheduler_cron_ok "$cron" "$base" || { dep_err "$(zpd_msg_scheduler_failed)"; return 1; }
+    mode="$(stat -c '%a' "$cron" 2>/dev/null || echo '')"
+    [ "$mode" = "644" ] || { dep_err "$(zpd_msg_scheduler_failed)"; return 1; }
+    # When running as root, the cron file must be root-owned.
+    if [ "$(id -u)" = "0" ]; then
+        [ "$(stat -c '%u' "$cron" 2>/dev/null || echo -1)" = "0" ] || { dep_err "$(zpd_msg_scheduler_failed)"; return 1; }
+    fi
+    return 0
+}
+
+# dep_cutover_services BASE — orchestrate the three strict cutovers. Any failure
+# returns 1 so the caller rolls back to the legacy application (fail-closed).
+dep_cutover_services() {
+    local base="$1"
+    dep_cutover_nginx "$base"      || return 1
+    dep_cutover_supervisor "$base" || return 1
+    dep_cutover_scheduler "$base"  || return 1
+    return 0
+}
+
+# ── Wrapper backup location (for first-cutover rollback) ─────────────────────
+dep_wrapper_backup_dir() { printf '%s/shared/deploy/wrappers.precutover' "$(zpd_base)"; }
+
+# ── Expanded post-activation readiness (fail-closed) ─────────────────────────
+
+# dep_verify_release BASE RELEASE_ID SHA [HEALTH_URL]
+#
+# The full readiness gate. Verifies HTTP routes, the current symlink + resolved
+# release id, manifest-SHA == deployed HEAD, Nginx/Supervisor/Scheduler all on
+# current/, the worker group running, schedule:list, command-wrapper resolution,
+# and PostgreSQL + Redis connectivity. A failure of ANY check returns 1 so the
+# deployment is NEVER reported successful while Queue or Scheduler still runs
+# legacy code.
+dep_verify_release() {
+    local base="$1" id="$2" sha="$3" url="${4:-$ZPD_HEALTH_URL}"
+    local manifest mansha headsha
+    manifest="$(zpd_releases_dir)/${id}/RELEASE_MANIFEST.json"
+
+    dep_health "$url"                                       || { dep_err "readiness: HTTP checks failed"; return 1; }
+    [ -L "$(zpd_current_link)" ]                            || { dep_err "readiness: current symlink missing"; return 1; }
+    [ "$(zpd_current_release)" = "$id" ]                    || { dep_err "readiness: current != ${id}"; return 1; }
+
+    headsha="$(zpd_git_head_sha "$(zpd_current_link)" 2>/dev/null)"
+    mansha="$(zpd_manifest_get "$manifest" git_sha 2>/dev/null)"
+    [ -n "$headsha" ] && [ "$mansha" = "$headsha" ]        || { dep_err "readiness: manifest SHA != deployed HEAD"; return 1; }
+    [ -z "$sha" ] || [ "$sha" = "$headsha" ]               || { dep_err "readiness: deployed SHA mismatch"; return 1; }
+
+    zpd_nginx_root_ok "$(zpd_nginx_conf_path)" "$base"     || { dep_err "readiness: Nginx root not on current/"; return 1; }
+    zpd_supervisor_ok "$(zpd_supervisor_conf_path)" "$base" || { dep_err "readiness: Supervisor not on current/"; return 1; }
+    dep_supervisor_group_running                           || { dep_err "readiness: worker group not running"; return 1; }
+    zpd_scheduler_cron_ok "$(zpd_scheduler_cron_path)" "$base" || { dep_err "readiness: Scheduler not on current/"; return 1; }
+    dep_verify_scheduler "$(zpd_current_link)"             || { dep_err "readiness: schedule:list failed"; return 1; }
+
+    if declare -F zpw_verify_wrappers >/dev/null 2>&1; then
+        zpw_verify_wrappers "$base"                        || { dep_err "readiness: command wrappers not resolving current/"; return 1; }
+    fi
+
+    dep_check_pg "$(zpd_shared_dir)/.env"                  || { dep_err "readiness: PostgreSQL unreachable"; return 1; }
+    dep_check_redis "$(zpd_shared_dir)/.env"               || { dep_err "readiness: Redis unreachable"; return 1; }
+    return 0
+}
+
+# dep_activate RELEASE_ID PHP_FPM_SVC CURRENT_BEFORE [LEGACY] [SHA]
 #
 # The atomic activation sequence. When LEGACY=1 this is the first migration off a
-# legacy single-directory install: maintenance mode is applied to the legacy app
-# and services are cut over to `current` after the symlink switch. Returns:
+# legacy single-directory install: maintenance mode targets the legacy app and
+# Nginx/Supervisor/Scheduler are STRICTLY cut over to `current` after the symlink
+# switch. The stable command wrappers are (re)installed from the new release on
+# EVERY activation. Returns:
 #   0   success
 #   30  migration failed (nothing switched)
-#   31  post-switch reload/health failed (caller must roll back)
+#   31  post-switch reload/cutover/readiness failed (caller must roll back)
 dep_activate() {
-    local id="$1" fpm="$2" current_before="$3" legacy="${4:-0}"
+    local id="$1" fpm="$2" current_before="$3" legacy="${4:-0}" sha="${5:-}"
     local current_dir base maint_dir
     current_dir="$(zpd_current_link)"
     base="$(zpd_base)"
-    # On a legacy first cutover `current` does not exist yet — maintenance mode
-    # must target the legacy application at the base directory.
     if [ "$legacy" = "1" ] && [ ! -L "$current_dir" ]; then
         maint_dir="$base"
     else
@@ -295,7 +421,7 @@ dep_activate() {
     ( cd "$maint_dir" 2>/dev/null && "$ZPD_PHP" artisan down --render="errors::503" 2>/dev/null ) || true
 
     # 2. pause workers (stop consuming with the old code)
-    "$ZPD_SUPERVISORCTL" stop 'zedproxy-worker:*' 2>/dev/null || true
+    "$ZPD_SUPERVISORCTL" stop "$(zpd_supervisor_worker_group):*" 2>/dev/null || true
 
     # 3. migrations (run from the NEW release, which is linked to shared .env)
     if ! ( cd "$(zpd_releases_dir)/${id}" && "$ZPD_PHP" artisan migrate --force ); then
@@ -309,7 +435,18 @@ dep_activate() {
         return 31
     fi
 
-    # 4b. first legacy cutover: repoint Nginx/Supervisor/Scheduler at current/.
+    # 4a. Refresh the stable command wrappers from the NEW release. On a legacy
+    #     first cutover, snapshot the existing wrappers first so a failed
+    #     activation can restore them.
+    if declare -F zpw_install_wrappers >/dev/null 2>&1; then
+        if [ "$legacy" = "1" ]; then
+            zpw_backup_wrappers "$(dep_wrapper_backup_dir)" || true
+        fi
+        zpw_install_wrappers || { dep_err "activation: command-wrapper install failed"; return 31; }
+    fi
+
+    # 4b. First legacy cutover: STRICTLY repoint Nginx/Supervisor/Scheduler at
+    #     current/. Any failure fails the activation (→ legacy rollback).
     if [ "$legacy" = "1" ]; then
         dep_cutover_services "$base" || { dep_err "activation: service cutover failed"; return 31; }
     fi
@@ -322,8 +459,9 @@ dep_activate() {
     # 8. restart workers against the new release
     dep_restart_workers || { dep_err "activation: worker restart failed"; return 31; }
 
-    # 9. readiness
-    if ! dep_health "$ZPD_HEALTH_URL"; then
+    # 9. EXPANDED readiness — HTTP + symlink + SHA + Nginx/Supervisor/Scheduler on
+    #    current/ + worker group running + schedule:list + wrappers + PG + Redis.
+    if ! dep_verify_release "$base" "$id" "$sha" "$ZPD_HEALTH_URL"; then
         return 31
     fi
 
@@ -341,12 +479,19 @@ dep_activate() {
 dep_first_cutover_rollback() {
     local base="$1" fpm="$2"
     zpd_restore_legacy_rollback || dep_warn "no legacy snapshot to restore"
+    # Restore the pre-cutover command wrappers so the server keeps whatever
+    # zedproxy-* commands it had before the failed migration.
+    if declare -F zpw_restore_wrappers >/dev/null 2>&1 && [ -d "$(dep_wrapper_backup_dir)" ]; then
+        zpw_restore_wrappers "$(dep_wrapper_backup_dir)" || dep_warn "wrapper restore failed"
+    fi
     rm -f "$(zpd_current_link)" 2>/dev/null || true
     dep_reload_php_fpm "$fpm" || true
     dep_reload_nginx          || true
-    "$ZPD_SUPERVISORCTL" reread >/dev/null 2>&1 || true
-    "$ZPD_SUPERVISORCTL" update >/dev/null 2>&1 || true
-    dep_restart_workers       || true
+    # Best-effort in the rollback path (the legacy config is already restored);
+    # surfaced as warnings rather than hidden, and never `|| true`.
+    "$ZPD_SUPERVISORCTL" reread >/dev/null 2>&1 || dep_warn "supervisor reread during rollback failed"
+    "$ZPD_SUPERVISORCTL" update >/dev/null 2>&1 || dep_warn "supervisor update during rollback failed"
+    dep_restart_workers       || dep_warn "worker restart during rollback failed"
     ( cd "$base" 2>/dev/null && "$ZPD_PHP" artisan up 2>/dev/null ) || true
     dep_health "$ZPD_HEALTH_URL"
 }
@@ -486,7 +631,7 @@ dep_main() {
     fi
 
     dep_log "Activating ${id}…"
-    dep_activate "$id" "$fpm" "$current_before" "$legacy"
+    dep_activate "$id" "$fpm" "$current_before" "$legacy" "$sha"
     local rc=$?
 
     if [ "$rc" -eq 0 ]; then
