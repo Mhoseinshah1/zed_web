@@ -193,13 +193,62 @@ or Telegram tokens:
 
 On the very first migration there is no previous release id — the **legacy
 application itself** is the rollback target. If the first activation fails, the
-deployer restores the snapshotted Nginx/Supervisor/scheduler config, drops the
-`current` symlink so Nginx serves the legacy root again, reloads services, brings
-the legacy app out of maintenance mode, and confirms legacy health. It reports
-«فعال‌سازی نسخه جدید ناموفق بود و نصب قبلی (legacy) بازیابی شد.» and never claims
-success unless the legacy app is healthy. The failed release is kept as
-`<id>.failed` for diagnosis. `zedproxy-rollback legacy` triggers the same path
-manually.
+deployer restores the snapshotted Nginx/Supervisor/scheduler config **and the
+previous command wrappers**, drops the `current` symlink so Nginx serves the
+legacy root again, reloads services, brings the legacy app out of maintenance
+mode, and confirms legacy health. It reports «فعال‌سازی نسخه جدید ناموفق بود و
+نصب قبلی (legacy) بازیابی شد.» and never claims success unless the legacy app is
+healthy. The failed release is kept as `<id>.failed` for diagnosis.
+`zedproxy-rollback legacy` triggers the same path manually.
+
+### Strict, fail-closed cutover
+
+The Nginx / Supervisor / Scheduler cutover **fails closed** — a partial cutover
+can never be reported as success:
+
+- **Supervisor**: the worker config must exist (or is created explicitly),
+  is rewritten to `current/artisan` with logs in shared storage, is verified to
+  contain the exact `current/` path (a lingering legacy `<base>/artisan` command
+  is rejected), and `supervisorctl reread`, `update`, and the worker restart
+  must all succeed — **none is masked by `|| true`**. Failure →
+  «به‌روزرسانی تنظیمات صف پردازش ناموفق بود و نسخه قبلی بازیابی می‌شود.»
+- **Scheduler**: the complete cron file is written **atomically** (root:root,
+  mode 644) and verified to contain exactly **one** `current/artisan schedule:run`
+  entry (duplicates and legacy paths rejected). Failure →
+  «انتقال زمان‌بندی Laravel به نسخه جدید ناموفق بود و تنظیمات قبلی بازیابی می‌شود.»
+
+### Command wrappers refreshed on every update
+
+The stable `zedproxy-*` wrappers + `/usr/local/lib/zedproxy/bootstrap.sh` are
+installed from **one** shared implementation
+(`scripts/deploy/install-command-wrappers.sh`) used by BOTH `install.sh` and
+`deploy.sh`. Because a legacy server migrates through `update.sh → deploy.sh`
+(never `install.sh`), `deploy.sh` **(re)installs the wrappers on every
+activation** — this is what removes an old, broken `zedproxy-update` that still
+executed the legacy base deployer with the original `.` repository fallback. On
+a first legacy cutover the previous wrappers are snapshotted and restored if the
+activation fails.
+
+### Expanded readiness gate
+
+After activation the deployer verifies (any failure → rollback): `/health`,
+`/health/live`, homepage, `/login`; the `current` symlink exists and resolves to
+the expected release id; the manifest SHA equals the deployed `git HEAD`; the
+Nginx root, Supervisor command, and scheduler cron all go through `current/`; the
+worker group is **running**; `php current/artisan schedule:list` succeeds; the
+command wrappers resolve `current/`; and PostgreSQL + Redis are reachable. The
+deployment is **never** reported successful while Queue or Scheduler still runs
+legacy code.
+
+### Strict updater ref (`update.sh`)
+
+`update.sh` resolves the exact updater commit from the remote (`git ls-remote`:
+branch / lightweight tag / annotated tag / full SHA) **before** fetching, fails
+clearly when the ref does not exist («نسخه درخواستی به‌روزرسان قابل بازیابی نیست.
+عملیات متوقف شد.»), checks out that ref **strictly** (a checkout failure stops
+immediately — never `|| true`), and verifies the fetched `HEAD` equals the
+resolved SHA before running `deploy.sh`. A custom ref never silently falls back
+to the default branch.
 
 ## Configuration (env)
 

@@ -162,6 +162,8 @@ load_lib "$SUPPLY_LIB_REL" || error "Could not load supply-chain helper library 
 # Deploy library provides the atomic-layout helpers (zpd_write_deploy_env,
 # zpd_switch_current, …) shared verbatim with the updater.
 load_lib "scripts/lib/deploy-lib.sh" || error "Could not load deploy helper library (scripts/lib/deploy-lib.sh)."
+# Shared command-wrapper installer (same implementation deploy.sh uses).
+load_lib "scripts/deploy/install-command-wrappers.sh" || error "Could not load command-wrapper installer (scripts/deploy/install-command-wrappers.sh)."
 
 # ─── Secret-safe output channel ───────────────────────────────────────────────
 # Credentials are delivered ONLY through log_secret_once(): to the controlling
@@ -1748,75 +1750,9 @@ ok "Deployment configuration written (repo/ref/base/health — no secrets)"
 # which fetches fresh deploy logic rather than blindly executing an on-disk copy.
 log "Installing deployment command shortcuts..."
 
-mkdir -p /usr/local/lib/zedproxy
-cat > /usr/local/lib/zedproxy/bootstrap.sh <<'BOOTSTRAP'
-#!/usr/bin/env bash
-# Shared resolver for the zedproxy-* command shortcuts. Sourced, never executed.
-# Resolves ZPD_BASE from deploy.env (parsed, not sourced) and locates a script
-# from the active release first, then a detected install — independent of $PWD.
-_zpd_deploy_env="${ZPD_DEPLOY_ENV:-/etc/zedproxy/deploy.env}"
-if [ -z "${ZPD_BASE:-}" ] && [ -r "$_zpd_deploy_env" ]; then
-    ZPD_BASE="$(sed -nE 's/^[[:space:]]*ZPD_BASE[[:space:]]*=[[:space:]]*"?([^"#[:space:]]+)"?.*/\1/p' "$_zpd_deploy_env" | tail -n1)"
-fi
-ZPD_BASE="${ZPD_BASE:-/var/www/zedproxy}"
-export ZPD_BASE
-
-# zpd_resolve_script REL — echo the first existing "<dir>/REL" among the active
-# release and the base install; return 1 if none exists.
-zpd_resolve_script() {
-    local rel="$1" d
-    for d in "${ZPD_BASE}/current" "${ZPD_BASE}"; do
-        if [ -f "${d}/${rel}" ]; then printf '%s' "${d}/${rel}"; return 0; fi
-    done
-    return 1
-}
-
-# zpd_exec_root SCRIPT ARGS... — run SCRIPT as root without unnecessary nested
-# sudo (exec directly when already root).
-zpd_exec_root() {
-    local s="$1"; shift
-    if [ "$(id -u)" = "0" ]; then exec bash "$s" "$@"; else exec sudo -E bash "$s" "$@"; fi
-}
-BOOTSTRAP
-chmod 644 /usr/local/lib/zedproxy/bootstrap.sh
-
-cat > /usr/local/bin/zedproxy-update <<'UPDATESCRIPT'
-#!/usr/bin/env bash
-# Self-bootstrapping atomic update (works from any directory).
-. /usr/local/lib/zedproxy/bootstrap.sh
-s="$(zpd_resolve_script update.sh)" \
-  || { echo "به‌روزرسان یافت نشد. برای بازیابی از دستور نصب curl استفاده کنید." >&2; exit 1; }
-zpd_exec_root "$s" "$@"
-UPDATESCRIPT
-chmod +x /usr/local/bin/zedproxy-update
-
-cat > /usr/local/bin/zedproxy-rollback <<'ROLLBACKSCRIPT'
-#!/usr/bin/env bash
-. /usr/local/lib/zedproxy/bootstrap.sh
-s="$(zpd_resolve_script scripts/deploy/rollback.sh)" \
-  || { echo "اسکریپت بازگردانی یافت نشد." >&2; exit 1; }
-zpd_exec_root "$s" "$@"
-ROLLBACKSCRIPT
-chmod +x /usr/local/bin/zedproxy-rollback
-
-cat > /usr/local/bin/zedproxy-deploy-status <<'STATUSSCRIPT'
-#!/usr/bin/env bash
-. /usr/local/lib/zedproxy/bootstrap.sh
-s="$(zpd_resolve_script scripts/deploy/deploy-status.sh)" \
-  || { echo "اسکریپت وضعیت استقرار یافت نشد." >&2; exit 1; }
-exec bash "$s" "$@"
-STATUSSCRIPT
-chmod +x /usr/local/bin/zedproxy-deploy-status
-
-cat > /usr/local/bin/zedproxy-sanitize-install-log <<'SANITIZESCRIPT'
-#!/usr/bin/env bash
-# Removes plaintext credentials older installers may have written into the log.
-. /usr/local/lib/zedproxy/bootstrap.sh
-s="$(zpd_resolve_script scripts/zedproxy-sanitize-install-log.sh)" \
-  || { echo "اسکریپت پاک‌سازی لاگ یافت نشد." >&2; exit 1; }
-zpd_exec_root "$s" "$@"
-SANITIZESCRIPT
-chmod +x /usr/local/bin/zedproxy-sanitize-install-log
+# Single shared implementation (identical to the one deploy.sh installs during
+# every update, so a legacy server that migrates via update.sh also gets it).
+zpw_install_wrappers || error "Installing command wrappers failed."
 
 ok "Shortcuts installed: zedproxy-update, zedproxy-rollback, zedproxy-deploy-status, zedproxy-sanitize-install-log"
 

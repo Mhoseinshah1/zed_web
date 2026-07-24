@@ -318,6 +318,7 @@ jobs:
             scripts/deploy/deploy.sh \
             scripts/deploy/rollback.sh \
             scripts/deploy/deploy-status.sh \
+            scripts/deploy/install-command-wrappers.sh \
             scripts/zedproxy-sanitize-install-log.sh \
             tests/deploy/run-tests.sh \
             tests/installer/run-tests.sh \
@@ -373,6 +374,37 @@ jobs:
           grep -q 'zpd_write_deploy_env "$DEPLOY_ENV_FILE"' install.sh \
             || { echo '::error::Installer does not create /etc/zedproxy/deploy.env.'; exit 1; }
           echo 'Atomic-updater invariants hold.'
+
+      - name: Assert legacy-cutover invariants (fail-closed services; wrappers; strict ref)
+        run: |
+          set -euo pipefail
+          dep=scripts/deploy/deploy.sh
+          # Defect 1: required Supervisor operations must NOT fail open in the
+          # deploy paths, and the git checkout in update.sh must be strict.
+          if grep -REn '(supervisorctl|SUPERVISORCTL)[^\n]*(reread|update)[^\n]*\|\| *true' "$dep" scripts/deploy/rollback.sh; then
+            echo '::error::A required supervisorctl reread/update is masked by "|| true".'
+            exit 1
+          fi
+          if grep -REn 'checkout[^\n]*\|\| *true' update.sh "$dep"; then
+            echo '::error::A git checkout is masked by "|| true" (ref failure would be ignored).'
+            exit 1
+          fi
+          # Defect 2: BOTH install.sh and deploy.sh must (re)install the shared
+          # command wrappers so a legacy server is upgraded off the old deployer.
+          grep -q 'zpw_install_wrappers' install.sh \
+            || { echo '::error::install.sh does not install command wrappers via the shared installer.'; exit 1; }
+          grep -q 'zpw_install_wrappers' "$dep" \
+            || { echo '::error::deploy.sh does not (re)install command wrappers on activation.'; exit 1; }
+          test -f scripts/deploy/install-command-wrappers.sh \
+            || { echo '::error::Shared command-wrapper installer is missing.'; exit 1; }
+          # Defect 1: the strict cutover + expanded readiness must exist.
+          for fn in dep_cutover_supervisor dep_cutover_scheduler dep_verify_release dep_supervisor_group_running dep_check_pg dep_check_redis; do
+            grep -q "$fn" "$dep" || { echo "::error::deploy.sh missing ${fn} (strict cutover/readiness)."; exit 1; }
+          done
+          # Defect 3: update.sh resolves + verifies the exact updater SHA.
+          grep -q 'RESOLVED_SHA' update.sh && grep -q 'GOT_SHA' update.sh \
+            || { echo '::error::update.sh does not resolve/verify the exact updater SHA.'; exit 1; }
+          echo 'Legacy-cutover invariants hold.'
 
       # ── Supply-chain verification (authoritative home; formerly the separate
       #    supply-chain.yml workflow, folded in here to remove duplicate jobs). ──

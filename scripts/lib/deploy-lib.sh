@@ -384,11 +384,72 @@ zpd_supervisor_rewrite() {
     sed -i "s#stdout_logfile=.*#stdout_logfile=${base}/shared/storage/logs/worker.log#g" "$conf"
 }
 
-# zpd_supervisor_ok CONF BASE — worker command runs current/artisan.
+# zpd_supervisor_ok CONF BASE — worker command runs current/artisan AND the
+# legacy direct path is absent (fail-closed: a config still referencing
+# <base>/artisan is rejected even if a current/ line also exists).
 zpd_supervisor_ok() {
     local conf="$1" base="$2"
     [ -f "$conf" ] || return 1
-    grep -Eq "command=[^ ]* ${base}/current/artisan " "$conf"
+    grep -Eq "command=[^ ]* ${base}/current/artisan " "$conf" || return 1
+    # Reject any command line still pointing at the LEGACY <base>/artisan path.
+    if grep -E "command=" "$conf" | grep -Eq "[= ]${base}/artisan[ /]"; then
+        return 1
+    fi
+    return 0
+}
+
+# zpd_supervisor_worker_group — the Supervisor program group name.
+zpd_supervisor_worker_group() { printf '%s' "${ZPD_WORKER_GROUP:-zedproxy-worker}"; }
+
+# -----------------------------------------------------------------------------
+# zpd_supervisor_conf_content BASE — the complete worker program config pointing
+# at <BASE>/current/artisan with logs in shared storage. Used to (re)create the
+# config explicitly when it is missing during a cutover.
+# -----------------------------------------------------------------------------
+zpd_supervisor_conf_content() {
+    local base="$1"
+    cat <<CONF
+[program:$(zpd_supervisor_worker_group)]
+process_name=%(program_name)s_%(process_num)02d
+command=php ${base}/current/artisan queue:work redis --sleep=3 --tries=3 --max-time=3600
+autostart=true
+autorestart=true
+stopasgroup=true
+killasgroup=true
+user=www-data
+numprocs=2
+redirect_stderr=true
+stdout_logfile=${base}/shared/storage/logs/worker.log
+stopwaitsecs=3600
+CONF
+}
+
+# ── Scheduler cron (atomic, single-entry, current/-based) ────────────────────
+
+# zpd_scheduler_cron_content BASE — the COMPLETE expected cron file: exactly one
+# every-minute schedule:run executing <BASE>/current/artisan as www-data.
+zpd_scheduler_cron_content() {
+    local base="$1" log="${ZPD_SCHED_LOG:-/var/log/zedproxy-scheduler.log}"
+    printf '* * * * * www-data cd %s/current && php %s/current/artisan schedule:run >> %s 2>&1\n' \
+        "$base" "$base" "$log"
+}
+
+# -----------------------------------------------------------------------------
+# zpd_scheduler_cron_ok CRON BASE — validate the scheduler cron fail-closed:
+#   - file exists and is non-empty
+#   - EXACTLY one `artisan schedule:run` line (reject duplicates)
+#   - it runs <BASE>/current/artisan schedule:run
+#   - no line references the LEGACY <BASE>/artisan path
+# Returns 0 only when all hold.
+# -----------------------------------------------------------------------------
+zpd_scheduler_cron_ok() {
+    local cron="$1" base="$2" n
+    [ -f "$cron" ] && [ -s "$cron" ] || return 1
+    n="$(grep -c 'artisan schedule:run' "$cron" 2>/dev/null || echo 0)"
+    [ "$n" = "1" ] || return 1
+    grep -q "php ${base}/current/artisan schedule:run" "$cron" || return 1
+    grep -Eq "php ${base}/artisan schedule:run" "$cron" && return 1
+    return 0
 }
 
 # ── First-cutover (legacy → first release) rollback bookkeeping ──────────────
@@ -748,3 +809,6 @@ zpd_msg_no_repo()          { printf 'آدرس مخزن پروژه قابل تش�
 zpd_msg_git_fetch_failed() { printf 'دریافت کد پروژه از GitHub ناموفق بود.\nدلیل غیرحساس خطا در خروجی بالا نمایش داده شد و نسخه فعال تغییر نکرد.'; }
 zpd_msg_nginx_restored()   { printf 'تغییر مسیر Nginx ناموفق بود و تنظیمات قبلی بازیابی شد.'; }
 zpd_msg_legacy_restored()  { printf 'فعال‌سازی نسخه جدید ناموفق بود و نصب قبلی (legacy) بازیابی شد.'; }
+zpd_msg_supervisor_failed(){ printf 'به‌روزرسانی تنظیمات صف پردازش ناموفق بود و نسخه قبلی بازیابی می‌شود.'; }
+zpd_msg_scheduler_failed() { printf 'انتقال زمان‌بندی Laravel به نسخه جدید ناموفق بود و تنظیمات قبلی بازیابی می‌شود.'; }
+zpd_msg_update_ref_bad()   { printf 'نسخه درخواستی به‌روزرسان قابل بازیابی نیست. عملیات متوقف شد.'; }

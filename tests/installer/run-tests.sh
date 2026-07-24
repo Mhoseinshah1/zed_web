@@ -181,10 +181,16 @@ grep_none 'command=php \$\{APP_DIR\}/artisan queue:work'        "$INSTALL_SH" "s
 # 23. Scheduler cron uses current/artisan (ACTIVE_APP_DIR).
 grep_has 'zp_scheduler_cron_line "\$\{ACTIVE_APP_DIR\}"' "$INSTALL_SH" "scheduler cron uses ACTIVE_APP_DIR"
 
-# 24. Shortcuts use the stable bootstrap resolver (active release), not a
-#     hardcoded legacy checkout path.
-grep_has  'zpd_resolve_script'                                   "$INSTALL_SH" "shortcuts resolve the active release at runtime"
-grep_none 'exec sudo bash "\$\{APP_DIR\}/scripts/deploy/deploy.sh"' "$INSTALL_SH" "no hardcoded legacy deploy.sh in shortcuts"
+# 24. Shortcuts use the ONE shared command-wrapper installer (not inline
+#     heredocs), and both install.sh AND deploy.sh install/refresh them.
+WRAPPERS_SH="${REPO_ROOT}/scripts/deploy/install-command-wrappers.sh"
+DEPLOY_SH="${REPO_ROOT}/scripts/deploy/deploy.sh"
+grep_has  'zpw_install_wrappers'   "$INSTALL_SH" "install.sh installs wrappers via the shared installer"
+grep_has  'zpw_install_wrappers'   "$DEPLOY_SH"  "deploy.sh (re)installs wrappers on activation (legacy servers get them)"
+grep_has  'zpd_resolve_script'     "$WRAPPERS_SH" "shared installer emits the current-release resolver"
+grep_none 'exec sudo bash "\$\{APP_DIR\}/scripts/deploy/deploy.sh"' "$INSTALL_SH" "no hardcoded legacy deploy.sh in install.sh shortcuts"
+grep_has  'zpw_backup_wrappers'    "$DEPLOY_SH"  "deploy.sh backs up wrappers before a legacy cutover"
+grep_has  'zpw_restore_wrappers'   "$DEPLOY_SH"  "first-cutover rollback restores the previous wrappers"
 
 # deploy.env is created by the installer (non-secret persistent config).
 grep_has 'zpd_write_deploy_env "\$DEPLOY_ENV_FILE"' "$INSTALL_SH" "installer writes /etc/zedproxy/deploy.env"
@@ -192,17 +198,29 @@ grep_has 'zpd_write_deploy_env "\$DEPLOY_ENV_FILE"' "$INSTALL_SH" "installer wri
 # ACTIVE_APP_DIR defaults to current/ (services target the active release).
 grep_has 'ACTIVE_APP_DIR="\$\{ZPD_CURRENT\}"' "$INSTALL_SH" "ACTIVE_APP_DIR defaults to current/"
 
-# 25. Standalone updater is pwd-independent + self-bootstraps (never blindly
-#     runs an on-disk deploy script; clones the exact source into a temp dir).
+# 25. Standalone updater is pwd-independent + self-bootstraps with STRICT ref
+#     handling (resolve → verify HEAD; no `|| true` on checkout).
 grep_has  'mktemp -d'                 "$UPDATE_SH" "update.sh fetches into a temp bootstrap dir"
 grep_has  'clone "\$repo"'            "$UPDATE_SH" "update.sh clones the resolved repository"
 grep_has  "DEFAULT_REPO='https://github.com/Mhoseinshah1/zed_web.git'" "$UPDATE_SH" "update.sh has a safe public default repo"
+grep_has  'RESOLVED_SHA'              "$UPDATE_SH" "update.sh resolves the exact updater SHA"
+grep_has  'GOT_SHA'                   "$UPDATE_SH" "update.sh verifies fetched HEAD == resolved SHA"
+grep_none 'checkout[^\n]*\|\| true'   "$UPDATE_SH" "update.sh checkout is NOT ignored (no || true)"
 grep_none '\bcd \$\(pwd\)'            "$UPDATE_SH" "update.sh does not depend on \$(pwd)"
-# update.sh must reject an implicit "." repository source.
-grep_has  '\.\|\./\*\|\.\./\*'        "$UPDATE_SH" "update.sh rejects implicit '.' repo source"
+
+# ── No required service operation may fail open in the deploy paths (Defect 1) ──
+# (25) supervisorctl reread/update and git checkout must never be `|| true`.
+grep_none 'supervisorctl[^\n]*reread[^\n]*\|\| *true' "$DEPLOY_SH" "deploy.sh: supervisor reread not '|| true'"
+grep_none 'supervisorctl[^\n]*update[^\n]*\|\| *true' "$DEPLOY_SH" "deploy.sh: supervisor update not '|| true'"
+grep_none 'SUPERVISORCTL[^\n]*reread[^\n]*\|\| *true' "$DEPLOY_SH" "deploy.sh: \$ZPD_SUPERVISORCTL reread not '|| true' (in cutover)"
+# The strict cutover functions and readiness gate exist.
+grep_has  'dep_cutover_supervisor'    "$DEPLOY_SH" "deploy.sh has a strict supervisor cutover"
+grep_has  'dep_cutover_scheduler'     "$DEPLOY_SH" "deploy.sh has a strict scheduler cutover"
+grep_has  'dep_verify_release'        "$DEPLOY_SH" "deploy.sh has an expanded readiness gate"
+grep_has  'dep_supervisor_group_running' "$DEPLOY_SH" "deploy.sh verifies the worker group is running"
 
 # No production repository fallback anywhere may be "." (root cause #1).
-grep_none 'clone[^\n]*"\$\{ZPD_REPO_URL:-\.\}"' "${REPO_ROOT}/scripts/deploy/deploy.sh" "deploy.sh has no '.' repo fallback"
+grep_none 'clone[^\n]*"\$\{ZPD_REPO_URL:-\.\}"' "$DEPLOY_SH" "deploy.sh has no '.' repo fallback"
 
 echo ""
 echo "== results: ${PASS} passed, ${FAIL} failed =="
