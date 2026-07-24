@@ -36,6 +36,11 @@ for _cand in "${_DEP_DIR}/../lib/supply-chain-lib.sh" "${ZPD_SUPPLY_LIB:-}"; do
     fi
 done
 
+# Load persistent, non-secret deployment configuration (repo URL, ref, base,
+# health URL) BEFORE any default assignment, so deploy.env values take effect
+# but explicit environment variables still override them.
+zpd_load_deploy_env
+
 # Injectable commands.
 ZPD_COMPOSER="${ZPD_COMPOSER:-composer}"
 ZPD_NPM="${ZPD_NPM:-npm}"
@@ -226,17 +231,68 @@ dep_restart_workers() {
 
 # ── Activation (atomic) ──────────────────────────────────────────────────────
 
-# dep_activate RELEASE_ID PHP_FPM_SVC CURRENT_BEFORE
+# dep_cutover_services BASE
 #
-# The atomic activation sequence. Returns:
+# On the FIRST legacy→release migration, repoint Nginx, Supervisor, and the
+# scheduler cron at `<BASE>/current` so the new release is actually served. Each
+# file is backed up before rewriting; if the rewritten Nginx config fails
+# `nginx -t`, the previous config is restored and the function returns 1 (the
+# caller then rolls back to the legacy application). Idempotent — safe to run on
+# an already-atomic install.
+dep_cutover_services() {
+    local base="$1"
+    local nginx_conf super_conf cron
+    nginx_conf="$(zpd_nginx_conf_path)"
+    super_conf="$(zpd_supervisor_conf_path)"
+    cron="$(zpd_scheduler_cron_path)"
+
+    if [ -f "$nginx_conf" ]; then
+        cp -a "$nginx_conf" "${nginx_conf}.zpd-precutover" 2>/dev/null || true
+        zpd_nginx_rewrite_root "$nginx_conf" "$base" || { dep_err "nginx root rewrite failed"; return 1; }
+        if ! dep_validate_nginx; then
+            dep_err "$(zpd_msg_nginx_restored)"
+            cp -a "${nginx_conf}.zpd-precutover" "$nginx_conf" 2>/dev/null || true
+            return 1
+        fi
+    fi
+
+    if [ -f "$super_conf" ]; then
+        cp -a "$super_conf" "${super_conf}.zpd-precutover" 2>/dev/null || true
+        zpd_supervisor_rewrite "$super_conf" "$base" || true
+        "$ZPD_SUPERVISORCTL" reread >/dev/null 2>&1 || true
+        "$ZPD_SUPERVISORCTL" update >/dev/null 2>&1 || true
+    fi
+
+    if [ -f "$cron" ]; then
+        cp -a "$cron" "${cron}.zpd-precutover" 2>/dev/null || true
+        sed -i "s#php [^ ]*/artisan schedule:run#php ${base}/current/artisan schedule:run#g" "$cron"
+    fi
+    return 0
+}
+
+# dep_activate RELEASE_ID PHP_FPM_SVC CURRENT_BEFORE [LEGACY]
+#
+# The atomic activation sequence. When LEGACY=1 this is the first migration off a
+# legacy single-directory install: maintenance mode is applied to the legacy app
+# and services are cut over to `current` after the symlink switch. Returns:
 #   0   success
 #   30  migration failed (nothing switched)
-#   31  post-switch reload/health failed (caller must roll back code)
+#   31  post-switch reload/health failed (caller must roll back)
 dep_activate() {
-    local id="$1" fpm="$2" current_dir; current_dir="$(zpd_current_link)"
+    local id="$1" fpm="$2" current_before="$3" legacy="${4:-0}"
+    local current_dir base maint_dir
+    current_dir="$(zpd_current_link)"
+    base="$(zpd_base)"
+    # On a legacy first cutover `current` does not exist yet — maintenance mode
+    # must target the legacy application at the base directory.
+    if [ "$legacy" = "1" ] && [ ! -L "$current_dir" ]; then
+        maint_dir="$base"
+    else
+        maint_dir="$current_dir"
+    fi
 
-    # 1. maintenance mode (against the CURRENT release)
-    ( cd "$current_dir" 2>/dev/null && "$ZPD_PHP" artisan down --render="errors::503" 2>/dev/null ) || true
+    # 1. maintenance mode (against the currently-live app)
+    ( cd "$maint_dir" 2>/dev/null && "$ZPD_PHP" artisan down --render="errors::503" 2>/dev/null ) || true
 
     # 2. pause workers (stop consuming with the old code)
     "$ZPD_SUPERVISORCTL" stop 'zedproxy-worker:*' 2>/dev/null || true
@@ -251,6 +307,11 @@ dep_activate() {
     if ! zpd_switch_current "$id"; then
         dep_err "activation: symlink switch failed"
         return 31
+    fi
+
+    # 4b. first legacy cutover: repoint Nginx/Supervisor/Scheduler at current/.
+    if [ "$legacy" = "1" ]; then
+        dep_cutover_services "$base" || { dep_err "activation: service cutover failed"; return 31; }
     fi
 
     # 5-7. reload PHP-FPM, validate + reload Nginx
@@ -269,6 +330,25 @@ dep_activate() {
     # 10. exit maintenance only after success
     ( cd "$current_dir" 2>/dev/null && "$ZPD_PHP" artisan up 2>/dev/null ) || true
     return 0
+}
+
+# dep_first_cutover_rollback BASE PHP_FPM_SVC
+#
+# Restore the legacy application after a FAILED first legacy→release cutover:
+# put back the snapshotted Nginx/Supervisor/scheduler config, drop the `current`
+# symlink (so Nginx serves the legacy root again), reload services, and bring the
+# legacy app out of maintenance mode. Returns 0 only if the legacy app is healthy.
+dep_first_cutover_rollback() {
+    local base="$1" fpm="$2"
+    zpd_restore_legacy_rollback || dep_warn "no legacy snapshot to restore"
+    rm -f "$(zpd_current_link)" 2>/dev/null || true
+    dep_reload_php_fpm "$fpm" || true
+    dep_reload_nginx          || true
+    "$ZPD_SUPERVISORCTL" reread >/dev/null 2>&1 || true
+    "$ZPD_SUPERVISORCTL" update >/dev/null 2>&1 || true
+    dep_restart_workers       || true
+    ( cd "$base" 2>/dev/null && "$ZPD_PHP" artisan up 2>/dev/null ) || true
+    dep_health "$ZPD_HEALTH_URL"
 }
 
 # ── Automatic rollback ───────────────────────────────────────────────────────
@@ -305,13 +385,20 @@ dep_ensure_shared() {
 # ── main ─────────────────────────────────────────────────────────────────────
 
 dep_main() {
-    local base shared releases lockfile fpm ver
+    local base shared releases lockfile fpm ver legacy=0
+    # Load persistent non-secret config for this invocation (explicit env wins).
+    zpd_load_deploy_env
     base="$(zpd_base)"; shared="$(zpd_shared_dir)"; releases="$(zpd_releases_dir)"
     lockfile="$(zpd_lock_file)"
     mkdir -p "$(zpd_log_dir)" "$releases" "$shared" 2>/dev/null || true
 
     ver="$("$ZPD_PHP" -r 'echo PHP_MAJOR_VERSION.".".PHP_MINOR_VERSION;' 2>/dev/null || echo 8.3)"
     fpm="php${ver}-fpm"
+
+    # Detect a legacy (pre-atomic) single-directory install BEFORE we create
+    # shared state, so the first cutover repoints services and keeps a rollback
+    # path to the legacy application.
+    zpd_is_legacy_layout && legacy=1
 
     # First release-based deploy on a legacy single-dir install: migrate the
     # existing .env + storage (uploads, encryption key) into shared, once, safely.
@@ -320,53 +407,92 @@ dep_main() {
     dep_log "Preflight…"
     dep_preflight "$shared" || return 1
 
+    # ── Resolve repository + ref + exact commit SHA BEFORE any backup/migration.
+    # The repository source is resolved by precedence (explicit → deploy.env →
+    # active release origin → legacy origin → public default) and can NEVER be
+    # "." or the caller's working directory.
+    local repo ref sha errfile
+    errfile="$(mktemp 2>/dev/null || echo /tmp/zpd-git.$$)"
+    repo="$(zpd_resolve_repo_url)" || { dep_err "$(zpd_msg_no_repo)"; rm -f "$errfile"; return 1; }
+    ref="${ZPD_REF:-$(zpd_default_ref)}"
+
+    dep_log "Resolving ${ref} from repository…"
+    sha="$(zpd_resolve_sha "$repo" "$ref" "$errfile")" || {
+        dep_err "$(zpd_msg_git_fetch_failed)"
+        zpd_redact_file "$errfile" >&2
+        rm -f "$errfile"
+        return 1
+    }
+
     local id rel_dir current_before manifest ts_start
-    id="$(zpd_release_id)"
+    id="$(zpd_release_id "$sha")" || { dep_err "could not derive release id from resolved SHA"; rm -f "$errfile"; return 1; }
     rel_dir="${releases}/${id}"
     current_before="$(zpd_current_release)"
     ts_start="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     manifest="${rel_dir}/RELEASE_MANIFEST.json"
 
     dep_log "Backing up .env + database…"
-    dep_backup_env "${shared}/.env" "$(zpd_backup_dir)/${id}" || { dep_err "env backup failed"; return 1; }
+    dep_backup_env "${shared}/.env" "$(zpd_backup_dir)/${id}" || { dep_err "env backup failed"; rm -f "$errfile"; return 1; }
     if ! dep_backup_database "$(zpd_backup_dir)/${id}/db.dump" "${shared}/.env"; then
         dep_err "database backup failed — aborting (nothing changed)"
+        rm -f "$errfile"
         return 1
     fi
 
-    dep_log "Fetching code into ${rel_dir}…"
-    mkdir -p "$rel_dir"
-    "$ZPD_GIT" clone --depth 1 "${ZPD_REPO_URL:-.}" "$rel_dir" 2>/dev/null \
-        || { dep_err "git clone failed"; rm -rf "$rel_dir"; return 1; }
+    dep_log "Fetching ${ref} (${sha:0:12}) into ${rel_dir}…"
+    if ! zpd_git_clone_ref "$repo" "$ref" "$rel_dir" "$errfile"; then
+        dep_err "$(zpd_msg_git_fetch_failed)"
+        zpd_redact_file "$errfile" >&2
+        rm -rf "$rel_dir"; rm -f "$errfile"
+        return 1
+    fi
+
+    # Verify the EXACT commit was checked out (the manifest must describe the
+    # code that is actually deployed).
+    local got; got="$(zpd_git_head_sha "$rel_dir")"
+    if [ "$got" != "$sha" ]; then
+        dep_err "deployed commit ${got:-<none>} does not match resolved ${sha} — aborting"
+        rm -rf "$rel_dir"; rm -f "$errfile"
+        return 1
+    fi
+    rm -f "$errfile"
 
     zpd_link_shared "$rel_dir" "$shared" || { dep_err "link shared failed"; rm -rf "$rel_dir"; return 1; }
 
     dep_log "Building release…"
     if ! dep_build "$rel_dir"; then
         dep_err "build failed — marking release failed, current untouched"
-        zpd_write_manifest "$manifest" "release_id=${id}" "result=failed" "stage=build" "started_at=${ts_start}"
+        zpd_write_manifest "$manifest" "release_id=${id}" "git_sha=${sha}" "result=failed" "stage=build" "started_at=${ts_start}"
         mv "$rel_dir" "${rel_dir}.failed" 2>/dev/null || true
         return 1
     fi
     dep_smoke "$rel_dir" || { dep_err "smoke test failed"; mv "$rel_dir" "${rel_dir}.failed" 2>/dev/null || true; return 1; }
 
-    # Record the RESOLVED full commit SHA (never just the branch) plus the exact
-    # toolchain versions and any exact tag pointing at this commit.
-    local sha; sha="$("$ZPD_GIT" -C "$rel_dir" rev-parse HEAD 2>/dev/null || echo unknown)"
+    # Record the RESOLVED full commit SHA, the repository, the requested ref, and
+    # the exact toolchain versions.
     local -a ver_pairs=()
     mapfile -d '' -t ver_pairs < <(dep_tool_versions "$rel_dir" "$sha")
     zpd_write_manifest "$manifest" \
-        "release_id=${id}" "git_sha=${sha}" "git_ref=${ZPD_REF:-HEAD}" "previous_release=${current_before}" \
+        "release_id=${id}" "git_sha=${sha}" "git_ref=${ref}" "repo_url=${repo}" \
+        "previous_release=${current_before}" "legacy_migration=${legacy}" \
         "started_at=${ts_start}" "result=activating" "migration_status=pending" \
         "${ver_pairs[@]}"
 
+    # Snapshot the legacy operational config so a failed FIRST cutover can restore
+    # the legacy application exactly (there is no previous release to fall back on).
+    if [ "$legacy" = "1" ] && ! zpd_has_legacy_rollback; then
+        zpd_save_legacy_rollback "$base" \
+            "$(zpd_nginx_conf_path)" "$(zpd_supervisor_conf_path)" "$(zpd_scheduler_cron_path)"
+    fi
+
     dep_log "Activating ${id}…"
-    dep_activate "$id" "$fpm" "$current_before"
+    dep_activate "$id" "$fpm" "$current_before" "$legacy"
     local rc=$?
 
     if [ "$rc" -eq 0 ]; then
         zpd_write_manifest "$manifest" \
-            "release_id=${id}" "git_sha=${sha}" "git_ref=${ZPD_REF:-HEAD}" "previous_release=${current_before}" \
+            "release_id=${id}" "git_sha=${sha}" "git_ref=${ref}" "repo_url=${repo}" \
+            "previous_release=${current_before}" "legacy_migration=${legacy}" \
             "started_at=${ts_start}" "finished_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             "result=success" "migration_status=applied" "health=ok" \
             "${ver_pairs[@]}"
@@ -376,17 +502,34 @@ dep_main() {
         return 0
     fi
 
-    # Activation failed → automatic code rollback.
-    dep_err "activation failed (rc=${rc}) — rolling back code"
+    # ── Activation failed. ──
+    dep_err "activation failed (rc=${rc})"
+
+    # First legacy→release cutover with no previous release: restore the legacy
+    # application (its Nginx/Supervisor/scheduler config + drop `current`).
+    if [ "$legacy" = "1" ] && [ -z "$current_before" ]; then
+        dep_err "rolling back to the legacy application"
+        if dep_first_cutover_rollback "$base" "$fpm"; then
+            zpd_write_manifest "$manifest" "release_id=${id}" "git_sha=${sha}" "result=failed" \
+                "stage=first_cutover" "rolled_back_to=legacy" \
+                "migration_status=$( [ "$rc" -eq 30 ] && echo none || echo applied_not_rolled_back )"
+            mv "$rel_dir" "${rel_dir}.failed" 2>/dev/null || true
+            dep_log "$(zpd_msg_legacy_restored)"
+        else
+            dep_err "legacy application could not be restored to a healthy state"
+        fi
+        return 1
+    fi
+
+    # Normal automatic code rollback to the previous release.
+    dep_err "rolling back code to ${current_before:-<none>}"
     if dep_rollback_code "$current_before" "$fpm" && dep_health "$ZPD_HEALTH_URL"; then
         if [ "$rc" -eq 30 ]; then
-            # migrations never ran (failure was during migrate) → DB unchanged
-            zpd_write_manifest "$manifest" "release_id=${id}" "result=failed" "stage=migrate" \
+            zpd_write_manifest "$manifest" "release_id=${id}" "git_sha=${sha}" "result=failed" "stage=migrate" \
                 "rolled_back_to=${current_before}" "migration_status=none"
             dep_log "$(zpd_msg_rolled_back)"
         else
-            # migrations MAY have applied before activation failed → warn about DB
-            zpd_write_manifest "$manifest" "release_id=${id}" "result=failed" "stage=activate" \
+            zpd_write_manifest "$manifest" "release_id=${id}" "git_sha=${sha}" "result=failed" "stage=activate" \
                 "rolled_back_to=${current_before}" "migration_status=applied_not_rolled_back"
             dep_warn "$(zpd_msg_db_needs_review)"
             dep_warn "DB backup: $(zpd_backup_dir)/${id}/db.dump"
