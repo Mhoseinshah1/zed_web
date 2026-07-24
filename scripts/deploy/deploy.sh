@@ -28,6 +28,14 @@ for _cand in "${_DEP_DIR}/../lib/deploy-lib.sh" "${ZPD_LIB:-}"; do
     fi
 done
 
+# shellcheck source=scripts/lib/supply-chain-lib.sh
+for _cand in "${_DEP_DIR}/../lib/supply-chain-lib.sh" "${ZPD_SUPPLY_LIB:-}"; do
+    if [ -n "${_cand:-}" ] && [ -f "$_cand" ]; then
+        # shellcheck disable=SC1090
+        source "$_cand"; break
+    fi
+done
+
 # Injectable commands.
 ZPD_COMPOSER="${ZPD_COMPOSER:-composer}"
 ZPD_NPM="${ZPD_NPM:-npm}"
@@ -126,6 +134,14 @@ dep_backup_database() {
 dep_build() {
     local rel="$1"
     ( cd "$rel" || exit 1
+      # Reproducible build: both lock files must be present; never composer
+      # update / npm install; never --ignore-platform-reqs.
+      if command -v zsc_require_lockfiles >/dev/null 2>&1; then
+          zsc_require_lockfiles "$rel" >/dev/null || exit 9
+      else
+          [ -f composer.lock ] && [ -f package-lock.json ] || exit 9
+      fi
+      "$ZPD_COMPOSER" validate --strict --no-check-publish --no-interaction || exit 8
       "$ZPD_COMPOSER" install --no-dev --prefer-dist --optimize-autoloader --no-interaction || exit 10
       "$ZPD_NPM" ci || exit 11
       "$ZPD_NPM" run build || exit 12
@@ -134,6 +150,19 @@ dep_build() {
       "$ZPD_PHP" artisan route:cache  || exit 15
       "$ZPD_PHP" artisan view:cache   || exit 16
     )
+}
+
+# dep_tool_versions RELEASE_DIR — print space-free "k=v" pairs for the toolchain
+# and the resolved git tag, for inclusion in the release manifest.
+dep_tool_versions() {
+    local rel="$1" sha="$2" tag="" php cv node npm
+    tag="$("$ZPD_GIT" -C "$rel" describe --tags --exact-match "$sha" 2>/dev/null || true)"
+    php="$("$ZPD_PHP" -r 'echo PHP_VERSION;' 2>/dev/null || echo unknown)"
+    cv="$("$ZPD_COMPOSER" --version --no-ansi 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1 || echo unknown)"
+    node="$(node --version 2>/dev/null || echo unknown)"
+    npm="$("$ZPD_NPM" --version 2>/dev/null || echo unknown)"
+    printf 'git_tag=%s\0php_version=%s\0composer_version=%s\0node_version=%s\0npm_version=%s\0' \
+        "$tag" "$php" "$cv" "$node" "$npm"
 }
 
 # dep_smoke RELEASE_DIR — application smoke test before activation.
@@ -321,10 +350,15 @@ dep_main() {
     fi
     dep_smoke "$rel_dir" || { dep_err "smoke test failed"; mv "$rel_dir" "${rel_dir}.failed" 2>/dev/null || true; return 1; }
 
+    # Record the RESOLVED full commit SHA (never just the branch) plus the exact
+    # toolchain versions and any exact tag pointing at this commit.
     local sha; sha="$("$ZPD_GIT" -C "$rel_dir" rev-parse HEAD 2>/dev/null || echo unknown)"
+    local -a ver_pairs=()
+    mapfile -d '' -t ver_pairs < <(dep_tool_versions "$rel_dir" "$sha")
     zpd_write_manifest "$manifest" \
-        "release_id=${id}" "git_sha=${sha}" "previous_release=${current_before}" \
-        "started_at=${ts_start}" "result=activating" "migration_status=pending"
+        "release_id=${id}" "git_sha=${sha}" "git_ref=${ZPD_REF:-HEAD}" "previous_release=${current_before}" \
+        "started_at=${ts_start}" "result=activating" "migration_status=pending" \
+        "${ver_pairs[@]}"
 
     dep_log "Activating ${id}…"
     dep_activate "$id" "$fpm" "$current_before"
@@ -332,9 +366,10 @@ dep_main() {
 
     if [ "$rc" -eq 0 ]; then
         zpd_write_manifest "$manifest" \
-            "release_id=${id}" "git_sha=${sha}" "previous_release=${current_before}" \
+            "release_id=${id}" "git_sha=${sha}" "git_ref=${ZPD_REF:-HEAD}" "previous_release=${current_before}" \
             "started_at=${ts_start}" "finished_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            "result=success" "migration_status=applied" "health=ok"
+            "result=success" "migration_status=applied" "health=ok" \
+            "${ver_pairs[@]}"
         zpd_write_manifest "$(zpd_state_file)" "active_release=${id}" "previous_release=${current_before}" "result=success"
         dep_log "$(zpd_msg_success)"
         dep_cleanup_releases

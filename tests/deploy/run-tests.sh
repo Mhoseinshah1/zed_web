@@ -94,6 +94,8 @@ case "$*" in
     for a in "$@"; do target="$a"; done
     mkdir -p "$target/storage/app/public"
     : > "$target/artisan"; : > "$target/composer.json"; : > "$target/package.json"
+    # Lock files are required by the hardened dep_build (reproducible install).
+    : > "$target/composer.lock"; : > "$target/package-lock.json"
     exit ${MOCK_GIT_RC:-0} ;;
   *) exit 0 ;;
 esac
@@ -189,12 +191,21 @@ rm -rf "$BASE"
 # 7. npm ci failure
 new_base
 rel="${BASE}/releases/rel"; mkdir -p "$rel"
+: > "$rel/composer.lock"; : > "$rel/package-lock.json"
 ( MOCK_NPM_CI_RC=1 dep_build "$rel" ); assert_rc 11 "$?" "npm ci failure returns build code 11"
+rm -rf "$BASE"
+
+# 7b. Missing lock file → build refuses (reproducible-install guard)
+new_base
+rel="${BASE}/releases/rel"; mkdir -p "$rel"
+: > "$rel/composer.lock"   # package-lock.json intentionally absent
+( dep_build "$rel" ); assert_rc 9 "$?" "missing package-lock.json returns build code 9"
 rm -rf "$BASE"
 
 # 8. Asset build failure
 new_base
 rel="${BASE}/releases/rel"; mkdir -p "$rel"
+: > "$rel/composer.lock"; : > "$rel/package-lock.json"
 ( MOCK_NPM_BUILD_RC=1 dep_build "$rel" ); assert_rc 12 "$?" "npm run build failure returns build code 12"
 rm -rf "$BASE"
 

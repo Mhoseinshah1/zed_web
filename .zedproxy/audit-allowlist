@@ -1,0 +1,27 @@
+# ZedProxy dependency-audit allowlist
+# =============================================================================
+# Temporary, justified exceptions to the vulnerability-audit policy enforced by
+# install.sh / update.sh / CI (see scripts/lib/supply-chain-lib.sh).
+#
+# Policy recap:
+#   critical  → always fails the install/CI (NEVER allowlistable)
+#   high      → fails UNLESS an UNEXPIRED entry below covers it
+#   moderate/low → reported, not blocking
+#
+# One entry per line, pipe-separated, with EXACTLY five fields:
+#
+#   package|advisory|reason|expiry(YYYY-MM-DD)|owner
+#
+#   package  — exact composer/npm package name (e.g. guzzlehttp/guzzle)
+#   advisory — advisory id / CVE / URL reported by the auditor
+#   reason   — why the risk is temporarily accepted (no blank/fake entries)
+#   expiry   — ISO date; the entry is IGNORED on or after this date
+#   owner    — who accepted the risk and will remove the entry
+#
+# Blank lines and lines starting with '#' are ignored. An entry with a missing
+# or malformed expiry date is treated as EXPIRED (i.e. it does NOT suppress the
+# finding). Do not add blanket or wildcard entries — each must name one package
+# and one advisory.
+#
+# Example (commented out — not active):
+# example/package|CVE-2099-0001|Upstream fix pending release; no exploit path in our usage|2099-01-01|security@zedproxy
