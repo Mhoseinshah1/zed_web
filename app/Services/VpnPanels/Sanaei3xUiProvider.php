@@ -31,6 +31,7 @@ class Sanaei3xUiProvider implements VpnPanelProviderInterface
     {
         try {
             $this->client($panel)->testConnection();
+
             return ProviderResult::success('اتصال به پنل سنایی با موفقیت برقرار شد.');
         } catch (Sanaei3xUiException $e) {
             return ProviderResult::failure($e->getMessage());
@@ -47,7 +48,7 @@ class Sanaei3xUiProvider implements VpnPanelProviderInterface
         }
 
         $client = $this->client($panel);
-        $email  = $client->makeEmail($service);
+        $email = $client->makeEmail($service);
 
         try {
             // Idempotency: if a client with this email already exists, sync it
@@ -55,33 +56,34 @@ class Sanaei3xUiProvider implements VpnPanelProviderInterface
             if ($client->clientExists($email)) {
                 $this->fillFromRemote($service, $panel, $email);
                 $service->save();
+
                 return ProviderResult::success('سرویس موجود همگام‌سازی شد.', ['email' => $email, 'existed' => true]);
             }
 
-            $plan    = $service->plan ?? null;
+            $plan = $service->plan ?? null;
             $totalGB = (int) (($plan->traffic_gb ?? 0) * 1024 * 1024 * 1024); // bytes (0 = unlimited)
-            $days    = (int) ($plan->duration_days ?? 0);
-            $expiry  = $days > 0 ? now()->addDays($days) : null;
+            $days = (int) ($plan->duration_days ?? 0);
+            $expiry = $days > 0 ? now()->addDays($days) : null;
 
             $created = $client->createClient($service, [
-                'email'      => $email,
-                'totalGB'    => $totalGB,
+                'email' => $email,
+                'totalGB' => $totalGB,
                 'expiryTime' => $expiry ? $expiry->getTimestampMs() : 0,
-                'enable'     => true,
+                'enable' => true,
             ]);
 
-            $service->vpn_panel_id     = $panel->id;
-            $service->remote_username  = $email;
-            $service->remote_uuid      = $created['id'] ?? null;
+            $service->vpn_panel_id = $panel->id;
+            $service->remote_username = $email;
+            $service->remote_uuid = $created['id'] ?? null;
             $service->remote_client_id = $created['id'] ?? null;
-            $service->remote_sub_id    = $created['subId'] ?? null;
+            $service->remote_sub_id = $created['subId'] ?? null;
             $service->remote_inbound_id = $created['inboundId'] ?? $panel->default_inbound_id;
             $service->marzban_data_limit = $totalGB ?: null;
             $service->marzban_used_traffic = 0;
-            $service->expires_at       = $expiry;
-            $service->sync_status      = UserService::SYNC_SYNCED;
-            $service->last_synced_at   = now();
-            $service->sync_error       = null;
+            $service->expires_at = $expiry;
+            $service->sync_status = UserService::SYNC_SYNCED;
+            $service->last_synced_at = now();
+            $service->sync_error = null;
 
             $this->fillLinks($service, $panel, $email, $created['subId'] ?? null);
             $service->save();
@@ -107,13 +109,14 @@ class Sanaei3xUiProvider implements VpnPanelProviderInterface
             if (empty($traffic)) {
                 $service->sync_status = UserService::SYNC_NOT_FOUND;
                 $service->save();
+
                 return ProviderResult::success('کلاینت در پنل یافت نشد؛ اطلاعات محلی نمایش داده می‌شود.', ['status' => 'not_found']);
             }
 
-            $up    = (int) ($traffic['up'] ?? 0);
-            $down  = (int) ($traffic['down'] ?? 0);
+            $up = (int) ($traffic['up'] ?? 0);
+            $down = (int) ($traffic['down'] ?? 0);
             $total = (int) ($traffic['total'] ?? 0);
-            $exp   = (int) ($traffic['expiryTime'] ?? 0);
+            $exp = (int) ($traffic['expiryTime'] ?? 0);
 
             $service->marzban_used_traffic = $up + $down;
             if ($total > 0) {
@@ -122,20 +125,21 @@ class Sanaei3xUiProvider implements VpnPanelProviderInterface
             if ($exp > 0) {
                 $service->expires_at = Carbon::createFromTimestampMs($exp);
             }
-            $service->remote_status   = array_key_exists('enable', $traffic)
+            $service->remote_status = array_key_exists('enable', $traffic)
                 ? ($traffic['enable'] ? 'active' : 'disabled')
                 : $service->remote_status;
-            $service->remote_raw      = $traffic;
-            $service->sync_status     = UserService::SYNC_SYNCED;
-            $service->sync_error      = null;
-            $service->last_synced_at  = now();
+            $service->remote_raw = $traffic;
+            $service->sync_status = UserService::SYNC_SYNCED;
+            $service->sync_error = null;
+            $service->last_synced_at = now();
             $service->save();
 
             return ProviderResult::success('همگام‌سازی انجام شد.');
         } catch (Sanaei3xUiException $e) {
             $service->sync_status = UserService::SYNC_FAILED;
-            $service->sync_error  = $e->getMessage();
+            $service->sync_error = $e->getMessage();
             $service->save();
+
             return ProviderResult::failure('اطلاعات سرویس در حال حاضر از آخرین بروزرسانی نمایش داده می‌شود.');
         }
     }
@@ -152,6 +156,7 @@ class Sanaei3xUiProvider implements VpnPanelProviderInterface
         }
         try {
             $this->client($panel)->updateClient($email, $inbound, $changes);
+
             return ProviderResult::success('سرویس بروزرسانی شد.');
         } catch (Sanaei3xUiException $e) {
             return ProviderResult::failure($e->getMessage());
@@ -180,6 +185,7 @@ class Sanaei3xUiProvider implements VpnPanelProviderInterface
             $this->client($panel)->setClientEnabled($email, $inbound, $enabled);
             $service->remote_status = $enabled ? 'active' : 'disabled';
             $service->save();
+
             return ProviderResult::success($enabled ? 'سرویس فعال شد.' : 'سرویس غیرفعال شد.');
         } catch (Sanaei3xUiException $e) {
             return ProviderResult::failure($e->getMessage());
@@ -198,6 +204,7 @@ class Sanaei3xUiProvider implements VpnPanelProviderInterface
             $this->client($panel)->resetClientTraffic($email, $inbound);
             $service->marzban_used_traffic = 0;
             $service->save();
+
             return ProviderResult::success('ترافیک سرویس صفر شد.');
         } catch (Sanaei3xUiException $e) {
             return ProviderResult::failure($e->getMessage());
@@ -213,13 +220,14 @@ class Sanaei3xUiProvider implements VpnPanelProviderInterface
             return ProviderResult::failure('اطلاعات سرویس کافی نیست.');
         }
         try {
-            $client  = $this->client($panel);
+            $client = $this->client($panel);
             $traffic = $client->getClientTraffic($email);
             $currentTotal = (int) ($traffic['total'] ?? $service->marzban_data_limit ?? 0);
             $newTotal = $currentTotal + max(0, $bytes); // add to quota, do NOT reset usage
             $client->updateClient($email, $inbound, ['id' => $service->remote_uuid, 'totalGB' => $newTotal]);
             $service->marzban_data_limit = $newTotal;
             $service->save();
+
             return ProviderResult::success('حجم اضافه اعمال شد.');
         } catch (Sanaei3xUiException $e) {
             return ProviderResult::failure($e->getMessage());
@@ -242,11 +250,12 @@ class Sanaei3xUiProvider implements VpnPanelProviderInterface
             $newExpiry = $base->addDays(max(0, $days));
 
             $this->client($panel)->updateClient($email, $inbound, [
-                'id'         => $service->remote_uuid,
+                'id' => $service->remote_uuid,
                 'expiryTime' => $newExpiry->getTimestampMs(),
             ]);
             $service->expires_at = $newExpiry;
             $service->save();
+
             return ProviderResult::success('زمان اضافه اعمال شد.');
         } catch (Sanaei3xUiException $e) {
             return ProviderResult::failure($e->getMessage());
@@ -269,6 +278,7 @@ class Sanaei3xUiProvider implements VpnPanelProviderInterface
             $service->remote_sub_id = $newSub;
             $this->fillLinks($service, $panel, $email, $newSub);
             $service->save();
+
             return ProviderResult::success('لینک اشتراک بازتولید شد.');
         } catch (Sanaei3xUiException $e) {
             return ProviderResult::failure($e->getMessage());
@@ -285,6 +295,7 @@ class Sanaei3xUiProvider implements VpnPanelProviderInterface
         }
         try {
             $this->client($panel)->deleteClient($email, $inbound);
+
             return ProviderResult::success('کلاینت حذف شد.');
         } catch (Sanaei3xUiException $e) {
             return ProviderResult::failure($e->getMessage());
@@ -298,7 +309,7 @@ class Sanaei3xUiProvider implements VpnPanelProviderInterface
         try {
             $traffic = $this->client($panel)->getClientTraffic($email);
             $service->remote_username = $email;
-            $service->vpn_panel_id    = $panel->id;
+            $service->vpn_panel_id = $panel->id;
             $service->marzban_used_traffic = (int) (($traffic['up'] ?? 0) + ($traffic['down'] ?? 0));
             if (($traffic['total'] ?? 0) > 0) {
                 $service->marzban_data_limit = (int) $traffic['total'];
@@ -306,13 +317,13 @@ class Sanaei3xUiProvider implements VpnPanelProviderInterface
             if (($traffic['expiryTime'] ?? 0) > 0) {
                 $service->expires_at = Carbon::createFromTimestampMs((int) $traffic['expiryTime']);
             }
-            $service->remote_raw     = $traffic;
-            $service->sync_status    = UserService::SYNC_SYNCED;
+            $service->remote_raw = $traffic;
+            $service->sync_status = UserService::SYNC_SYNCED;
             $service->last_synced_at = now();
         } catch (Sanaei3xUiException $e) {
             // Keep local data; mark failed.
             $service->sync_status = UserService::SYNC_FAILED;
-            $service->sync_error  = $e->getMessage();
+            $service->sync_error = $e->getMessage();
         }
     }
 
@@ -320,7 +331,7 @@ class Sanaei3xUiProvider implements VpnPanelProviderInterface
     {
         try {
             $links = $this->client($panel)->getClientLinks($email);
-            $list  = $links['links'] ?? $links['obj'] ?? null;
+            $list = $links['links'] ?? $links['obj'] ?? null;
             if (is_array($list) && $list !== []) {
                 $service->links_json = $list;
                 $first = is_array($list[0] ?? null) ? ($list[0]['link'] ?? null) : ($list[0] ?? null);
@@ -336,7 +347,7 @@ class Sanaei3xUiProvider implements VpnPanelProviderInterface
         if ($subId && filled($panel->subscription_base_url)) {
             $base = rtrim((string) $panel->subscription_base_url, '/');
             $path = trim((string) $panel->subscription_path, '/');
-            $service->subscription_link = $base . ($path ? '/' . $path : '') . '/' . $subId;
+            $service->subscription_link = $base.($path ? '/'.$path : '').'/'.$subId;
         }
     }
 }

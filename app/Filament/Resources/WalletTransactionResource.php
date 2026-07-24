@@ -3,6 +3,7 @@
 namespace App\Filament\Resources;
 
 use App\Filament\Resources\WalletTransactionResource\Pages;
+use App\Filament\Support\UserAccountColumn;
 use App\Models\WalletTransaction;
 use Filament\Forms;
 use Filament\Forms\Form;
@@ -17,12 +18,17 @@ class WalletTransactionResource extends Resource
 {
     protected static ?string $model = WalletTransaction::class;
 
-    protected static ?string $navigationIcon   = 'heroicon-o-banknotes';
-    protected static ?string $navigationGroup  = 'سفارش‌ها و مالی';
-    protected static ?string $navigationLabel  = 'تراکنش‌های کیف پول';
-    protected static ?string $modelLabel       = 'تراکنش کیف پول';
+    protected static ?string $navigationIcon = 'heroicon-o-banknotes';
+
+    protected static ?string $navigationGroup = 'سفارش‌ها و مالی';
+
+    protected static ?string $navigationLabel = 'تراکنش‌های کیف پول';
+
+    protected static ?string $modelLabel = 'تراکنش کیف پول';
+
     protected static ?string $pluralModelLabel = 'تراکنش‌های کیف پول';
-    protected static ?int    $navigationSort   = 40;
+
+    protected static ?int $navigationSort = 40;
 
     public static function form(Form $form): Form
     {
@@ -38,7 +44,7 @@ class WalletTransactionResource extends Resource
                     ->sortable()
                     ->toggleable(isToggledHiddenByDefault: true),
 
-                \App\Filament\Support\UserAccountColumn::make(),
+                UserAccountColumn::make(),
 
                 Tables\Columns\TextColumn::make('user.username')
                     ->label('کاربر')
@@ -50,7 +56,7 @@ class WalletTransactionResource extends Resource
                     ->formatStateUsing(fn ($state) => WalletTransaction::allTypes()[$state] ?? $state)
                     ->colors([
                         'success' => [WalletTransaction::TYPE_MANUAL_CREDIT, WalletTransaction::TYPE_REFUND, WalletTransaction::TYPE_TOPUP],
-                        'danger'  => [WalletTransaction::TYPE_MANUAL_DEBIT, WalletTransaction::TYPE_ORDER_PAYMENT],
+                        'danger' => [WalletTransaction::TYPE_MANUAL_DEBIT, WalletTransaction::TYPE_ORDER_PAYMENT],
                         'warning' => [WalletTransaction::TYPE_ADJUSTMENT],
                     ]),
 
@@ -59,15 +65,14 @@ class WalletTransactionResource extends Resource
                     ->formatStateUsing(fn ($state) => $state === 'credit' ? 'واریز' : 'برداشت')
                     ->colors([
                         'success' => ['credit'],
-                        'danger'  => ['debit'],
+                        'danger' => ['debit'],
                     ]),
 
                 Tables\Columns\TextColumn::make('amount_toman')
                     ->label('مبلغ (تومان)')
                     ->numeric()
                     ->sortable()
-                    ->formatStateUsing(fn ($state, $record) =>
-                        ($record->direction === 'credit' ? '+' : '-') . number_format($state)),
+                    ->formatStateUsing(fn ($state, $record) => ($record->direction === 'credit' ? '+' : '-').number_format($state)),
 
                 Tables\Columns\TextColumn::make('balance_before_toman')
                     ->label('موجودی قبل')
@@ -82,14 +87,14 @@ class WalletTransactionResource extends Resource
                     ->label('وضعیت')
                     ->formatStateUsing(fn ($state) => match ($state) {
                         'completed' => 'موفق',
-                        'pending'   => 'در انتظار',
-                        'failed'    => 'ناموفق',
-                        default     => $state,
+                        'pending' => 'در انتظار',
+                        'failed' => 'ناموفق',
+                        default => $state,
                     })
                     ->colors([
                         'success' => ['completed'],
                         'warning' => ['pending'],
-                        'danger'  => ['failed'],
+                        'danger' => ['failed'],
                     ]),
 
                 Tables\Columns\TextColumn::make('description')
@@ -116,15 +121,15 @@ class WalletTransactionResource extends Resource
                     ->label('جهت')
                     ->options([
                         'credit' => 'واریز (افزایش موجودی)',
-                        'debit'  => 'برداشت',
+                        'debit' => 'برداشت',
                     ]),
 
                 SelectFilter::make('status')
                     ->label('وضعیت')
                     ->options([
                         'completed' => 'موفق',
-                        'pending'   => 'در انتظار',
-                        'failed'    => 'ناموفق',
+                        'pending' => 'در انتظار',
+                        'failed' => 'ناموفق',
                     ]),
 
                 Filter::make('topup_only')

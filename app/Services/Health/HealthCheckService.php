@@ -32,7 +32,7 @@ class HealthCheckService
     {
         // Bound the Redis client so a dead endpoint can't hang the request.
         config([
-            'database.redis.default.timeout'            => self::TIMEOUT,
+            'database.redis.default.timeout' => self::TIMEOUT,
             'database.redis.default.read_write_timeout' => self::TIMEOUT,
         ]);
     }
@@ -45,11 +45,11 @@ class HealthCheckService
     public function collect(): array
     {
         return [
-            'app'        => $this->componentApp(),
-            'database'   => $this->componentDatabase(),
-            'redis'      => $this->componentRedis(),
+            'app' => $this->componentApp(),
+            'database' => $this->componentDatabase(),
+            'redis' => $this->componentRedis(),
             'migrations' => $this->componentMigrations(),
-            'storage'    => $this->componentStorage(),
+            'storage' => $this->componentStorage(),
         ];
     }
 
@@ -79,6 +79,7 @@ class HealthCheckService
                 // Not all drivers support ATTR_TIMEOUT; the connect itself proves reachability.
             }
             DB::connection()->select('select 1');
+
             return true;
         });
     }
@@ -90,6 +91,7 @@ class HealthCheckService
                 throw new \RuntimeException('migrations table missing');
             }
             DB::table('migrations')->count();
+
             return true;
         });
     }
@@ -97,13 +99,14 @@ class HealthCheckService
     public function componentRedis(): array
     {
         return $this->safe('redis', function () {
-            $key = 'health:ping:' . Str::random(16);
+            $key = 'health:ping:'.Str::random(16);
             $connection = Redis::connection();
             try {
                 $connection->setex($key, self::TIMEOUT, '1');
                 if ((string) $connection->get($key) !== '1') {
                     throw new \RuntimeException('redis readback mismatch');
                 }
+
                 return true;
             } finally {
                 try {
@@ -119,12 +122,13 @@ class HealthCheckService
     {
         return $this->safe('storage', function () {
             $disk = Storage::disk('local');
-            $file = 'health/.write-test-' . Str::uuid()->toString();
+            $file = 'health/.write-test-'.Str::uuid()->toString();
             try {
                 $disk->put($file, 'ok');
                 if ($disk->get($file) !== 'ok') {
                     throw new \RuntimeException('storage readback mismatch');
                 }
+
                 return true;
             } finally {
                 try {
@@ -152,7 +156,7 @@ class HealthCheckService
             // no credentials, no endpoints.
             Log::warning('health.check_failed', [
                 'component' => $component,
-                'error'     => $masked,
+                'error' => $masked,
             ]);
 
             return ['ok' => false, 'error' => $masked];

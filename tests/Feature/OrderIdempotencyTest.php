@@ -12,11 +12,10 @@ use App\Models\PurchaseIntent;
 use App\Models\SiteSetting;
 use App\Models\User;
 use App\Models\UserService;
-use App\Services\Addons\ServiceAddonService;
 use App\Services\Discounts\DiscountService;
 use App\Services\Orders\OrderIdempotencyService;
-use App\Services\Renewals\RenewalService;
 use App\Support\PurchaseToken;
+use Illuminate\Cache\RateLimiter;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
@@ -38,12 +37,12 @@ class OrderIdempotencyTest extends TestCase
     private function makePlan(array $attrs = []): Plan
     {
         return Plan::factory()->create(array_merge([
-            'name'          => 'Starter',
-            'slug'          => 'starter-' . uniqid(),
-            'price_toman'   => 49000,
-            'traffic_gb'    => 50,
+            'name' => 'Starter',
+            'slug' => 'starter-'.uniqid(),
+            'price_toman' => 49000,
+            'traffic_gb' => 50,
             'duration_days' => 30,
-            'is_active'     => true,
+            'is_active' => true,
         ], $attrs));
     }
 
@@ -73,19 +72,19 @@ class OrderIdempotencyTest extends TestCase
                 }
 
                 return Order::create([
-                    'order_type'           => Order::TYPE_NEW_SERVICE,
-                    'user_id'              => $user->id,
+                    'order_type' => Order::TYPE_NEW_SERVICE,
+                    'user_id' => $user->id,
                     'purchase_fingerprint' => $fp,
-                    'plan_id'              => $fresh->id,
-                    'plan_name'            => $fresh->name,
-                    'plan_slug'            => $fresh->slug,
-                    'traffic_gb'           => $fresh->traffic_gb,
-                    'duration_days'        => $fresh->duration_days,
-                    'price_toman'          => $fresh->price_toman,
-                    'final_price_toman'    => $fresh->price_toman,
-                    'discount_toman'       => 0,
-                    'status'               => Order::STATUS_PENDING,
-                    'payment_status'       => Order::PAYMENT_UNPAID,
+                    'plan_id' => $fresh->id,
+                    'plan_name' => $fresh->name,
+                    'plan_slug' => $fresh->slug,
+                    'traffic_gb' => $fresh->traffic_gb,
+                    'duration_days' => $fresh->duration_days,
+                    'price_toman' => $fresh->price_toman,
+                    'final_price_toman' => $fresh->price_toman,
+                    'discount_toman' => 0,
+                    'status' => Order::STATUS_PENDING,
+                    'payment_status' => Order::PAYMENT_UNPAID,
                 ]);
             },
         );
@@ -109,11 +108,11 @@ class OrderIdempotencyTest extends TestCase
 
     public function test_2_double_click_same_token_returns_one_order(): void
     {
-        $user  = $this->makeUser();
-        $plan  = $this->makePlan();
+        $user = $this->makeUser();
+        $plan = $this->makePlan();
         $token = $this->buyToken($user, $plan);
 
-        $first  = $this->buy($user, $plan, $token);
+        $first = $this->buy($user, $plan, $token);
         $second = $this->buy($user, $plan, $token);
 
         $this->assertSame(1, Order::count());
@@ -126,8 +125,8 @@ class OrderIdempotencyTest extends TestCase
 
     public function test_3_retried_http_request_creates_one_order(): void
     {
-        $user  = $this->makeUser();
-        $plan  = $this->makePlan();
+        $user = $this->makeUser();
+        $plan = $this->makePlan();
         $token = $this->buyToken($user, $plan);
 
         $this->actingAs($user)->post(route('plans.buy', $plan), ['purchase_token' => $token])
@@ -143,8 +142,8 @@ class OrderIdempotencyTest extends TestCase
 
     public function test_4_two_submissions_same_key_converge(): void
     {
-        $user  = $this->makeUser();
-        $plan  = $this->makePlan();
+        $user = $this->makeUser();
+        $plan = $this->makePlan();
         $token = $this->buyToken($user, $plan);
 
         $a = $this->buy($user, $plan, $token);
@@ -175,8 +174,8 @@ class OrderIdempotencyTest extends TestCase
 
     public function test_6_consumed_key_returns_original(): void
     {
-        $user  = $this->makeUser();
-        $plan  = $this->makePlan();
+        $user = $this->makeUser();
+        $plan = $this->makePlan();
         $token = $this->buyToken($user, $plan);
 
         $first = $this->buy($user, $plan, $token);
@@ -191,9 +190,9 @@ class OrderIdempotencyTest extends TestCase
 
     public function test_7_another_users_token_is_rejected(): void
     {
-        $owner    = $this->makeUser();
+        $owner = $this->makeUser();
         $intruder = $this->makeUser();
-        $plan     = $this->makePlan();
+        $plan = $this->makePlan();
 
         $ownerToken = $this->buyToken($owner, $plan);
 
@@ -204,10 +203,10 @@ class OrderIdempotencyTest extends TestCase
 
     public function test_7b_cross_user_token_creates_no_order(): void
     {
-        $owner    = $this->makeUser();
+        $owner = $this->makeUser();
         $intruder = $this->makeUser();
-        $plan     = $this->makePlan();
-        $token    = $this->buyToken($owner, $plan);
+        $plan = $this->makePlan();
+        $token = $this->buyToken($owner, $plan);
 
         try {
             $this->buy($intruder, $plan, $token);
@@ -252,7 +251,7 @@ class OrderIdempotencyTest extends TestCase
 
     public function test_10_modified_plan_id_is_rejected(): void
     {
-        $user  = $this->makeUser();
+        $user = $this->makeUser();
         $planA = $this->makePlan();
         $planB = $this->makePlan();
 
@@ -280,8 +279,8 @@ class OrderIdempotencyTest extends TestCase
 
     public function test_11b_plan_deactivated_after_render_is_rejected_in_transaction(): void
     {
-        $user  = $this->makeUser();
-        $plan  = $this->makePlan();
+        $user = $this->makeUser();
+        $plan = $this->makePlan();
         $token = $this->buyToken($user, $plan);
 
         // Plan goes inactive between form render and submit; the creator re-reads
@@ -297,8 +296,8 @@ class OrderIdempotencyTest extends TestCase
 
     public function test_12_plan_price_change_uses_server_side_price(): void
     {
-        $user  = $this->makeUser();
-        $plan  = $this->makePlan(['price_toman' => 50000]);
+        $user = $this->makeUser();
+        $plan = $this->makePlan(['price_toman' => 50000]);
         $token = $this->buyToken($user, $plan);
 
         $plan->update(['price_toman' => 99000]);
@@ -314,15 +313,15 @@ class OrderIdempotencyTest extends TestCase
 
     public function test_13_client_supplied_price_is_ignored(): void
     {
-        $user  = $this->makeUser();
-        $plan  = $this->makePlan(['price_toman' => 49000]);
+        $user = $this->makeUser();
+        $plan = $this->makePlan(['price_toman' => 49000]);
         $token = $this->buyToken($user, $plan);
 
         $this->actingAs($user)->post(route('plans.buy', $plan), [
-            'purchase_token'    => $token,
-            'price_toman'       => 1,
+            'purchase_token' => $token,
+            'price_toman' => 1,
             'final_price_toman' => 1,
-            'discount_toman'    => 48999,
+            'discount_toman' => 48999,
         ])->assertRedirectContains('/dashboard/orders/');
 
         $order = Order::first();
@@ -361,7 +360,7 @@ class OrderIdempotencyTest extends TestCase
         // Age the pending order past the reuse window.
         $window = (int) config('zedproxy.purchase.pending_reuse_minutes', 30);
         Order::whereKey($first['order']->id)->update([
-            'created_at'           => now()->subMinutes($window + 5),
+            'created_at' => now()->subMinutes($window + 5),
             'purchase_fingerprint' => null, // stale order leaves the dedup window
         ]);
 
@@ -383,7 +382,7 @@ class OrderIdempotencyTest extends TestCase
         // Simulate the order having been paid — it leaves the partial unique index.
         Order::whereKey($first['order']->id)->update([
             'payment_status' => Order::PAYMENT_PAID,
-            'status'         => Order::STATUS_PAID,
+            'status' => Order::STATUS_PAID,
         ]);
 
         $second = $this->buy($user, $plan, $this->buyToken($user, $plan));
@@ -414,14 +413,14 @@ class OrderIdempotencyTest extends TestCase
 
     public function test_18_duplicate_manual_payment_submission_creates_one_transaction(): void
     {
-        $user  = $this->makeUser();
-        $plan  = $this->makePlan();
+        $user = $this->makeUser();
+        $plan = $this->makePlan();
         $order = $this->buy($user, $plan, $this->buyToken($user, $plan))['order'];
 
         $method = PaymentMethod::create([
-            'title'      => 'کارت به کارت',
-            'type'       => PaymentMethod::TYPE_MANUAL_RIAL,
-            'is_active'  => true,
+            'title' => 'کارت به کارت',
+            'type' => PaymentMethod::TYPE_MANUAL_RIAL,
+            'is_active' => true,
             'sort_order' => 0,
         ]);
 
@@ -437,8 +436,8 @@ class OrderIdempotencyTest extends TestCase
 
     public function test_19_discount_reservation_is_not_duplicated_on_replay(): void
     {
-        $user  = $this->makeUser();
-        $plan  = $this->makePlan(['price_toman' => 100000]);
+        $user = $this->makeUser();
+        $plan = $this->makePlan(['price_toman' => 100000]);
         $token = $this->buyToken($user, $plan);
 
         $code = DiscountCode::create([
@@ -447,21 +446,21 @@ class OrderIdempotencyTest extends TestCase
             'total_usage_limit' => 5, 'per_user_usage_limit' => 1, 'is_active' => true,
         ]);
 
-        $creator = function (string $fp) use ($user, $plan, $code): Order {
+        $creator = function (string $fp) use ($user, $plan): Order {
             $order = Order::create([
-                'order_type'           => Order::TYPE_NEW_SERVICE,
-                'user_id'              => $user->id,
+                'order_type' => Order::TYPE_NEW_SERVICE,
+                'user_id' => $user->id,
                 'purchase_fingerprint' => $fp,
-                'plan_id'              => $plan->id,
-                'plan_name'            => $plan->name,
-                'plan_slug'            => $plan->slug,
-                'traffic_gb'           => $plan->traffic_gb,
-                'duration_days'        => $plan->duration_days,
-                'price_toman'          => $plan->price_toman,
-                'final_price_toman'    => $plan->price_toman,
-                'discount_toman'       => 0,
-                'status'               => Order::STATUS_PENDING,
-                'payment_status'       => Order::PAYMENT_UNPAID,
+                'plan_id' => $plan->id,
+                'plan_name' => $plan->name,
+                'plan_slug' => $plan->slug,
+                'traffic_gb' => $plan->traffic_gb,
+                'duration_days' => $plan->duration_days,
+                'price_toman' => $plan->price_toman,
+                'final_price_toman' => $plan->price_toman,
+                'discount_toman' => 0,
+                'status' => Order::STATUS_PENDING,
+                'payment_status' => Order::PAYMENT_UNPAID,
             ]);
 
             return app(DiscountService::class)->applyToOrder($user, $order, 'WELCOME10');
@@ -497,8 +496,8 @@ class OrderIdempotencyTest extends TestCase
 
     public function test_21_renewal_double_submit_creates_one_order(): void
     {
-        $user    = $this->makeUser();
-        $plan    = $this->makePlan(['renewal_enabled' => true]);
+        $user = $this->makeUser();
+        $plan = $this->makePlan(['renewal_enabled' => true]);
         $service = $this->makeRenewableService($user);
 
         $token = PurchaseToken::issue($user->id, PurchaseIntent::OP_RENEWAL, null, $service->id);
@@ -519,7 +518,7 @@ class OrderIdempotencyTest extends TestCase
     {
         SiteSetting::set('extra_traffic_price_per_gb', 1000);
 
-        $user    = $this->makeUser();
+        $user = $this->makeUser();
         $service = $this->makeAddonService($user);
 
         $token = PurchaseToken::issue(
@@ -539,7 +538,7 @@ class OrderIdempotencyTest extends TestCase
     {
         SiteSetting::set('extra_time_price_per_day', 2000);
 
-        $user    = $this->makeUser();
+        $user = $this->makeUser();
         $service = $this->makeAddonService($user);
 
         $token = PurchaseToken::issue(
@@ -609,15 +608,15 @@ class OrderIdempotencyTest extends TestCase
 
     public function test_25_named_purchase_limiters_are_registered(): void
     {
-        $limiter = app(\Illuminate\Cache\RateLimiter::class);
+        $limiter = app(RateLimiter::class);
         $this->assertNotNull($limiter->limiter('purchase-intent'));
         $this->assertNotNull($limiter->limiter('purchase-submit'));
     }
 
     public function test_25b_submit_route_is_rate_limited(): void
     {
-        $user  = $this->makeUser();
-        $plan  = $this->makePlan();
+        $user = $this->makeUser();
+        $plan = $this->makePlan();
         $token = $this->buyToken($user, $plan);
 
         $hitLimit = false;
@@ -641,7 +640,7 @@ class OrderIdempotencyTest extends TestCase
     private function makeRenewableService(User $user): UserService
     {
         $plan = Plan::create([
-            'name' => 'svc', 'slug' => 'svc-' . uniqid(),
+            'name' => 'svc', 'slug' => 'svc-'.uniqid(),
             'price_toman' => 100000, 'duration_days' => 30, 'traffic_gb' => 50,
             'is_active' => false, 'renewal_enabled' => false, 'sort_order' => 0,
         ]);

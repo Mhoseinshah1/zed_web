@@ -22,25 +22,30 @@ class ShopSettingsPage extends Page implements HasForms
 
     protected static string $view = 'filament.pages.cms-settings';
 
-    protected static ?string $navigationIcon  = 'heroicon-o-shopping-bag';
+    protected static ?string $navigationIcon = 'heroicon-o-shopping-bag';
+
     protected static ?string $navigationGroup = 'فروشگاه و پلن‌ها';
+
     protected static ?string $navigationLabel = 'تنظیمات فروشگاه';
-    protected static ?string $title           = 'تنظیمات فروشگاه';
-    protected static ?string $slug            = 'content/shop-settings';
-    protected static ?int    $navigationSort  = 30;
+
+    protected static ?string $title = 'تنظیمات فروشگاه';
+
+    protected static ?string $slug = 'content/shop-settings';
+
+    protected static ?int $navigationSort = 30;
 
     /** @var array<string,mixed> */
     public array $data = [];
 
     public const KEYS = [
-        'shop_page_title'       => 'عنوان صفحه فروشگاه',
-        'shop_page_subtitle'    => 'زیرعنوان صفحه فروشگاه',
+        'shop_page_title' => 'عنوان صفحه فروشگاه',
+        'shop_page_subtitle' => 'زیرعنوان صفحه فروشگاه',
         'shop_page_description' => 'توضیحات فروشگاه',
-        'trust_text'            => 'متن اعتمادسازی',
-        'guarantee_text'        => 'متن ضمانت خرید',
-        'payment_help_text'     => 'متن راهنمای پرداخت',
-        'discount_help_text'    => 'متن راهنمای کد تخفیف',
-        'checkout_help_text'    => 'متن راهنمای تسویه/پرداخت سفارش',
+        'trust_text' => 'متن اعتمادسازی',
+        'guarantee_text' => 'متن ضمانت خرید',
+        'payment_help_text' => 'متن راهنمای پرداخت',
+        'discount_help_text' => 'متن راهنمای کد تخفیف',
+        'checkout_help_text' => 'متن راهنمای تسویه/پرداخت سفارش',
     ];
 
     public function mount(): void

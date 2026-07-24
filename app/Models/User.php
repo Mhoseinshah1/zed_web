@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Support\PhoneNumber;
 use Database\Factories\UserFactory;
 use Filament\Models\Contracts\FilamentUser;
 use Filament\Panel;
@@ -46,10 +47,14 @@ class User extends Authenticatable implements FilamentUser
     ];
 
     // Representative statuses
-    const REP_NONE     = 'none';
-    const REP_PENDING  = 'pending';
+    const REP_NONE = 'none';
+
+    const REP_PENDING = 'pending';
+
     const REP_APPROVED = 'approved';
+
     const REP_REJECTED = 'rejected';
+
     const REP_DISABLED = 'disabled';
 
     protected $hidden = [
@@ -60,17 +65,17 @@ class User extends Authenticatable implements FilamentUser
     protected function casts(): array
     {
         return [
-            'email_verified_at'    => 'datetime',
-            'phone_verified_at'    => 'datetime',
+            'email_verified_at' => 'datetime',
+            'phone_verified_at' => 'datetime',
             'profile_completed_at' => 'datetime',
-            'password'             => 'hashed',
-            'is_admin'             => 'boolean',
+            'password' => 'hashed',
+            'is_admin' => 'boolean',
             'wallet_balance_toman' => 'integer',
-            'is_representative'         => 'boolean',
-            'commission_rate'          => 'integer',
-            'commission_fixed_amount'  => 'integer',
-            'commission_balance'       => 'integer',
-            'total_commission_earned'  => 'integer',
+            'is_representative' => 'boolean',
+            'commission_rate' => 'integer',
+            'commission_fixed_amount' => 'integer',
+            'commission_balance' => 'integer',
+            'total_commission_earned' => 'integer',
             'representative_approved_at' => 'datetime',
         ];
     }
@@ -91,7 +96,7 @@ class User extends Authenticatable implements FilamentUser
         static::saving(function (User $user) {
             if ($user->isDirty('phone')) {
                 $user->normalized_phone = $user->phone
-                    ? \App\Support\PhoneNumber::normalize($user->phone)
+                    ? PhoneNumber::normalize($user->phone)
                     : null;
             }
         });
@@ -121,6 +126,7 @@ class User extends Authenticatable implements FilamentUser
         for ($i = 0; $i < $length; $i++) {
             $code .= $alphabet[random_int(0, strlen($alphabet) - 1)];
         }
+
         return $code;
     }
 
@@ -180,8 +186,8 @@ class User extends Authenticatable implements FilamentUser
     public static function representativeStatuses(): array
     {
         return [
-            self::REP_NONE     => 'بدون درخواست',
-            self::REP_PENDING  => 'در انتظار بررسی',
+            self::REP_NONE => 'بدون درخواست',
+            self::REP_PENDING => 'در انتظار بررسی',
             self::REP_APPROVED => 'تاییدشده',
             self::REP_REJECTED => 'ردشده',
             self::REP_DISABLED => 'غیرفعال',

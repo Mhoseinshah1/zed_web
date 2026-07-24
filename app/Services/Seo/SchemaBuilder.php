@@ -6,6 +6,7 @@ use App\Models\Faq;
 use App\Models\Page;
 use App\Models\Plan;
 use App\Models\Tutorial;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Str;
 
 /**
@@ -28,9 +29,9 @@ class SchemaBuilder
 
         $node = [
             '@type' => 'Organization',
-            '@id'   => $this->seo->baseUrl() . '/#organization',
-            'name'  => $name,
-            'url'   => $this->seo->baseUrl() . '/',
+            '@id' => $this->seo->baseUrl().'/#organization',
+            'name' => $name,
+            'url' => $this->seo->baseUrl().'/',
         ];
 
         if ($alt = SeoSettings::get('seo_org_alternate_name')) {
@@ -60,12 +61,12 @@ class SchemaBuilder
     public function website(): ?array
     {
         return [
-            '@type'    => 'WebSite',
-            '@id'      => $this->seo->baseUrl() . '/#website',
-            'url'      => $this->seo->baseUrl() . '/',
-            'name'     => SeoSettings::siteName(),
+            '@type' => 'WebSite',
+            '@id' => $this->seo->baseUrl().'/#website',
+            'url' => $this->seo->baseUrl().'/',
+            'name' => SeoSettings::siteName(),
             'inLanguage' => SeoSettings::locale(),
-            'publisher' => ['@id' => $this->seo->baseUrl() . '/#organization'],
+            'publisher' => ['@id' => $this->seo->baseUrl().'/#organization'],
         ];
     }
 
@@ -74,15 +75,16 @@ class SchemaBuilder
     {
         $d = $this->seo->resolve();
         $node = [
-            '@type'      => $type,
-            'url'        => $d->canonical ?: ($this->seo->baseUrl() . '/'),
-            'name'       => $d->title,
+            '@type' => $type,
+            'url' => $d->canonical ?: ($this->seo->baseUrl().'/'),
+            'name' => $d->title,
             'inLanguage' => SeoSettings::locale(),
-            'isPartOf'   => ['@id' => $this->seo->baseUrl() . '/#website'],
+            'isPartOf' => ['@id' => $this->seo->baseUrl().'/#website'],
         ];
         if ($d->description !== '') {
             $node['description'] = $d->description;
         }
+
         return $node;
     }
 
@@ -93,11 +95,12 @@ class SchemaBuilder
         if ($cp === null) {
             return null;
         }
+
         return [
             '@type' => 'ContactPage',
-            'url'   => $this->seo->resolve()->canonical,
-            'name'  => $this->seo->resolve()->title,
-            'mainEntity' => array_merge(['@id' => $this->seo->baseUrl() . '/#organization'], ['contactPoint' => $cp]),
+            'url' => $this->seo->resolve()->canonical,
+            'name' => $this->seo->resolve()->title,
+            'mainEntity' => array_merge(['@id' => $this->seo->baseUrl().'/#organization'], ['contactPoint' => $cp]),
         ];
     }
 
@@ -116,6 +119,7 @@ class SchemaBuilder
         if ($email !== '') {
             $node['email'] = $email;
         }
+
         return $node;
     }
 
@@ -123,7 +127,7 @@ class SchemaBuilder
      * FAQPage from the ACTIVE FAQs actually rendered on the page. HTML answers
      * are converted to safe plain text. Returns null when there are no FAQs.
      *
-     * @param  \Illuminate\Support\Collection<int,Faq>|null  $faqs
+     * @param  Collection<int,Faq>|null  $faqs
      */
     public function faqPage($faqs = null): ?array
     {
@@ -141,7 +145,7 @@ class SchemaBuilder
             }
             $items[] = [
                 '@type' => 'Question',
-                'name'  => $q,
+                'name' => $q,
                 'acceptedAnswer' => ['@type' => 'Answer', 'text' => $a],
             ];
         }
@@ -156,7 +160,7 @@ class SchemaBuilder
      * ItemList of ACTIVE plans. Each item is a Product with an Offer ONLY when a
      * real price exists. No ratings/reviews are ever generated.
      *
-     * @param  \Illuminate\Support\Collection<int,Plan>|null  $plans
+     * @param  Collection<int,Plan>|null  $plans
      */
     public function plansItemList($plans = null): ?array
     {
@@ -170,7 +174,7 @@ class SchemaBuilder
         foreach ($plans as $plan) {
             $product = [
                 '@type' => 'Product',
-                'name'  => (string) $plan->name,
+                'name' => (string) $plan->name,
             ];
             if (filled($plan->description ?? null)) {
                 $product['description'] = $this->htmlToText((string) $plan->description);
@@ -178,19 +182,19 @@ class SchemaBuilder
             // Offer only with real price data (Toman → IRR currency).
             if (($plan->price_toman ?? 0) > 0) {
                 $product['offers'] = [
-                    '@type'         => 'Offer',
-                    'price'         => (string) ((int) $plan->price_toman * 10), // Toman → Rial
+                    '@type' => 'Offer',
+                    'price' => (string) ((int) $plan->price_toman * 10), // Toman → Rial
                     'priceCurrency' => 'IRR',
-                    'availability'  => 'https://schema.org/InStock',
+                    'availability' => 'https://schema.org/InStock',
                 ];
             }
             $elements[] = ['@type' => 'ListItem', 'position' => $pos++, 'item' => $product];
         }
 
         return [
-            '@type'           => 'ItemList',
+            '@type' => 'ItemList',
             'itemListElement' => $elements,
-            'numberOfItems'   => count($elements),
+            'numberOfItems' => count($elements),
         ];
     }
 
@@ -212,9 +216,9 @@ class SchemaBuilder
 
         $d = $this->seo->resolve();
         $node = [
-            '@type'      => $type,
-            'headline'   => $d->title,
-            'url'        => $d->canonical,
+            '@type' => $type,
+            'headline' => $d->title,
+            'url' => $d->canonical,
             'inLanguage' => SeoSettings::locale(),
         ];
         if ($d->description !== '') {
@@ -235,7 +239,7 @@ class SchemaBuilder
         if (filled($t->author_name)) {
             $node['author'] = ['@type' => 'Person', 'name' => $t->author_name];
         }
-        $node['publisher'] = ['@id' => $this->seo->baseUrl() . '/#organization'];
+        $node['publisher'] = ['@id' => $this->seo->baseUrl().'/#organization'];
 
         return $node;
     }
@@ -244,6 +248,7 @@ class SchemaBuilder
     public function cmsPage(Page $page): array
     {
         $type = filled($page->schema_type) ? $page->schema_type : 'WebPage';
+
         return $this->webPage($type);
     }
 
@@ -269,6 +274,7 @@ class SchemaBuilder
         if ($elements === []) {
             return null;
         }
+
         return ['@type' => 'BreadcrumbList', 'itemListElement' => $elements];
     }
 
@@ -277,6 +283,7 @@ class SchemaBuilder
     private function twitterUrl(): string
     {
         $u = ltrim(SeoSettings::twitterUsername(), '@');
+
         return $u !== '' ? "https://twitter.com/{$u}" : '';
     }
 
@@ -286,6 +293,7 @@ class SchemaBuilder
         $text = strip_tags($html);
         $text = html_entity_decode($text, ENT_QUOTES | ENT_HTML5, 'UTF-8');
         $text = preg_replace('/\s+/u', ' ', $text) ?? $text;
+
         return trim(Str::limit($text, 1000, ''));
     }
 }

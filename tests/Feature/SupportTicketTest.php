@@ -2,7 +2,9 @@
 
 namespace Tests\Feature;
 
+use App\Models\Notification;
 use App\Models\Order;
+use App\Models\Plan;
 use App\Models\SupportTicket;
 use App\Models\SupportTicketCategory;
 use App\Models\SupportTicketMessage;
@@ -23,9 +25,9 @@ class SupportTicketTest extends TestCase
     private function makeTicket(User $user, array $overrides = []): SupportTicket
     {
         return SupportTicket::create(array_merge([
-            'user_id'  => $user->id,
-            'subject'  => 'موضوع تست',
-            'status'   => SupportTicket::STATUS_WAITING_ADMIN,
+            'user_id' => $user->id,
+            'subject' => 'موضوع تست',
+            'status' => SupportTicket::STATUS_WAITING_ADMIN,
             'priority' => SupportTicket::PRIORITY_NORMAL,
         ], $overrides));
     }
@@ -72,13 +74,13 @@ class SupportTicketTest extends TestCase
     public function test_user_can_create_ticket(): void
     {
         $user = User::factory()->create();
-        $cat  = $this->category();
+        $cat = $this->category();
 
         $response = $this->actingAs($user)->post(route('dashboard.tickets.store'), [
-            'subject'     => 'مشکل در پرداخت',
-            'body'        => 'پرداخت من انجام نشد.',
+            'subject' => 'مشکل در پرداخت',
+            'body' => 'پرداخت من انجام نشد.',
             'category_id' => $cat->id,
-            'priority'    => 'high',
+            'priority' => 'high',
         ]);
 
         $ticket = SupportTicket::where('user_id', $user->id)->first();
@@ -86,14 +88,14 @@ class SupportTicketTest extends TestCase
         $response->assertRedirect(route('dashboard.tickets.show', $ticket));
         $this->assertDatabaseHas('support_ticket_messages', [
             'support_ticket_id' => $ticket->id,
-            'is_admin'          => false,
-            'body'              => 'پرداخت من انجام نشد.',
+            'is_admin' => false,
+            'body' => 'پرداخت من انجام نشد.',
         ]);
     }
 
     public function test_user_can_view_own_tickets(): void
     {
-        $user   = User::factory()->create();
+        $user = User::factory()->create();
         $ticket = $this->makeTicket($user, ['subject' => 'تیکت خودم']);
         SupportTicketMessage::create(['support_ticket_id' => $ticket->id, 'user_id' => $user->id, 'body' => 'سلام']);
 
@@ -112,7 +114,7 @@ class SupportTicketTest extends TestCase
 
     public function test_user_can_reply_to_own_open_ticket(): void
     {
-        $user   = User::factory()->create();
+        $user = User::factory()->create();
         $ticket = $this->makeTicket($user);
 
         $this->actingAs($user)
@@ -121,14 +123,14 @@ class SupportTicketTest extends TestCase
 
         $this->assertDatabaseHas('support_ticket_messages', [
             'support_ticket_id' => $ticket->id,
-            'body'              => 'پاسخ من',
-            'is_admin'          => false,
+            'body' => 'پاسخ من',
+            'is_admin' => false,
         ]);
     }
 
     public function test_user_cannot_reply_to_closed_ticket(): void
     {
-        $user   = User::factory()->create();
+        $user = User::factory()->create();
         $ticket = $this->makeTicket($user, ['status' => SupportTicket::STATUS_CLOSED, 'closed_at' => now()]);
 
         $this->actingAs($user)
@@ -151,7 +153,7 @@ class SupportTicketTest extends TestCase
 
     public function test_user_can_close_own_ticket(): void
     {
-        $user   = User::factory()->create();
+        $user = User::factory()->create();
         $ticket = $this->makeTicket($user);
 
         $this->actingAs($user)->post(route('dashboard.tickets.close', $ticket))->assertRedirect();
@@ -162,10 +164,10 @@ class SupportTicketTest extends TestCase
 
     public function test_related_order_must_belong_to_user(): void
     {
-        $user  = User::factory()->create();
+        $user = User::factory()->create();
         $other = User::factory()->create();
-        $plan  = \App\Models\Plan::create([
-            'name' => 'p', 'slug' => 'p-' . uniqid(), 'price_toman' => 1000,
+        $plan = Plan::create([
+            'name' => 'p', 'slug' => 'p-'.uniqid(), 'price_toman' => 1000,
             'duration_days' => 30, 'traffic_gb' => 10, 'is_active' => true, 'sort_order' => 0,
         ]);
         $foreignOrder = Order::create([
@@ -194,11 +196,11 @@ class SupportTicketTest extends TestCase
 
     public function test_admin_can_search_tickets_by_ticket_number(): void
     {
-        $admin  = User::factory()->create(['is_admin' => true]);
+        $admin = User::factory()->create(['is_admin' => true]);
         $ticket = $this->makeTicket(User::factory()->create());
 
         $this->actingAs($admin)
-            ->get('/zed-admin/support-tickets?tableSearch=' . $ticket->ticket_number)
+            ->get('/zed-admin/support-tickets?tableSearch='.$ticket->ticket_number)
             ->assertStatus(200)
             ->assertSee($ticket->ticket_number);
     }
@@ -210,15 +212,15 @@ class SupportTicketTest extends TestCase
         $ticket = $this->makeTicket($owner, ['subject' => 'پیدا کن منو']);
 
         $this->actingAs($admin)
-            ->get('/zed-admin/support-tickets?tableSearch=' . $owner->account_id)
+            ->get('/zed-admin/support-tickets?tableSearch='.$owner->account_id)
             ->assertStatus(200)
             ->assertSee($ticket->ticket_number);
     }
 
     public function test_admin_can_reply_and_user_sees_it(): void
     {
-        $admin  = User::factory()->create(['is_admin' => true]);
-        $user   = User::factory()->create();
+        $admin = User::factory()->create(['is_admin' => true]);
+        $user = User::factory()->create();
         $ticket = $this->makeTicket($user);
 
         app(SupportTicketService::class)->adminReply($ticket, $admin, 'پاسخ پشتیبانی', internal: false);
@@ -233,8 +235,8 @@ class SupportTicketTest extends TestCase
 
     public function test_internal_notes_are_hidden_from_user(): void
     {
-        $admin  = User::factory()->create(['is_admin' => true]);
-        $user   = User::factory()->create();
+        $admin = User::factory()->create(['is_admin' => true]);
+        $user = User::factory()->create();
         $ticket = $this->makeTicket($user);
 
         app(SupportTicketService::class)->adminReply($ticket, $admin, 'یادداشت محرمانه ادمین', internal: true);
@@ -249,22 +251,22 @@ class SupportTicketTest extends TestCase
         // But it exists in the database.
         $this->assertDatabaseHas('support_ticket_messages', [
             'support_ticket_id' => $ticket->id,
-            'is_internal_note'  => true,
-            'body'              => 'یادداشت محرمانه ادمین',
+            'is_internal_note' => true,
+            'body' => 'یادداشت محرمانه ادمین',
         ]);
     }
 
     public function test_admin_reply_notifies_user_when_notifications_enabled(): void
     {
-        $admin  = User::factory()->create(['is_admin' => true]);
-        $user   = User::factory()->create();
+        $admin = User::factory()->create(['is_admin' => true]);
+        $user = User::factory()->create();
         $ticket = $this->makeTicket($user);
 
         app(SupportTicketService::class)->adminReply($ticket, $admin, 'پاسخ', internal: false);
 
         $this->assertDatabaseHas('notifications', [
             'user_id' => $user->id,
-            'type'    => \App\Models\Notification::TYPE_TICKET_ADMIN_REPLY,
+            'type' => Notification::TYPE_TICKET_ADMIN_REPLY,
         ]);
     }
 }

@@ -22,24 +22,24 @@ class PlanPanelSelectionTest extends TestCase
     private function sanaeiPanel(): VpnPanel
     {
         return VpnPanel::create([
-            'name'               => 'سنایی',
-            'type'               => VpnPanel::TYPE_SANAEI_XUI,
-            'base_url'           => 'https://panel.example.com:2053',
-            'panel_path'         => '/xui-panel-path',
-            'auth_method'        => VpnPanel::AUTH_API_TOKEN,
-            'api_token'          => 'secret-token',
+            'name' => 'سنایی',
+            'type' => VpnPanel::TYPE_SANAEI_XUI,
+            'base_url' => 'https://panel.example.com:2053',
+            'panel_path' => '/xui-panel-path',
+            'auth_method' => VpnPanel::AUTH_API_TOKEN,
+            'api_token' => 'secret-token',
             'default_inbound_id' => 1,
-            'is_active'          => true,
+            'is_active' => true,
         ]);
     }
 
     private function defaultMarzban(): VpnPanel
     {
         return VpnPanel::create([
-            'name'       => 'مرزبان پیش‌فرض',
-            'type'       => VpnPanel::TYPE_MARZBAN,
-            'base_url'   => 'https://m.example.com',
-            'is_active'  => true,
+            'name' => 'مرزبان پیش‌فرض',
+            'type' => VpnPanel::TYPE_MARZBAN,
+            'base_url' => 'https://m.example.com',
+            'is_active' => true,
             'is_default' => true,
         ]);
     }
@@ -47,17 +47,18 @@ class PlanPanelSelectionTest extends TestCase
     private function paidOrder(Plan $plan): Order
     {
         $user = User::factory()->create();
+
         return Order::create([
-            'user_id'           => $user->id,
-            'plan_id'           => $plan->id,
-            'plan_name'         => $plan->name,
-            'price_toman'       => $plan->price_toman,
+            'user_id' => $user->id,
+            'plan_id' => $plan->id,
+            'plan_name' => $plan->name,
+            'price_toman' => $plan->price_toman,
             'final_price_toman' => $plan->price_toman,
-            'traffic_gb'        => 10,
-            'duration_days'     => 30,
-            'status'            => Order::STATUS_PAID,
-            'payment_status'    => Order::PAYMENT_PAID,
-            'paid_at'           => now(),
+            'traffic_gb' => 10,
+            'duration_days' => 30,
+            'status' => Order::STATUS_PAID,
+            'payment_status' => Order::PAYMENT_PAID,
+            'paid_at' => now(),
         ]);
     }
 
@@ -66,7 +67,7 @@ class PlanPanelSelectionTest extends TestCase
     public function test_plan_belongs_to_vpn_panel(): void
     {
         $panel = $this->sanaeiPanel();
-        $plan  = Plan::factory()->create(['vpn_panel_id' => $panel->id]);
+        $plan = Plan::factory()->create(['vpn_panel_id' => $panel->id]);
 
         $this->assertSame($panel->id, $plan->vpnPanel->id);
     }
@@ -77,7 +78,7 @@ class PlanPanelSelectionTest extends TestCase
     {
         Queue::fake();
         $panel = $this->sanaeiPanel();
-        $plan  = Plan::factory()->create(['vpn_panel_id' => $panel->id, 'traffic_gb' => 10, 'duration_days' => 30]);
+        $plan = Plan::factory()->create(['vpn_panel_id' => $panel->id, 'traffic_gb' => 10, 'duration_days' => 30]);
         $order = $this->paidOrder($plan);
 
         $service = app(ServiceProvisioner::class)->createFromOrder($order);
@@ -90,8 +91,8 @@ class PlanPanelSelectionTest extends TestCase
     {
         Queue::fake();
         $default = $this->defaultMarzban();
-        $plan    = Plan::factory()->create(['vpn_panel_id' => null, 'traffic_gb' => 10, 'duration_days' => 30]);
-        $order   = $this->paidOrder($plan);
+        $plan = Plan::factory()->create(['vpn_panel_id' => null, 'traffic_gb' => 10, 'duration_days' => 30]);
+        $order = $this->paidOrder($plan);
 
         $service = app(ServiceProvisioner::class)->createFromOrder($order);
 
@@ -105,15 +106,15 @@ class PlanPanelSelectionTest extends TestCase
     public function test_provisioning_service_provisions_on_plan_sanaei_panel(): void
     {
         Http::fake([
-            '*/panel/api/clients/get/*'   => Http::response(['success' => false], 200),
-            '*/panel/api/clients/add'     => Http::response(['success' => true], 200),
+            '*/panel/api/clients/get/*' => Http::response(['success' => false], 200),
+            '*/panel/api/clients/add' => Http::response(['success' => true], 200),
             '*/panel/api/clients/links/*' => Http::response(['success' => true, 'obj' => ['vless://abc']], 200),
         ]);
 
         $panel = $this->sanaeiPanel();
         // A default Marzban exists too — the plan's panel must win over it.
         $this->defaultMarzban();
-        $plan  = Plan::factory()->create(['vpn_panel_id' => $panel->id, 'traffic_gb' => 10, 'duration_days' => 30]);
+        $plan = Plan::factory()->create(['vpn_panel_id' => $panel->id, 'traffic_gb' => 10, 'duration_days' => 30]);
         $order = $this->paidOrder($plan);
 
         $service = app(ProvisioningService::class)->provisionOrder($order);
@@ -127,7 +128,7 @@ class PlanPanelSelectionTest extends TestCase
     {
         Http::fake([
             '*/api/users/by-username/*' => Http::response(['message' => 'not found'], 404),
-            '*/api/users'               => Http::response(['response' => [
+            '*/api/users' => Http::response(['response' => [
                 'uuid' => 'user-uuid-1', 'username' => 'zed-1', 'shortUuid' => 'short1',
                 'status' => 'ACTIVE', 'trafficLimitBytes' => 10737418240,
                 'expireAt' => '2026-08-02T00:00:00.000Z',
@@ -137,13 +138,13 @@ class PlanPanelSelectionTest extends TestCase
         ]);
 
         $panel = VpnPanel::create([
-            'name'      => 'رمناویو',
-            'type'      => VpnPanel::TYPE_REMNAWAVE,
-            'base_url'  => 'https://panel.example.com',
+            'name' => 'رمناویو',
+            'type' => VpnPanel::TYPE_REMNAWAVE,
+            'base_url' => 'https://panel.example.com',
             'api_token' => 'jwt-token',
             'is_active' => true,
         ]);
-        $plan  = Plan::factory()->create(['vpn_panel_id' => $panel->id, 'traffic_gb' => 10, 'duration_days' => 30]);
+        $plan = Plan::factory()->create(['vpn_panel_id' => $panel->id, 'traffic_gb' => 10, 'duration_days' => 30]);
         $order = $this->paidOrder($plan);
 
         $service = app(ProvisioningService::class)->provisionOrder($order);

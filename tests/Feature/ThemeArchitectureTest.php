@@ -3,7 +3,7 @@
 namespace Tests\Feature;
 
 use App\Models\SiteSetting;
-use App\Services\Theme\AdminAppearanceResolver;
+use App\Services\Theme\AppearanceManager;
 use App\Services\Theme\ThemeRegistry;
 use App\Services\Theme\ThemeSettingsService;
 use App\Support\Theme\CssVariableBuilder;
@@ -55,7 +55,7 @@ class ThemeArchitectureTest extends TestCase
     /** AppearanceManager exposes exactly the 5 practical presets. */
     public function test_appearance_manager_has_five_presets(): void
     {
-        $keys = \App\Services\Theme\AppearanceManager::presetKeys();
+        $keys = AppearanceManager::presetKeys();
         $this->assertSame(
             ['default_dark', 'minimal_light', 'luxury_gold', 'professional_blue', 'graphite_admin'],
             $keys
@@ -70,7 +70,7 @@ class ThemeArchitectureTest extends TestCase
     public function test_preset_changes_accent_vars(): void
     {
         SiteSetting::set('site_theme_preset', 'minimal_light');
-        $vars = \App\Services\Theme\AppearanceManager::colorVars();
+        $vars = AppearanceManager::colorVars();
         $this->assertSame('#2563eb', $vars['--zp-primary']);
         $this->assertSame('#0ea5e9', $vars['--zp-accent']);
         // Neutral chrome must NOT be part of the injected colour vars.
@@ -84,7 +84,7 @@ class ThemeArchitectureTest extends TestCase
         SiteSetting::set('site_theme_preset', 'default_dark');
         SiteSetting::set('primary_color', '#ff0000');
         SiteSetting::set('accent_color', '00ff00');
-        $vars = \App\Services\Theme\AppearanceManager::colorVars();
+        $vars = AppearanceManager::colorVars();
         $this->assertSame('#ff0000', $vars['--zp-primary']);
         $this->assertSame('#00ff00', $vars['--zp-accent']);
     }
@@ -93,9 +93,9 @@ class ThemeArchitectureTest extends TestCase
     public function test_css_variable_builder_is_safe(): void
     {
         $out = CssVariableBuilder::declarations([
-            'zp-x'           => '16px',
-            '--zp-y'         => 'red;}<script>',
-            '--zp-z'         => 'calc(100% * 1)',
+            'zp-x' => '16px',
+            '--zp-y' => 'red;}<script>',
+            '--zp-z' => 'calc(100% * 1)',
         ]);
         $this->assertStringContainsString('--zp-x:16px;', $out);
         $this->assertStringContainsString('--zp-z:calc(100% * 1);', $out);

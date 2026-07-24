@@ -21,29 +21,34 @@ class SocialLinksPage extends Page implements HasForms
 
     protected static string $view = 'filament.pages.cms-settings';
 
-    protected static ?string $navigationIcon  = 'heroicon-o-link';
+    protected static ?string $navigationIcon = 'heroicon-o-link';
+
     protected static ?string $navigationGroup = 'مدیریت محتوا';
+
     protected static ?string $navigationLabel = 'لینک‌ها و شبکه‌های اجتماعی';
-    protected static ?string $title           = 'لینک‌ها و شبکه‌های اجتماعی';
-    protected static ?string $slug            = 'content/social-links';
-    protected static ?int    $navigationSort  = 100;
+
+    protected static ?string $title = 'لینک‌ها و شبکه‌های اجتماعی';
+
+    protected static ?string $slug = 'content/social-links';
+
+    protected static ?int $navigationSort = 100;
 
     /** @var array<string,mixed> */
     public array $data = [];
 
     public const KEYS = [
-        'telegram_channel'      => 'نام کانال تلگرام',
-        'telegram_channel_url'  => 'لینک کانال تلگرام',
-        'telegram_support'      => 'نام پشتیبانی تلگرام',
-        'telegram_support_url'  => 'لینک پشتیبانی تلگرام',
-        'bot_url'               => 'لینک ربات',
-        'instagram'             => 'نام اینستاگرام',
-        'instagram_url'         => 'لینک اینستاگرام',
-        'youtube'               => 'نام یوتیوب',
-        'youtube_url'           => 'لینک یوتیوب',
-        'website_url'           => 'لینک وب‌سایت',
-        'support_url'           => 'لینک پشتیبانی',
-        'status_channel'        => 'لینک کانال وضعیت',
+        'telegram_channel' => 'نام کانال تلگرام',
+        'telegram_channel_url' => 'لینک کانال تلگرام',
+        'telegram_support' => 'نام پشتیبانی تلگرام',
+        'telegram_support_url' => 'لینک پشتیبانی تلگرام',
+        'bot_url' => 'لینک ربات',
+        'instagram' => 'نام اینستاگرام',
+        'instagram_url' => 'لینک اینستاگرام',
+        'youtube' => 'نام یوتیوب',
+        'youtube_url' => 'لینک یوتیوب',
+        'website_url' => 'لینک وب‌سایت',
+        'support_url' => 'لینک پشتیبانی',
+        'status_channel' => 'لینک کانال وضعیت',
     ];
 
     public function mount(): void

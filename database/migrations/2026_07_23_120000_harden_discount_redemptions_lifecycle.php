@@ -2,6 +2,7 @@
 
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 
@@ -29,7 +30,8 @@ use Illuminate\Support\Facades\Schema;
 return new class extends Migration
 {
     private string $activeIdx = 'discount_redemptions_one_active_per_order';
-    private string $usedIdx    = 'discount_redemptions_one_used_per_order_code';
+
+    private string $usedIdx = 'discount_redemptions_one_used_per_order_code';
 
     public function up(): void
     {
@@ -65,7 +67,7 @@ return new class extends Migration
         foreach (DB::table('discount_redemptions')
             ->where('status', 'reserved')->whereNull('expires_at')->select('id', 'created_at')->cursor() as $row) {
             DB::table('discount_redemptions')->where('id', $row->id)->update([
-                'expires_at' => \Illuminate\Support\Carbon::parse($row->created_at)->addMinutes($ttl),
+                'expires_at' => Carbon::parse($row->created_at)->addMinutes($ttl),
             ]);
         }
 
@@ -79,7 +81,7 @@ return new class extends Migration
             if (in_array($driver, ['pgsql', 'sqlite'], true)) {
                 DB::statement(
                     "CREATE UNIQUE INDEX {$this->activeIdx} ON discount_redemptions (order_id) "
-                    . "WHERE status = 'reserved' AND order_id IS NOT NULL"
+                    ."WHERE status = 'reserved' AND order_id IS NOT NULL"
                 );
             } else {
                 Schema::table('discount_redemptions', fn ($t) => $t->unique('order_id', $this->activeIdx));
@@ -90,7 +92,7 @@ return new class extends Migration
             if (in_array($driver, ['pgsql', 'sqlite'], true)) {
                 DB::statement(
                     "CREATE UNIQUE INDEX {$this->usedIdx} ON discount_redemptions (order_id, discount_code_id) "
-                    . "WHERE status = 'used' AND order_id IS NOT NULL"
+                    ."WHERE status = 'used' AND order_id IS NOT NULL"
                 );
             } else {
                 Schema::table('discount_redemptions', fn ($t) => $t->unique(['order_id', 'discount_code_id'], $this->usedIdx));
@@ -155,8 +157,8 @@ return new class extends Migration
 
         throw new RuntimeException(
             "Cannot add discount-redemption unique constraints: conflicting rows exist.\n"
-            . implode("\n", $lines) . "\n"
-            . "Resolve them first (nothing was deleted). Run: php artisan zedproxy:find-discount-conflicts"
+            .implode("\n", $lines)."\n"
+            .'Resolve them first (nothing was deleted). Run: php artisan zedproxy:find-discount-conflicts'
         );
     }
 
@@ -170,9 +172,10 @@ return new class extends Migration
             if ($driver === 'sqlite') {
                 return DB::table('sqlite_master')->where('type', 'index')->where('name', $name)->exists();
             }
-        } catch (\Throwable) {
+        } catch (Throwable) {
             return false;
         }
+
         return false;
     }
 };

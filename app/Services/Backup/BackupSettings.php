@@ -11,16 +11,25 @@ use Illuminate\Support\Facades\Crypt;
  */
 class BackupSettings
 {
-    public function enabled(): bool        { return (bool) SiteSetting::get('backup_enabled', false); }
-    public function autoEnabled(): bool    { return (bool) SiteSetting::get('backup_auto_enabled', false); }
+    public function enabled(): bool
+    {
+        return (bool) SiteSetting::get('backup_enabled', false);
+    }
+
+    public function autoEnabled(): bool
+    {
+        return (bool) SiteSetting::get('backup_auto_enabled', false);
+    }
 
     public const MODE_FIXED_TIME = 'fixed_time';
-    public const MODE_INTERVAL   = 'interval';
+
+    public const MODE_INTERVAL = 'interval';
 
     /** Scheduling mode: fixed_time (daily at HH:MM) or interval (every N minutes). */
     public function scheduleMode(): string
     {
         $mode = (string) SiteSetting::get('backup_schedule_mode', self::MODE_FIXED_TIME);
+
         return $mode === self::MODE_INTERVAL ? self::MODE_INTERVAL : self::MODE_FIXED_TIME;
     }
 
@@ -28,6 +37,7 @@ class BackupSettings
     public function scheduleTime(): string
     {
         $t = (string) SiteSetting::get('backup_schedule_time', '03:00');
+
         return preg_match('/^\d{2}:\d{2}$/', $t) ? $t : '03:00';
     }
 
@@ -51,16 +61,39 @@ class BackupSettings
     public function storagePath(): string
     {
         $p = trim((string) SiteSetting::get('backup_storage_path', ''));
+
         return $p !== '' ? $p : storage_path('app/backups');
     }
 
-    public function includeDatabase(): bool     { return (bool) SiteSetting::get('backup_include_database', true); }
-    public function includeStorage(): bool      { return (bool) SiteSetting::get('backup_include_storage', true); }
-    public function includeUploads(): bool      { return (bool) SiteSetting::get('backup_include_uploads', true); }
-    public function includeProjectFiles(): bool { return (bool) SiteSetting::get('backup_include_project_files', false); }
-    public function excludeSensitive(): bool    { return (bool) SiteSetting::get('backup_exclude_sensitive_files', true); }
+    public function includeDatabase(): bool
+    {
+        return (bool) SiteSetting::get('backup_include_database', true);
+    }
 
-    public function encryptEnabled(): bool { return (bool) SiteSetting::get('backup_encrypt_enabled', false); }
+    public function includeStorage(): bool
+    {
+        return (bool) SiteSetting::get('backup_include_storage', true);
+    }
+
+    public function includeUploads(): bool
+    {
+        return (bool) SiteSetting::get('backup_include_uploads', true);
+    }
+
+    public function includeProjectFiles(): bool
+    {
+        return (bool) SiteSetting::get('backup_include_project_files', false);
+    }
+
+    public function excludeSensitive(): bool
+    {
+        return (bool) SiteSetting::get('backup_exclude_sensitive_files', true);
+    }
+
+    public function encryptEnabled(): bool
+    {
+        return (bool) SiteSetting::get('backup_encrypt_enabled', false);
+    }
 
     /** Decrypted archive password, or '' if unset/undecryptable. Never shown. */
     public function password(): string
@@ -76,7 +109,10 @@ class BackupSettings
         }
     }
 
-    public function hasPassword(): bool { return $this->password() !== ''; }
+    public function hasPassword(): bool
+    {
+        return $this->password() !== '';
+    }
 
     public function storePassword(string $password): void
     {
@@ -87,8 +123,15 @@ class BackupSettings
         SiteSetting::set('backup_password', Crypt::encryptString($password));
     }
 
-    public function sendFileToTelegram(): bool   { return (bool) SiteSetting::get('backup_send_file_to_telegram', false); }
-    public function sendReportToTelegram(): bool { return (bool) SiteSetting::get('backup_send_report_to_telegram', true); }
+    public function sendFileToTelegram(): bool
+    {
+        return (bool) SiteSetting::get('backup_send_file_to_telegram', false);
+    }
+
+    public function sendReportToTelegram(): bool
+    {
+        return (bool) SiteSetting::get('backup_send_report_to_telegram', true);
+    }
 
     public function maxTelegramFileMb(): int
     {
@@ -96,5 +139,8 @@ class BackupSettings
         return max(1, min(50, (int) SiteSetting::get('backup_max_telegram_file_size_mb', 50)));
     }
 
-    public function topicKey(): string { return 'backup_server'; }
+    public function topicKey(): string
+    {
+        return 'backup_server';
+    }
 }

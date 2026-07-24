@@ -30,12 +30,12 @@ class SeoPage extends Model
     ];
 
     protected $casts = [
-        'robots_index'        => 'boolean',
-        'robots_follow'       => 'boolean',
-        'lock_noindex'        => 'boolean',
-        'include_in_sitemap'  => 'boolean',
-        'is_active'           => 'boolean',
-        'sitemap_priority'    => 'float',
+        'robots_index' => 'boolean',
+        'robots_follow' => 'boolean',
+        'lock_noindex' => 'boolean',
+        'include_in_sitemap' => 'boolean',
+        'is_active' => 'boolean',
+        'sitemap_priority' => 'float',
     ];
 
     public function scopeActive(Builder $query): Builder

@@ -40,7 +40,7 @@ class SchedulerTest extends TestCase
     /** Build the schedule the way routes/console.php does, in isolation. */
     private function buildSchedule(): Schedule
     {
-        $schedule = new Schedule();
+        $schedule = new Schedule;
         app(ScheduleRegistrar::class)($schedule);
 
         return $schedule;

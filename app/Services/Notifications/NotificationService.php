@@ -5,6 +5,7 @@ namespace App\Services\Notifications;
 use App\Models\Notification;
 use App\Models\NotificationTemplate;
 use App\Models\User;
+use Illuminate\Database\QueryException;
 
 /**
  * Central, idempotent notification dispatcher.
@@ -48,14 +49,14 @@ class NotificationService
 
         try {
             return Notification::create([
-                'user_id'    => $userId,
-                'type'       => $type,
-                'title'      => $title,
-                'message'    => $message,
-                'data'       => $this->buildData($context),
+                'user_id' => $userId,
+                'type' => $type,
+                'title' => $title,
+                'message' => $message,
+                'data' => $this->buildData($context),
                 'dedupe_key' => $dedupeKey,
             ]);
-        } catch (\Illuminate\Database\QueryException $e) {
+        } catch (QueryException $e) {
             // Concurrent insert with the same dedupe_key won the race.
             if ($dedupeKey !== null) {
                 return null;
@@ -75,11 +76,11 @@ class NotificationService
         $template = NotificationTemplate::findByKey($type);
 
         if ($template && $template->is_active) {
-            $title   = $template->title;
+            $title = $template->title;
             $message = $template->message;
         } else {
             $default = self::defaults()[$type] ?? ['title' => $type, 'message' => ''];
-            $title   = $default['title'];
+            $title = $default['title'];
             $message = $default['message'];
         }
 
@@ -100,8 +101,9 @@ class NotificationService
             if (is_array($value) || is_object($value)) {
                 continue;
             }
-            $text = str_replace('{' . $key . '}', (string) $value, $text);
+            $text = str_replace('{'.$key.'}', (string) $value, $text);
         }
+
         return $text;
     }
 
@@ -127,93 +129,93 @@ class NotificationService
     {
         return [
             Notification::TYPE_PAYMENT_SUCCESS => [
-                'title'     => 'پرداخت موفق',
-                'message'   => 'خرید شما با موفقیت پرداخت شد و سرویس در حال آماده‌سازی است.',
+                'title' => 'پرداخت موفق',
+                'message' => 'خرید شما با موفقیت پرداخت شد و سرویس در حال آماده‌سازی است.',
                 'variables' => '{user_name}, {order_id}, {amount}, {final_amount}',
             ],
             Notification::TYPE_PAYMENT_FAILED => [
-                'title'     => 'پرداخت ناموفق',
-                'message'   => 'پرداخت سفارش شما ناموفق بود. لطفاً دوباره تلاش کنید.',
+                'title' => 'پرداخت ناموفق',
+                'message' => 'پرداخت سفارش شما ناموفق بود. لطفاً دوباره تلاش کنید.',
                 'variables' => '{user_name}, {order_id}, {amount}',
             ],
             Notification::TYPE_NEW_SERVICE_CREATED => [
-                'title'     => 'سرویس فعال شد',
-                'message'   => 'سرویس شما با موفقیت فعال شد.',
+                'title' => 'سرویس فعال شد',
+                'message' => 'سرویس شما با موفقیت فعال شد.',
                 'variables' => '{user_name}, {service_name}, {order_id}',
             ],
             Notification::TYPE_RENEWAL_SUCCESS => [
-                'title'     => 'تمدید موفق',
-                'message'   => 'سرویس شما با موفقیت تمدید شد.',
+                'title' => 'تمدید موفق',
+                'message' => 'سرویس شما با موفقیت تمدید شد.',
                 'variables' => '{user_name}, {service_name}, {order_id}, {days}, {expiry_date}',
             ],
             Notification::TYPE_EXTRA_TRAFFIC_SUCCESS => [
-                'title'     => 'حجم اضافه شد',
-                'message'   => 'حجم اضافه با موفقیت به سرویس شما اضافه شد.',
+                'title' => 'حجم اضافه شد',
+                'message' => 'حجم اضافه با موفقیت به سرویس شما اضافه شد.',
                 'variables' => '{user_name}, {service_name}, {order_id}, {traffic_gb}',
             ],
             Notification::TYPE_EXTRA_TIME_SUCCESS => [
-                'title'     => 'زمان اضافه شد',
-                'message'   => 'زمان اضافه با موفقیت به سرویس شما اضافه شد.',
+                'title' => 'زمان اضافه شد',
+                'message' => 'زمان اضافه با موفقیت به سرویس شما اضافه شد.',
                 'variables' => '{user_name}, {service_name}, {order_id}, {days}, {expiry_date}',
             ],
             Notification::TYPE_WALLET_TOPUP_SUCCESS => [
-                'title'     => 'شارژ کیف پول',
-                'message'   => 'کیف پول شما با موفقیت شارژ شد.',
+                'title' => 'شارژ کیف پول',
+                'message' => 'کیف پول شما با موفقیت شارژ شد.',
                 'variables' => '{user_name}, {wallet_amount}',
             ],
             Notification::TYPE_WALLET_PAYMENT_SUCCESS => [
-                'title'     => 'پرداخت از کیف پول',
-                'message'   => 'پرداخت از کیف پول با موفقیت انجام شد.',
+                'title' => 'پرداخت از کیف پول',
+                'message' => 'پرداخت از کیف پول با موفقیت انجام شد.',
                 'variables' => '{user_name}, {order_id}, {final_amount}',
             ],
             Notification::TYPE_RENEWAL_CASHBACK_SUCCESS => [
-                'title'     => 'کش‌بک تمدید',
-                'message'   => 'کش‌بک تمدید به کیف پول شما اضافه شد.',
+                'title' => 'کش‌بک تمدید',
+                'message' => 'کش‌بک تمدید به کیف پول شما اضافه شد.',
                 'variables' => '{user_name}, {cashback_amount}',
             ],
             Notification::TYPE_DISCOUNT_USED => [
-                'title'     => 'کد تخفیف اعمال شد',
-                'message'   => 'کد تخفیف با موفقیت روی سفارش شما اعمال شد.',
+                'title' => 'کد تخفیف اعمال شد',
+                'message' => 'کد تخفیف با موفقیت روی سفارش شما اعمال شد.',
                 'variables' => '{user_name}, {order_id}, {discount_amount}, {final_amount}',
             ],
             Notification::TYPE_MARZBAN_UPDATE_FAILED => [
-                'title'     => 'خطای به‌روزرسانی Marzban',
-                'message'   => 'به‌روزرسانی کاربر در Marzban با خطا مواجه شد. کاربر: {user_name} — سفارش: {order_id} — سرویس: {service_id} — خطا: {error}. نیاز به بررسی و تلاش مجدد.',
+                'title' => 'خطای به‌روزرسانی Marzban',
+                'message' => 'به‌روزرسانی کاربر در Marzban با خطا مواجه شد. کاربر: {user_name} — سفارش: {order_id} — سرویس: {service_id} — خطا: {error}. نیاز به بررسی و تلاش مجدد.',
                 'variables' => '{user_name}, {order_id}, {service_id}, {error}',
             ],
             Notification::TYPE_PROVISIONING_FAILED => [
-                'title'     => 'خطای ساخت سرویس',
-                'message'   => 'ساخت سرویس برای سفارش {order_id} (کاربر: {user_name}) با خطا مواجه شد. خطا: {error}. نیاز به بررسی و تلاش مجدد.',
+                'title' => 'خطای ساخت سرویس',
+                'message' => 'ساخت سرویس برای سفارش {order_id} (کاربر: {user_name}) با خطا مواجه شد. خطا: {error}. نیاز به بررسی و تلاش مجدد.',
                 'variables' => '{user_name}, {order_id}, {service_id}, {error}',
             ],
             Notification::TYPE_ADMIN_WARNING => [
-                'title'     => 'هشدار سیستم',
-                'message'   => '{message}',
+                'title' => 'هشدار سیستم',
+                'message' => '{message}',
                 'variables' => '{user_name}, {order_id}, {service_id}, {error}, {message}',
             ],
             Notification::TYPE_TICKET_ADMIN_REPLY => [
-                'title'     => 'پاسخ جدید پشتیبانی',
-                'message'   => 'پشتیبانی به تیکت {ticket_number} شما پاسخ داد.',
+                'title' => 'پاسخ جدید پشتیبانی',
+                'message' => 'پشتیبانی به تیکت {ticket_number} شما پاسخ داد.',
                 'variables' => '{user_name}, {ticket_number}',
             ],
             Notification::TYPE_TICKET_CREATED => [
-                'title'     => 'تیکت جدید',
-                'message'   => 'تیکت جدید {ticket_number} توسط کاربر {user_name} ثبت شد: {subject}',
+                'title' => 'تیکت جدید',
+                'message' => 'تیکت جدید {ticket_number} توسط کاربر {user_name} ثبت شد: {subject}',
                 'variables' => '{user_name}, {ticket_number}, {subject}',
             ],
             Notification::TYPE_TICKET_USER_REPLY => [
-                'title'     => 'پاسخ جدید کاربر در تیکت',
-                'message'   => 'کاربر {user_name} به تیکت {ticket_number} پاسخ داد.',
+                'title' => 'پاسخ جدید کاربر در تیکت',
+                'message' => 'کاربر {user_name} به تیکت {ticket_number} پاسخ داد.',
                 'variables' => '{user_name}, {ticket_number}',
             ],
             Notification::TYPE_COMMISSION_CREDITED => [
-                'title'     => 'واریز پورسانت',
-                'message'   => 'پورسانت فروش به کیف پول شما اضافه شد. مبلغ: {amount} تومان',
+                'title' => 'واریز پورسانت',
+                'message' => 'پورسانت فروش به کیف پول شما اضافه شد. مبلغ: {amount} تومان',
                 'variables' => '{user_name}, {amount}',
             ],
             Notification::TYPE_REPRESENTATIVE_REQUEST => [
-                'title'     => 'درخواست نمایندگی جدید',
-                'message'   => 'درخواست نمایندگی جدید ثبت شد. کاربر: {user_name} (شناسه {account_id}).',
+                'title' => 'درخواست نمایندگی جدید',
+                'message' => 'درخواست نمایندگی جدید ثبت شد. کاربر: {user_name} (شناسه {account_id}).',
                 'variables' => '{user_name}, {account_id}',
             ],
         ];
@@ -229,10 +231,10 @@ class NotificationService
                 continue;
             }
             NotificationTemplate::create([
-                'key'                 => $key,
-                'title'               => $tpl['title'],
-                'message'             => $tpl['message'],
-                'is_active'           => true,
+                'key' => $key,
+                'title' => $tpl['title'],
+                'message' => $tpl['message'],
+                'is_active' => true,
                 'available_variables' => $tpl['variables'],
             ]);
         }

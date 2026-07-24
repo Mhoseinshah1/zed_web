@@ -17,11 +17,11 @@ class TelegramAdminTopic extends Model
     ];
 
     protected $casts = [
-        'is_active'         => 'boolean',
+        'is_active' => 'boolean',
         'message_thread_id' => 'integer',
-        'sort_order'        => 'integer',
-        'last_sent_at'      => 'datetime',
-        'metadata'          => 'array',
+        'sort_order' => 'integer',
+        'last_sent_at' => 'datetime',
+        'metadata' => 'array',
     ];
 
     public static function findByKey(string $key): ?self
@@ -47,7 +47,7 @@ class TelegramAdminTopic extends Model
             ['key' => 'panels',         'title' => 'پنل‌های VPN',         'description' => 'قطعی/بازیابی پنل، خطای احراز، سلامت'],
             ['key' => 'errors',         'title' => 'خطاها و عملیات ناموفق', 'description' => 'خطاهای اعمال پرداخت/ساخت/تمدید و تلاش مجدد'],
             ['key' => 'daily_report',   'title' => 'گزارش روزانه',        'description' => 'خلاصه روزانه فروش و عملیات'],
-            ['key' => 'representatives','title' => 'نمایندگان',           'description' => 'درخواست، تایید/رد، پورسانت'],
+            ['key' => 'representatives', 'title' => 'نمایندگان',           'description' => 'درخواست، تایید/رد، پورسانت'],
             ['key' => 'admin',          'title' => 'تغییرات ادمین',       'description' => 'تغییرات مهم تنظیمات (درگاه، پنل، کیف پول)'],
             ['key' => 'backup_server',  'title' => 'بکاپ و سرور',         'description' => 'گزارش و وضعیت بکاپ سرور'],
             ['key' => 'system',         'title' => 'اعلان‌های سیستم',     'description' => 'هشدارهای بحرانی سیستم'],
@@ -61,10 +61,10 @@ class TelegramAdminTopic extends Model
             static::firstOrCreate(
                 ['key' => $topic['key']],
                 [
-                    'title'       => $topic['title'],
+                    'title' => $topic['title'],
                     'description' => $topic['description'],
-                    'is_active'   => true,
-                    'sort_order'  => ($i + 1) * 10,
+                    'is_active' => true,
+                    'sort_order' => ($i + 1) * 10,
                 ],
             );
         }

@@ -9,6 +9,7 @@ use App\Models\SiteSetting;
 use App\Models\User;
 use App\Models\UserService;
 use App\Services\Phone\PhoneVerificationService;
+use App\Services\Sms\SmsService;
 use App\Support\PhoneNumber;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Hash;
@@ -98,10 +99,10 @@ class AccountPhoneTest extends TestCase
     public function test_registration_requires_phone(): void
     {
         $response = $this->post('/register', [
-            'name'                  => 'No Phone',
-            'username'              => 'nophoneuser',
-            'email'                 => 'nophone@example.com',
-            'password'              => 'password123',
+            'name' => 'No Phone',
+            'username' => 'nophoneuser',
+            'email' => 'nophone@example.com',
+            'password' => 'password123',
             'password_confirmation' => 'password123',
         ]);
 
@@ -112,17 +113,17 @@ class AccountPhoneTest extends TestCase
     public function test_registration_stores_normalized_phone(): void
     {
         $this->post('/register', [
-            'name'                  => 'With Phone',
-            'username'              => 'withphone',
-            'email'                 => 'withphone@example.com',
-            'phone'                 => '09120001122',
-            'password'              => 'password123',
+            'name' => 'With Phone',
+            'username' => 'withphone',
+            'email' => 'withphone@example.com',
+            'phone' => '09120001122',
+            'password' => 'password123',
             'password_confirmation' => 'password123',
         ]);
 
         $this->assertDatabaseHas('users', [
-            'username'         => 'withphone',
-            'phone'            => '09120001122',
+            'username' => 'withphone',
+            'phone' => '09120001122',
             'normalized_phone' => '+989120001122',
         ]);
     }
@@ -132,11 +133,11 @@ class AccountPhoneTest extends TestCase
         User::factory()->create(['phone' => '09120001122', 'normalized_phone' => '+989120001122']);
 
         $response = $this->post('/register', [
-            'name'                  => 'Dup Phone',
-            'username'              => 'dupphone',
-            'email'                 => 'dupphone@example.com',
-            'phone'                 => '+989120001122', // same number, different format
-            'password'              => 'password123',
+            'name' => 'Dup Phone',
+            'username' => 'dupphone',
+            'email' => 'dupphone@example.com',
+            'phone' => '+989120001122', // same number, different format
+            'password' => 'password123',
             'password_confirmation' => 'password123',
         ]);
 
@@ -201,7 +202,7 @@ class AccountPhoneTest extends TestCase
     {
         SiteSetting::set('phone_verification_enabled', 'true');
         $user = User::factory()->unverifiedPhone()->create();
-        $res  = app(PhoneVerificationService::class)->requestCode($user);
+        $res = app(PhoneVerificationService::class)->requestCode($user);
 
         // Force expiry.
         PhoneVerificationCode::where('user_id', $user->id)->update(['expires_at' => now()->subMinute()]);
@@ -214,7 +215,7 @@ class AccountPhoneTest extends TestCase
     {
         SiteSetting::set('phone_verification_enabled', 'true');
         $user = User::factory()->unverifiedPhone()->create();
-        $res  = app(PhoneVerificationService::class)->requestCode($user);
+        $res = app(PhoneVerificationService::class)->requestCode($user);
 
         app(PhoneVerificationService::class)->verify($user, $res['code']); // first use OK
 
@@ -228,7 +229,7 @@ class AccountPhoneTest extends TestCase
     {
         SiteSetting::set('phone_verification_enabled', 'true');
         $user = User::factory()->unverifiedPhone()->create();
-        $res  = app(PhoneVerificationService::class)->requestCode($user);
+        $res = app(PhoneVerificationService::class)->requestCode($user);
 
         for ($i = 0; $i < PhoneVerificationService::MAX_ATTEMPTS; $i++) {
             app(PhoneVerificationService::class)->verify($user, '111111');
@@ -261,7 +262,7 @@ class AccountPhoneTest extends TestCase
     {
         SiteSetting::set('phone_verification_enabled', 'true');
         $user = User::factory()->unverifiedPhone()->create();
-        $res  = app(PhoneVerificationService::class)->requestCode($user);
+        $res = app(PhoneVerificationService::class)->requestCode($user);
 
         $record = PhoneVerificationCode::where('user_id', $user->id)->latest()->first();
         $this->assertNotSame($res['code'], $record->code_hash);
@@ -272,7 +273,7 @@ class AccountPhoneTest extends TestCase
 
     public function test_user_without_phone_is_redirected_from_sensitive_action(): void
     {
-        $user    = User::factory()->noPhone()->create();
+        $user = User::factory()->noPhone()->create();
         $service = $this->makeService($user);
 
         $this->actingAs($user)
@@ -300,7 +301,7 @@ class AccountPhoneTest extends TestCase
         SiteSetting::set('phone_verification_enabled', 'true');
         SiteSetting::set('phone_verification_required_on_register', 'true');
 
-        $user    = User::factory()->unverifiedPhone()->create();
+        $user = User::factory()->unverifiedPhone()->create();
         $service = $this->makeService($user);
 
         $this->actingAs($user)
@@ -324,11 +325,11 @@ class AccountPhoneTest extends TestCase
 
     public function test_admin_can_search_users_by_account_id(): void
     {
-        $admin  = User::factory()->create(['is_admin' => true]);
+        $admin = User::factory()->create(['is_admin' => true]);
         $target = User::factory()->create();
 
         $this->actingAs($admin)
-            ->get('/zed-admin/users?tableSearch=' . $target->account_id)
+            ->get('/zed-admin/users?tableSearch='.$target->account_id)
             ->assertStatus(200)
             ->assertSee($target->account_id);
     }
@@ -337,21 +338,21 @@ class AccountPhoneTest extends TestCase
     {
         $admin = User::factory()->create(['is_admin' => true]);
         $buyer = User::factory()->create();
-        $plan  = $this->makePlan();
+        $plan = $this->makePlan();
         Order::create([
-            'order_type'        => Order::TYPE_NEW_SERVICE,
-            'user_id'           => $buyer->id,
-            'plan_id'           => $plan->id,
-            'plan_name'         => $plan->name,
-            'price_toman'       => 100000,
+            'order_type' => Order::TYPE_NEW_SERVICE,
+            'user_id' => $buyer->id,
+            'plan_id' => $plan->id,
+            'plan_name' => $plan->name,
+            'price_toman' => 100000,
             'final_price_toman' => 100000,
-            'discount_toman'    => 0,
-            'status'            => Order::STATUS_PAID,
-            'payment_status'    => Order::PAYMENT_PAID,
+            'discount_toman' => 0,
+            'status' => Order::STATUS_PAID,
+            'payment_status' => Order::PAYMENT_PAID,
         ]);
 
         $this->actingAs($admin)
-            ->get('/zed-admin/orders?tableSearch=' . $buyer->account_id)
+            ->get('/zed-admin/orders?tableSearch='.$buyer->account_id)
             ->assertStatus(200)
             ->assertSee($buyer->account_id);
     }
@@ -363,7 +364,7 @@ class AccountPhoneTest extends TestCase
         $this->makeService($owner);
 
         $this->actingAs($admin)
-            ->get('/zed-admin/user-services?tableSearch=' . $owner->account_id)
+            ->get('/zed-admin/user-services?tableSearch='.$owner->account_id)
             ->assertStatus(200)
             ->assertSee($owner->account_id);
     }
@@ -372,17 +373,17 @@ class AccountPhoneTest extends TestCase
     {
         $admin = User::factory()->create(['is_admin' => true]);
         $buyer = User::factory()->create();
-        $plan  = $this->makePlan();
+        $plan = $this->makePlan();
         $order = Order::create([
-            'order_type'        => Order::TYPE_NEW_SERVICE,
-            'user_id'           => $buyer->id,
-            'plan_id'           => $plan->id,
-            'plan_name'         => $plan->name,
-            'price_toman'       => 100000,
+            'order_type' => Order::TYPE_NEW_SERVICE,
+            'user_id' => $buyer->id,
+            'plan_id' => $plan->id,
+            'plan_name' => $plan->name,
+            'price_toman' => 100000,
             'final_price_toman' => 100000,
-            'discount_toman'    => 0,
-            'status'            => Order::STATUS_PAID,
-            'payment_status'    => Order::PAYMENT_PAID,
+            'discount_toman' => 0,
+            'status' => Order::STATUS_PAID,
+            'payment_status' => Order::PAYMENT_PAID,
         ]);
 
         $this->actingAs($admin)
@@ -398,33 +399,34 @@ class AccountPhoneTest extends TestCase
     {
         SiteSetting::set('sms_enabled', 'true');
         SiteSetting::set('sms_provider', 'kavenegar');
-        \App\Services\Sms\SmsService::storeApiKey('test-api-key');
+        SmsService::storeApiKey('test-api-key');
     }
 
     private function makePlan(): Plan
     {
         return Plan::create([
-            'name'            => 'پلن',
-            'slug'            => 'plan-' . uniqid(),
-            'price_toman'     => 100000,
-            'duration_days'   => 30,
-            'traffic_gb'      => 50,
-            'is_active'       => true,
+            'name' => 'پلن',
+            'slug' => 'plan-'.uniqid(),
+            'price_toman' => 100000,
+            'duration_days' => 30,
+            'traffic_gb' => 50,
+            'is_active' => true,
             'renewal_enabled' => true,
-            'sort_order'      => 0,
+            'sort_order' => 0,
         ]);
     }
 
     private function makeService(User $user): UserService
     {
         $plan = $this->makePlan();
+
         return UserService::create([
-            'user_id'          => $user->id,
-            'plan_id'          => $plan->id,
-            'status'           => UserService::STATUS_ACTIVE,
+            'user_id' => $user->id,
+            'plan_id' => $plan->id,
+            'status' => UserService::STATUS_ACTIVE,
             'provision_status' => UserService::PROVISION_PROVISIONED,
-            'plan_name'        => $plan->name,
-            'expires_at'       => now()->addDays(10),
+            'plan_name' => $plan->name,
+            'expires_at' => now()->addDays(10),
         ]);
     }
 }

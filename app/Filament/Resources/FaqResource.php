@@ -14,12 +14,17 @@ class FaqResource extends Resource
 {
     protected static ?string $model = Faq::class;
 
-    protected static ?string $navigationIcon   = 'heroicon-o-question-mark-circle';
-    protected static ?string $navigationGroup   = 'مدیریت محتوا';
-    protected static ?string $navigationLabel   = 'سوالات متداول';
-    protected static ?string $modelLabel        = 'سوال متداول';
-    protected static ?string $pluralModelLabel  = 'سوالات متداول';
-    protected static ?int    $navigationSort    = 70;
+    protected static ?string $navigationIcon = 'heroicon-o-question-mark-circle';
+
+    protected static ?string $navigationGroup = 'مدیریت محتوا';
+
+    protected static ?string $navigationLabel = 'سوالات متداول';
+
+    protected static ?string $modelLabel = 'سوال متداول';
+
+    protected static ?string $pluralModelLabel = 'سوالات متداول';
+
+    protected static ?int $navigationSort = 70;
 
     public static function form(Form $form): Form
     {
@@ -68,9 +73,9 @@ class FaqResource extends Resource
     public static function getPages(): array
     {
         return [
-            'index'  => Pages\ListFaqs::route('/'),
+            'index' => Pages\ListFaqs::route('/'),
             'create' => Pages\CreateFaq::route('/create'),
-            'edit'   => Pages\EditFaq::route('/{record}/edit'),
+            'edit' => Pages\EditFaq::route('/{record}/edit'),
         ];
     }
 }

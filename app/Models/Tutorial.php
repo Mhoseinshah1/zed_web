@@ -4,6 +4,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Str;
 
 class Tutorial extends Model
@@ -20,13 +21,13 @@ class Tutorial extends Model
     ];
 
     protected $casts = [
-        'is_active'          => 'boolean',
-        'sort_order'         => 'integer',
-        'robots_index'       => 'boolean',
-        'robots_follow'      => 'boolean',
+        'is_active' => 'boolean',
+        'sort_order' => 'integer',
+        'robots_index' => 'boolean',
+        'robots_follow' => 'boolean',
         'include_in_sitemap' => 'boolean',
-        'sitemap_priority'   => 'float',
-        'published_at'       => 'datetime',
+        'sitemap_priority' => 'float',
+        'published_at' => 'datetime',
     ];
 
     /** Platform keys → Persian labels. */
@@ -34,11 +35,11 @@ class Tutorial extends Model
     {
         return [
             'android' => 'اندروید',
-            'ios'     => 'آیفون',
+            'ios' => 'آیفون',
             'windows' => 'ویندوز',
-            'mac'     => 'مک',
-            'linux'   => 'لینوکس',
-            'router'  => 'مودم/روتر',
+            'mac' => 'مک',
+            'linux' => 'لینوکس',
+            'router' => 'مودم/روتر',
             'general' => 'عمومی',
         ];
     }
@@ -52,12 +53,12 @@ class Tutorial extends Model
     {
         static::saving(function (Tutorial $tutorial) {
             if (empty($tutorial->slug)) {
-                $tutorial->slug = Str::slug($tutorial->title) ?: 'tutorial-' . uniqid();
+                $tutorial->slug = Str::slug($tutorial->title) ?: 'tutorial-'.uniqid();
             }
         });
 
         // Invalidate the tutorials sitemap cache when a tutorial changes.
-        $bust = fn () => \Illuminate\Support\Facades\Cache::forget('seo_sitemap:tutorials');
+        $bust = fn () => Cache::forget('seo_sitemap:tutorials');
         static::saved($bust);
         static::deleted($bust);
     }

@@ -10,6 +10,7 @@ use Filament\Forms\Form;
 use Filament\Resources\Resource;
 use Filament\Tables;
 use Filament\Tables\Table;
+use Illuminate\Support\HtmlString;
 
 /**
  * Manage per-page SEO for the public static pages. Records are seeded; admins
@@ -20,12 +21,17 @@ class SeoPageResource extends Resource
 {
     protected static ?string $model = SeoPage::class;
 
-    protected static ?string $navigationIcon   = 'heroicon-o-magnifying-glass';
-    protected static ?string $navigationGroup  = 'مدیریت محتوا';
-    protected static ?string $navigationLabel  = 'سئوی صفحات';
-    protected static ?string $modelLabel       = 'سئوی صفحه';
+    protected static ?string $navigationIcon = 'heroicon-o-magnifying-glass';
+
+    protected static ?string $navigationGroup = 'مدیریت محتوا';
+
+    protected static ?string $navigationLabel = 'سئوی صفحات';
+
+    protected static ?string $modelLabel = 'سئوی صفحه';
+
     protected static ?string $pluralModelLabel = 'سئوی صفحات';
-    protected static ?int    $navigationSort   = 85;
+
+    protected static ?int $navigationSort = 85;
 
     public static function form(Form $form): Form
     {
@@ -40,7 +46,7 @@ class SeoPageResource extends Resource
             Forms\Components\Placeholder::make('auth_warning')
                 ->label('')
                 ->visible(fn (?SeoPage $record) => $record?->lock_noindex)
-                ->content(new \Illuminate\Support\HtmlString(
+                ->content(new HtmlString(
                     '<div style="color:#dc2626;font-weight:600">هشدار: ایندکس شدن صفحات ورود و ثبت‌نام معمولاً توصیه نمی‌شود.</div>'
                 ))
                 ->columnSpanFull(),
@@ -84,7 +90,7 @@ class SeoPageResource extends Resource
     {
         return [
             'index' => Pages\ListSeoPages::route('/'),
-            'edit'  => Pages\EditSeoPage::route('/{record}/edit'),
+            'edit' => Pages\EditSeoPage::route('/{record}/edit'),
         ];
     }
 }

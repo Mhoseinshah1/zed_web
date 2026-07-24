@@ -15,9 +15,9 @@ class PanelProviderFactory
     public static function forType(string $type): VpnPanelProviderInterface
     {
         return match ($type) {
-            VpnPanel::TYPE_SANAEI_XUI => new Sanaei3xUiProvider(),
-            VpnPanel::TYPE_REMNAWAVE  => new RemnawaveProvider(),
-            default                   => new MarzbanProvider(),
+            VpnPanel::TYPE_SANAEI_XUI => new Sanaei3xUiProvider,
+            VpnPanel::TYPE_REMNAWAVE => new RemnawaveProvider,
+            default => new MarzbanProvider,
         };
     }
 
@@ -29,6 +29,7 @@ class PanelProviderFactory
     public static function forService(UserService $service): ?VpnPanelProviderInterface
     {
         $panel = $service->vpn_panel_id ? VpnPanel::find($service->vpn_panel_id) : null;
+
         return $panel ? self::forType($panel->type) : null;
     }
 

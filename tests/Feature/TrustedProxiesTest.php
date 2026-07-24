@@ -53,7 +53,7 @@ class TrustedProxiesTest extends TestCase
         config(['proxies.proxies' => [], 'proxies.trust_cloudflare' => false]);
 
         $this->hit('/_test/ip', [
-            'REMOTE_ADDR'          => '198.51.100.50',
+            'REMOTE_ADDR' => '198.51.100.50',
             'HTTP_X_FORWARDED_FOR' => '1.2.3.4',
         ])->assertOk()->assertSee('198.51.100.50');
     }
@@ -65,7 +65,7 @@ class TrustedProxiesTest extends TestCase
         config(['proxies.proxies' => ['127.0.0.1', '::1'], 'proxies.trust_cloudflare' => false]);
 
         $this->hit('/_test/ip', [
-            'REMOTE_ADDR'          => '127.0.0.1',
+            'REMOTE_ADDR' => '127.0.0.1',
             'HTTP_X_FORWARDED_FOR' => '9.9.9.9',
         ])->assertOk()->assertSee('9.9.9.9');
     }
@@ -78,7 +78,7 @@ class TrustedProxiesTest extends TestCase
 
         // Peer is NOT in the trusted list → its X-Forwarded-For is disregarded.
         $this->hit('/_test/ip', [
-            'REMOTE_ADDR'          => '45.33.22.11',
+            'REMOTE_ADDR' => '45.33.22.11',
             'HTTP_X_FORWARDED_FOR' => '9.9.9.9',
         ])->assertOk()->assertSee('45.33.22.11');
     }
@@ -91,7 +91,7 @@ class TrustedProxiesTest extends TestCase
 
         // client → 10.0.0.5 → 10.0.0.6 → (peer) 127.0.0.1
         $this->hit('/_test/ip', [
-            'REMOTE_ADDR'          => '127.0.0.1',
+            'REMOTE_ADDR' => '127.0.0.1',
             'HTTP_X_FORWARDED_FOR' => '203.0.113.7, 10.0.0.5, 10.0.0.6',
         ])->assertOk()->assertSee('203.0.113.7');
     }
@@ -104,9 +104,9 @@ class TrustedProxiesTest extends TestCase
 
         // 173.245.48.1 is inside Cloudflare's 173.245.48.0/20 range.
         $this->hit('/_test/ip', [
-            'REMOTE_ADDR'             => '173.245.48.1',
-            'HTTP_CF_CONNECTING_IP'   => '203.0.113.77',
-            'HTTP_X_FORWARDED_FOR'    => 'garbage-should-be-overwritten',
+            'REMOTE_ADDR' => '173.245.48.1',
+            'HTTP_CF_CONNECTING_IP' => '203.0.113.77',
+            'HTTP_X_FORWARDED_FOR' => 'garbage-should-be-overwritten',
         ])->assertOk()->assertSee('203.0.113.77');
     }
 
@@ -116,7 +116,7 @@ class TrustedProxiesTest extends TestCase
 
         // Peer is not a Cloudflare edge → CF-Connecting-IP must be ignored.
         $this->hit('/_test/ip', [
-            'REMOTE_ADDR'           => '45.33.22.11',
+            'REMOTE_ADDR' => '45.33.22.11',
             'HTTP_CF_CONNECTING_IP' => '1.2.3.4',
         ])->assertOk()->assertSee('45.33.22.11');
     }
@@ -142,12 +142,12 @@ class TrustedProxiesTest extends TestCase
         config(['proxies.proxies' => ['127.0.0.1'], 'proxies.trust_cloudflare' => false]);
 
         $this->hit('/_test/scheme', [
-            'REMOTE_ADDR'            => '127.0.0.1',
+            'REMOTE_ADDR' => '127.0.0.1',
             'HTTP_X_FORWARDED_PROTO' => 'https',
         ])->assertOk()->assertSee('https');
 
         $this->hit('/_test/url', [
-            'REMOTE_ADDR'            => '127.0.0.1',
+            'REMOTE_ADDR' => '127.0.0.1',
             'HTTP_X_FORWARDED_PROTO' => 'https',
         ])->assertOk()->assertSee('https://', false);
     }
@@ -158,7 +158,7 @@ class TrustedProxiesTest extends TestCase
 
         // Untrusted peer claiming https must not flip the scheme.
         $this->hit('/_test/scheme', [
-            'REMOTE_ADDR'            => '45.33.22.11',
+            'REMOTE_ADDR' => '45.33.22.11',
             'HTTP_X_FORWARDED_PROTO' => 'https',
         ])->assertOk()->assertSee('http');
     }
@@ -168,18 +168,18 @@ class TrustedProxiesTest extends TestCase
     public function test_signed_url_validates_behind_trusted_proxy(): void
     {
         config([
-            'app.url'                 => 'https://localhost',
-            'proxies.proxies'         => ['127.0.0.1'],
+            'app.url' => 'https://localhost',
+            'proxies.proxies' => ['127.0.0.1'],
             'proxies.trust_cloudflare' => false,
         ]);
         URL::forceRootUrl('https://localhost');
 
         $signed = URL::signedRoute('test.signed', ['x' => '1']);
-        $path   = '/' . ltrim(parse_url($signed, PHP_URL_PATH), '/') . '?' . parse_url($signed, PHP_URL_QUERY);
+        $path = '/'.ltrim(parse_url($signed, PHP_URL_PATH), '/').'?'.parse_url($signed, PHP_URL_QUERY);
 
         $this->hit($path, [
-            'REMOTE_ADDR'            => '127.0.0.1',
-            'HTTP_HOST'              => 'localhost',
+            'REMOTE_ADDR' => '127.0.0.1',
+            'HTTP_HOST' => 'localhost',
             'HTTP_X_FORWARDED_PROTO' => 'https',
         ])->assertOk()->assertSee('valid');
     }

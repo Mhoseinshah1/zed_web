@@ -3,6 +3,7 @@
 namespace App\Filament\Resources;
 
 use App\Filament\Resources\TutorialResource\Pages;
+use App\Filament\Support\SeoFormFields;
 use App\Models\Tutorial;
 use Filament\Forms;
 use Filament\Forms\Form;
@@ -15,12 +16,17 @@ class TutorialResource extends Resource
 {
     protected static ?string $model = Tutorial::class;
 
-    protected static ?string $navigationIcon   = 'heroicon-o-academic-cap';
-    protected static ?string $navigationGroup   = 'مدیریت محتوا';
-    protected static ?string $navigationLabel   = 'آموزش‌ها';
-    protected static ?string $modelLabel        = 'آموزش';
-    protected static ?string $pluralModelLabel  = 'آموزش‌ها';
-    protected static ?int    $navigationSort    = 90;
+    protected static ?string $navigationIcon = 'heroicon-o-academic-cap';
+
+    protected static ?string $navigationGroup = 'مدیریت محتوا';
+
+    protected static ?string $navigationLabel = 'آموزش‌ها';
+
+    protected static ?string $modelLabel = 'آموزش';
+
+    protected static ?string $pluralModelLabel = 'آموزش‌ها';
+
+    protected static ?int $navigationSort = 90;
 
     public static function form(Form $form): Form
     {
@@ -30,7 +36,7 @@ class TutorialResource extends Resource
                     ->live(onBlur: true)
                     ->afterStateUpdated(function (string $operation, $state, Forms\Set $set) {
                         if ($operation === 'create') {
-                            $set('slug', Str::slug($state) ?: 'tutorial-' . Str::random(6));
+                            $set('slug', Str::slug($state) ?: 'tutorial-'.Str::random(6));
                         }
                     }),
                 Forms\Components\TextInput::make('slug')->label('اسلاگ (آدرس)')->required()
@@ -63,9 +69,9 @@ class TutorialResource extends Resource
                 Forms\Components\Textarea::make('twitter_description')->label('توضیحات توییتر')->rows(2),
                 Forms\Components\Select::make('schema_type')->label('نوع اسکیما')
                     ->options([
-                        'Article'     => 'مقاله (Article)',
+                        'Article' => 'مقاله (Article)',
                         'TechArticle' => 'مقاله فنی (TechArticle)',
-                        'HowTo'       => 'راهنمای گام‌به‌گام (HowTo)',
+                        'HowTo' => 'راهنمای گام‌به‌گام (HowTo)',
                     ])->default('Article')->native(false)
                     ->helperText('HowTo فقط زمانی استفاده می‌شود که مراحل واقعی وجود داشته باشد؛ در غیر این صورت به TechArticle تبدیل می‌شود.'),
                 Forms\Components\TextInput::make('author_name')->label('نام نویسنده')->maxLength(120)
@@ -76,7 +82,7 @@ class TutorialResource extends Resource
             ])->columns(2),
 
             Forms\Components\Section::make('سایت‌مپ')->collapsed()
-                ->schema(\App\Filament\Support\SeoFormFields::sitemapFields())->columns(3),
+                ->schema(SeoFormFields::sitemapFields())->columns(3),
         ]);
     }
 
@@ -110,9 +116,9 @@ class TutorialResource extends Resource
     public static function getPages(): array
     {
         return [
-            'index'  => Pages\ListTutorials::route('/'),
+            'index' => Pages\ListTutorials::route('/'),
             'create' => Pages\CreateTutorial::route('/create'),
-            'edit'   => Pages\EditTutorial::route('/{record}/edit'),
+            'edit' => Pages\EditTutorial::route('/{record}/edit'),
         ];
     }
 }

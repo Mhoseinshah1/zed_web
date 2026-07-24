@@ -16,9 +16,9 @@ class OrderTest extends TestCase
     private function makePlan(array $attrs = []): Plan
     {
         return Plan::factory()->create(array_merge([
-            'name'       => 'Starter',
+            'name' => 'Starter',
             'price_toman' => 49000,
-            'is_active'   => true,
+            'is_active' => true,
         ], $attrs));
     }
 
@@ -57,11 +57,11 @@ class OrderTest extends TestCase
     {
         $user = User::factory()->create();
         $plan = $this->makePlan([
-            'name'         => 'Pro Plan',
-            'price_toman'  => 89000,
-            'traffic_gb'   => 100,
+            'name' => 'Pro Plan',
+            'price_toman' => 89000,
+            'traffic_gb' => 100,
             'duration_days' => 30,
-            'slug'         => 'pro-plan',
+            'slug' => 'pro-plan',
         ]);
 
         $this->actingAs($user)->post(route('plans.buy', $plan));
@@ -161,9 +161,9 @@ class OrderTest extends TestCase
 
     public function test_user_cannot_view_another_users_order(): void
     {
-        $owner   = User::factory()->create();
+        $owner = User::factory()->create();
         $intruder = User::factory()->create();
-        $plan    = $this->makePlan();
+        $plan = $this->makePlan();
 
         $this->actingAs($owner)->post(route('plans.buy', $plan));
         $order = $owner->orders()->first();
@@ -177,13 +177,13 @@ class OrderTest extends TestCase
 
     public function test_order_belongs_to_user(): void
     {
-        $user  = User::factory()->create();
-        $plan  = $this->makePlan();
+        $user = User::factory()->create();
+        $plan = $this->makePlan();
         $order = Order::create([
-            'user_id'           => $user->id,
-            'plan_id'           => $plan->id,
-            'plan_name'         => $plan->name,
-            'price_toman'       => $plan->price_toman,
+            'user_id' => $user->id,
+            'plan_id' => $plan->id,
+            'plan_name' => $plan->name,
+            'price_toman' => $plan->price_toman,
             'final_price_toman' => $plan->price_toman,
         ]);
 
@@ -209,18 +209,18 @@ class OrderTest extends TestCase
 
     public function test_payment_transaction_model_and_migration(): void
     {
-        $user  = User::factory()->create();
-        $plan  = $this->makePlan();
+        $user = User::factory()->create();
+        $plan = $this->makePlan();
         $order = Order::create([
             'user_id' => $user->id, 'plan_id' => $plan->id,
             'plan_name' => 'Test', 'price_toman' => 100, 'final_price_toman' => 100,
         ]);
 
         $tx = PaymentTransaction::create([
-            'order_id'     => $order->id,
-            'user_id'      => $user->id,
+            'order_id' => $order->id,
+            'user_id' => $user->id,
             'amount_toman' => 100,
-            'status'       => PaymentTransaction::STATUS_PENDING,
+            'status' => PaymentTransaction::STATUS_PENDING,
         ]);
 
         $this->assertDatabaseHas('payment_transactions', ['id' => $tx->id]);

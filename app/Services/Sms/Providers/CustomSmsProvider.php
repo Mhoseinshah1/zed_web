@@ -24,19 +24,19 @@ class CustomSmsProvider extends AbstractSmsProvider
             throw new \RuntimeException('Custom SMS provider URL is not configured.');
         }
 
-        $method  = strtoupper((string) ($this->config['custom_method'] ?? 'POST'));
+        $method = strtoupper((string) ($this->config['custom_method'] ?? 'POST'));
         $headers = $this->decodeHeaders($this->config['custom_headers'] ?? null);
 
         $replacements = [
-            '{phone}'   => $this->toLocal($normalizedPhone),
-            '{code}'    => (string) ($this->config['_code'] ?? ''),
+            '{phone}' => $this->toLocal($normalizedPhone),
+            '{code}' => (string) ($this->config['_code'] ?? ''),
             '{message}' => $message,
-            '{sender}'  => $this->sender(),
+            '{sender}' => $this->sender(),
             '{api_key}' => $this->apiKey(),
         ];
 
         $bodyTemplate = (string) ($this->config['custom_body_template'] ?? '');
-        $rendered     = strtr($bodyTemplate, $replacements);
+        $rendered = strtr($bodyTemplate, $replacements);
 
         $request = Http::timeout(20)->withHeaders($headers);
 
@@ -50,7 +50,7 @@ class CustomSmsProvider extends AbstractSmsProvider
         }
 
         if (! $response->successful()) {
-            throw new \RuntimeException('Custom SMS HTTP ' . $response->status());
+            throw new \RuntimeException('Custom SMS HTTP '.$response->status());
         }
 
         return true;
@@ -60,6 +60,7 @@ class CustomSmsProvider extends AbstractSmsProvider
     {
         // Expose {code} to the body template for OTP sends.
         $this->config['_code'] = $code;
+
         return $this->sendMessage($normalizedPhone, $this->buildOtpMessage($code));
     }
 
@@ -77,6 +78,7 @@ class CustomSmsProvider extends AbstractSmsProvider
                 return $decoded;
             }
         }
+
         return [];
     }
 
@@ -90,6 +92,7 @@ class CustomSmsProvider extends AbstractSmsProvider
             return $json;
         }
         parse_str($rendered, $parsed);
+
         return $parsed;
     }
 }

@@ -14,12 +14,17 @@ class SiteTextResource extends Resource
 {
     protected static ?string $model = SiteText::class;
 
-    protected static ?string $navigationIcon  = 'heroicon-o-document-text';
+    protected static ?string $navigationIcon = 'heroicon-o-document-text';
+
     protected static ?string $navigationGroup = 'مدیریت محتوا';
+
     protected static ?string $navigationLabel = 'متن‌های عمومی';
-    protected static ?string $modelLabel      = 'متن عمومی';
+
+    protected static ?string $modelLabel = 'متن عمومی';
+
     protected static ?string $pluralModelLabel = 'متن‌های عمومی';
-    protected static ?int $navigationSort     = 110;
+
+    protected static ?int $navigationSort = 110;
 
     public static function form(Form $form): Form
     {
@@ -44,12 +49,12 @@ class SiteTextResource extends Resource
                 Forms\Components\Select::make('type')
                     ->label('نوع')
                     ->options([
-                        'text'     => 'متن کوتاه',
+                        'text' => 'متن کوتاه',
                         'textarea' => 'متن بلند',
-                        'html'     => 'HTML',
-                        'image'    => 'آدرس تصویر',
-                        'boolean'  => 'بله/خیر',
-                        'number'   => 'عدد',
+                        'html' => 'HTML',
+                        'image' => 'آدرس تصویر',
+                        'boolean' => 'بله/خیر',
+                        'number' => 'عدد',
                     ])
                     ->default('text')
                     ->required(),
@@ -117,7 +122,7 @@ class SiteTextResource extends Resource
     {
         return [
             'index' => Pages\ListSiteTexts::route('/'),
-            'edit'  => Pages\EditSiteText::route('/{record}/edit'),
+            'edit' => Pages\EditSiteText::route('/{record}/edit'),
         ];
     }
 }

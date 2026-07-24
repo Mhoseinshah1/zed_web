@@ -18,7 +18,7 @@ class VpnServiceProvisionLog extends Model
     ];
 
     protected $casts = [
-        'request_payload'  => 'array',
+        'request_payload' => 'array',
         'response_payload' => 'array',
     ];
 

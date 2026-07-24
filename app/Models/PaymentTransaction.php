@@ -9,18 +9,29 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 class PaymentTransaction extends Model
 {
     use HasFactory;
-    const STATUS_PENDING    = 'pending';
-    const STATUS_SUBMITTED  = 'submitted';
-    const STATUS_APPROVED   = 'approved';
-    const STATUS_REJECTED   = 'rejected';
-    const STATUS_FAILED     = 'failed';
-    const STATUS_CANCELLED  = 'cancelled';
+
+    const STATUS_PENDING = 'pending';
+
+    const STATUS_SUBMITTED = 'submitted';
+
+    const STATUS_APPROVED = 'approved';
+
+    const STATUS_REJECTED = 'rejected';
+
+    const STATUS_FAILED = 'failed';
+
+    const STATUS_CANCELLED = 'cancelled';
+
     // NOWPayments gateway statuses
-    const STATUS_WAITING    = 'waiting';
+    const STATUS_WAITING = 'waiting';
+
     const STATUS_CONFIRMING = 'confirming';
-    const STATUS_PARTIAL    = 'partially_paid';
-    const STATUS_REFUNDED   = 'refunded';
-    const STATUS_EXPIRED    = 'expired';
+
+    const STATUS_PARTIAL = 'partially_paid';
+
+    const STATUS_REFUNDED = 'refunded';
+
+    const STATUS_EXPIRED = 'expired';
 
     protected $fillable = [
         'order_id',
@@ -69,23 +80,23 @@ class PaymentTransaction extends Model
     ];
 
     protected $casts = [
-        'amount_toman'          => 'integer',
-        'payload'               => 'array',
-        'paid_at'               => 'datetime',
-        'reviewed_at'           => 'datetime',
-        'rejected_at'           => 'datetime',
-        'gateway_price_amount'  => 'float',
-        'pay_amount'            => 'float',
-        'fee_amount'            => 'float',
-        'payable_amount'        => 'float',
-        'expires_at'            => 'datetime',
-        'request_payload'       => 'array',
-        'response_payload'      => 'array',
-        'callback_payload'      => 'array',
-        'callback_received_at'  => 'datetime',
-        'gateway_amount'        => 'integer',
-        'verified_at'           => 'datetime',
-        'failed_at'             => 'datetime',
+        'amount_toman' => 'integer',
+        'payload' => 'array',
+        'paid_at' => 'datetime',
+        'reviewed_at' => 'datetime',
+        'rejected_at' => 'datetime',
+        'gateway_price_amount' => 'float',
+        'pay_amount' => 'float',
+        'fee_amount' => 'float',
+        'payable_amount' => 'float',
+        'expires_at' => 'datetime',
+        'request_payload' => 'array',
+        'response_payload' => 'array',
+        'callback_payload' => 'array',
+        'callback_received_at' => 'datetime',
+        'gateway_amount' => 'integer',
+        'verified_at' => 'datetime',
+        'failed_at' => 'datetime',
     ];
 
     public function order(): BelongsTo
@@ -110,36 +121,36 @@ class PaymentTransaction extends Model
 
     public function statusLabel(): string
     {
-        return match($this->status) {
-            self::STATUS_PENDING    => 'در انتظار',
-            self::STATUS_SUBMITTED  => 'ارسال شده',
-            self::STATUS_APPROVED   => 'تایید شده',
-            self::STATUS_REJECTED   => 'رد شده',
-            self::STATUS_FAILED     => 'ناموفق',
-            self::STATUS_CANCELLED  => 'لغو شده',
-            self::STATUS_WAITING    => 'در انتظار واریز',
+        return match ($this->status) {
+            self::STATUS_PENDING => 'در انتظار',
+            self::STATUS_SUBMITTED => 'ارسال شده',
+            self::STATUS_APPROVED => 'تایید شده',
+            self::STATUS_REJECTED => 'رد شده',
+            self::STATUS_FAILED => 'ناموفق',
+            self::STATUS_CANCELLED => 'لغو شده',
+            self::STATUS_WAITING => 'در انتظار واریز',
             self::STATUS_CONFIRMING => 'در حال تایید',
-            self::STATUS_PARTIAL    => 'پرداخت ناقص',
-            self::STATUS_REFUNDED   => 'بازگشت وجه',
-            self::STATUS_EXPIRED    => 'منقضی شده',
-            default                 => $this->status,
+            self::STATUS_PARTIAL => 'پرداخت ناقص',
+            self::STATUS_REFUNDED => 'بازگشت وجه',
+            self::STATUS_EXPIRED => 'منقضی شده',
+            default => $this->status,
         };
     }
 
     public static function allStatuses(): array
     {
         return [
-            self::STATUS_PENDING    => 'در انتظار',
-            self::STATUS_SUBMITTED  => 'ارسال شده',
-            self::STATUS_APPROVED   => 'تایید شده',
-            self::STATUS_REJECTED   => 'رد شده',
-            self::STATUS_FAILED     => 'ناموفق',
-            self::STATUS_CANCELLED  => 'لغو شده',
-            self::STATUS_WAITING    => 'در انتظار واریز',
+            self::STATUS_PENDING => 'در انتظار',
+            self::STATUS_SUBMITTED => 'ارسال شده',
+            self::STATUS_APPROVED => 'تایید شده',
+            self::STATUS_REJECTED => 'رد شده',
+            self::STATUS_FAILED => 'ناموفق',
+            self::STATUS_CANCELLED => 'لغو شده',
+            self::STATUS_WAITING => 'در انتظار واریز',
             self::STATUS_CONFIRMING => 'در حال تایید',
-            self::STATUS_PARTIAL    => 'پرداخت ناقص',
-            self::STATUS_REFUNDED   => 'بازگشت وجه',
-            self::STATUS_EXPIRED    => 'منقضی شده',
+            self::STATUS_PARTIAL => 'پرداخت ناقص',
+            self::STATUS_REFUNDED => 'بازگشت وجه',
+            self::STATUS_EXPIRED => 'منقضی شده',
         ];
     }
 

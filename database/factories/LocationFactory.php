@@ -13,13 +13,13 @@ class LocationFactory extends Factory
     public function definition(): array
     {
         return [
-            'country_name'     => fake()->country(),
-            'country_code'     => strtoupper(Str::random(2)),
-            'flag_emoji'       => null,
-            'description'      => null,
-            'is_active'        => true,
+            'country_name' => fake()->country(),
+            'country_code' => strtoupper(Str::random(2)),
+            'flag_emoji' => null,
+            'description' => null,
+            'is_active' => true,
             'is_youtube_special' => false,
-            'sort_order'       => 0,
+            'sort_order' => 0,
         ];
     }
 }

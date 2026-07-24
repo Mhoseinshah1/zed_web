@@ -14,7 +14,7 @@ class SiteTextSeeder extends Seeder
             ['key' => 'homepage.hero.title',                'group' => 'homepage', 'label' => 'تیتر اصلی صفحه',         'value' => "اینترنت آزاد\nبدون محدودیت",                                                                              'type' => 'textarea', 'sort_order' => 1],
             ['key' => 'homepage.hero.subtitle',             'group' => 'homepage', 'label' => 'زیرتیتر صفحه',           'value' => "با ZedProxy از هر نقطه‌ای در جهان به اینترنت آزاد دسترسی داشته باشید.\nسرعت بالا، امنیت کامل و پشتیبانی ۲۴ ساعته.", 'type' => 'textarea', 'sort_order' => 2],
             ['key' => 'homepage.hero.button_text',          'group' => 'homepage', 'label' => 'متن دکمه اصلی',          'value' => 'مشاهده پلن‌ها',                                                                                              'type' => 'text',     'sort_order' => 3],
-            ['key' => 'homepage.hero.secondary_button_text','group' => 'homepage', 'label' => 'متن دکمه دوم',           'value' => 'آموزش اتصال',                                                                                                'type' => 'text',     'sort_order' => 4],
+            ['key' => 'homepage.hero.secondary_button_text', 'group' => 'homepage', 'label' => 'متن دکمه دوم',           'value' => 'آموزش اتصال',                                                                                                'type' => 'text',     'sort_order' => 4],
             ['key' => 'homepage.status.badge',              'group' => 'homepage', 'label' => 'متن نوار وضعیت',          'value' => 'سرویس در حال اجراست',                                                                                       'type' => 'text',     'sort_order' => 5],
 
             // ── Homepage: Features section ──────────────────────────────────
@@ -47,12 +47,12 @@ class SiteTextSeeder extends Seeder
             SiteText::firstOrCreate(
                 ['key' => $item['key']],
                 [
-                    'group'       => $item['group'] ?? null,
-                    'label'       => $item['label'] ?? null,
-                    'value'       => $item['value'],
-                    'type'        => $item['type'] ?? 'text',
-                    'is_public'   => $item['is_public'] ?? true,
-                    'sort_order'  => $item['sort_order'] ?? 0,
+                    'group' => $item['group'] ?? null,
+                    'label' => $item['label'] ?? null,
+                    'value' => $item['value'],
+                    'type' => $item['type'] ?? 'text',
+                    'is_public' => $item['is_public'] ?? true,
+                    'sort_order' => $item['sort_order'] ?? 0,
                 ]
             );
         }

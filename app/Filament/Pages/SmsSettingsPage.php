@@ -20,19 +20,24 @@ use Filament\Pages\Page;
  * All values are stored in the database; the API key is stored encrypted and
  * never re-displayed.
  */
-class SmsSettingsPage extends Page implements HasForms, HasActions
+class SmsSettingsPage extends Page implements HasActions, HasForms
 {
-    use InteractsWithForms;
     use InteractsWithActions;
+    use InteractsWithForms;
 
     protected static string $view = 'filament.pages.sms-settings';
 
-    protected static ?string $navigationIcon   = 'heroicon-o-chat-bubble-bottom-center-text';
-    protected static ?string $navigationGroup   = 'کاربران';
-    protected static ?string $navigationLabel   = 'تنظیمات پیامک و تایید شماره';
-    protected static ?string $title             = 'تنظیمات پیامک و تایید شماره موبایل';
-    protected static ?string $slug              = 'settings/sms';
-    protected static ?int    $navigationSort    = 20;
+    protected static ?string $navigationIcon = 'heroicon-o-chat-bubble-bottom-center-text';
+
+    protected static ?string $navigationGroup = 'کاربران';
+
+    protected static ?string $navigationLabel = 'تنظیمات پیامک و تایید شماره';
+
+    protected static ?string $title = 'تنظیمات پیامک و تایید شماره موبایل';
+
+    protected static ?string $slug = 'settings/sms';
+
+    protected static ?int $navigationSort = 20;
 
     /** @var array<string, mixed> */
     public array $data = [];
@@ -40,21 +45,21 @@ class SmsSettingsPage extends Page implements HasForms, HasActions
     public function mount(): void
     {
         $this->form->fill([
-            'sms_enabled'                             => (bool) SiteSetting::get('sms_enabled', false),
-            'sms_provider'                            => (string) SiteSetting::get('sms_provider', 'kavenegar'),
-            'sms_api_key_new'                         => null,
-            'sms_sender'                              => (string) SiteSetting::get('sms_sender', ''),
-            'sms_pattern_code'                        => (string) SiteSetting::get('sms_pattern_code', ''),
-            'sms_otp_message'                         => (string) SiteSetting::get('sms_otp_message', SmsService::DEFAULT_OTP_MESSAGE),
-            'otp_ttl_minutes'                         => (int) SiteSetting::get('otp_ttl_minutes', 5),
-            'otp_max_attempts'                        => (int) SiteSetting::get('otp_max_attempts', 5),
-            'otp_resend_cooldown_seconds'             => (int) SiteSetting::get('otp_resend_cooldown_seconds', 60),
-            'phone_verification_enabled'              => (bool) SiteSetting::get('phone_verification_enabled', false),
+            'sms_enabled' => (bool) SiteSetting::get('sms_enabled', false),
+            'sms_provider' => (string) SiteSetting::get('sms_provider', 'kavenegar'),
+            'sms_api_key_new' => null,
+            'sms_sender' => (string) SiteSetting::get('sms_sender', ''),
+            'sms_pattern_code' => (string) SiteSetting::get('sms_pattern_code', ''),
+            'sms_otp_message' => (string) SiteSetting::get('sms_otp_message', SmsService::DEFAULT_OTP_MESSAGE),
+            'otp_ttl_minutes' => (int) SiteSetting::get('otp_ttl_minutes', 5),
+            'otp_max_attempts' => (int) SiteSetting::get('otp_max_attempts', 5),
+            'otp_resend_cooldown_seconds' => (int) SiteSetting::get('otp_resend_cooldown_seconds', 60),
+            'phone_verification_enabled' => (bool) SiteSetting::get('phone_verification_enabled', false),
             'phone_verification_required_on_register' => (bool) SiteSetting::get('phone_verification_required_on_register', false),
-            'sms_custom_url'                          => (string) SiteSetting::get('sms_custom_url', ''),
-            'sms_custom_method'                       => (string) SiteSetting::get('sms_custom_method', 'POST'),
-            'sms_custom_headers'                      => (string) SiteSetting::get('sms_custom_headers', ''),
-            'sms_custom_body_template'                => (string) SiteSetting::get('sms_custom_body_template', ''),
+            'sms_custom_url' => (string) SiteSetting::get('sms_custom_url', ''),
+            'sms_custom_method' => (string) SiteSetting::get('sms_custom_method', 'POST'),
+            'sms_custom_headers' => (string) SiteSetting::get('sms_custom_headers', ''),
+            'sms_custom_body_template' => (string) SiteSetting::get('sms_custom_body_template', ''),
         ]);
     }
 
@@ -171,15 +176,16 @@ class SmsSettingsPage extends Page implements HasForms, HasActions
         $data = $this->form->getState();
 
         $smsEnabled = ! empty($data['sms_enabled']);
-        $provider   = $data['sms_provider'] ?? 'kavenegar';
-        $newKey     = $data['sms_api_key_new'] ?? null;
-        $hasKey     = $this->hasApiKey() || filled($newKey);
+        $provider = $data['sms_provider'] ?? 'kavenegar';
+        $newKey = $data['sms_api_key_new'] ?? null;
+        $hasKey = $this->hasApiKey() || filled($newKey);
 
         // ── Validation guards ──────────────────────────────────────────────
         if ($smsEnabled && (blank($provider) || ! $hasKey)) {
             Notification::make()
                 ->title('برای فعال‌سازی پیامک، انتخاب ارائه‌دهنده و وارد کردن API Key الزامی است.')
                 ->danger()->send();
+
             return;
         }
 
@@ -187,6 +193,7 @@ class SmsSettingsPage extends Page implements HasForms, HasActions
             Notification::make()
                 ->title('برای ارائه‌دهنده سفارشی، آدرس API الزامی است.')
                 ->danger()->send();
+
             return;
         }
 
@@ -195,6 +202,7 @@ class SmsSettingsPage extends Page implements HasForms, HasActions
             Notification::make()
                 ->title('برای اجباری کردن تایید شماره هنگام ثبت نام، ابتدا باید ارسال پیامک فعال و تنظیم شود.')
                 ->danger()->send();
+
             return;
         }
 
@@ -241,6 +249,7 @@ class SmsSettingsPage extends Page implements HasForms, HasActions
                 $normalized = PhoneNumber::normalize($data['test_phone'] ?? '');
                 if ($normalized === null) {
                     Notification::make()->title('شماره موبایل معتبر نیست.')->danger()->send();
+
                     return;
                 }
 
@@ -249,7 +258,7 @@ class SmsSettingsPage extends Page implements HasForms, HasActions
                     Notification::make()->title('پیامک تست با موفقیت ارسال شد.')->success()->send();
                 } catch (\Throwable $e) {
                     Notification::make()
-                        ->title('ارسال پیامک تست ناموفق بود: ' . $e->getMessage())
+                        ->title('ارسال پیامک تست ناموفق بود: '.$e->getMessage())
                         ->danger()->send();
                 }
             });

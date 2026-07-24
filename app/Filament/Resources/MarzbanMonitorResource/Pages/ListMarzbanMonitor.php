@@ -7,6 +7,7 @@ use App\Filament\Widgets\MarzbanMonitorStats;
 use App\Models\SiteSetting;
 use App\Services\Marzban\UserServiceSyncService;
 use Filament\Actions;
+use Filament\Forms\Components\TextInput;
 use Filament\Notifications\Notification;
 use Filament\Resources\Pages\ListRecords;
 
@@ -49,12 +50,12 @@ class ListMarzbanMonitor extends ListRecords
                 ->icon('heroicon-o-bolt')
                 ->color('gray')
                 ->form([
-                    \Filament\Forms\Components\TextInput::make('limit')
+                    TextInput::make('limit')
                         ->label('حداکثر تعداد')->numeric()->default(50)->minValue(1),
                 ])
                 ->action(function (array $data) {
                     $limit = max(1, (int) ($data['limit'] ?? 50));
-                    $svc   = app(UserServiceSyncService::class);
+                    $svc = app(UserServiceSyncService::class);
                     $count = $svc->syncFailedServices($limit) + $svc->syncPendingServices($limit);
                     Notification::make()->title("{$count} سرویس سینک شد.")->success()->send();
                 }),

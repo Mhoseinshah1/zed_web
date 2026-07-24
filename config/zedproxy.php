@@ -27,7 +27,7 @@ return [
     */
 
     'scheduler' => [
-        'heartbeat_store'     => env('SCHEDULER_HEARTBEAT_STORE', 'file'),
+        'heartbeat_store' => env('SCHEDULER_HEARTBEAT_STORE', 'file'),
         'heartbeat_threshold' => (int) env('SCHEDULER_HEARTBEAT_THRESHOLD', 300),
     ],
 
@@ -48,9 +48,9 @@ return [
     */
 
     'purchase' => [
-        'intent_ttl_minutes'    => (int) env('PURCHASE_INTENT_TTL_MINUTES', 30),
+        'intent_ttl_minutes' => (int) env('PURCHASE_INTENT_TTL_MINUTES', 30),
         'pending_reuse_minutes' => (int) env('PURCHASE_PENDING_REUSE_MINUTES', 30),
-        'prune_batch_size'      => (int) env('PURCHASE_PRUNE_BATCH_SIZE', 500),
+        'prune_batch_size' => (int) env('PURCHASE_PRUNE_BATCH_SIZE', 500),
     ],
 
     /*
@@ -73,9 +73,9 @@ return [
 
     'discounts' => [
         'reservation_ttl_minutes' => (int) env('DISCOUNT_RESERVATION_TTL_MINUTES', 30),
-        'deadlock_retries'        => (int) env('DISCOUNT_DEADLOCK_RETRIES', 3),
-        'deadlock_backoff_ms'     => (int) env('DISCOUNT_DEADLOCK_BACKOFF_MS', 100),
-        'expire_batch_size'       => (int) env('DISCOUNT_EXPIRE_BATCH_SIZE', 500),
+        'deadlock_retries' => (int) env('DISCOUNT_DEADLOCK_RETRIES', 3),
+        'deadlock_backoff_ms' => (int) env('DISCOUNT_DEADLOCK_BACKOFF_MS', 100),
+        'expire_batch_size' => (int) env('DISCOUNT_EXPIRE_BATCH_SIZE', 500),
     ],
 
 ];

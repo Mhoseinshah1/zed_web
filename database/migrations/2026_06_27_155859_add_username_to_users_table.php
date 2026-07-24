@@ -18,18 +18,18 @@ return new class extends Migration
         DB::table('users')->orderBy('id')->each(function (object $user) {
             // Sanitize name → lowercase snake_case alphanumeric
             $base = strtolower(preg_replace('/[^a-zA-Z0-9]+/', '_', $user->name));
-            $base = trim($base, '_') ?: ('user' . $user->id);
+            $base = trim($base, '_') ?: ('user'.$user->id);
             $base = substr($base, 0, 40);
 
             $username = $base;
-            $suffix   = 1;
+            $suffix = 1;
             while (
                 DB::table('users')
                     ->where('username', $username)
                     ->where('id', '!=', $user->id)
                     ->exists()
             ) {
-                $username = $base . '_' . $suffix++;
+                $username = $base.'_'.$suffix++;
             }
 
             DB::table('users')->where('id', $user->id)->update(['username' => $username]);

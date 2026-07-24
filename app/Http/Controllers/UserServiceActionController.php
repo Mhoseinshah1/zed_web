@@ -39,6 +39,7 @@ class UserServiceActionController extends Controller
         if (! filled($service->remote_username) || $service->status !== UserService::STATUS_ACTIVE) {
             return back()->with('error', 'این عملیات فقط برای سرویس‌های فعال قابل انجام است.');
         }
+
         return null;
     }
 
@@ -47,11 +48,11 @@ class UserServiceActionController extends Controller
     private function log(UserService $service, ?int $panelId, string $action, string $status, string $message, array $payload = []): void
     {
         VpnServiceProvisionLog::create([
-            'user_service_id'  => $service->id,
-            'vpn_panel_id'     => $panelId,
-            'action'           => $action,
-            'status'           => $status,
-            'message'          => $message,
+            'user_service_id' => $service->id,
+            'vpn_panel_id' => $panelId,
+            'action' => $action,
+            'status' => $status,
+            'message' => $message,
             'response_payload' => $payload ?: null,
         ]);
     }
@@ -61,13 +62,13 @@ class UserServiceActionController extends Controller
     private function applyNormalized(UserService $service, array $marzbanUser, MarzbanClient $client): void
     {
         $normalized = $client->normalizeUserResponse($marzbanUser);
-        $subLink    = $client->extractSubscriptionLink($marzbanUser);
+        $subLink = $client->extractSubscriptionLink($marzbanUser);
 
         $updates = [
-            'traffic_used_gb'   => $normalized['used_traffic_gb'],
+            'traffic_used_gb' => $normalized['used_traffic_gb'],
             'subscription_link' => $subLink ?? $service->subscription_link,
-            'config_link'       => $marzbanUser['links'][0] ?? $service->config_link,
-            'last_synced_at'    => now(),
+            'config_link' => $marzbanUser['links'][0] ?? $service->config_link,
+            'last_synced_at' => now(),
         ];
 
         if (! empty($normalized['expire'])) {
@@ -105,9 +106,9 @@ class UserServiceActionController extends Controller
         }
 
         try {
-            $client      = new MarzbanClient($panel);
+            $client = new MarzbanClient($panel);
             $marzbanUser = $client->getUser($service->remote_username);
-            $normalized  = $client->normalizeUserResponse($marzbanUser);
+            $normalized = $client->normalizeUserResponse($marzbanUser);
 
             $this->applyNormalized($service, $marzbanUser, $client);
 
@@ -119,6 +120,7 @@ class UserServiceActionController extends Controller
 
         } catch (\Throwable $e) {
             $this->log($service, $service->vpn_panel_id, 'user_marzban_sync', 'failed', $e->getMessage());
+
             return back()->with('error', 'بروزرسانی سرویس انجام نشد. لطفاً بعداً دوباره تلاش کنید.');
         }
     }
@@ -140,24 +142,25 @@ class UserServiceActionController extends Controller
         }
 
         // Rate limit: once per 10 minutes per service
-        $rateLimitKey          = 'revoke-sub:' . $service->id . ':' . auth()->id();
+        $rateLimitKey = 'revoke-sub:'.$service->id.':'.auth()->id();
         $revokeIntervalSeconds = (int) SiteText::get('services.revoke_subscription_cooldown_seconds', '600');
 
         if (RateLimiter::tooManyAttempts($rateLimitKey, 1)) {
             $seconds = RateLimiter::availableIn($rateLimitKey);
             $minutes = max(1, (int) ceil($seconds / 60));
+
             return back()->with('error', "برای تغییر مجدد لینک اشتراک کمی بعد دوباره تلاش کنید. ({$minutes} دقیقه دیگر)");
         }
 
         try {
-            $client      = new MarzbanClient($panel);
+            $client = new MarzbanClient($panel);
             $marzbanUser = $client->revokeSubscription($service->remote_username);
-            $newSubLink  = $client->extractSubscriptionLink($marzbanUser);
+            $newSubLink = $client->extractSubscriptionLink($marzbanUser);
 
             $service->update([
                 'subscription_link' => $newSubLink,
-                'config_link'       => $marzbanUser['links'][0] ?? $service->config_link,
-                'last_synced_at'    => now(),
+                'config_link' => $marzbanUser['links'][0] ?? $service->config_link,
+                'last_synced_at' => now(),
             ]);
 
             RateLimiter::hit($rateLimitKey, $revokeIntervalSeconds);
@@ -170,6 +173,7 @@ class UserServiceActionController extends Controller
 
         } catch (\Throwable $e) {
             $this->log($service, $service->vpn_panel_id, 'user_marzban_revoke_subscription', 'failed', $e->getMessage());
+
             return back()->with('error', 'تغییر لینک اشتراک انجام نشد. لطفاً بعداً دوباره تلاش کنید.');
         }
     }
@@ -196,7 +200,7 @@ class UserServiceActionController extends Controller
 
             $service->update([
                 'traffic_used_gb' => 0,
-                'last_synced_at'  => now(),
+                'last_synced_at' => now(),
             ]);
 
             $this->log($service, $panel->id, 'user_marzban_reset_traffic', 'success',
@@ -206,6 +210,7 @@ class UserServiceActionController extends Controller
 
         } catch (\Throwable $e) {
             $this->log($service, $service->vpn_panel_id, 'user_marzban_reset_traffic', 'failed', $e->getMessage());
+
             return back()->with('error', 'ریست ترافیک انجام نشد. لطفاً بعداً دوباره تلاش کنید.');
         }
     }
@@ -231,7 +236,7 @@ class UserServiceActionController extends Controller
             $client->updateUser($service->remote_username, ['status' => 'disabled']);
 
             $service->update([
-                'status'         => UserService::STATUS_DISABLED,
+                'status' => UserService::STATUS_DISABLED,
                 'last_synced_at' => now(),
             ]);
 
@@ -242,6 +247,7 @@ class UserServiceActionController extends Controller
 
         } catch (\Throwable $e) {
             $this->log($service, $service->vpn_panel_id, 'user_marzban_disable', 'failed', $e->getMessage());
+
             return back()->with('error', 'غیرفعال کردن سرویس انجام نشد. لطفاً بعداً دوباره تلاش کنید.');
         }
     }
@@ -267,7 +273,7 @@ class UserServiceActionController extends Controller
             $client->updateUser($service->remote_username, ['status' => 'active']);
 
             $service->update([
-                'status'         => UserService::STATUS_ACTIVE,
+                'status' => UserService::STATUS_ACTIVE,
                 'last_synced_at' => now(),
             ]);
 
@@ -278,6 +284,7 @@ class UserServiceActionController extends Controller
 
         } catch (\Throwable $e) {
             $this->log($service, $service->vpn_panel_id, 'user_marzban_enable', 'failed', $e->getMessage());
+
             return back()->with('error', 'فعال کردن سرویس انجام نشد. لطفاً بعداً دوباره تلاش کنید.');
         }
     }

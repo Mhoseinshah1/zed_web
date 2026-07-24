@@ -27,12 +27,12 @@ class PurchaseToken
         ksort($options);
 
         return Crypt::encryptString(json_encode([
-            'u'   => $userId,
-            'op'  => $operation,
-            'p'   => $planId,
-            's'   => $serviceId,
-            'o'   => $options,
-            'n'   => Str::random(40),      // nonce → idempotency key
+            'u' => $userId,
+            'op' => $operation,
+            'p' => $planId,
+            's' => $serviceId,
+            'o' => $options,
+            'n' => Str::random(40),      // nonce → idempotency key
             'iat' => now()->getTimestamp(),
         ], JSON_UNESCAPED_UNICODE));
     }
@@ -65,12 +65,12 @@ class PurchaseToken
         }
 
         return [
-            'u'   => (int) $decoded['u'],
-            'op'  => (string) $decoded['op'],
-            'p'   => isset($decoded['p']) ? (int) $decoded['p'] : null,
-            's'   => isset($decoded['s']) ? (int) $decoded['s'] : null,
-            'o'   => is_array($decoded['o'] ?? null) ? $decoded['o'] : [],
-            'n'   => (string) $decoded['n'],
+            'u' => (int) $decoded['u'],
+            'op' => (string) $decoded['op'],
+            'p' => isset($decoded['p']) ? (int) $decoded['p'] : null,
+            's' => isset($decoded['s']) ? (int) $decoded['s'] : null,
+            'o' => is_array($decoded['o'] ?? null) ? $decoded['o'] : [],
+            'n' => (string) $decoded['n'],
             'iat' => (int) $decoded['iat'],
         ];
     }
@@ -86,11 +86,11 @@ class PurchaseToken
         ksort($options);
 
         return hash('sha256', json_encode([
-            'u'  => $userId,
+            'u' => $userId,
             'op' => $operation,
-            'p'  => $planId,
-            's'  => $serviceId,
-            'o'  => $options,
+            'p' => $planId,
+            's' => $serviceId,
+            'o' => $options,
         ], JSON_UNESCAPED_UNICODE));
     }
 }

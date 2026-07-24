@@ -24,6 +24,7 @@ if (! function_exists('cms_image')) {
         if (str_starts_with($path, 'http://') || str_starts_with($path, 'https://') || str_starts_with($path, '/')) {
             return $path;
         }
+
         return Storage::disk('public')->url($path);
     }
 }
@@ -39,6 +40,7 @@ if (! function_exists('cms_asset_url')) {
         if (str_starts_with($path, 'http://') || str_starts_with($path, 'https://') || str_starts_with($path, '/')) {
             return $path;
         }
+
         return Storage::disk('public')->url($path);
     }
 }

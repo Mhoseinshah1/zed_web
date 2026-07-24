@@ -5,8 +5,11 @@ namespace App\Filament\Resources;
 use App\Filament\Resources\UserResource\Pages;
 use App\Models\SiteText;
 use App\Models\User;
+use App\Models\UserService;
 use App\Models\WalletTransaction;
+use App\Services\Phone\PhoneVerificationService;
 use App\Services\WalletService;
+use App\Support\PhoneNumber;
 use Filament\Forms;
 use Filament\Forms\Form;
 use Filament\Notifications\Notification;
@@ -18,12 +21,17 @@ class UserResource extends Resource
 {
     protected static ?string $model = User::class;
 
-    protected static ?string $navigationIcon  = 'heroicon-o-users';
+    protected static ?string $navigationIcon = 'heroicon-o-users';
+
     protected static ?string $navigationGroup = 'کاربران';
+
     protected static ?string $navigationLabel = 'کاربران';
-    protected static ?string $modelLabel      = 'کاربر';
+
+    protected static ?string $modelLabel = 'کاربر';
+
     protected static ?string $pluralModelLabel = 'کاربران';
-    protected static ?int $navigationSort     = 10;
+
+    protected static ?int $navigationSort = 10;
 
     public static function form(Form $form): Form
     {
@@ -60,7 +68,7 @@ class UserResource extends Resource
                     ->tel()
                     ->maxLength(32)
                     ->helperText('شماره نرمال‌شده به‌صورت خودکار ذخیره می‌شود.')
-                    ->afterStateUpdated(fn ($state, Forms\Set $set) => $set('normalized_phone', \App\Support\PhoneNumber::normalize($state)))
+                    ->afterStateUpdated(fn ($state, Forms\Set $set) => $set('normalized_phone', PhoneNumber::normalize($state)))
                     ->live(onBlur: true),
 
                 Forms\Components\TextInput::make('normalized_phone')
@@ -128,7 +136,7 @@ class UserResource extends Resource
 
                 Tables\Columns\TextColumn::make('representative_status')
                     ->label('وضعیت نمایندگی')
-                    ->formatStateUsing(fn ($state) => \App\Models\User::representativeStatuses()[$state] ?? $state)
+                    ->formatStateUsing(fn ($state) => User::representativeStatuses()[$state] ?? $state)
                     ->badge()
                     ->toggleable(),
 
@@ -176,7 +184,7 @@ class UserResource extends Resource
                     ->query(fn ($query) => $query->where('wallet_balance_toman', '>', 0)),
                 Tables\Filters\Filter::make('has_active_service')
                     ->label('کاربران دارای سرویس فعال')
-                    ->query(fn ($query) => $query->whereHas('services', fn ($q) => $q->where('status', \App\Models\UserService::STATUS_ACTIVE))),
+                    ->query(fn ($query) => $query->whereHas('services', fn ($q) => $q->where('status', UserService::STATUS_ACTIVE))),
                 Tables\Filters\Filter::make('registered_range')
                     ->form([
                         Forms\Components\DatePicker::make('from')->label('از تاریخ'),
@@ -217,7 +225,7 @@ class UserResource extends Resource
                     ->visible(fn (User $record) => filled($record->phone) && is_null($record->phone_verified_at))
                     ->requiresConfirmation()
                     ->action(function (User $record) {
-                        $result = app(\App\Services\Phone\PhoneVerificationService::class)->requestCode($record);
+                        $result = app(PhoneVerificationService::class)->requestCode($record);
                         if ($result['status'] === 'sent') {
                             $sent = ($result['sms_sent'] ?? false)
                                 ? 'کد تایید برای کاربر ارسال شد.'
@@ -251,7 +259,7 @@ class UserResource extends Resource
                                 WalletTransaction::TYPE_MANUAL_CREDIT,
                                 [
                                     'description' => $data['description'],
-                                    'admin_id'    => auth()->id(),
+                                    'admin_id' => auth()->id(),
                                 ]
                             );
                             Notification::make()
@@ -260,7 +268,7 @@ class UserResource extends Resource
                                 ->send();
                         } catch (\Exception $e) {
                             Notification::make()
-                                ->title('خطا: ' . $e->getMessage())
+                                ->title('خطا: '.$e->getMessage())
                                 ->danger()
                                 ->send();
                         }
@@ -291,7 +299,7 @@ class UserResource extends Resource
                                 WalletTransaction::TYPE_MANUAL_DEBIT,
                                 [
                                     'description' => $data['description'],
-                                    'admin_id'    => auth()->id(),
+                                    'admin_id' => auth()->id(),
                                 ]
                             );
                             Notification::make()
@@ -322,9 +330,9 @@ class UserResource extends Resource
     public static function getPages(): array
     {
         return [
-            'index'  => Pages\ListUsers::route('/'),
+            'index' => Pages\ListUsers::route('/'),
             'create' => Pages\CreateUser::route('/create'),
-            'edit'   => Pages\EditUser::route('/{record}/edit'),
+            'edit' => Pages\EditUser::route('/{record}/edit'),
         ];
     }
 }

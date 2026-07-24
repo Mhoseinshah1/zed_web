@@ -8,6 +8,7 @@ use Illuminate\Database\Eloquent\Model;
 class Location extends Model
 {
     use HasFactory;
+
     protected $fillable = [
         'country_name', 'country_code', 'flag_emoji',
         'latitude', 'longitude', 'ping_ms',
@@ -15,12 +16,12 @@ class Location extends Model
     ];
 
     protected $casts = [
-        'is_active'         => 'boolean',
+        'is_active' => 'boolean',
         'is_youtube_special' => 'boolean',
-        'sort_order'        => 'integer',
-        'latitude'          => 'float',
-        'longitude'         => 'float',
-        'ping_ms'           => 'integer',
+        'sort_order' => 'integer',
+        'latitude' => 'float',
+        'longitude' => 'float',
+        'ping_ms' => 'integer',
     ];
 
     public function scopeActive($query)
@@ -53,6 +54,7 @@ class Location extends Model
         if (! $this->hasCoordinates()) {
             return null;
         }
+
         return [
             'x' => round((($this->longitude + 180) / 360) * 1000, 1),
             'y' => round(((90 - $this->latitude) / 180) * 500, 1),

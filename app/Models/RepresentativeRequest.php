@@ -7,9 +7,12 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class RepresentativeRequest extends Model
 {
-    const STATUS_PENDING  = 'pending';
+    const STATUS_PENDING = 'pending';
+
     const STATUS_APPROVED = 'approved';
+
     const STATUS_REJECTED = 'rejected';
+
     const STATUS_DISABLED = 'disabled';
 
     protected $fillable = [
@@ -39,7 +42,7 @@ class RepresentativeRequest extends Model
     public static function statuses(): array
     {
         return [
-            self::STATUS_PENDING  => 'در انتظار بررسی',
+            self::STATUS_PENDING => 'در انتظار بررسی',
             self::STATUS_APPROVED => 'تاییدشده',
             self::STATUS_REJECTED => 'ردشده',
             self::STATUS_DISABLED => 'غیرفعال',

@@ -13,7 +13,7 @@ class SiteText extends Model
     ];
 
     protected $casts = [
-        'is_public'  => 'boolean',
+        'is_public' => 'boolean',
         'sort_order' => 'integer',
     ];
 
@@ -21,6 +21,7 @@ class SiteText extends Model
     {
         return Cache::remember("site_text:{$key}", 3600, function () use ($key, $default) {
             $record = static::where('key', $key)->first();
+
             return $record ? (string) $record->value : $default;
         });
     }
@@ -34,12 +35,12 @@ class SiteText extends Model
         $row = static::firstOrNew(['key' => $key]);
         $row->value = (string) ($value ?? '');
         if (! $row->exists) {
-            $row->group       = $meta['group'] ?? $row->group;
-            $row->label       = $meta['label'] ?? $key;
-            $row->type        = $meta['type'] ?? 'text';
-            $row->is_public   = $meta['is_public'] ?? true;
+            $row->group = $meta['group'] ?? $row->group;
+            $row->label = $meta['label'] ?? $key;
+            $row->type = $meta['type'] ?? 'text';
+            $row->is_public = $meta['is_public'] ?? true;
             $row->description = $meta['description'] ?? null;
-            $row->sort_order  = $meta['sort_order'] ?? 0;
+            $row->sort_order = $meta['sort_order'] ?? 0;
         }
         $row->save();
     }
@@ -62,6 +63,7 @@ class SiteText extends Model
     {
         $row = static::get($key, $default ? '1' : '0');
         $str = strtolower(trim($row));
+
         return $str === '1' || $str === 'true' || $str === 'yes';
     }
 

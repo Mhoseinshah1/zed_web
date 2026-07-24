@@ -22,6 +22,7 @@ class PanelTemplateAccentTest extends TestCase
     private function panel(string $template): string
     {
         SiteSetting::set(TemplateManager::SETTING_KEY, $template);
+
         return $this->actingAs(User::factory()->create())
             ->get(route('dashboard.index'))
             ->assertSuccessful()
@@ -71,11 +72,11 @@ class PanelTemplateAccentTest extends TestCase
     public function test_each_template_brings_its_own_scoped_accent(): void
     {
         $accents = [
-            'classic'  => '#6366f1',
-            'modern'   => '#22d3ee',
-            'shop'     => '#22d3ee',
-            'map'      => '#22d3ee',
-            'matrix'   => '#34d399',
+            'classic' => '#6366f1',
+            'modern' => '#22d3ee',
+            'shop' => '#22d3ee',
+            'map' => '#22d3ee',
+            'matrix' => '#34d399',
             'woodmart' => '#e8552a',
         ];
 
@@ -83,8 +84,8 @@ class PanelTemplateAccentTest extends TestCase
             $html = $this->panel($template);
 
             // The panel carries this template and its scoped accent style block…
-            $this->assertStringContainsString('data-template="' . $template . '"', $html);
-            $this->assertStringContainsString('[data-template="' . $template . '"]', $html);
+            $this->assertStringContainsString('data-template="'.$template.'"', $html);
+            $this->assertStringContainsString('[data-template="'.$template.'"]', $html);
             $this->assertStringContainsString('--zp-tpl-accent:', $html);
 
             // woodmart maps its orange through --wm-accent; the rest set the hex directly.
@@ -97,7 +98,7 @@ class PanelTemplateAccentTest extends TestCase
             // Scope isolation: no OTHER template's style block is present.
             foreach (array_keys($accents) as $other) {
                 if ($other !== $template) {
-                    $this->assertStringNotContainsString('[data-template="' . $other . '"]', $html,
+                    $this->assertStringNotContainsString('[data-template="'.$other.'"]', $html,
                         "{$other}'s accent must not leak into the {$template} panel.");
                 }
             }
@@ -106,7 +107,7 @@ class PanelTemplateAccentTest extends TestCase
 
     public function test_panel_structure_is_identical_across_templates(): void
     {
-        $classic  = $this->panel('classic');
+        $classic = $this->panel('classic');
         $woodmart = $this->panel('woodmart');
 
         // Same fixed menu, same order, same labels — the accent must not add,

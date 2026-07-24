@@ -24,11 +24,11 @@ class RepresentativeService
         $autoApprove = ReferralSettings::autoApproveRepresentatives();
 
         $request = RepresentativeRequest::create([
-            'user_id'      => $user->id,
-            'message'      => $message,
+            'user_id' => $user->id,
+            'message' => $message,
             'contact_info' => $contactInfo,
-            'status'       => $autoApprove ? RepresentativeRequest::STATUS_APPROVED : RepresentativeRequest::STATUS_PENDING,
-            'reviewed_at'  => $autoApprove ? now() : null,
+            'status' => $autoApprove ? RepresentativeRequest::STATUS_APPROVED : RepresentativeRequest::STATUS_PENDING,
+            'reviewed_at' => $autoApprove ? now() : null,
         ]);
 
         if ($autoApprove) {
@@ -40,9 +40,9 @@ class RepresentativeService
                 Notification::TYPE_REPRESENTATIVE_REQUEST,
                 [
                     'user_name' => $user->name ?? $user->username,
-                    'account_id'=> $user->account_id,
+                    'account_id' => $user->account_id,
                 ],
-                'representative_request:' . $request->id,
+                'representative_request:'.$request->id,
             );
         }
 
@@ -58,9 +58,9 @@ class RepresentativeService
     public function reject(User $user, ?string $note = null): void
     {
         $user->update([
-            'is_representative'      => false,
-            'representative_status'  => User::REP_REJECTED,
-            'representative_note'    => $note ?? $user->representative_note,
+            'is_representative' => false,
+            'representative_status' => User::REP_REJECTED,
+            'representative_note' => $note ?? $user->representative_note,
         ]);
         $this->updateLatestRequest($user, RepresentativeRequest::STATUS_REJECTED, $note);
     }
@@ -68,9 +68,9 @@ class RepresentativeService
     public function disable(User $user, ?string $note = null): void
     {
         $user->update([
-            'is_representative'     => false,
+            'is_representative' => false,
             'representative_status' => User::REP_DISABLED,
-            'representative_note'   => $note ?? $user->representative_note,
+            'representative_note' => $note ?? $user->representative_note,
         ]);
         $this->updateLatestRequest($user, RepresentativeRequest::STATUS_DISABLED, $note);
     }
@@ -84,10 +84,10 @@ class RepresentativeService
     private function markUserApproved(User $user, ?string $note = null): void
     {
         $user->update([
-            'is_representative'          => true,
-            'representative_status'      => User::REP_APPROVED,
+            'is_representative' => true,
+            'representative_status' => User::REP_APPROVED,
             'representative_approved_at' => $user->representative_approved_at ?? now(),
-            'representative_note'        => $note ?? $user->representative_note,
+            'representative_note' => $note ?? $user->representative_note,
         ]);
     }
 
@@ -95,8 +95,8 @@ class RepresentativeService
     {
         $request = $user->representativeRequests()->latest()->first();
         $request?->update([
-            'status'      => $status,
-            'admin_note'  => $note ?? $request->admin_note,
+            'status' => $status,
+            'admin_note' => $note ?? $request->admin_note,
             'reviewed_by' => auth()->id(),
             'reviewed_at' => now(),
         ]);

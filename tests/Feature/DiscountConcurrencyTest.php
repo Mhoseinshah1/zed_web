@@ -30,9 +30,10 @@ class DiscountConcurrencyTest extends TestCase
     private function user(): User
     {
         $this->seq++;
+
         return User::factory()->create([
             'username' => "dc_user_{$this->seq}",
-            'email'    => "dc_{$this->seq}@test.com",
+            'email' => "dc_{$this->seq}@test.com",
         ]);
     }
 
@@ -46,18 +47,19 @@ class DiscountConcurrencyTest extends TestCase
     private function order(User $user, ?Plan $plan = null, array $attrs = []): Order
     {
         $plan ??= $this->plan();
+
         return Order::create(array_merge([
-            'user_id'           => $user->id,
-            'plan_id'           => $plan->id,
-            'plan_name'         => $plan->name,
-            'order_type'        => Order::TYPE_NEW_SERVICE,
-            'price_toman'       => $plan->price_toman,
+            'user_id' => $user->id,
+            'plan_id' => $plan->id,
+            'plan_name' => $plan->name,
+            'order_type' => Order::TYPE_NEW_SERVICE,
+            'price_toman' => $plan->price_toman,
             'final_price_toman' => $plan->price_toman,
-            'discount_toman'    => 0,
-            'traffic_gb'        => $plan->traffic_gb,
-            'duration_days'     => $plan->duration_days,
-            'status'            => Order::STATUS_PENDING,
-            'payment_status'    => Order::PAYMENT_UNPAID,
+            'discount_toman' => 0,
+            'traffic_gb' => $plan->traffic_gb,
+            'duration_days' => $plan->duration_days,
+            'status' => Order::STATUS_PENDING,
+            'payment_status' => Order::PAYMENT_UNPAID,
         ], $attrs));
     }
 
@@ -86,7 +88,8 @@ class DiscountConcurrencyTest extends TestCase
     {
         $code = $this->code(['total_usage_limit' => 5, 'per_user_usage_limit' => 1]);
 
-        $ok = 0; $rejected = 0;
+        $ok = 0;
+        $rejected = 0;
         for ($i = 0; $i < 20; $i++) {
             $u = $this->user();
             $o = $this->order($u);
@@ -248,7 +251,7 @@ class DiscountConcurrencyTest extends TestCase
 
         $this->assertSame(1, DiscountRedemption::where('order_id', $o->id)->where('status', DiscountRedemption::STATUS_USED)->count());
         $this->assertSame(0, $this->reservedCount($code));
-        $this->assertSame(1, Notification::where('dedupe_key', 'discount_used:order:' . $o->id)->count());
+        $this->assertSame(1, Notification::where('dedupe_key', 'discount_used:order:'.$o->id)->count());
     }
 
     public function test_db_blocks_duplicate_used_for_order_and_code(): void
@@ -358,7 +361,8 @@ class DiscountConcurrencyTest extends TestCase
 
     public function test_allowed_plan_restriction(): void
     {
-        $p1 = $this->plan(); $p2 = $this->plan();
+        $p1 = $this->plan();
+        $p2 = $this->plan();
         $this->code(['code' => 'PLAN', 'allowed_plan_ids' => [$p1->id], 'per_user_usage_limit' => 5]);
         $u = $this->user();
         $r = $this->svc()->validateCode($u, $this->order($u, $p2), 'PLAN');
@@ -421,9 +425,12 @@ class DiscountConcurrencyTest extends TestCase
 
     public function test_deadlock_is_retried_then_succeeds(): void
     {
-        $runner = new class {
+        $runner = new class
+        {
             use RetriesDeadlocks;
+
             public int $calls = 0;
+
             public function run(): string
             {
                 return $this->runWithDeadlockRetries(function () {
@@ -431,6 +438,7 @@ class DiscountConcurrencyTest extends TestCase
                     if ($this->calls < 3) {
                         throw new QueryException('pgsql', 'update x', [], new \Exception('deadlock detected', 40001));
                     }
+
                     return 'ok';
                 }, 'test');
             }
@@ -442,9 +450,12 @@ class DiscountConcurrencyTest extends TestCase
 
     public function test_validation_errors_are_not_retried(): void
     {
-        $runner = new class {
+        $runner = new class
+        {
             use RetriesDeadlocks;
+
             public int $calls = 0;
+
             public function run(): void
             {
                 $this->runWithDeadlockRetries(function () {

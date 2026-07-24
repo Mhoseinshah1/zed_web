@@ -4,6 +4,7 @@ namespace App\Services\Payments\NowPayments;
 
 use App\Models\PaymentMethod;
 use Illuminate\Http\Client\PendingRequest;
+use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Http;
 
 /**
@@ -16,12 +17,14 @@ use Illuminate\Support\Facades\Http;
 class NowPaymentsClient
 {
     private string $baseUrl;
+
     private string $apiKey;
+
     private string $ipnSecret;
 
     public function __construct(PaymentMethod $method)
     {
-        $config  = $method->config ?? [];
+        $config = $method->config ?? [];
         $sandbox = (bool) ($config['sandbox'] ?? false);
 
         if (! empty($config['base_url'])) {
@@ -33,7 +36,7 @@ class NowPaymentsClient
         }
 
         // Use encrypted cast — accessing the attribute auto-decrypts
-        $this->apiKey    = $method->api_key    ?? '';
+        $this->apiKey = $method->api_key ?? '';
         $this->ipnSecret = $method->ipn_secret ?? '';
     }
 
@@ -42,8 +45,8 @@ class NowPaymentsClient
     private function http(): PendingRequest
     {
         return Http::withHeaders([
-            'x-api-key'    => $this->apiKey,
-            'Accept'       => 'application/json',
+            'x-api-key' => $this->apiKey,
+            'Accept' => 'application/json',
             'Content-Type' => 'application/json',
         ]);
     }
@@ -54,6 +57,7 @@ class NowPaymentsClient
     {
         $response = $this->http()->get("{$this->baseUrl}/status");
         $this->assertOk($response, 'status');
+
         return $response->json();
     }
 
@@ -61,6 +65,7 @@ class NowPaymentsClient
     {
         $response = $this->http()->get("{$this->baseUrl}/currencies");
         $this->assertOk($response, 'currencies');
+
         return $response->json();
     }
 
@@ -68,20 +73,22 @@ class NowPaymentsClient
     {
         $response = $this->http()->get("{$this->baseUrl}/min-amount", [
             'currency_from' => $currencyFrom,
-            'currency_to'   => $currencyTo,
+            'currency_to' => $currencyTo,
         ]);
         $this->assertOk($response, 'min-amount');
+
         return $response->json();
     }
 
     public function getEstimatedPrice(float $amount, string $currencyFrom, string $currencyTo): array
     {
         $response = $this->http()->get("{$this->baseUrl}/estimate", [
-            'amount'        => $amount,
+            'amount' => $amount,
             'currency_from' => $currencyFrom,
-            'currency_to'   => $currencyTo,
+            'currency_to' => $currencyTo,
         ]);
         $this->assertOk($response, 'estimate');
+
         return $response->json();
     }
 
@@ -89,6 +96,7 @@ class NowPaymentsClient
     {
         $response = $this->http()->post("{$this->baseUrl}/payment", $payload);
         $this->assertOk($response, 'create-payment');
+
         return $response->json();
     }
 
@@ -96,6 +104,7 @@ class NowPaymentsClient
     {
         $response = $this->http()->post("{$this->baseUrl}/invoice", $payload);
         $this->assertOk($response, 'create-invoice');
+
         return $response->json();
     }
 
@@ -103,6 +112,7 @@ class NowPaymentsClient
     {
         $response = $this->http()->get("{$this->baseUrl}/payment/{$paymentId}");
         $this->assertOk($response, 'get-payment');
+
         return $response->json();
     }
 
@@ -123,7 +133,7 @@ class NowPaymentsClient
 
         ksort($payload);
 
-        $jsonStr  = json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        $jsonStr = json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
         $computed = hash_hmac('sha512', $jsonStr, $this->ipnSecret);
 
         return hash_equals($computed, strtolower($signature));
@@ -131,10 +141,10 @@ class NowPaymentsClient
 
     // ── Internals ─────────────────────────────────────────────────────────────
 
-    private function assertOk(\Illuminate\Http\Client\Response $response, string $endpoint): void
+    private function assertOk(Response $response, string $endpoint): void
     {
         if ($response->failed()) {
-            $body    = $response->json() ?? [];
+            $body = $response->json() ?? [];
             $message = $body['message'] ?? ($body['error'] ?? "HTTP {$response->status()}");
             throw new \RuntimeException("NOWPayments [{$endpoint}]: {$message}");
         }

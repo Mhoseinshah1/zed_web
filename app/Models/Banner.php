@@ -14,25 +14,25 @@ class Banner extends Model
     ];
 
     protected $casts = [
-        'is_active'  => 'boolean',
+        'is_active' => 'boolean',
         'sort_order' => 'integer',
-        'starts_at'  => 'datetime',
-        'ends_at'    => 'datetime',
-        'metadata'   => 'array',
+        'starts_at' => 'datetime',
+        'ends_at' => 'datetime',
+        'metadata' => 'array',
     ];
 
     /** Placement keys → Persian labels. */
     public static function placements(): array
     {
         return [
-            'home_top'       => 'صفحه اصلی بالا',
-            'home_middle'    => 'صفحه اصلی میانی',
-            'homepage_top'   => 'صفحه اصلی بالا (جایگزین)',
+            'home_top' => 'صفحه اصلی بالا',
+            'home_middle' => 'صفحه اصلی میانی',
+            'homepage_top' => 'صفحه اصلی بالا (جایگزین)',
             'homepage_middle' => 'صفحه اصلی میانی (جایگزین)',
-            'shop_top'       => 'بالای فروشگاه',
-            'plans_top'      => 'بالای پلن‌ها',
-            'dashboard_top'  => 'بالای داشبورد',
-            'wallet_top'     => 'بالای کیف پول',
+            'shop_top' => 'بالای فروشگاه',
+            'plans_top' => 'بالای پلن‌ها',
+            'dashboard_top' => 'بالای داشبورد',
+            'wallet_top' => 'بالای کیف پول',
         ];
     }
 
@@ -40,6 +40,7 @@ class Banner extends Model
     public function scopeLive(Builder $query): Builder
     {
         $now = now();
+
         return $query->where('is_active', true)
             ->where(fn ($q) => $q->whereNull('starts_at')->orWhere('starts_at', '<=', $now))
             ->where(fn ($q) => $q->whereNull('ends_at')->orWhere('ends_at', '>=', $now));

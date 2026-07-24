@@ -30,11 +30,11 @@ class TelegramClient
         bool $silent = false,
     ): array {
         $payload = [
-            'chat_id'    => $chatId ?? $this->settings->chatId(),
-            'text'       => $text,
+            'chat_id' => $chatId ?? $this->settings->chatId(),
+            'text' => $text,
             'parse_mode' => $parseMode ?? $this->settings->parseMode(),
             'disable_web_page_preview' => true,
-            'disable_notification'     => $silent,
+            'disable_notification' => $silent,
         ];
         if ($messageThreadId !== null) {
             $payload['message_thread_id'] = $messageThreadId;
@@ -65,8 +65,8 @@ class TelegramClient
     public function setWebhook(string $url, string $secret): array
     {
         return $this->call('setWebhook', [
-            'url'             => $url,
-            'secret_token'    => $secret,
+            'url' => $url,
+            'secret_token' => $secret,
             'allowed_updates' => ['message'],
             'max_connections' => 20,
         ]);
@@ -99,7 +99,7 @@ class TelegramClient
 
         return [
             'message_thread_id' => (int) ($result['message_thread_id'] ?? 0),
-            'name'              => (string) ($result['name'] ?? $name),
+            'name' => (string) ($result['name'] ?? $name),
         ];
     }
 
@@ -138,15 +138,15 @@ class TelegramClient
             $response = Http::asMultipart()
                 ->timeout(120)
                 ->attach('document', fopen($filePath, 'r'), basename($filePath))
-                ->post(self::BASE . $token . '/sendDocument', $payload);
+                ->post(self::BASE.$token.'/sendDocument', $payload);
         } catch (\Throwable $e) {
-            throw new \RuntimeException('Telegram transport error: ' . class_basename($e));
+            throw new \RuntimeException('Telegram transport error: '.class_basename($e));
         }
 
         $body = $response->json();
         if (! is_array($body) || empty($body['ok'])) {
             $desc = is_array($body) ? (string) ($body['description'] ?? 'unknown error') : 'invalid response';
-            throw new \RuntimeException('Telegram API error: ' . $desc);
+            throw new \RuntimeException('Telegram API error: '.$desc);
         }
 
         return ['message_id' => (int) ($body['result']['message_id'] ?? 0)];
@@ -168,17 +168,17 @@ class TelegramClient
             $response = Http::asJson()
                 ->timeout(15)
                 ->retry(1, 200)
-                ->post(self::BASE . $token . '/' . $method, $params);
+                ->post(self::BASE.$token.'/'.$method, $params);
         } catch (\Throwable $e) {
             // Never include the token (which lives in the URL) in the message.
-            throw new \RuntimeException('Telegram transport error: ' . class_basename($e));
+            throw new \RuntimeException('Telegram transport error: '.class_basename($e));
         }
 
         $body = $response->json();
 
         if (! is_array($body) || empty($body['ok'])) {
             $desc = is_array($body) ? (string) ($body['description'] ?? 'unknown error') : 'invalid response';
-            throw new \RuntimeException('Telegram API error: ' . $desc);
+            throw new \RuntimeException('Telegram API error: '.$desc);
         }
 
         return is_array($body['result'] ?? null) ? $body['result'] : [];

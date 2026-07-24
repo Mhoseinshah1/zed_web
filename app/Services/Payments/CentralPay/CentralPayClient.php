@@ -11,8 +11,11 @@ use Illuminate\Support\Facades\Http;
 class CentralPayClient
 {
     private string $apiKey;
+
     private string $baseUrl;
+
     private string $type;
+
     private string $callbackPath;
 
     public function __construct(PaymentMethod $method)
@@ -23,9 +26,9 @@ class CentralPayClient
             throw new \RuntimeException('کلید API درگاه CentralPay ثبت نشده است.');
         }
 
-        $this->apiKey       = $apiKey;
-        $this->baseUrl      = rtrim($method->getConfig('base_url', 'https://centralapi.org/webservice/basic'), '/');
-        $this->type         = $method->getConfig('type', 'deposit');
+        $this->apiKey = $apiKey;
+        $this->baseUrl = rtrim($method->getConfig('base_url', 'https://centralapi.org/webservice/basic'), '/');
+        $this->type = $method->getConfig('type', 'deposit');
         $this->callbackPath = $method->getConfig('callback_path', '/payments/centralpay/callback');
     }
 
@@ -35,7 +38,7 @@ class CentralPayClient
      */
     public function buildReturnUrl(int $txId): string
     {
-        return url($this->callbackPath) . '?orderId=' . $txId;
+        return url($this->callbackPath).'?orderId='.$txId;
     }
 
     /**
@@ -46,24 +49,24 @@ class CentralPayClient
      */
     public function createPaymentLink(Order $order, PaymentTransaction $transaction): array
     {
-        $amount    = $this->toCentralPayTomanAmount($order);
+        $amount = $this->toCentralPayTomanAmount($order);
         $returnUrl = $this->buildReturnUrl($transaction->id);
 
         $payload = [
-            'api_key'   => $this->apiKey,
-            'type'      => $this->type,
-            'amount'    => $amount,
-            'userId'    => $order->user_id,
-            'orderId'   => $transaction->id,
+            'api_key' => $this->apiKey,
+            'type' => $this->type,
+            'amount' => $amount,
+            'userId' => $order->user_id,
+            'orderId' => $transaction->id,
             'returnUrl' => $returnUrl,
         ];
 
         $response = Http::timeout(20)
             ->acceptJson()
-            ->post($this->baseUrl . '/getLink.php', $payload);
+            ->post($this->baseUrl.'/getLink.php', $payload);
 
         if (! $response->successful()) {
-            throw new \RuntimeException('CentralPay HTTP error: ' . $response->status());
+            throw new \RuntimeException('CentralPay HTTP error: '.$response->status());
         }
 
         return $response->json() ?? [];
@@ -77,20 +80,20 @@ class CentralPayClient
         $returnUrl = $this->buildReturnUrl($transaction->id);
 
         $payload = [
-            'api_key'   => $this->apiKey,
-            'type'      => $this->type,
-            'amount'    => $amountToman,
-            'userId'    => $user->id,
-            'orderId'   => $transaction->id,
+            'api_key' => $this->apiKey,
+            'type' => $this->type,
+            'amount' => $amountToman,
+            'userId' => $user->id,
+            'orderId' => $transaction->id,
             'returnUrl' => $returnUrl,
         ];
 
         $response = Http::timeout(20)
             ->acceptJson()
-            ->post($this->baseUrl . '/getLink.php', $payload);
+            ->post($this->baseUrl.'/getLink.php', $payload);
 
         if (! $response->successful()) {
-            throw new \RuntimeException('CentralPay HTTP error: ' . $response->status());
+            throw new \RuntimeException('CentralPay HTTP error: '.$response->status());
         }
 
         return $response->json() ?? [];
@@ -99,19 +102,19 @@ class CentralPayClient
     /**
      * Verify a CentralPay payment server-to-server.
      *
-     * @param  int|string $orderId  The transaction->id sent to CentralPay as orderId
+     * @param  int|string  $orderId  The transaction->id sent to CentralPay as orderId
      */
     public function verifyPayment(int|string $orderId): array
     {
         $response = Http::timeout(20)
             ->acceptJson()
-            ->post($this->baseUrl . '/verify.php', [
+            ->post($this->baseUrl.'/verify.php', [
                 'api_key' => $this->apiKey,
                 'orderId' => (int) $orderId,
             ]);
 
         if (! $response->successful()) {
-            throw new \RuntimeException('CentralPay verify HTTP error: ' . $response->status());
+            throw new \RuntimeException('CentralPay verify HTTP error: '.$response->status());
         }
 
         return $response->json() ?? [];
@@ -141,6 +144,7 @@ class CentralPayClient
     {
         $safe = $payload;
         unset($safe['api_key']);
+
         return $safe;
     }
 

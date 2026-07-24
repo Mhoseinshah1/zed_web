@@ -3,13 +3,13 @@
 namespace Tests\Feature;
 
 use App\Filament\Pages\ExtraAddonSettingsPage;
+use App\Filament\Pages\FinancialReport;
 use App\Models\Order;
 use App\Models\PaymentTransaction;
 use App\Models\Plan;
 use App\Models\SiteSetting;
 use App\Models\User;
 use App\Models\UserService;
-use App\Models\VpnPanel;
 use App\Services\Addons\ServiceAddonService;
 use App\Services\Marzban\MarzbanClient;
 use App\Services\Orders\MarkOrderAsPaidService;
@@ -40,79 +40,81 @@ class ServiceAddonTest extends TestCase
     private function makeService(User $user, array $overrides = []): UserService
     {
         $plan = Plan::create([
-            'name'            => 'پلن سرویس',
-            'slug'            => 'svc-plan-' . uniqid(),
-            'price_toman'     => 100000,
-            'duration_days'   => 30,
-            'traffic_gb'      => 50,
-            'is_active'       => false,
+            'name' => 'پلن سرویس',
+            'slug' => 'svc-plan-'.uniqid(),
+            'price_toman' => 100000,
+            'duration_days' => 30,
+            'traffic_gb' => 50,
+            'is_active' => false,
             'renewal_enabled' => false,
-            'sort_order'      => 0,
+            'sort_order' => 0,
         ]);
 
         return UserService::create(array_merge([
-            'user_id'          => $user->id,
-            'plan_id'          => $plan->id,
-            'status'           => UserService::STATUS_ACTIVE,
+            'user_id' => $user->id,
+            'plan_id' => $plan->id,
+            'status' => UserService::STATUS_ACTIVE,
             'provision_status' => UserService::PROVISION_PROVISIONED,
-            'plan_name'        => $plan->name,
+            'plan_name' => $plan->name,
             'traffic_total_gb' => 20,
-            'traffic_used_gb'  => 8,
-            'expires_at'       => now()->addDays(10),
+            'traffic_used_gb' => 8,
+            'expires_at' => now()->addDays(10),
         ], $overrides));
     }
 
     private function makeTrafficOrder(UserService $service, int $gb, array $overrides = []): Order
     {
         $price = $gb * 1000;
+
         return Order::create(array_merge([
-            'order_type'          => Order::TYPE_EXTRA_TRAFFIC,
-            'user_id'             => $service->user_id,
-            'user_service_id'     => $service->id,
-            'plan_name'           => $service->plan_name,
-            'extra_traffic_gb'    => $gb,
-            'unit_price'          => 1000,
+            'order_type' => Order::TYPE_EXTRA_TRAFFIC,
+            'user_id' => $service->user_id,
+            'user_service_id' => $service->id,
+            'plan_name' => $service->plan_name,
+            'extra_traffic_gb' => $gb,
+            'unit_price' => 1000,
             'original_data_limit' => (int) ($service->traffic_total_gb * self::BYTES_PER_GB),
-            'new_data_limit'      => (int) (($service->traffic_total_gb + $gb) * self::BYTES_PER_GB),
-            'price_toman'         => $price,
-            'final_price_toman'   => $price,
-            'discount_toman'      => 0,
-            'status'              => Order::STATUS_PAID,
-            'payment_status'      => Order::PAYMENT_PAID,
-            'paid_at'             => now(),
+            'new_data_limit' => (int) (($service->traffic_total_gb + $gb) * self::BYTES_PER_GB),
+            'price_toman' => $price,
+            'final_price_toman' => $price,
+            'discount_toman' => 0,
+            'status' => Order::STATUS_PAID,
+            'payment_status' => Order::PAYMENT_PAID,
+            'paid_at' => now(),
         ], $overrides));
     }
 
     private function makeTimeOrder(UserService $service, int $days, array $overrides = []): Order
     {
         $price = $days * 2000;
+
         return Order::create(array_merge([
-            'order_type'         => Order::TYPE_EXTRA_TIME,
-            'user_id'            => $service->user_id,
-            'user_service_id'    => $service->id,
-            'plan_name'          => $service->plan_name,
-            'extra_time_days'    => $days,
-            'unit_price'         => 2000,
+            'order_type' => Order::TYPE_EXTRA_TIME,
+            'user_id' => $service->user_id,
+            'user_service_id' => $service->id,
+            'plan_name' => $service->plan_name,
+            'extra_time_days' => $days,
+            'unit_price' => 2000,
             'original_expire_at' => $service->expires_at,
-            'price_toman'        => $price,
-            'final_price_toman'  => $price,
-            'discount_toman'     => 0,
-            'status'             => Order::STATUS_PAID,
-            'payment_status'     => Order::PAYMENT_PAID,
-            'paid_at'            => now(),
+            'price_toman' => $price,
+            'final_price_toman' => $price,
+            'discount_toman' => 0,
+            'status' => Order::STATUS_PAID,
+            'payment_status' => Order::PAYMENT_PAID,
+            'paid_at' => now(),
         ], $overrides));
     }
 
     private function makePaidTx(Order $order, User $user): PaymentTransaction
     {
         return PaymentTransaction::create([
-            'order_id'        => $order->id,
-            'user_id'         => $user->id,
-            'provider'        => 'wallet',
-            'status'          => PaymentTransaction::STATUS_APPROVED,
-            'amount_toman'    => $order->final_price_toman,
+            'order_id' => $order->id,
+            'user_id' => $user->id,
+            'provider' => 'wallet',
+            'status' => PaymentTransaction::STATUS_APPROVED,
+            'amount_toman' => $order->final_price_toman,
             'payment_purpose' => 'order_payment',
-            'paid_at'         => now(),
+            'paid_at' => now(),
         ]);
     }
 
@@ -167,7 +169,7 @@ class ServiceAddonTest extends TestCase
 
     public function test_extra_traffic_page_shows_input_not_plan_selection(): void
     {
-        $user    = $this->makeUser();
+        $user = $this->makeUser();
         $service = $this->makeService($user, ['remote_username' => 'u1']);
 
         $response = $this->actingAs($user)->get(route('dashboard.services.extra-traffic', $service));
@@ -180,7 +182,7 @@ class ServiceAddonTest extends TestCase
 
     public function test_extra_time_page_shows_input_not_plan_selection(): void
     {
-        $user    = $this->makeUser();
+        $user = $this->makeUser();
         $service = $this->makeService($user, ['remote_username' => 'u1']);
 
         $response = $this->actingAs($user)->get(route('dashboard.services.extra-time', $service));
@@ -208,7 +210,7 @@ class ServiceAddonTest extends TestCase
 
     public function test_extra_traffic_page_redirects_for_unlimited_traffic(): void
     {
-        $user    = $this->makeUser();
+        $user = $this->makeUser();
         $service = $this->makeService($user, ['traffic_total_gb' => null, 'remote_username' => 'u1']);
 
         $this->actingAs($user)
@@ -218,7 +220,7 @@ class ServiceAddonTest extends TestCase
 
     public function test_extra_time_page_redirects_for_service_without_expiry(): void
     {
-        $user    = $this->makeUser();
+        $user = $this->makeUser();
         $service = $this->makeService($user, ['expires_at' => null, 'remote_username' => 'u1']);
 
         $this->actingAs($user)
@@ -230,7 +232,7 @@ class ServiceAddonTest extends TestCase
     {
         SiteSetting::set('extra_traffic_price_per_gb', '');
 
-        $user    = $this->makeUser();
+        $user = $this->makeUser();
         $service = $this->makeService($user, ['remote_username' => 'u1']);
 
         $this->actingAs($user)
@@ -242,7 +244,7 @@ class ServiceAddonTest extends TestCase
 
     public function test_submit_extra_traffic_creates_order_and_redirects_to_payment(): void
     {
-        $user    = $this->makeUser();
+        $user = $this->makeUser();
         $service = $this->makeService($user, ['remote_username' => 'u1']);
 
         $response = $this->actingAs($user)
@@ -258,7 +260,7 @@ class ServiceAddonTest extends TestCase
 
     public function test_submit_extra_time_creates_order_and_redirects_to_payment(): void
     {
-        $user    = $this->makeUser();
+        $user = $this->makeUser();
         $service = $this->makeService($user, ['remote_username' => 'u1']);
 
         $response = $this->actingAs($user)
@@ -274,7 +276,7 @@ class ServiceAddonTest extends TestCase
     public function test_amount_below_min_is_rejected(): void
     {
         SiteSetting::set('extra_traffic_min_gb', 5);
-        $user    = $this->makeUser();
+        $user = $this->makeUser();
         $service = $this->makeService($user, ['remote_username' => 'u1']);
 
         $this->actingAs($user)
@@ -287,7 +289,7 @@ class ServiceAddonTest extends TestCase
     public function test_amount_above_max_is_rejected(): void
     {
         SiteSetting::set('extra_traffic_max_gb', 50);
-        $user    = $this->makeUser();
+        $user = $this->makeUser();
         $service = $this->makeService($user, ['remote_username' => 'u1']);
 
         $this->actingAs($user)
@@ -297,7 +299,7 @@ class ServiceAddonTest extends TestCase
 
     public function test_create_traffic_order_throws_for_unlimited_service(): void
     {
-        $user    = $this->makeUser();
+        $user = $this->makeUser();
         $service = $this->makeService($user, ['traffic_total_gb' => null]);
 
         $this->expectException(\InvalidArgumentException::class);
@@ -306,7 +308,7 @@ class ServiceAddonTest extends TestCase
 
     public function test_create_time_order_throws_for_service_without_expiry(): void
     {
-        $user    = $this->makeUser();
+        $user = $this->makeUser();
         $service = $this->makeService($user, ['expires_at' => null]);
 
         $this->expectException(\InvalidArgumentException::class);
@@ -317,9 +319,9 @@ class ServiceAddonTest extends TestCase
 
     public function test_extra_traffic_increases_data_limit_without_resetting_used(): void
     {
-        $user    = $this->makeUser();
+        $user = $this->makeUser();
         $service = $this->makeService($user, ['traffic_total_gb' => 20, 'traffic_used_gb' => 8, 'remote_username' => 'u1']);
-        $order   = $this->makeTrafficOrder($service, 20);
+        $order = $this->makeTrafficOrder($service, 20);
 
         $this->mock(MarzbanClient::class)->shouldReceive('updateUser')->once()->andReturn([]);
 
@@ -334,9 +336,9 @@ class ServiceAddonTest extends TestCase
 
     public function test_extra_traffic_marzban_payload_uses_correct_bytes(): void
     {
-        $user    = $this->makeUser();
+        $user = $this->makeUser();
         $service = $this->makeService($user, ['traffic_total_gb' => 20, 'remote_username' => 'u1']);
-        $order   = $this->makeTrafficOrder($service, 20);
+        $order = $this->makeTrafficOrder($service, 20);
 
         $expectedBytes = 40 * self::BYTES_PER_GB;
 
@@ -356,10 +358,10 @@ class ServiceAddonTest extends TestCase
 
     public function test_extra_time_extends_from_current_expiry_if_active(): void
     {
-        $user    = $this->makeUser();
-        $expiry  = now()->addDays(10);
+        $user = $this->makeUser();
+        $expiry = now()->addDays(10);
         $service = $this->makeService($user, ['expires_at' => $expiry, 'remote_username' => 'u1']);
-        $order   = $this->makeTimeOrder($service, 7);
+        $order = $this->makeTimeOrder($service, 7);
 
         $this->mock(MarzbanClient::class)->shouldReceive('updateUser')->once()->andReturn([]);
 
@@ -377,10 +379,10 @@ class ServiceAddonTest extends TestCase
     {
         SiteSetting::set('extra_addon_apply_to_expired_services', 'true');
 
-        $user    = $this->makeUser();
+        $user = $this->makeUser();
         $service = $this->makeService($user, [
-            'status'      => UserService::STATUS_EXPIRED,
-            'expires_at'  => now()->subDays(5),
+            'status' => UserService::STATUS_EXPIRED,
+            'expires_at' => now()->subDays(5),
             'remote_username' => 'u1',
         ]);
         $order = $this->makeTimeOrder($service, 7);
@@ -396,9 +398,9 @@ class ServiceAddonTest extends TestCase
 
     public function test_extra_time_marzban_payload_updates_expire_only(): void
     {
-        $user    = $this->makeUser();
+        $user = $this->makeUser();
         $service = $this->makeService($user, ['remote_username' => 'u1']);
-        $order   = $this->makeTimeOrder($service, 7);
+        $order = $this->makeTimeOrder($service, 7);
 
         $this->mock(MarzbanClient::class)
             ->shouldReceive('updateUser')
@@ -413,9 +415,9 @@ class ServiceAddonTest extends TestCase
 
     public function test_apply_extra_traffic_is_idempotent(): void
     {
-        $user    = $this->makeUser();
+        $user = $this->makeUser();
         $service = $this->makeService($user, ['traffic_total_gb' => 20, 'remote_username' => 'u1']);
-        $order   = $this->makeTrafficOrder($service, 20);
+        $order = $this->makeTrafficOrder($service, 20);
 
         $this->mock(MarzbanClient::class)->shouldReceive('updateUser')->once()->andReturn([]);
 
@@ -428,10 +430,10 @@ class ServiceAddonTest extends TestCase
 
     public function test_duplicate_ipn_does_not_apply_addon_twice(): void
     {
-        $user    = $this->makeUser(['wallet_balance_toman' => 100000]);
+        $user = $this->makeUser(['wallet_balance_toman' => 100000]);
         $service = $this->makeService($user, ['traffic_total_gb' => 20, 'remote_username' => 'u1']);
-        $order   = $this->makeTrafficOrder($service, 20);
-        $tx      = $this->makePaidTx($order, $user);
+        $order = $this->makeTrafficOrder($service, 20);
+        $tx = $this->makePaidTx($order, $user);
 
         $this->mock(MarzbanClient::class)->shouldReceive('updateUser')->once()->andReturn([]);
 
@@ -444,12 +446,12 @@ class ServiceAddonTest extends TestCase
 
     public function test_mark_order_paid_routes_extra_traffic_to_addon_service(): void
     {
-        $user    = $this->makeUser();
+        $user = $this->makeUser();
         $service = $this->makeService($user, ['traffic_total_gb' => 20, 'remote_username' => 'u1']);
-        $order   = $this->makeTrafficOrder($service, 20, [
-            'status'         => Order::STATUS_AWAITING_PAYMENT,
+        $order = $this->makeTrafficOrder($service, 20, [
+            'status' => Order::STATUS_AWAITING_PAYMENT,
             'payment_status' => Order::PAYMENT_UNPAID,
-            'paid_at'        => null,
+            'paid_at' => null,
         ]);
         $tx = $this->makePaidTx($order, $user);
         $tx->update(['status' => PaymentTransaction::STATUS_PENDING]);
@@ -465,9 +467,9 @@ class ServiceAddonTest extends TestCase
 
     public function test_addon_does_not_create_new_user_service(): void
     {
-        $user    = $this->makeUser();
+        $user = $this->makeUser();
         $service = $this->makeService($user, ['remote_username' => 'u1']);
-        $order   = $this->makeTrafficOrder($service, 20);
+        $order = $this->makeTrafficOrder($service, 20);
 
         $this->mock(MarzbanClient::class)->shouldReceive('updateUser')->andReturn([]);
 
@@ -478,9 +480,9 @@ class ServiceAddonTest extends TestCase
 
     public function test_addon_does_not_create_new_marzban_user(): void
     {
-        $user    = $this->makeUser();
+        $user = $this->makeUser();
         $service = $this->makeService($user, ['remote_username' => 'u1']);
-        $order   = $this->makeTimeOrder($service, 7);
+        $order = $this->makeTimeOrder($service, 7);
 
         // Only updateUser is permitted; createUser must never be called.
         $mock = $this->mock(MarzbanClient::class);
@@ -494,9 +496,9 @@ class ServiceAddonTest extends TestCase
 
     public function test_marzban_failure_marks_addon_failed_and_keeps_payment(): void
     {
-        $user    = $this->makeUser();
+        $user = $this->makeUser();
         $service = $this->makeService($user, ['remote_username' => 'u1', 'traffic_total_gb' => 20]);
-        $order   = $this->makeTrafficOrder($service, 20);
+        $order = $this->makeTrafficOrder($service, 20);
 
         $this->mock(MarzbanClient::class)
             ->shouldReceive('updateUser')
@@ -514,9 +516,9 @@ class ServiceAddonTest extends TestCase
 
     public function test_admin_retry_applies_failed_addon(): void
     {
-        $user    = $this->makeUser();
+        $user = $this->makeUser();
         $service = $this->makeService($user, ['remote_username' => 'u1', 'traffic_total_gb' => 20]);
-        $order   = $this->makeTrafficOrder($service, 20, ['status' => Order::STATUS_ADDON_FAILED]);
+        $order = $this->makeTrafficOrder($service, 20, ['status' => Order::STATUS_ADDON_FAILED]);
 
         $this->mock(MarzbanClient::class)->shouldReceive('updateUser')->once()->andReturn([]);
 
@@ -530,12 +532,12 @@ class ServiceAddonTest extends TestCase
 
     public function test_wallet_extra_traffic_payment_applies(): void
     {
-        $user    = $this->makeUser(['wallet_balance_toman' => 100000]);
+        $user = $this->makeUser(['wallet_balance_toman' => 100000]);
         $service = $this->makeService($user, ['traffic_total_gb' => 20, 'remote_username' => 'u1']);
-        $order   = $this->makeTrafficOrder($service, 20, [
-            'status'         => Order::STATUS_AWAITING_PAYMENT,
+        $order = $this->makeTrafficOrder($service, 20, [
+            'status' => Order::STATUS_AWAITING_PAYMENT,
             'payment_status' => Order::PAYMENT_UNPAID,
-            'paid_at'        => null,
+            'paid_at' => null,
         ]);
         $tx = $this->makePaidTx($order, $user);
 
@@ -548,13 +550,13 @@ class ServiceAddonTest extends TestCase
 
     public function test_wallet_extra_time_payment_applies(): void
     {
-        $user    = $this->makeUser(['wallet_balance_toman' => 100000]);
-        $expiry  = now()->addDays(10);
+        $user = $this->makeUser(['wallet_balance_toman' => 100000]);
+        $expiry = now()->addDays(10);
         $service = $this->makeService($user, ['expires_at' => $expiry, 'remote_username' => 'u1']);
-        $order   = $this->makeTimeOrder($service, 7, [
-            'status'         => Order::STATUS_AWAITING_PAYMENT,
+        $order = $this->makeTimeOrder($service, 7, [
+            'status' => Order::STATUS_AWAITING_PAYMENT,
             'payment_status' => Order::PAYMENT_UNPAID,
-            'paid_at'        => null,
+            'paid_at' => null,
         ]);
         $tx = $this->makePaidTx($order, $user);
 
@@ -569,14 +571,14 @@ class ServiceAddonTest extends TestCase
 
     public function test_financial_report_counts_addons_as_sales(): void
     {
-        $user    = $this->makeUser();
+        $user = $this->makeUser();
         $service = $this->makeService($user);
         $this->makeTrafficOrder($service, 20); // 20000 toman, paid
         $this->makeTimeOrder($service, 7);     // 14000 toman, paid
 
-        $report = app(\App\Filament\Pages\FinancialReport::class);
+        $report = app(FinancialReport::class);
         $report->dateFrom = now()->subDay()->format('Y-m-d');
-        $report->dateTo   = now()->addDay()->format('Y-m-d');
+        $report->dateTo = now()->addDay()->format('Y-m-d');
 
         $this->assertSame(20000, $report->getExtraTrafficSalesRange());
         $this->assertSame(1, $report->getExtraTrafficOrdersRange());
@@ -587,7 +589,7 @@ class ServiceAddonTest extends TestCase
 
     public function test_extra_traffic_amount_validation_rejects_non_integer(): void
     {
-        $user    = $this->makeUser();
+        $user = $this->makeUser();
         $service = $this->makeService($user, ['remote_username' => 'u1']);
 
         $this->actingAs($user)

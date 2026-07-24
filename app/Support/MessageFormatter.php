@@ -25,12 +25,13 @@ class MessageFormatter
                 // Trim trailing punctuation that is unlikely to be part of the URL.
                 $trail = '';
                 while ($url !== '' && in_array(substr($url, -1), ['.', ',', ')', ']', '!', '?', ':', ';'], true)) {
-                    $trail = substr($url, -1) . $trail;
-                    $url   = substr($url, 0, -1);
+                    $trail = substr($url, -1).$trail;
+                    $url = substr($url, 0, -1);
                 }
+
                 // $url is already HTML-escaped; safe to place in href/text.
-                return '<a href="' . $url . '" target="_blank" rel="noopener nofollow" class="underline break-all">'
-                    . $url . '</a>' . $trail;
+                return '<a href="'.$url.'" target="_blank" rel="noopener nofollow" class="underline break-all">'
+                    .$url.'</a>'.$trail;
             },
             $escaped,
         );

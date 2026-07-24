@@ -182,6 +182,108 @@ Then log in at `/zed-admin`.
 
 Alternatively, the `install.sh` script creates the admin user automatically during installation using the credentials you enter at the prompts.
 
+## Continuous Integration (CI)
+
+All checks run from a single GitHub Actions workflow, **`.github/workflows/ci.yml`** (workflow name **CI**). It triggers on pushes to `main`, `fix/**`, `feat/**`, `chore/**`, and `hardening/**`, on pull requests targeting `main`, and via manual `workflow_dispatch`. Superseded runs on the same ref are auto-cancelled (`concurrency`), and the workflow uses least-privilege permissions (`contents: read` by default).
+
+### Jobs and required status checks
+
+Each job publishes a stable check name suitable for branch protection:
+
+| Required check | Purpose |
+| --- | --- |
+| **PHP Tests (SQLite)** | Full Laravel test suite on the in-memory SQLite config, then `config:cache` + `route:cache` + `view:cache` to prove the app boots and compiles in production mode. |
+| **Integration Tests (PostgreSQL)** | Real PostgreSQL 16 + Redis 7 services. Runs the financial and concurrency-sensitive suites (provisioning, payment, wallet, commission, renewal/add-ons, discount concurrency, order idempotency incl. the forked real-concurrency test) plus scheduler locking and a real-Redis backup-lock test. |
+| **Code Style** | `composer validate --strict`, optimized autoload generation (`--strict-psr`), `php -l` syntax lint, and `vendor/bin/pint --test`. |
+| **Frontend Build** | `npm ci` (locked) + `npm run build`, and asserts `public/build/manifest.json` exists. |
+| **Shell Tests** | `bash -n` on every script, ShellCheck (errors only), and the mocked installer/deploy helper tests (no real infrastructure is touched). |
+| **Security Audit** | `composer audit` + `npm audit` (severity policy below), gitleaks secret scan, committed-`.env` and private-key detection, and best-effort dependency review on PRs. |
+| **Migration Validation** | Fresh PostgreSQL migrate, `migrate:status` (no pending), idempotent re-run, PostgreSQL partial-index presence, and the duplicate-data guard. |
+
+### Supported runtime versions
+
+| Component | Version in CI |
+| --- | --- |
+| PHP | 8.3 |
+| PostgreSQL | 16 |
+| Redis | 7 |
+| Node.js | 22 |
+
+These match production; the installer provisions the same major versions.
+
+### Which tests require PostgreSQL
+
+Tests that validate real locks, partial unique indexes, deadlocks, or concurrent connections **must** run on PostgreSQL and are exercised only in *Integration Tests (PostgreSQL)*:
+
+- `OrderIdempotencyPgTest`, `DiscountConcurrencyPgTest`, `ProvisioningConcurrencyTest` (forked, multi-connection; skipped on SQLite/without `pcntl`).
+- The partial unique indexes (`orders_user_fingerprint_unpaid_unique`, `user_services_order_id_unique`) and the migration duplicate guards.
+
+The rest of the suite runs on SQLite in *PHP Tests (SQLite)*.
+
+### Local commands matching CI
+
+```bash
+# PHP Tests (SQLite)
+composer install --no-interaction --prefer-dist --no-progress
+php artisan test
+php artisan config:cache && php artisan route:cache && php artisan view:cache
+
+# Code Style
+composer validate --strict --no-check-publish
+composer dump-autoload --optimize --strict-psr
+vendor/bin/pint --test        # add no flag to auto-fix
+
+# Frontend Build
+npm ci && npm run build
+
+# Shell Tests
+bash tests/installer/run-tests.sh
+bash tests/deploy/run-tests.sh
+
+# Security Audit
+composer audit --abandoned=report
+npm audit --audit-level=high
+
+# Integration / Migration (needs a local Postgres + Redis)
+DB_CONNECTION=pgsql php artisan migrate --force
+DB_CONNECTION=pgsql php artisan test --testsuite=Feature \
+  --filter='OrderIdempotencyPgTest|DiscountConcurrencyPgTest|ProvisioningConcurrencyTest'
+```
+
+### Audit / severity policy
+
+- **Composer:** **high** and **critical** advisories fail the build; medium/low are reported as warnings (parsed from `composer audit --format=json`), and abandoned packages are ignored.
+- **npm:** **high** and **critical** advisories fail; lower severities are reported as warnings.
+- **Secrets:** gitleaks runs with `--redact` so discovered values are never printed; a tracked real `.env` or an embedded private key fails the job.
+- **Dependency review:** GitHub's Dependency Review augments the audits on PRs but is best-effort (`continue-on-error`) because it needs the Dependency Graph API, which is not available on every private plan — `composer audit` and `npm audit` remain the enforced gates.
+
+### Caching
+
+Composer and npm **download** caches are keyed on `composer.lock` / `package-lock.json` hashes. Application state that could contain secrets — `.env`, `vendor` across incompatible locks, database directories, Laravel caches, and runtime `storage/` — is never cached.
+
+### Action pinning
+
+Official/first-party actions are pinned to stable major versions (`actions/checkout@v4`, `actions/cache@v4`, `actions/setup-node@v4`, `actions/upload-artifact@v4`, `shivammathur/setup-php@v2`, `actions/dependency-review-action@v4`). gitleaks is installed from a version-pinned release tarball rather than a third-party action. **Update policy:** bump majors deliberately in a dedicated PR and let the full pipeline validate them before merge.
+
+### Rerunning a failed workflow
+
+- From the PR/commit **Checks** tab, open the run and choose **Re-run failed jobs** (or **Re-run all jobs**).
+- Or push a new commit / use the **Run workflow** button (`workflow_dispatch`) on the Actions tab.
+- CLI: `gh run rerun <run-id> --failed`.
+
+Never make a required job `continue-on-error` to get a green result — inspect the logs and fix the cause.
+
+## Recommended branch protection for `main`
+
+Configure these in **Settings → Branches → Branch protection rules** (requires admin; this repository's protection settings are **not** modified by CI):
+
+- **Require a pull request before merging**, with at least **1 approval** (raise for shared/production repos).
+- **Require status checks to pass**, selecting all seven: `PHP Tests (SQLite)`, `Integration Tests (PostgreSQL)`, `Code Style`, `Frontend Build`, `Shell Tests`, `Security Audit`, `Migration Validation` — and **require branches to be up to date**.
+- **Require conversation resolution** before merging.
+- **Do not allow force pushes** and **do not allow deletions** of `main`.
+- **Optionally require signed commits.**
+- **No direct production deployment from an untested commit** — deploy only from a `main` commit whose CI is green (see the deployment scripts under `scripts/deploy/`).
+
 ## Database backup
 
 ### Create a backup

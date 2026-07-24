@@ -23,7 +23,7 @@ class SeoTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
-        (new SeoPageSeeder())->run();
+        (new SeoPageSeeder)->run();
         SeoSettings::flush();
     }
 
@@ -31,6 +31,7 @@ class SeoTest extends TestCase
     private function jsonLd(string $html): array
     {
         preg_match_all('#<script type="application/ld\+json">(.*?)</script>#s', $html, $m);
+
         return array_map(fn ($j) => json_decode($j, true), $m[1]);
     }
 
@@ -54,7 +55,7 @@ class SeoTest extends TestCase
     {
         $html = $this->get('/')->getContent();
         foreach (['og:title', 'og:description', 'og:type', 'og:url', 'og:site_name', 'og:locale'] as $t) {
-            $this->assertStringContainsString('property="' . $t . '"', $html, "missing {$t}");
+            $this->assertStringContainsString('property="'.$t.'"', $html, "missing {$t}");
         }
         $this->assertStringContainsString('name="twitter:card"', $html);
     }

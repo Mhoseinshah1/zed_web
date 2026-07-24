@@ -15,14 +15,19 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  */
 class PurchaseIntent extends Model
 {
-    const STATUS_PENDING  = 'pending';
-    const STATUS_CONSUMED = 'consumed';
-    const STATUS_EXPIRED  = 'expired';
+    const STATUS_PENDING = 'pending';
 
-    const OP_NEW_SERVICE   = 'new_service';
-    const OP_RENEWAL       = 'renewal';
+    const STATUS_CONSUMED = 'consumed';
+
+    const STATUS_EXPIRED = 'expired';
+
+    const OP_NEW_SERVICE = 'new_service';
+
+    const OP_RENEWAL = 'renewal';
+
     const OP_EXTRA_TRAFFIC = 'extra_traffic';
-    const OP_EXTRA_TIME    = 'extra_time';
+
+    const OP_EXTRA_TIME = 'extra_time';
 
     protected $fillable = [
         'key',
@@ -38,7 +43,7 @@ class PurchaseIntent extends Model
     ];
 
     protected $casts = [
-        'expires_at'  => 'datetime',
+        'expires_at' => 'datetime',
         'consumed_at' => 'datetime',
     ];
 

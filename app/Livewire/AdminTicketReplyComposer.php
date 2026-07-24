@@ -67,7 +67,7 @@ class AdminTicketReplyComposer extends Component implements HasForms
 
     public function send(): void
     {
-        $state    = $this->form->getState();
+        $state = $this->form->getState();
         $internal = (bool) ($state['is_internal_note'] ?? false);
 
         $service = app(SupportTicketService::class);

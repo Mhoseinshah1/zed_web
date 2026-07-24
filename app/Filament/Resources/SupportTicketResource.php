@@ -14,16 +14,22 @@ class SupportTicketResource extends Resource
 {
     protected static ?string $model = SupportTicket::class;
 
-    protected static ?string $navigationIcon   = 'heroicon-o-lifebuoy';
-    protected static ?string $navigationGroup   = 'پشتیبانی';
-    protected static ?string $navigationLabel   = 'تیکت‌ها';
-    protected static ?string $modelLabel        = 'تیکت';
-    protected static ?string $pluralModelLabel  = 'تیکت‌ها';
-    protected static ?int    $navigationSort    = 10;
+    protected static ?string $navigationIcon = 'heroicon-o-lifebuoy';
+
+    protected static ?string $navigationGroup = 'پشتیبانی';
+
+    protected static ?string $navigationLabel = 'تیکت‌ها';
+
+    protected static ?string $modelLabel = 'تیکت';
+
+    protected static ?string $pluralModelLabel = 'تیکت‌ها';
+
+    protected static ?int $navigationSort = 10;
 
     public static function getNavigationBadge(): ?string
     {
         $count = static::getModel()::query()->where('admin_unread', true)->count();
+
         return $count > 0 ? (string) $count : null;
     }
 
@@ -75,17 +81,17 @@ class SupportTicketResource extends Resource
                         'primary' => [SupportTicket::STATUS_OPEN, SupportTicket::STATUS_WAITING_ADMIN],
                         'warning' => [SupportTicket::STATUS_WAITING_USER],
                         'success' => [SupportTicket::STATUS_ANSWERED],
-                        'gray'    => [SupportTicket::STATUS_CLOSED],
+                        'gray' => [SupportTicket::STATUS_CLOSED],
                     ]),
 
                 Tables\Columns\BadgeColumn::make('priority')
                     ->label('اولویت')
                     ->formatStateUsing(fn ($state) => SupportTicket::priorities()[$state] ?? $state)
                     ->colors([
-                        'gray'    => [SupportTicket::PRIORITY_LOW],
+                        'gray' => [SupportTicket::PRIORITY_LOW],
                         'primary' => [SupportTicket::PRIORITY_NORMAL],
                         'warning' => [SupportTicket::PRIORITY_HIGH],
-                        'danger'  => [SupportTicket::PRIORITY_URGENT],
+                        'danger' => [SupportTicket::PRIORITY_URGENT],
                     ]),
 
                 Tables\Columns\TextColumn::make('assignedAdmin.username')
@@ -119,7 +125,7 @@ class SupportTicketResource extends Resource
     {
         return [
             'index' => Pages\ListSupportTickets::route('/'),
-            'view'  => Pages\ViewSupportTicket::route('/{record}'),
+            'view' => Pages\ViewSupportTicket::route('/{record}'),
         ];
     }
 }

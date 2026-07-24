@@ -27,6 +27,7 @@ class ThemeSettingsService
     public static function get(string $key, mixed $default = null): mixed
     {
         $memo = self::memo();
+
         return array_key_exists($key, $memo) ? $memo[$key] : $default;
     }
 
@@ -44,6 +45,7 @@ class ThemeSettingsService
                 return $memo[$key];
             }
         }
+
         return $default;
     }
 
@@ -84,6 +86,7 @@ class ThemeSettingsService
                 self::$memo[$k] = self::cast($v);
             }
         }
+
         return self::$memo;
     }
 
@@ -99,6 +102,7 @@ class ThemeSettingsService
         if (is_string($value) && is_numeric($value) && ! str_contains($value, '.')) {
             return (int) $value;
         }
+
         return $value;
     }
 }

@@ -40,7 +40,7 @@ class PhoneNumber
             return null;
         }
 
-        return '+98' . $digits;
+        return '+98'.$digits;
     }
 
     public static function isValid(?string $raw): bool

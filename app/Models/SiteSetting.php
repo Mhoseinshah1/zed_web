@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Services\Theme\ThemeSettingsService;
 use Illuminate\Database\Eloquent\Model;
 
 class SiteSetting extends Model
@@ -16,9 +17,15 @@ class SiteSetting extends Model
         }
 
         $value = $setting->value;
-        if ($value === 'true')  return true;
-        if ($value === 'false') return false;
-        if (is_numeric($value) && strpos($value, '.') === false) return (int) $value;
+        if ($value === 'true') {
+            return true;
+        }
+        if ($value === 'false') {
+            return false;
+        }
+        if (is_numeric($value) && strpos($value, '.') === false) {
+            return (int) $value;
+        }
 
         return $value;
     }
@@ -29,8 +36,8 @@ class SiteSetting extends Model
 
         // Invalidate the theme settings memo so any visual change is picked up
         // on the very next read — no manual cache:clear required.
-        if (class_exists(\App\Services\Theme\ThemeSettingsService::class)) {
-            \App\Services\Theme\ThemeSettingsService::flush();
+        if (class_exists(ThemeSettingsService::class)) {
+            ThemeSettingsService::flush();
         }
     }
 }

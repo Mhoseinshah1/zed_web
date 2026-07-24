@@ -21,12 +21,17 @@ class FailedOperationResource extends Resource
 {
     protected static ?string $model = Order::class;
 
-    protected static ?string $navigationIcon   = 'heroicon-o-exclamation-triangle';
-    protected static ?string $navigationGroup   = 'سرویس‌ها و پنل‌های VPN';
-    protected static ?string $navigationLabel   = 'عملیات‌های ناموفق';
-    protected static ?string $modelLabel        = 'عملیات ناموفق';
-    protected static ?string $pluralModelLabel  = 'عملیات‌های ناموفق';
-    protected static ?int    $navigationSort    = 50;
+    protected static ?string $navigationIcon = 'heroicon-o-exclamation-triangle';
+
+    protected static ?string $navigationGroup = 'سرویس‌ها و پنل‌های VPN';
+
+    protected static ?string $navigationLabel = 'عملیات‌های ناموفق';
+
+    protected static ?string $modelLabel = 'عملیات ناموفق';
+
+    protected static ?string $pluralModelLabel = 'عملیات‌های ناموفق';
+
+    protected static ?int $navigationSort = 50;
 
     public static function getEloquentQuery(): Builder
     {
@@ -36,6 +41,7 @@ class FailedOperationResource extends Resource
     public static function getNavigationBadge(): ?string
     {
         $count = static::getEloquentQuery()->whereNull('failure_reviewed_at')->count();
+
         return $count > 0 ? (string) $count : null;
     }
 
@@ -56,7 +62,7 @@ class FailedOperationResource extends Resource
                 Tables\Columns\TextColumn::make('user.phone')->label('شماره موبایل')->placeholder('—'),
                 Tables\Columns\TextColumn::make('user_service_id')->label('شناسه سرویس')->placeholder('—'),
                 Tables\Columns\TextColumn::make('final_price_toman')
-                    ->label('مبلغ')->formatStateUsing(fn ($state) => number_format((int) $state) . ' تومان'),
+                    ->label('مبلغ')->formatStateUsing(fn ($state) => number_format((int) $state).' تومان'),
                 Tables\Columns\TextColumn::make('status')
                     ->label('وضعیت')
                     ->formatStateUsing(fn ($state) => Order::allStatuses()[$state] ?? $state)

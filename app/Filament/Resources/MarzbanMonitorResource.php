@@ -23,12 +23,17 @@ class MarzbanMonitorResource extends Resource
 {
     protected static ?string $model = UserService::class;
 
-    protected static ?string $navigationIcon   = 'heroicon-o-signal';
-    protected static ?string $navigationGroup   = 'سرویس‌ها و پنل‌های VPN';
-    protected static ?string $navigationLabel   = 'مانیتورینگ پنل‌ها';
-    protected static ?string $modelLabel        = 'سرویس Marzban';
-    protected static ?string $pluralModelLabel  = 'مانیتورینگ Marzban';
-    protected static ?int    $navigationSort    = 40;
+    protected static ?string $navigationIcon = 'heroicon-o-signal';
+
+    protected static ?string $navigationGroup = 'سرویس‌ها و پنل‌های VPN';
+
+    protected static ?string $navigationLabel = 'مانیتورینگ پنل‌ها';
+
+    protected static ?string $modelLabel = 'سرویس Marzban';
+
+    protected static ?string $pluralModelLabel = 'مانیتورینگ Marzban';
+
+    protected static ?int $navigationSort = 40;
 
     public static function table(Table $table): Table
     {
@@ -53,9 +58,9 @@ class MarzbanMonitorResource extends Resource
                     ->formatStateUsing(fn ($state) => $state ? (UserService::allSyncStatuses()[$state] ?? $state) : '—')
                     ->colors([
                         'success' => [UserService::SYNC_SYNCED],
-                        'danger'  => [UserService::SYNC_FAILED, UserService::SYNC_NOT_FOUND],
+                        'danger' => [UserService::SYNC_FAILED, UserService::SYNC_NOT_FOUND],
                         'warning' => [UserService::SYNC_PENDING],
-                        'gray'    => [UserService::SYNC_DISABLED],
+                        'gray' => [UserService::SYNC_DISABLED],
                     ]),
                 Tables\Columns\TextColumn::make('sync_error')->label('خطای سینک')->limit(40)->placeholder('—')->toggleable(),
             ])

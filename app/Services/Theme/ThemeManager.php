@@ -16,8 +16,10 @@ use App\Models\User;
 class ThemeManager
 {
     public const SURFACE_PUBLIC = 'public';
-    public const SURFACE_USER   = 'user';
-    public const SURFACE_ADMIN  = 'admin';
+
+    public const SURFACE_USER = 'user';
+
+    public const SURFACE_ADMIN = 'admin';
 
     public const DEFAULT_THEME = 'zed-ocean';
 
@@ -149,7 +151,8 @@ class ThemeManager
         if (self::isValidPreset($key)) {
             return $key;
         }
-        $prefixed = 'zed-' . ltrim($key, '-');
+        $prefixed = 'zed-'.ltrim($key, '-');
+
         return self::isValidPreset($prefixed) ? $prefixed : null;
     }
 
@@ -164,6 +167,7 @@ class ThemeManager
         foreach (self::presets() as $key => $preset) {
             $groups[$preset['group']][] = $key;
         }
+
         return $groups;
     }
 
@@ -178,10 +182,11 @@ class ThemeManager
     public static function defaultTheme(string $surface): string
     {
         $key = match ($surface) {
-            self::SURFACE_USER  => (string) SiteSetting::get('default_theme_user', self::DEFAULT_THEME),
+            self::SURFACE_USER => (string) SiteSetting::get('default_theme_user', self::DEFAULT_THEME),
             self::SURFACE_ADMIN => (string) SiteSetting::get('default_theme_admin', self::DEFAULT_THEME),
-            default             => (string) SiteSetting::get('default_theme_public', self::DEFAULT_THEME),
+            default => (string) SiteSetting::get('default_theme_public', self::DEFAULT_THEME),
         };
+
         return self::normalize($key) ?? self::DEFAULT_THEME;
     }
 
@@ -199,6 +204,7 @@ class ThemeManager
                 $keys[] = $norm;
             }
         }
+
         return array_values(array_unique($keys)) ?: self::presetKeys();
     }
 
@@ -223,11 +229,12 @@ class ThemeManager
         $v = (string) SiteSetting::get('animation_intensity', 'medium');
         // Back-compat with the earlier none/subtle/rich vocabulary.
         $v = match ($v) {
-            'none'   => 'off',
+            'none' => 'off',
             'subtle' => 'low',
-            'rich'   => 'high',
-            default  => $v,
+            'rich' => 'high',
+            default => $v,
         };
+
         return in_array($v, ['off', 'low', 'medium', 'high'], true) ? $v : 'medium';
     }
 
@@ -258,6 +265,7 @@ class ThemeManager
                 return $pref;
             }
         }
+
         return (string) SiteSetting::get('default_appearance', 'dark');
     }
 
@@ -278,6 +286,7 @@ class ThemeManager
         if (self::animationIntensity() === 'off') {
             $classes[] = 'zed-anim-none';
         }
+
         return implode(' ', $classes);
     }
 
@@ -285,8 +294,8 @@ class ThemeManager
     public static function animationSpeed(): string
     {
         return match (self::animationIntensity()) {
-            'off'  => '0ms',
-            'low'  => '160ms',
+            'off' => '0ms',
+            'low' => '160ms',
             'high' => '320ms',
             default => '220ms',
         };
@@ -295,22 +304,22 @@ class ThemeManager
     /** Inline CSS custom properties from shape/density settings. */
     public static function inlineStyle(): string
     {
-        $cardRadius   = (string) SiteSetting::get('card_radius', '0.9rem');
+        $cardRadius = (string) SiteSetting::get('card_radius', '0.9rem');
         $buttonRadius = (string) SiteSetting::get('button_radius', '0.6rem');
-        $iconSize     = (string) SiteSetting::get('icon_size', '1.25rem');
-        $sidebarIcon  = (string) SiteSetting::get('sidebar_icon_size', '1.25rem');
-        $logoSize     = (string) SiteSetting::get('logo_size', '1.15rem');
-        $imageSize    = (string) SiteSetting::get('image_size', '2.5rem');
-        $fontScale    = (int) SiteSetting::get('font_scale', 100);
+        $iconSize = (string) SiteSetting::get('icon_size', '1.25rem');
+        $sidebarIcon = (string) SiteSetting::get('sidebar_icon_size', '1.25rem');
+        $logoSize = (string) SiteSetting::get('logo_size', '1.15rem');
+        $imageSize = (string) SiteSetting::get('image_size', '2.5rem');
+        $fontScale = (int) SiteSetting::get('font_scale', 100);
 
         $style = "--zp-card-radius:{$cardRadius};--zp-button-radius:{$buttonRadius};"
-            . "--zp-animation-speed:" . self::animationSpeed() . ";"
-            . "--zp-icon-size:{$iconSize};--zp-sidebar-icon-size:{$sidebarIcon};"
-            . "--zp-logo-size:{$logoSize};--zp-image-size:{$imageSize};";
+            .'--zp-animation-speed:'.self::animationSpeed().';'
+            ."--zp-icon-size:{$iconSize};--zp-sidebar-icon-size:{$sidebarIcon};"
+            ."--zp-logo-size:{$logoSize};--zp-image-size:{$imageSize};";
 
         if ($fontScale >= 80 && $fontScale <= 130 && $fontScale !== 100) {
-            $style .= '--zp-font-scale:' . round($fontScale / 100, 3) . ';';
-            $style .= 'font-size:' . round($fontScale / 100 * 16, 1) . 'px;';
+            $style .= '--zp-font-scale:'.round($fontScale / 100, 3).';';
+            $style .= 'font-size:'.round($fontScale / 100 * 16, 1).'px;';
         }
 
         // Apply the active preset's colour palette (+ brand overrides) to the
@@ -331,6 +340,7 @@ class ThemeManager
         if ($appearance !== 'system') {
             return '';
         }
+
         return <<<'JS'
 (function(){try{var m=window.matchMedia('(prefers-color-scheme: light)');
 var el=document.documentElement;

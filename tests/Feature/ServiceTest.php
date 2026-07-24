@@ -10,7 +10,6 @@ use App\Models\User;
 use App\Models\UserService;
 use App\Models\VpnInbound;
 use App\Models\VpnPanel;
-use App\Models\VpnServiceProvisionLog;
 use App\Services\PaymentService;
 use App\Services\ServiceProvisioner;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -28,10 +27,10 @@ class ServiceTest extends TestCase
     private function makePlan(int $price = 50000): Plan
     {
         return Plan::factory()->create([
-            'name'        => 'Test Plan',
+            'name' => 'Test Plan',
             'price_toman' => $price,
-            'is_active'   => true,
-            'traffic_gb'  => 20,
+            'is_active' => true,
+            'traffic_gb' => 20,
             'duration_days' => 30,
         ]);
     }
@@ -39,24 +38,24 @@ class ServiceTest extends TestCase
     private function makeOrder(User $user, Plan $plan): Order
     {
         return Order::create([
-            'user_id'           => $user->id,
-            'plan_id'           => $plan->id,
-            'plan_name'         => $plan->name,
-            'price_toman'       => $plan->price_toman,
+            'user_id' => $user->id,
+            'plan_id' => $plan->id,
+            'plan_name' => $plan->name,
+            'price_toman' => $plan->price_toman,
             'final_price_toman' => $plan->price_toman,
-            'traffic_gb'        => $plan->traffic_gb,
-            'duration_days'     => $plan->duration_days,
-            'status'            => Order::STATUS_PAID,
-            'payment_status'    => Order::PAYMENT_PAID,
+            'traffic_gb' => $plan->traffic_gb,
+            'duration_days' => $plan->duration_days,
+            'status' => Order::STATUS_PAID,
+            'payment_status' => Order::PAYMENT_PAID,
         ]);
     }
 
     private function makeManualMethod(): PaymentMethod
     {
         return PaymentMethod::create([
-            'title'     => 'پرداخت دستی',
-            'slug'      => 'manual-crypto',
-            'type'      => PaymentMethod::TYPE_MANUAL_CRYPTO,
+            'title' => 'پرداخت دستی',
+            'slug' => 'manual-crypto',
+            'type' => PaymentMethod::TYPE_MANUAL_CRYPTO,
             'is_active' => true,
         ]);
     }
@@ -65,51 +64,51 @@ class ServiceTest extends TestCase
 
     public function test_paid_order_approval_creates_one_pending_service(): void
     {
-        $admin  = $this->makeUser(['username' => 'admin_s', 'email' => 'admin_s@ex.com', 'is_admin' => true]);
-        $user   = $this->makeUser(['username' => 'customer_s', 'email' => 'cust_s@ex.com']);
-        $plan   = $this->makePlan();
-        $order  = Order::create([
-            'user_id'           => $user->id,
-            'plan_id'           => $plan->id,
-            'plan_name'         => $plan->name,
-            'price_toman'       => $plan->price_toman,
+        $admin = $this->makeUser(['username' => 'admin_s', 'email' => 'admin_s@ex.com', 'is_admin' => true]);
+        $user = $this->makeUser(['username' => 'customer_s', 'email' => 'cust_s@ex.com']);
+        $plan = $this->makePlan();
+        $order = Order::create([
+            'user_id' => $user->id,
+            'plan_id' => $plan->id,
+            'plan_name' => $plan->name,
+            'price_toman' => $plan->price_toman,
             'final_price_toman' => $plan->price_toman,
-            'traffic_gb'        => $plan->traffic_gb,
-            'duration_days'     => $plan->duration_days,
-            'status'            => Order::STATUS_PENDING,
-            'payment_status'    => Order::PAYMENT_UNPAID,
+            'traffic_gb' => $plan->traffic_gb,
+            'duration_days' => $plan->duration_days,
+            'status' => Order::STATUS_PENDING,
+            'payment_status' => Order::PAYMENT_UNPAID,
         ]);
         $method = $this->makeManualMethod();
         $tx = PaymentTransaction::create([
-            'order_id'          => $order->id,
-            'user_id'           => $user->id,
+            'order_id' => $order->id,
+            'user_id' => $user->id,
             'payment_method_id' => $method->id,
-            'provider'          => 'manual',
-            'method'            => 'manual',
-            'status'            => PaymentTransaction::STATUS_SUBMITTED,
-            'amount_toman'      => $order->final_price_toman,
+            'provider' => 'manual',
+            'method' => 'manual',
+            'status' => PaymentTransaction::STATUS_SUBMITTED,
+            'amount_toman' => $order->final_price_toman,
         ]);
 
         app(PaymentService::class)->approveTransaction($tx, $admin->id);
 
         $this->assertDatabaseCount('user_services', 1);
         $this->assertDatabaseHas('user_services', [
-            'order_id'         => $order->id,
-            'user_id'          => $user->id,
-            'status'           => UserService::STATUS_PENDING_PROVISION,
+            'order_id' => $order->id,
+            'user_id' => $user->id,
+            'status' => UserService::STATUS_PENDING_PROVISION,
             'provision_status' => UserService::PROVISION_MANUAL_REQUIRED,
-            'plan_name'        => $plan->name,
+            'plan_name' => $plan->name,
             'traffic_total_gb' => $plan->traffic_gb,
-            'duration_days'    => $plan->duration_days,
+            'duration_days' => $plan->duration_days,
         ]);
     }
 
     public function test_approving_same_payment_twice_does_not_create_duplicate_service(): void
     {
-        $admin  = $this->makeUser(['username' => 'admin_dup', 'email' => 'admin_dup@ex.com', 'is_admin' => true]);
-        $user   = $this->makeUser(['username' => 'cust_dup', 'email' => 'cust_dup@ex.com']);
-        $plan   = $this->makePlan();
-        $order  = Order::create([
+        $admin = $this->makeUser(['username' => 'admin_dup', 'email' => 'admin_dup@ex.com', 'is_admin' => true]);
+        $user = $this->makeUser(['username' => 'cust_dup', 'email' => 'cust_dup@ex.com']);
+        $plan = $this->makePlan();
+        $order = Order::create([
             'user_id' => $user->id, 'plan_id' => $plan->id, 'plan_name' => $plan->name,
             'price_toman' => $plan->price_toman, 'final_price_toman' => $plan->price_toman,
             'traffic_gb' => $plan->traffic_gb, 'duration_days' => $plan->duration_days,
@@ -131,8 +130,8 @@ class ServiceTest extends TestCase
 
     public function test_provision_log_is_created_when_service_placeholder_is_created(): void
     {
-        $user  = $this->makeUser(['username' => 'log_user', 'email' => 'log@ex.com']);
-        $plan  = $this->makePlan();
+        $user = $this->makeUser(['username' => 'log_user', 'email' => 'log@ex.com']);
+        $plan = $this->makePlan();
         $order = $this->makeOrder($user, $plan);
 
         app(ServiceProvisioner::class)->createFromOrder($order);
@@ -140,8 +139,8 @@ class ServiceTest extends TestCase
         $service = UserService::where('order_id', $order->id)->firstOrFail();
         $this->assertDatabaseHas('vpn_service_provision_logs', [
             'user_service_id' => $service->id,
-            'action'          => 'create_placeholder_service',
-            'status'          => 'skipped',
+            'action' => 'create_placeholder_service',
+            'status' => 'skipped',
         ]);
     }
 
@@ -149,9 +148,9 @@ class ServiceTest extends TestCase
 
     public function test_user_can_view_own_services(): void
     {
-        $user    = $this->makeUser();
-        $plan    = $this->makePlan();
-        $order   = $this->makeOrder($user, $plan);
+        $user = $this->makeUser();
+        $plan = $this->makePlan();
+        $order = $this->makeOrder($user, $plan);
         $service = app(ServiceProvisioner::class)->createFromOrder($order);
 
         $this->actingAs($user)
@@ -164,7 +163,7 @@ class ServiceTest extends TestCase
     {
         $owner = $this->makeUser(['username' => 'owner_svc', 'email' => 'owner_svc@ex.com']);
         $other = $this->makeUser(['username' => 'other_svc', 'email' => 'other_svc@ex.com']);
-        $plan  = $this->makePlan();
+        $plan = $this->makePlan();
         $order = $this->makeOrder($owner, $plan);
 
         $service = app(ServiceProvisioner::class)->createFromOrder($order);
@@ -176,9 +175,9 @@ class ServiceTest extends TestCase
 
     public function test_service_detail_shows_pending_message_when_no_config_link(): void
     {
-        $user    = $this->makeUser(['username' => 'pending_user', 'email' => 'pend@ex.com']);
-        $plan    = $this->makePlan();
-        $order   = $this->makeOrder($user, $plan);
+        $user = $this->makeUser(['username' => 'pending_user', 'email' => 'pend@ex.com']);
+        $plan = $this->makePlan();
+        $order = $this->makeOrder($user, $plan);
         $service = app(ServiceProvisioner::class)->createFromOrder($order);
 
         $this->actingAs($user)
@@ -191,9 +190,9 @@ class ServiceTest extends TestCase
 
     public function test_admin_can_manually_activate_service(): void
     {
-        $user    = $this->makeUser(['username' => 'actv_user', 'email' => 'actv@ex.com']);
-        $plan    = $this->makePlan();
-        $order   = $this->makeOrder($user, $plan);
+        $user = $this->makeUser(['username' => 'actv_user', 'email' => 'actv@ex.com']);
+        $plan = $this->makePlan();
+        $order = $this->makeOrder($user, $plan);
         $service = app(ServiceProvisioner::class)->createFromOrder($order);
 
         app(ServiceProvisioner::class)->activateManually($service);
@@ -204,9 +203,9 @@ class ServiceTest extends TestCase
 
     public function test_manual_activation_sets_dates_correctly(): void
     {
-        $user    = $this->makeUser(['username' => 'date_user', 'email' => 'date@ex.com']);
-        $plan    = $this->makePlan();
-        $order   = $this->makeOrder($user, $plan);
+        $user = $this->makeUser(['username' => 'date_user', 'email' => 'date@ex.com']);
+        $plan = $this->makePlan();
+        $order = $this->makeOrder($user, $plan);
         $service = app(ServiceProvisioner::class)->createFromOrder($order);
 
         app(ServiceProvisioner::class)->activateManually($service);
@@ -223,17 +222,17 @@ class ServiceTest extends TestCase
 
     public function test_manual_activation_creates_provision_log(): void
     {
-        $user    = $this->makeUser(['username' => 'logact', 'email' => 'logact@ex.com']);
-        $plan    = $this->makePlan();
-        $order   = $this->makeOrder($user, $plan);
+        $user = $this->makeUser(['username' => 'logact', 'email' => 'logact@ex.com']);
+        $plan = $this->makePlan();
+        $order = $this->makeOrder($user, $plan);
         $service = app(ServiceProvisioner::class)->createFromOrder($order);
 
         app(ServiceProvisioner::class)->activateManually($service);
 
         $this->assertDatabaseHas('vpn_service_provision_logs', [
             'user_service_id' => $service->id,
-            'action'          => 'manual_activate',
-            'status'          => 'success',
+            'action' => 'manual_activate',
+            'status' => 'success',
         ]);
     }
 
@@ -241,9 +240,9 @@ class ServiceTest extends TestCase
 
     public function test_order_detail_links_to_service_if_exists(): void
     {
-        $user    = $this->makeUser(['username' => 'ord_svc_user', 'email' => 'ordsvc@ex.com']);
-        $plan    = $this->makePlan();
-        $order   = $this->makeOrder($user, $plan);
+        $user = $this->makeUser(['username' => 'ord_svc_user', 'email' => 'ordsvc@ex.com']);
+        $plan = $this->makePlan();
+        $order = $this->makeOrder($user, $plan);
         $service = app(ServiceProvisioner::class)->createFromOrder($order);
 
         $this->actingAs($user)
@@ -257,8 +256,8 @@ class ServiceTest extends TestCase
     public function test_vpn_panel_can_be_created(): void
     {
         VpnPanel::create([
-            'name'    => 'Test Panel',
-            'type'    => VpnPanel::TYPE_MARZBAN,
+            'name' => 'Test Panel',
+            'type' => VpnPanel::TYPE_MARZBAN,
             'base_url' => 'https://panel.example.com:2053',
         ]);
 
@@ -274,16 +273,16 @@ class ServiceTest extends TestCase
 
         VpnInbound::create([
             'vpn_panel_id' => $panel->id,
-            'name'         => 'VLESS-WS',
-            'protocol'     => 'vless',
-            'port'         => 443,
-            'network'      => 'ws',
-            'security'     => 'tls',
+            'name' => 'VLESS-WS',
+            'protocol' => 'vless',
+            'port' => 443,
+            'network' => 'ws',
+            'security' => 'tls',
         ]);
 
         $this->assertDatabaseHas('vpn_inbounds', [
             'vpn_panel_id' => $panel->id,
-            'name'         => 'VLESS-WS',
+            'name' => 'VLESS-WS',
         ]);
     }
 }

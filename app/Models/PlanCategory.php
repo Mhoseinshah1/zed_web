@@ -14,7 +14,7 @@ class PlanCategory extends Model
     ];
 
     protected $casts = [
-        'is_active'  => 'boolean',
+        'is_active' => 'boolean',
         'sort_order' => 'integer',
     ];
 
@@ -22,7 +22,7 @@ class PlanCategory extends Model
     {
         static::saving(function (PlanCategory $category) {
             if (empty($category->slug)) {
-                $category->slug = Str::slug($category->title, '-', 'fa') ?: 'cat-' . uniqid();
+                $category->slug = Str::slug($category->title, '-', 'fa') ?: 'cat-'.uniqid();
             }
         });
     }

@@ -15,11 +15,11 @@ class ThemeController extends Controller
     public function update(Request $request)
     {
         $data = $request->validate([
-            'theme'      => ['nullable', 'string', 'max:40'],
+            'theme' => ['nullable', 'string', 'max:40'],
             'appearance' => ['nullable', 'in:light,dark,system'],
         ]);
 
-        $user    = $request->user();
+        $user = $request->user();
         $cookies = [];
 
         if (! empty($data['theme']) && ThemeManager::allowUserThemeSwitch()) {

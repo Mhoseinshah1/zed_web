@@ -20,16 +20,16 @@ class FarazSmsProvider extends AbstractSmsProvider
     public function sendMessage(string $normalizedPhone, string $message): bool
     {
         $response = Http::withHeaders([
-            'Authorization' => 'AccessKey ' . $this->apiKey(),
-            'Accept'        => 'application/json',
-        ])->timeout(20)->post(self::BASE . '/sms/send/webservice/single', array_filter([
-            'sender'    => $this->sender() ?: null,
-            'message'   => $message,
+            'Authorization' => 'AccessKey '.$this->apiKey(),
+            'Accept' => 'application/json',
+        ])->timeout(20)->post(self::BASE.'/sms/send/webservice/single', array_filter([
+            'sender' => $this->sender() ?: null,
+            'message' => $message,
             'recipient' => [$this->toLocal($normalizedPhone)],
         ]));
 
         if (! $response->successful()) {
-            throw new \RuntimeException('FarazSMS HTTP ' . $response->status());
+            throw new \RuntimeException('FarazSMS HTTP '.$response->status());
         }
 
         return true;
@@ -39,17 +39,17 @@ class FarazSmsProvider extends AbstractSmsProvider
     {
         if ($this->pattern() !== '') {
             $response = Http::withHeaders([
-                'Authorization' => 'AccessKey ' . $this->apiKey(),
-                'Accept'        => 'application/json',
-            ])->timeout(20)->post(self::BASE . '/sms/pattern/normal/send', [
-                'code'      => $this->pattern(),
-                'sender'    => $this->sender(),
+                'Authorization' => 'AccessKey '.$this->apiKey(),
+                'Accept' => 'application/json',
+            ])->timeout(20)->post(self::BASE.'/sms/pattern/normal/send', [
+                'code' => $this->pattern(),
+                'sender' => $this->sender(),
                 'recipient' => $this->toLocal($normalizedPhone),
-                'variable'  => ['code' => $code],
+                'variable' => ['code' => $code],
             ]);
 
             if (! $response->successful()) {
-                throw new \RuntimeException('FarazSMS pattern HTTP ' . $response->status());
+                throw new \RuntimeException('FarazSMS pattern HTTP '.$response->status());
             }
 
             return true;

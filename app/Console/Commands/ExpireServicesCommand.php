@@ -7,7 +7,8 @@ use Illuminate\Console\Command;
 
 class ExpireServicesCommand extends Command
 {
-    protected $signature   = 'services:expire';
+    protected $signature = 'services:expire';
+
     protected $description = 'Mark services as expired where expires_at is in the past';
 
     public function handle(): int

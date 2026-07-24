@@ -18,22 +18,22 @@ class UserAppearanceResolver
     /** @return array<string,string> name => CSS value */
     public static function vars(): array
     {
-        $cardRadius   = (string) ThemeSettingsService::get('card_radius', '0.9rem');
+        $cardRadius = (string) ThemeSettingsService::get('card_radius', '0.9rem');
         $buttonRadius = (string) ThemeSettingsService::get('button_radius', '0.6rem');
-        $iconSize     = (string) ThemeSettingsService::get('icon_size', '1.25rem');
-        $sidebarIcon  = (string) ThemeSettingsService::get('sidebar_icon_size', '1.25rem');
-        $logoSize     = (string) ThemeSettingsService::get('logo_size', '1.15rem');
-        $imageSize    = (string) ThemeSettingsService::get('image_size', '2.5rem');
-        $fontScale    = (int) ThemeSettingsService::get('font_scale', 100);
+        $iconSize = (string) ThemeSettingsService::get('icon_size', '1.25rem');
+        $sidebarIcon = (string) ThemeSettingsService::get('sidebar_icon_size', '1.25rem');
+        $logoSize = (string) ThemeSettingsService::get('logo_size', '1.15rem');
+        $imageSize = (string) ThemeSettingsService::get('image_size', '2.5rem');
+        $fontScale = (int) ThemeSettingsService::get('font_scale', 100);
 
         $vars = [
-            '--zp-card-radius'       => $cardRadius,
-            '--zp-button-radius'     => $buttonRadius,
-            '--zp-animation-speed'   => ThemeManager::animationSpeed(),
-            '--zp-icon-size'         => $iconSize,
+            '--zp-card-radius' => $cardRadius,
+            '--zp-button-radius' => $buttonRadius,
+            '--zp-animation-speed' => ThemeManager::animationSpeed(),
+            '--zp-icon-size' => $iconSize,
             '--zp-sidebar-icon-size' => $sidebarIcon,
-            '--zp-logo-size'         => $logoSize,
-            '--zp-image-size'        => $imageSize,
+            '--zp-logo-size' => $logoSize,
+            '--zp-image-size' => $imageSize,
         ];
 
         if ($fontScale >= 80 && $fontScale <= 130 && $fontScale !== 100) {

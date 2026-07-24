@@ -6,7 +6,9 @@ use App\Filament\Pages\Auth\Login as AdminLogin;
 use App\Filament\Pages\WalletSettings;
 use App\Models\SiteText;
 use App\Models\User;
+use Database\Seeders\WalletSettingsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Cache;
 use Livewire\Livewire;
 use Tests\TestCase;
 
@@ -95,9 +97,9 @@ class AdminPanelTest extends TestCase
     public function test_admin_can_login_with_username_and_password(): void
     {
         $admin = User::factory()->create([
-            'username'          => 'testadmin',
-            'password'          => bcrypt('secret123'),
-            'is_admin'          => true,
+            'username' => 'testadmin',
+            'password' => bcrypt('secret123'),
+            'is_admin' => true,
             'email_verified_at' => now(),
         ]);
 
@@ -176,9 +178,9 @@ class AdminPanelTest extends TestCase
     public function test_admin_can_save_wallet_settings(): void
     {
         $admin = User::factory()->create([
-            'username'          => 'walletadmin2',
-            'password'          => bcrypt('secret123'),
-            'is_admin'          => true,
+            'username' => 'walletadmin2',
+            'password' => bcrypt('secret123'),
+            'is_admin' => true,
             'email_verified_at' => now(),
         ]);
 
@@ -226,15 +228,15 @@ class AdminPanelTest extends TestCase
         Livewire::actingAs($admin)
             ->test(WalletSettings::class)
             ->fillForm([
-                'wallet_enabled'         => true,
+                'wallet_enabled' => true,
                 'wallet_payment_enabled' => true,
-                'wallet_topup_enabled'   => true,
-                'wallet_topup_nowpayments_enabled'  => true,
-                'wallet_topup_centralpay_enabled'   => false,
-                'wallet_min_topup_amount'            => 200000,
-                'wallet_max_topup_amount'            => null,
-                'wallet_currency'                   => 'IRT',
-                'wallet_topup_preset_amounts'       => '200000,500000,1000000',
+                'wallet_topup_enabled' => true,
+                'wallet_topup_nowpayments_enabled' => true,
+                'wallet_topup_centralpay_enabled' => false,
+                'wallet_min_topup_amount' => 200000,
+                'wallet_max_topup_amount' => null,
+                'wallet_currency' => 'IRT',
+                'wallet_topup_preset_amounts' => '200000,500000,1000000',
                 'wallet_admin_adjustment_requires_note' => true,
             ])
             ->call('save')
@@ -253,17 +255,17 @@ class AdminPanelTest extends TestCase
             ['value' => '1', 'group' => 'wallet', 'type' => 'boolean']
         );
 
-        $this->assertEquals('1', \App\Models\SiteText::get('wallet_enabled', '0'));
+        $this->assertEquals('1', SiteText::get('wallet_enabled', '0'));
 
         SiteText::where('key', 'wallet_enabled')->update(['value' => '0']);
-        \Illuminate\Support\Facades\Cache::forget('site_text:wallet_enabled');
+        Cache::forget('site_text:wallet_enabled');
 
-        $this->assertEquals('0', \App\Models\SiteText::get('wallet_enabled', '1'));
+        $this->assertEquals('0', SiteText::get('wallet_enabled', '1'));
     }
 
     public function test_centralpay_topup_is_disabled_by_default_in_seeder(): void
     {
-        $this->seed(\Database\Seeders\WalletSettingsSeeder::class);
+        $this->seed(WalletSettingsSeeder::class);
 
         $record = SiteText::where('key', 'wallet_topup_centralpay_enabled')->first();
         $this->assertNotNull($record);

@@ -14,12 +14,17 @@ class VpnInboundResource extends Resource
 {
     protected static ?string $model = VpnInbound::class;
 
-    protected static ?string $navigationIcon   = 'heroicon-o-arrows-right-left';
-    protected static ?string $navigationGroup  = 'سرویس‌ها و پنل‌های VPN';
-    protected static ?string $navigationLabel  = 'Inboundها';
-    protected static ?string $modelLabel       = 'اینباند';
+    protected static ?string $navigationIcon = 'heroicon-o-arrows-right-left';
+
+    protected static ?string $navigationGroup = 'سرویس‌ها و پنل‌های VPN';
+
+    protected static ?string $navigationLabel = 'Inboundها';
+
+    protected static ?string $modelLabel = 'اینباند';
+
     protected static ?string $pluralModelLabel = 'اینباندها';
-    protected static ?int    $navigationSort   = 30;
+
+    protected static ?int $navigationSort = 30;
 
     public static function form(Form $form): Form
     {
@@ -43,9 +48,9 @@ class VpnInboundResource extends Resource
                 Forms\Components\Select::make('protocol')
                     ->label('پروتکل')
                     ->options([
-                        'vmess'       => 'VMess',
-                        'vless'       => 'VLESS',
-                        'trojan'      => 'Trojan',
+                        'vmess' => 'VMess',
+                        'vless' => 'VLESS',
+                        'trojan' => 'Trojan',
                         'shadowsocks' => 'Shadowsocks',
                     ])
                     ->nullable(),
@@ -60,8 +65,8 @@ class VpnInboundResource extends Resource
                 Forms\Components\Select::make('network')
                     ->label('شبکه')
                     ->options([
-                        'tcp'  => 'TCP',
-                        'ws'   => 'WebSocket',
+                        'tcp' => 'TCP',
+                        'ws' => 'WebSocket',
                         'grpc' => 'gRPC',
                         'quic' => 'QUIC',
                     ])
@@ -70,8 +75,8 @@ class VpnInboundResource extends Resource
                 Forms\Components\Select::make('security')
                     ->label('امنیت')
                     ->options([
-                        'none'    => 'None',
-                        'tls'     => 'TLS',
+                        'none' => 'None',
+                        'tls' => 'TLS',
                         'reality' => 'Reality',
                     ])
                     ->nullable(),
@@ -153,9 +158,9 @@ class VpnInboundResource extends Resource
     public static function getPages(): array
     {
         return [
-            'index'  => Pages\ListVpnInbounds::route('/'),
+            'index' => Pages\ListVpnInbounds::route('/'),
             'create' => Pages\CreateVpnInbound::route('/create'),
-            'edit'   => Pages\EditVpnInbound::route('/{record}/edit'),
+            'edit' => Pages\EditVpnInbound::route('/{record}/edit'),
         ];
     }
 }

@@ -2,12 +2,16 @@
 
 namespace App\Services\Orders;
 
+use App\Models\Notification;
 use App\Models\Order;
 use App\Models\PaymentTransaction;
 use App\Services\Addons\ServiceAddonService;
 use App\Services\Discounts\DiscountService;
+use App\Services\Notifications\NotificationService;
+use App\Services\Referrals\CommissionService;
 use App\Services\Renewals\RenewalService;
 use App\Services\ServiceProvisioner;
+use App\Services\Telegram\TelegramAdminNotifier;
 use Illuminate\Support\Facades\DB;
 
 /**
@@ -19,9 +23,9 @@ use Illuminate\Support\Facades\DB;
 class MarkOrderAsPaidService
 {
     public function __construct(
-        private readonly ServiceProvisioner  $provisioner,
-        private readonly DiscountService     $discountService,
-        private readonly RenewalService      $renewalService,
+        private readonly ServiceProvisioner $provisioner,
+        private readonly DiscountService $discountService,
+        private readonly RenewalService $renewalService,
         private readonly ServiceAddonService $addonService,
     ) {}
 
@@ -52,19 +56,19 @@ class MarkOrderAsPaidService
             // Re-read WITH a row lock so two concurrent IPNs/callbacks can't both
             // pass the "not paid yet" check — the second waits, then sees PAID.
             $order = Order::whereKey($order->id)->lockForUpdate()->first() ?? $order;
-            $tx    = PaymentTransaction::whereKey($tx->id)->lockForUpdate()->first() ?? $tx;
+            $tx = PaymentTransaction::whereKey($tx->id)->lockForUpdate()->first() ?? $tx;
 
             if ($order->payment_status !== Order::PAYMENT_PAID) {
                 $order->update([
                     'payment_status' => Order::PAYMENT_PAID,
-                    'status'         => Order::STATUS_PAID,
-                    'paid_at'        => $order->paid_at ?? now(),
+                    'status' => Order::STATUS_PAID,
+                    'paid_at' => $order->paid_at ?? now(),
                 ]);
             }
 
             if ($tx->status !== PaymentTransaction::STATUS_APPROVED) {
                 $tx->update([
-                    'status'  => PaymentTransaction::STATUS_APPROVED,
+                    'status' => PaymentTransaction::STATUS_APPROVED,
                     'paid_at' => $tx->paid_at ?? now(),
                 ]);
             }
@@ -77,16 +81,16 @@ class MarkOrderAsPaidService
         // Admin Telegram — paid order + successful payment. Fire-and-forget:
         // the notifier never throws, so Telegram can never break this flow.
         $buyer = $order->user?->name ?? $order->user?->username ?? '—';
-        $tg = app(\App\Services\Telegram\TelegramAdminNotifier::class);
+        $tg = app(TelegramAdminNotifier::class);
         $tg->event('order_paid', [
-            'user'   => $buyer,
-            'order'  => $order->order_number,
-            'plan'   => $order->plan_name,
+            'user' => $buyer,
+            'order' => $order->order_number,
+            'plan' => $order->plan_name,
             'amount' => number_format($order->final_price_toman),
         ], $order);
         $tg->event('payment_success', [
-            'user'   => $buyer,
-            'order'  => $order->order_number,
+            'user' => $buyer,
+            'order' => $order->order_number,
             'amount' => number_format($order->final_price_toman),
             'method' => $tx->payment_method ?? 'درگاه',
         ], $order);
@@ -94,16 +98,16 @@ class MarkOrderAsPaidService
         // Notify the buyer that payment succeeded (new-service flow). Idempotent
         // via dedupe key so a duplicate IPN/callback does not re-notify.
         if (! $order->isRenewal() && ! $order->isAddon() && $order->user) {
-            app(\App\Services\Notifications\NotificationService::class)->notify(
-                \App\Models\Notification::TYPE_PAYMENT_SUCCESS,
+            app(NotificationService::class)->notify(
+                Notification::TYPE_PAYMENT_SUCCESS,
                 $order->user,
                 [
-                    'user_name'    => $order->user->name ?? $order->user->username,
-                    'order_id'     => $order->order_number,
-                    'amount'       => number_format($order->price_toman),
+                    'user_name' => $order->user->name ?? $order->user->username,
+                    'order_id' => $order->order_number,
+                    'amount' => number_format($order->price_toman),
                     'final_amount' => number_format($order->final_price_toman),
                 ],
-                'payment_success:order:' . $order->id,
+                'payment_success:order:'.$order->id,
             );
         }
 
@@ -121,6 +125,6 @@ class MarkOrderAsPaidService
 
         // Representative commission — idempotent (one per order). Never applies
         // to wallet top-ups (those are not Orders routed here).
-        app(\App\Services\Referrals\CommissionService::class)->recordForOrder($order->fresh());
+        app(CommissionService::class)->recordForOrder($order->fresh());
     }
 }

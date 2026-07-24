@@ -20,30 +20,30 @@ class SeoSettings
 
     /** All manageable keys with their defaults. */
     public const DEFAULTS = [
-        'seo_site_name'                 => 'ZedProxy',
-        'seo_default_title'             => 'ZedProxy | خرید VPN و پروکسی پرسرعت',
-        'seo_default_description'       => 'خرید VPN و پروکسی با کیفیت بالا، سرعت فوق‌العاده و قیمت مناسب',
-        'seo_default_og_image'          => '',
-        'seo_twitter_username'          => '',
-        'seo_facebook_url'              => '',
-        'seo_telegram_url'              => '',
-        'seo_schema_logo'               => '',
-        'seo_org_name'                  => 'ZedProxy',
-        'seo_org_alternate_name'        => '',
-        'seo_telephone'                 => '',
-        'seo_email'                     => '',
-        'seo_address'                   => '',
-        'seo_country'                   => 'IR',
-        'seo_default_locale'            => 'fa-IR',
-        'seo_sitemap_enabled'           => '1',
-        'seo_custom_robots'             => '',
-        'seo_google_verification'       => '',
-        'seo_bing_verification'         => '',
-        'seo_google_analytics_id'       => '',
+        'seo_site_name' => 'ZedProxy',
+        'seo_default_title' => 'ZedProxy | خرید VPN و پروکسی پرسرعت',
+        'seo_default_description' => 'خرید VPN و پروکسی با کیفیت بالا، سرعت فوق‌العاده و قیمت مناسب',
+        'seo_default_og_image' => '',
+        'seo_twitter_username' => '',
+        'seo_facebook_url' => '',
+        'seo_telegram_url' => '',
+        'seo_schema_logo' => '',
+        'seo_org_name' => 'ZedProxy',
+        'seo_org_alternate_name' => '',
+        'seo_telephone' => '',
+        'seo_email' => '',
+        'seo_address' => '',
+        'seo_country' => 'IR',
+        'seo_default_locale' => 'fa-IR',
+        'seo_sitemap_enabled' => '1',
+        'seo_custom_robots' => '',
+        'seo_google_verification' => '',
+        'seo_bing_verification' => '',
+        'seo_google_analytics_id' => '',
         'seo_schema_breadcrumb_enabled' => '1',
         'seo_schema_organization_enabled' => '1',
-        'seo_schema_website_enabled'    => '1',
-        'seo_title_separator'           => '|',
+        'seo_schema_website_enabled' => '1',
+        'seo_title_separator' => '|',
     ];
 
     /** @var array<string,string>|null */
@@ -68,6 +68,7 @@ class SeoSettings
                 $v = $stored[$key] ?? null;
                 $values[$key] = ($v === null || $v === '') ? $default : $v;
             }
+
             return $values;
         });
 
@@ -78,12 +79,14 @@ class SeoSettings
     {
         $all = self::all();
         $val = $all[$key] ?? $default;
+
         return $val !== '' ? $val : $default;
     }
 
     public static function bool(string $key, bool $default = false): bool
     {
         $v = self::all()[$key] ?? ($default ? '1' : '0');
+
         return in_array(strtolower(trim($v)), ['1', 'true', 'on', 'yes'], true);
     }
 
@@ -102,12 +105,43 @@ class SeoSettings
 
     // ── Convenience accessors used across the SEO system ─────────────────────
 
-    public static function siteName(): string          { return self::get('seo_site_name', 'ZedProxy'); }
-    public static function defaultTitle(): string       { return self::get('seo_default_title', self::siteName()); }
-    public static function defaultDescription(): string { return self::get('seo_default_description'); }
-    public static function defaultOgImage(): string     { return self::get('seo_default_og_image'); }
-    public static function locale(): string             { return self::get('seo_default_locale', 'fa-IR'); }
-    public static function titleSeparator(): string     { return self::get('seo_title_separator', '|'); }
-    public static function sitemapEnabled(): bool       { return self::bool('seo_sitemap_enabled', true); }
-    public static function twitterUsername(): string    { return self::get('seo_twitter_username'); }
+    public static function siteName(): string
+    {
+        return self::get('seo_site_name', 'ZedProxy');
+    }
+
+    public static function defaultTitle(): string
+    {
+        return self::get('seo_default_title', self::siteName());
+    }
+
+    public static function defaultDescription(): string
+    {
+        return self::get('seo_default_description');
+    }
+
+    public static function defaultOgImage(): string
+    {
+        return self::get('seo_default_og_image');
+    }
+
+    public static function locale(): string
+    {
+        return self::get('seo_default_locale', 'fa-IR');
+    }
+
+    public static function titleSeparator(): string
+    {
+        return self::get('seo_title_separator', '|');
+    }
+
+    public static function sitemapEnabled(): bool
+    {
+        return self::bool('seo_sitemap_enabled', true);
+    }
+
+    public static function twitterUsername(): string
+    {
+        return self::get('seo_twitter_username');
+    }
 }
