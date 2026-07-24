@@ -30,18 +30,18 @@ class SecretMasker
         }
 
         // 2) Redact credentials embedded in connection URLs (scheme://user:pass@host).
-        $text = preg_replace('#([a-z][a-z0-9+.\-]*://)[^/@\s:]+:[^/@\s]+@#i', '$1' . self::REDACTED . ':' . self::REDACTED . '@', $text) ?? $text;
+        $text = preg_replace('#([a-z][a-z0-9+.\-]*://)[^/@\s:]+:[^/@\s]+@#i', '$1'.self::REDACTED.':'.self::REDACTED.'@', $text) ?? $text;
 
         // 3) Redact bare IPv4[:port] and host:port endpoints.
         $text = preg_replace('/\b\d{1,3}(?:\.\d{1,3}){3}(?::\d+)?\b/', self::REDACTED, $text) ?? $text;
         $text = preg_replace('/\b[a-z0-9.\-]+\.[a-z]{2,}(?::\d+)?\b/i', self::REDACTED, $text) ?? $text;
 
         // 4) Redact common key=value credential pairs.
-        $text = preg_replace('/\b(password|passwd|pass|pwd|secret|token|api[_-]?key|auth)\b\s*[=:]\s*\S+/i', '$1=' . self::REDACTED, $text) ?? $text;
+        $text = preg_replace('/\b(password|passwd|pass|pwd|secret|token|api[_-]?key|auth)\b\s*[=:]\s*\S+/i', '$1='.self::REDACTED, $text) ?? $text;
 
         // 5) Collapse a trailing :port left over after a host/IP was redacted in
         // an earlier step (e.g. "***:6379").
-        $text = preg_replace('/' . preg_quote(self::REDACTED, '/') . '(?::\d{2,5})+\b/', self::REDACTED, $text) ?? $text;
+        $text = preg_replace('/'.preg_quote(self::REDACTED, '/').'(?::\d{2,5})+\b/', self::REDACTED, $text) ?? $text;
 
         return $text;
     }

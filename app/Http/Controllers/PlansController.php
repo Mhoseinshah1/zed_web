@@ -12,7 +12,7 @@ class PlansController extends Controller
 {
     public function index(SeoManager $seo): View
     {
-        $plans      = Plan::active()->ordered()->with(['features', 'category'])->get();
+        $plans = Plan::active()->ordered()->with(['features', 'category'])->get();
         $categories = PlanCategory::active()->ordered()
             ->whereHas('plans', fn ($q) => $q->where('is_active', true))
             ->get();

@@ -14,12 +14,17 @@ class TelegramTopicResource extends Resource
 {
     protected static ?string $model = TelegramAdminTopic::class;
 
-    protected static ?string $navigationIcon   = 'heroicon-o-hashtag';
-    protected static ?string $navigationGroup   = 'اعلان‌ها و پیام‌ها';
-    protected static ?string $navigationLabel   = 'تاپیک‌های تلگرام';
-    protected static ?string $modelLabel        = 'تاپیک تلگرام';
-    protected static ?string $pluralModelLabel  = 'تاپیک‌های تلگرام';
-    protected static ?int    $navigationSort    = 31;
+    protected static ?string $navigationIcon = 'heroicon-o-hashtag';
+
+    protected static ?string $navigationGroup = 'اعلان‌ها و پیام‌ها';
+
+    protected static ?string $navigationLabel = 'تاپیک‌های تلگرام';
+
+    protected static ?string $modelLabel = 'تاپیک تلگرام';
+
+    protected static ?string $pluralModelLabel = 'تاپیک‌های تلگرام';
+
+    protected static ?int $navigationSort = 31;
 
     public static function form(Form $form): Form
     {
@@ -62,7 +67,7 @@ class TelegramTopicResource extends Resource
     {
         return [
             'index' => Pages\ListTelegramTopics::route('/'),
-            'edit'  => Pages\EditTelegramTopic::route('/{record}/edit'),
+            'edit' => Pages\EditTelegramTopic::route('/{record}/edit'),
         ];
     }
 }

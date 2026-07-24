@@ -6,6 +6,7 @@ use App\Services\Health\HealthCheckService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Routing\Middleware\ThrottleRequests;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
 use Mockery;
 use Tests\TestCase;
@@ -43,12 +44,12 @@ class HealthCheckTest extends TestCase
             ->get('/health')
             ->assertOk()
             ->assertExactJson([
-                'status'     => 'ok',
-                'app'        => true,
-                'database'   => true,
-                'redis'      => true,
+                'status' => 'ok',
+                'app' => true,
+                'database' => true,
+                'redis' => true,
                 'migrations' => true,
-                'storage'    => true,
+                'storage' => true,
             ]);
     }
 
@@ -172,7 +173,7 @@ class HealthCheckTest extends TestCase
     public function test_missing_migrations_table_is_reported_without_leak(): void
     {
         Storage::disk('local'); // ensure disk resolves
-        \Illuminate\Support\Facades\Schema::drop('migrations');
+        Schema::drop('migrations');
 
         $result = app(HealthCheckService::class)->componentMigrations();
 

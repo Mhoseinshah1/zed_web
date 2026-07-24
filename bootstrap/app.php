@@ -1,8 +1,11 @@
 <?php
 
+use App\Http\Middleware\EnsureProfileComplete;
+use App\Http\Middleware\NoIndexHeaders;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
+use Illuminate\Http\Middleware\TrustProxies;
 use Illuminate\Http\Request;
 
 return Application::configure(basePath: dirname(__DIR__))
@@ -20,8 +23,8 @@ return Application::configure(basePath: dirname(__DIR__))
         // proxy, so a directly reachable origin can no longer be tricked into
         // trusting a spoofed X-Forwarded-For and bypassing IP rate limiting.
         $middleware->replace(
-            \Illuminate\Http\Middleware\TrustProxies::class,
-            \App\Http\Middleware\TrustProxies::class,
+            TrustProxies::class,
+            App\Http\Middleware\TrustProxies::class,
         );
 
         // NOWPayments IPN webhook must bypass CSRF — signature verified via HMAC-SHA512.
@@ -33,8 +36,8 @@ return Application::configure(basePath: dirname(__DIR__))
 
         // Gate sensitive purchase actions behind a completed profile (phone).
         $middleware->alias([
-            'profile.complete' => \App\Http\Middleware\EnsureProfileComplete::class,
-            'noindex'          => \App\Http\Middleware\NoIndexHeaders::class,
+            'profile.complete' => EnsureProfileComplete::class,
+            'noindex' => NoIndexHeaders::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {

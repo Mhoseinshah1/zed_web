@@ -3,9 +3,11 @@
 namespace App\Filament\Resources;
 
 use App\Filament\Resources\PaymentTransactionResource\Pages;
+use App\Filament\Support\UserAccountColumn;
+use App\Http\Controllers\CentralPayController;
+use App\Models\Order;
 use App\Models\PaymentMethod;
 use App\Models\PaymentTransaction;
-use App\Http\Controllers\CentralPayController;
 use App\Services\Orders\MarkOrderAsPaidService;
 use App\Services\Payments\NowPayments\NowPaymentsClient;
 use App\Services\PaymentService;
@@ -23,12 +25,17 @@ class PaymentTransactionResource extends Resource
 {
     protected static ?string $model = PaymentTransaction::class;
 
-    protected static ?string $navigationIcon   = 'heroicon-o-credit-card';
-    protected static ?string $navigationGroup  = 'سفارش‌ها و مالی';
-    protected static ?string $navigationLabel  = 'تراکنش‌های پرداخت';
-    protected static ?string $modelLabel       = 'تراکنش';
+    protected static ?string $navigationIcon = 'heroicon-o-credit-card';
+
+    protected static ?string $navigationGroup = 'سفارش‌ها و مالی';
+
+    protected static ?string $navigationLabel = 'تراکنش‌های پرداخت';
+
+    protected static ?string $modelLabel = 'تراکنش';
+
     protected static ?string $pluralModelLabel = 'تراکنش‌ها';
-    protected static ?int    $navigationSort   = 30;
+
+    protected static ?int $navigationSort = 30;
 
     public static function form(Form $form): Form
     {
@@ -87,7 +94,7 @@ class PaymentTransactionResource extends Resource
                     ->label('#')
                     ->sortable(),
 
-                \App\Filament\Support\UserAccountColumn::make(),
+                UserAccountColumn::make(),
 
                 Tables\Columns\TextColumn::make('user.username')
                     ->label('کاربر')
@@ -104,26 +111,26 @@ class PaymentTransactionResource extends Resource
                     ->label('درگاه')
                     ->formatStateUsing(fn ($state) => match ($state) {
                         'nowpayments' => 'NOWPayments',
-                        'centralpay'  => 'CentralPay',
-                        'manual'      => 'دستی',
-                        default       => $state ?? '—',
+                        'centralpay' => 'CentralPay',
+                        'manual' => 'دستی',
+                        default => $state ?? '—',
                     })
                     ->colors([
                         'warning' => ['nowpayments'],
                         'success' => ['centralpay'],
-                        'gray'    => ['manual'],
+                        'gray' => ['manual'],
                     ]),
 
                 Tables\Columns\BadgeColumn::make('payment_purpose')
                     ->label('نوع پرداخت')
                     ->formatStateUsing(fn ($state) => match ($state) {
                         'order_payment' => 'خرید سرویس',
-                        'wallet_topup'  => 'شارژ کیف پول',
-                        default         => $state ?? '—',
+                        'wallet_topup' => 'شارژ کیف پول',
+                        default => $state ?? '—',
                     })
                     ->colors([
                         'success' => ['order_payment'],
-                        'info'    => ['wallet_topup'],
+                        'info' => ['wallet_topup'],
                     ]),
 
                 Tables\Columns\TextColumn::make('amount_toman')
@@ -143,8 +150,8 @@ class PaymentTransactionResource extends Resource
                     ->colors([
                         'warning' => ['pending', 'submitted', 'waiting', 'confirming'],
                         'success' => ['approved'],
-                        'info'    => ['partially_paid'],
-                        'danger'  => ['rejected', 'failed', 'cancelled', 'expired', 'refunded'],
+                        'info' => ['partially_paid'],
+                        'danger' => ['rejected', 'failed', 'cancelled', 'expired', 'refunded'],
                     ]),
 
                 Tables\Columns\TextColumn::make('gateway_status')
@@ -179,16 +186,16 @@ class PaymentTransactionResource extends Resource
                 SelectFilter::make('provider')
                     ->label('درگاه')
                     ->options([
-                        'centralpay'  => 'CentralPay',
+                        'centralpay' => 'CentralPay',
                         'nowpayments' => 'NOWPayments',
-                        'manual'      => 'دستی',
+                        'manual' => 'دستی',
                     ]),
 
                 SelectFilter::make('payment_purpose')
                     ->label('نوع پرداخت')
                     ->options([
                         'order_payment' => 'خرید سرویس',
-                        'wallet_topup'  => 'شارژ کیف پول',
+                        'wallet_topup' => 'شارژ کیف پول',
                     ]),
 
                 Filter::make('paid_only')
@@ -299,19 +306,21 @@ class PaymentTransactionResource extends Resource
                         $method = PaymentMethod::where('type', PaymentMethod::TYPE_NOWPAYMENTS)->where('is_active', true)->first();
                         if (! $method) {
                             Notification::make()->title('روش پرداخت NOWPayments فعال یافت نشد.')->danger()->send();
+
                             return;
                         }
                         try {
-                            $client        = new NowPaymentsClient($method);
-                            $status        = $client->getPaymentStatus($record->provider_reference);
+                            $client = new NowPaymentsClient($method);
+                            $status = $client->getPaymentStatus($record->provider_reference);
                             $gatewayStatus = strtolower($status['payment_status'] ?? '');
                             $record->update([
-                                'gateway_status'   => $gatewayStatus,
+                                'gateway_status' => $gatewayStatus,
                                 'response_payload' => collect($status)->except(['api_key', 'ipn_secret'])->all(),
                             ]);
                             if ($gatewayStatus === 'finished') {
                                 if ($record->order === null) {
                                     Notification::make()->title('پرداخت تایید شد اما سفارش مرتبط یافت نشد.')->warning()->send();
+
                                     return;
                                 }
                                 app(MarkOrderAsPaidService::class)->markPaid($record->order, $record);
@@ -320,7 +329,7 @@ class PaymentTransactionResource extends Resource
                                 Notification::make()->title("وضعیت درگاه: {$gatewayStatus}")->info()->send();
                             }
                         } catch (\RuntimeException $e) {
-                            Notification::make()->title('خطا: ' . $e->getMessage())->danger()->send();
+                            Notification::make()->title('خطا: '.$e->getMessage())->danger()->send();
                         }
                     }),
 
@@ -330,7 +339,7 @@ class PaymentTransactionResource extends Resource
                     ->color('gray')
                     ->visible(fn (PaymentTransaction $record) => $record->provider === 'nowpayments' && $record->response_payload !== null)
                     ->modalContent(fn (PaymentTransaction $record) => view('filament.nowpayments-payload-modal', [
-                        'payload'     => $record->response_payload,
+                        'payload' => $record->response_payload,
                         'gateway_url' => $record->gateway_url,
                     ]))
                     ->modalHeading('پاسخ NOWPayments')
@@ -343,7 +352,7 @@ class PaymentTransactionResource extends Resource
                     ->visible(fn (PaymentTransaction $record) => $record->provider === 'centralpay'
                         && $record->order !== null
                         && ! in_array($record->gateway_status, ['verified', 'amount_mismatch', 'user_mismatch'])
-                        && $record->order->payment_status !== \App\Models\Order::PAYMENT_PAID)
+                        && $record->order->payment_status !== Order::PAYMENT_PAID)
                     ->action(function (PaymentTransaction $record) {
                         try {
                             CentralPayController::adminVerify($record, app(MarkOrderAsPaidService::class));
@@ -367,7 +376,7 @@ class PaymentTransactionResource extends Resource
     {
         return [
             'index' => Pages\ListPaymentTransactions::route('/'),
-            'edit'  => Pages\EditPaymentTransaction::route('/{record}/edit'),
+            'edit' => Pages\EditPaymentTransaction::route('/{record}/edit'),
         ];
     }
 }

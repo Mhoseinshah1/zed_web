@@ -13,7 +13,7 @@ namespace App\Services\Sms;
 abstract class AbstractSmsProvider implements SmsProviderInterface
 {
     /**
-     * @param array<string,mixed> $config
+     * @param  array<string,mixed>  $config
      */
     public function __construct(protected array $config) {}
 
@@ -49,8 +49,9 @@ abstract class AbstractSmsProvider implements SmsProviderInterface
     protected function buildOtpMessage(string $code): string
     {
         $template = (string) ($this->config['otp_message'] ?? 'کد تایید شما در زدپروکسی: {code}');
+
         return strtr($template, [
-            '{code}'    => $code,
+            '{code}' => $code,
             '{minutes}' => (string) $this->ttlMinutes(),
         ]);
     }
@@ -61,8 +62,9 @@ abstract class AbstractSmsProvider implements SmsProviderInterface
     protected function toLocal(string $normalizedPhone): string
     {
         if (str_starts_with($normalizedPhone, '+98')) {
-            return '0' . substr($normalizedPhone, 3);
+            return '0'.substr($normalizedPhone, 3);
         }
+
         return $normalizedPhone;
     }
 }

@@ -16,13 +16,14 @@ trait RetriesDeadlocks
 {
     /**
      * @template T
+     *
      * @param  callable():T  $callback
      * @return T
      */
     protected function runWithDeadlockRetries(callable $callback, string $context = 'db')
     {
         $maxRetries = (int) config('zedproxy.discounts.deadlock_retries', 3);
-        $backoffMs  = (int) config('zedproxy.discounts.deadlock_backoff_ms', 100);
+        $backoffMs = (int) config('zedproxy.discounts.deadlock_backoff_ms', 100);
 
         $attempt = 0;
         while (true) {
@@ -35,9 +36,9 @@ trait RetriesDeadlocks
                 }
 
                 Log::warning('db.deadlock_retry', [
-                    'context'  => $context,
-                    'attempt'  => $attempt,
-                    'max'      => $maxRetries,
+                    'context' => $context,
+                    'attempt' => $attempt,
+                    'max' => $maxRetries,
                     'sqlstate' => $e->getCode(),
                 ]);
 

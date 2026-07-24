@@ -7,14 +7,19 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class VpnPanel extends Model
 {
-    const TYPE_MARZBAN    = 'marzban';
-    const TYPE_XUI        = 'xui';
+    const TYPE_MARZBAN = 'marzban';
+
+    const TYPE_XUI = 'xui';
+
     const TYPE_SANAEI_XUI = 'sanaei_3xui';
-    const TYPE_REMNAWAVE  = 'remnawave';
-    const TYPE_OTHER      = 'other';
+
+    const TYPE_REMNAWAVE = 'remnawave';
+
+    const TYPE_OTHER = 'other';
 
     // 3X-UI / Sanaei authentication methods.
     const AUTH_API_TOKEN = 'api_token';
+
     const AUTH_API_LOGIN = 'api_login';
 
     protected $fillable = [
@@ -55,44 +60,45 @@ class VpnPanel extends Model
         'allow_user_view_all_config_links',
     ];
 
-    const HEALTH_ONLINE  = 'online';
+    const HEALTH_ONLINE = 'online';
+
     const HEALTH_OFFLINE = 'offline';
 
     protected $casts = [
-        'is_active'                        => 'boolean',
-        'is_default'                       => 'boolean',
-        'last_checked_at'                  => 'datetime',
-        'last_health_checked_at'           => 'datetime',
-        'system_info'                      => 'array',
-        'password'                         => 'encrypted',
-        'token'                            => 'encrypted',
-        'api_token'                        => 'encrypted',
-        'verify_ssl'                       => 'boolean',
-        'timeout_seconds'                  => 'integer',
-        'default_inbound_id'               => 'integer',
-        'allow_user_sync_service'          => 'boolean',
-        'allow_user_revoke_subscription'   => 'boolean',
-        'allow_user_reset_traffic'         => 'boolean',
-        'allow_user_disable_service'       => 'boolean',
-        'allow_user_enable_service'        => 'boolean',
-        'allow_user_view_subscription_qr'  => 'boolean',
-        'allow_user_view_config_qr'        => 'boolean',
+        'is_active' => 'boolean',
+        'is_default' => 'boolean',
+        'last_checked_at' => 'datetime',
+        'last_health_checked_at' => 'datetime',
+        'system_info' => 'array',
+        'password' => 'encrypted',
+        'token' => 'encrypted',
+        'api_token' => 'encrypted',
+        'verify_ssl' => 'boolean',
+        'timeout_seconds' => 'integer',
+        'default_inbound_id' => 'integer',
+        'allow_user_sync_service' => 'boolean',
+        'allow_user_revoke_subscription' => 'boolean',
+        'allow_user_reset_traffic' => 'boolean',
+        'allow_user_disable_service' => 'boolean',
+        'allow_user_enable_service' => 'boolean',
+        'allow_user_view_subscription_qr' => 'boolean',
+        'allow_user_view_config_qr' => 'boolean',
         'allow_user_copy_subscription_link' => 'boolean',
-        'allow_user_copy_config_link'      => 'boolean',
+        'allow_user_copy_config_link' => 'boolean',
         'allow_user_view_all_config_links' => 'boolean',
     ];
 
     protected $attributes = [
-        'allow_user_sync_service'           => true,
-        'allow_user_revoke_subscription'    => true,
-        'allow_user_reset_traffic'          => false,
-        'allow_user_disable_service'        => false,
-        'allow_user_enable_service'         => false,
-        'allow_user_view_subscription_qr'   => true,
-        'allow_user_view_config_qr'         => true,
+        'allow_user_sync_service' => true,
+        'allow_user_revoke_subscription' => true,
+        'allow_user_reset_traffic' => false,
+        'allow_user_disable_service' => false,
+        'allow_user_enable_service' => false,
+        'allow_user_view_subscription_qr' => true,
+        'allow_user_view_config_qr' => true,
         'allow_user_copy_subscription_link' => true,
-        'allow_user_copy_config_link'       => true,
-        'allow_user_view_all_config_links'  => true,
+        'allow_user_copy_config_link' => true,
+        'allow_user_view_all_config_links' => true,
     ];
 
     protected $hidden = ['password', 'token', 'api_token'];
@@ -131,7 +137,8 @@ class VpnPanel extends Model
         if ($path === '') {
             return $base;
         }
-        return $base . '/' . trim($path, '/');
+
+        return $base.'/'.trim($path, '/');
     }
 
     /** Effective auth method (defaults to API token). */
@@ -159,24 +166,24 @@ class VpnPanel extends Model
 
     public function typeLabel(): string
     {
-        return match($this->type) {
-            self::TYPE_MARZBAN    => 'Marzban',
-            self::TYPE_XUI        => 'X-UI',
+        return match ($this->type) {
+            self::TYPE_MARZBAN => 'Marzban',
+            self::TYPE_XUI => 'X-UI',
             self::TYPE_SANAEI_XUI => '3X-UI (Sanaei)',
-            self::TYPE_REMNAWAVE  => 'Remnawave',
-            self::TYPE_OTHER      => 'سایر',
-            default               => $this->type,
+            self::TYPE_REMNAWAVE => 'Remnawave',
+            self::TYPE_OTHER => 'سایر',
+            default => $this->type,
         };
     }
 
     public static function allTypes(): array
     {
         return [
-            self::TYPE_MARZBAN    => 'Marzban',
-            self::TYPE_XUI        => 'X-UI',
+            self::TYPE_MARZBAN => 'Marzban',
+            self::TYPE_XUI => 'X-UI',
             self::TYPE_SANAEI_XUI => '3X-UI (Sanaei)',
-            self::TYPE_REMNAWAVE  => 'Remnawave',
-            self::TYPE_OTHER      => 'سایر',
+            self::TYPE_REMNAWAVE => 'Remnawave',
+            self::TYPE_OTHER => 'سایر',
         ];
     }
 }

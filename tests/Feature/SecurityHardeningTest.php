@@ -6,7 +6,6 @@ use App\Filament\Resources\UserResource\Pages\EditUser;
 use App\Models\Order;
 use App\Models\PaymentMethod;
 use App\Models\PaymentTransaction;
-use App\Models\Plan;
 use App\Models\User;
 use App\Models\WalletTransaction;
 use App\Services\WalletService;
@@ -38,32 +37,32 @@ class SecurityHardeningTest extends TestCase
     private function walletTopupTx(User $user, int $amount = 50000): PaymentTransaction
     {
         return PaymentTransaction::create([
-            'user_id'         => $user->id,
-            'provider'        => 'nowpayments',
-            'method'          => 'nowpayments',
+            'user_id' => $user->id,
+            'provider' => 'nowpayments',
+            'method' => 'nowpayments',
             'payment_purpose' => 'wallet_topup',
-            'status'          => PaymentTransaction::STATUS_WAITING,
-            'amount_toman'    => $amount,
+            'status' => PaymentTransaction::STATUS_WAITING,
+            'amount_toman' => $amount,
         ]);
     }
 
     public function test_payment_transaction_id_is_unique(): void
     {
         $user = User::factory()->create();
-        $tx   = $this->walletTopupTx($user);
+        $tx = $this->walletTopupTx($user);
 
         app(WalletService::class)->creditFromPaymentTransaction($user, $tx);
 
         // A second row for the same payment transaction must be rejected by the DB.
         $this->expectException(QueryException::class);
         WalletTransaction::create([
-            'user_id'                => $user->id,
-            'type'                   => WalletTransaction::TYPE_TOPUP,
-            'direction'              => WalletTransaction::DIRECTION_CREDIT,
-            'amount_toman'           => 50000,
-            'balance_before_toman'   => 0,
-            'balance_after_toman'    => 50000,
-            'status'                 => WalletTransaction::STATUS_COMPLETED,
+            'user_id' => $user->id,
+            'type' => WalletTransaction::TYPE_TOPUP,
+            'direction' => WalletTransaction::DIRECTION_CREDIT,
+            'amount_toman' => 50000,
+            'balance_before_toman' => 0,
+            'balance_after_toman' => 50000,
+            'status' => WalletTransaction::STATUS_COMPLETED,
             'payment_transaction_id' => $tx->id,
         ]);
     }
@@ -82,10 +81,10 @@ class SecurityHardeningTest extends TestCase
     public function test_credit_from_payment_transaction_is_idempotent(): void
     {
         $user = User::factory()->create(['wallet_balance_toman' => 0]);
-        $tx   = $this->walletTopupTx($user, 50000);
+        $tx = $this->walletTopupTx($user, 50000);
 
         $service = app(WalletService::class);
-        $first  = $service->creditFromPaymentTransaction($user, $tx);
+        $first = $service->creditFromPaymentTransaction($user, $tx);
         $second = $service->creditFromPaymentTransaction($user, $tx); // duplicate → no 500
 
         $this->assertTrue($first->is($second));
@@ -106,17 +105,17 @@ class SecurityHardeningTest extends TestCase
 
         // Already processed top-up (status APPROVED).
         $tx = PaymentTransaction::create([
-            'user_id'         => $user->id,
-            'provider'        => 'nowpayments',
-            'method'          => 'nowpayments',
+            'user_id' => $user->id,
+            'provider' => 'nowpayments',
+            'method' => 'nowpayments',
             'payment_purpose' => 'wallet_topup',
-            'status'          => PaymentTransaction::STATUS_APPROVED,
-            'external_id'     => 'pay_approved_1',
-            'amount_toman'    => 50000,
+            'status' => PaymentTransaction::STATUS_APPROVED,
+            'external_id' => 'pay_approved_1',
+            'amount_toman' => 50000,
         ]);
 
         $payload = ['payment_id' => 'pay_approved_1', 'payment_status' => 'finished'];
-        $sorted  = $payload;
+        $sorted = $payload;
         ksort($sorted);
         $signature = hash_hmac('sha512', json_encode($sorted, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES), 'ipn-secret');
 
@@ -143,14 +142,14 @@ class SecurityHardeningTest extends TestCase
 
     public function test_payment_submit_endpoint_is_throttled(): void
     {
-        $user  = User::factory()->create();
+        $user = User::factory()->create();
         $order = Order::create([
-            'user_id'           => $user->id,
-            'plan_name'         => 'Test',
-            'price_toman'       => 10000,
+            'user_id' => $user->id,
+            'plan_name' => 'Test',
+            'price_toman' => 10000,
             'final_price_toman' => 10000,
-            'status'            => Order::STATUS_PENDING,
-            'payment_status'    => Order::PAYMENT_UNPAID,
+            'status' => Order::STATUS_PENDING,
+            'payment_status' => Order::PAYMENT_UNPAID,
         ]);
 
         // throttle:10,1 → the 11th request within the minute is blocked.
@@ -177,14 +176,14 @@ class SecurityHardeningTest extends TestCase
     public function test_registration_cannot_grant_admin(): void
     {
         $this->post('/register', [
-            'name'                  => 'Attacker',
-            'username'              => 'attacker1',
-            'email'                 => 'attacker@example.com',
-            'phone'                 => '09120000000',
-            'password'              => 'password123',
+            'name' => 'Attacker',
+            'username' => 'attacker1',
+            'email' => 'attacker@example.com',
+            'phone' => '09120000000',
+            'password' => 'password123',
             'password_confirmation' => 'password123',
-            'is_admin'              => '1',
-            'wallet_balance_toman'  => '999999',
+            'is_admin' => '1',
+            'wallet_balance_toman' => '999999',
         ]);
 
         $user = User::where('username', 'attacker1')->first();
@@ -200,8 +199,8 @@ class SecurityHardeningTest extends TestCase
     {
         $this->artisan('zedproxy:create-admin', [
             '--username' => 'rootadmin',
-            '--email'    => 'root@example.com',
-            '--name'     => 'Root',
+            '--email' => 'root@example.com',
+            '--name' => 'Root',
             '--password' => 'secret1234',
         ])->assertExitCode(0);
 
@@ -212,7 +211,7 @@ class SecurityHardeningTest extends TestCase
     {
         // Explicit usernames — the admin form validates username against
         // /^[a-zA-Z0-9_]+$/, and the factory's faker username can contain a dot.
-        $admin  = User::factory()->create(['is_admin' => true, 'username' => 'admin_user']);
+        $admin = User::factory()->create(['is_admin' => true, 'username' => 'admin_user']);
         $target = User::factory()->create(['is_admin' => false, 'username' => 'target_user']);
 
         // Grant admin via the edit page (exercises EditUser::handleRecordUpdate forceFill).

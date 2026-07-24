@@ -9,26 +9,41 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 class Notification extends Model
 {
     // ── User notification types ──────────────────────────────────────────────
-    const TYPE_PAYMENT_SUCCESS          = 'payment_success';
-    const TYPE_PAYMENT_FAILED           = 'payment_failed';
-    const TYPE_WALLET_TOPUP_SUCCESS     = 'wallet_topup_success';
-    const TYPE_WALLET_PAYMENT_SUCCESS   = 'wallet_payment_success';
-    const TYPE_NEW_SERVICE_CREATED      = 'new_service_created';
-    const TYPE_RENEWAL_SUCCESS          = 'renewal_success';
-    const TYPE_EXTRA_TRAFFIC_SUCCESS    = 'extra_traffic_success';
-    const TYPE_EXTRA_TIME_SUCCESS       = 'extra_time_success';
-    const TYPE_RENEWAL_CASHBACK_SUCCESS = 'renewal_cashback_success';
-    const TYPE_DISCOUNT_USED            = 'discount_used';
+    const TYPE_PAYMENT_SUCCESS = 'payment_success';
 
-    const TYPE_TICKET_ADMIN_REPLY    = 'ticket_admin_reply';
-    const TYPE_COMMISSION_CREDITED   = 'commission_credited';
+    const TYPE_PAYMENT_FAILED = 'payment_failed';
+
+    const TYPE_WALLET_TOPUP_SUCCESS = 'wallet_topup_success';
+
+    const TYPE_WALLET_PAYMENT_SUCCESS = 'wallet_payment_success';
+
+    const TYPE_NEW_SERVICE_CREATED = 'new_service_created';
+
+    const TYPE_RENEWAL_SUCCESS = 'renewal_success';
+
+    const TYPE_EXTRA_TRAFFIC_SUCCESS = 'extra_traffic_success';
+
+    const TYPE_EXTRA_TIME_SUCCESS = 'extra_time_success';
+
+    const TYPE_RENEWAL_CASHBACK_SUCCESS = 'renewal_cashback_success';
+
+    const TYPE_DISCOUNT_USED = 'discount_used';
+
+    const TYPE_TICKET_ADMIN_REPLY = 'ticket_admin_reply';
+
+    const TYPE_COMMISSION_CREDITED = 'commission_credited';
 
     // ── Admin / system notification types ────────────────────────────────────
     const TYPE_MARZBAN_UPDATE_FAILED = 'marzban_update_failed';
-    const TYPE_PROVISIONING_FAILED   = 'provisioning_failed';
-    const TYPE_ADMIN_WARNING         = 'admin_warning';
-    const TYPE_TICKET_CREATED        = 'ticket_created';
-    const TYPE_TICKET_USER_REPLY     = 'ticket_user_reply';
+
+    const TYPE_PROVISIONING_FAILED = 'provisioning_failed';
+
+    const TYPE_ADMIN_WARNING = 'admin_warning';
+
+    const TYPE_TICKET_CREATED = 'ticket_created';
+
+    const TYPE_TICKET_USER_REPLY = 'ticket_user_reply';
+
     const TYPE_REPRESENTATIVE_REQUEST = 'representative_request';
 
     protected $fillable = [
@@ -42,7 +57,7 @@ class Notification extends Model
     ];
 
     protected $casts = [
-        'data'    => 'array',
+        'data' => 'array',
         'read_at' => 'datetime',
     ];
 
@@ -91,24 +106,24 @@ class Notification extends Model
     public static function typeLabels(): array
     {
         return [
-            self::TYPE_PAYMENT_SUCCESS          => 'پرداخت موفق',
-            self::TYPE_PAYMENT_FAILED           => 'پرداخت ناموفق',
-            self::TYPE_WALLET_TOPUP_SUCCESS     => 'شارژ کیف پول',
-            self::TYPE_WALLET_PAYMENT_SUCCESS   => 'پرداخت از کیف پول',
-            self::TYPE_NEW_SERVICE_CREATED      => 'ساخت سرویس',
-            self::TYPE_RENEWAL_SUCCESS          => 'تمدید سرویس',
-            self::TYPE_EXTRA_TRAFFIC_SUCCESS    => 'خرید حجم اضافه',
-            self::TYPE_EXTRA_TIME_SUCCESS       => 'خرید زمان اضافه',
+            self::TYPE_PAYMENT_SUCCESS => 'پرداخت موفق',
+            self::TYPE_PAYMENT_FAILED => 'پرداخت ناموفق',
+            self::TYPE_WALLET_TOPUP_SUCCESS => 'شارژ کیف پول',
+            self::TYPE_WALLET_PAYMENT_SUCCESS => 'پرداخت از کیف پول',
+            self::TYPE_NEW_SERVICE_CREATED => 'ساخت سرویس',
+            self::TYPE_RENEWAL_SUCCESS => 'تمدید سرویس',
+            self::TYPE_EXTRA_TRAFFIC_SUCCESS => 'خرید حجم اضافه',
+            self::TYPE_EXTRA_TIME_SUCCESS => 'خرید زمان اضافه',
             self::TYPE_RENEWAL_CASHBACK_SUCCESS => 'کش‌بک تمدید',
-            self::TYPE_DISCOUNT_USED            => 'استفاده از کد تخفیف',
-            self::TYPE_TICKET_ADMIN_REPLY       => 'پاسخ پشتیبانی',
-            self::TYPE_COMMISSION_CREDITED      => 'واریز پورسانت',
-            self::TYPE_MARZBAN_UPDATE_FAILED    => 'خطای Marzban',
-            self::TYPE_PROVISIONING_FAILED      => 'خطای ساخت سرویس',
-            self::TYPE_ADMIN_WARNING            => 'هشدار سیستم',
-            self::TYPE_TICKET_CREATED           => 'تیکت جدید',
-            self::TYPE_TICKET_USER_REPLY        => 'پاسخ کاربر در تیکت',
-            self::TYPE_REPRESENTATIVE_REQUEST   => 'درخواست نمایندگی',
+            self::TYPE_DISCOUNT_USED => 'استفاده از کد تخفیف',
+            self::TYPE_TICKET_ADMIN_REPLY => 'پاسخ پشتیبانی',
+            self::TYPE_COMMISSION_CREDITED => 'واریز پورسانت',
+            self::TYPE_MARZBAN_UPDATE_FAILED => 'خطای Marzban',
+            self::TYPE_PROVISIONING_FAILED => 'خطای ساخت سرویس',
+            self::TYPE_ADMIN_WARNING => 'هشدار سیستم',
+            self::TYPE_TICKET_CREATED => 'تیکت جدید',
+            self::TYPE_TICKET_USER_REPLY => 'پاسخ کاربر در تیکت',
+            self::TYPE_REPRESENTATIVE_REQUEST => 'درخواست نمایندگی',
         ];
     }
 

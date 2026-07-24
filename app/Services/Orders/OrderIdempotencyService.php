@@ -25,11 +25,15 @@ class OrderIdempotencyService
 {
     use RetriesDeadlocks;
 
-    public const MSG_ALREADY       = 'این درخواست قبلاً ثبت شده است.';
-    public const MSG_HAS_PENDING   = 'یک سفارش پرداخت‌نشده برای این خرید دارید.';
-    public const MSG_REDIRECTED    = 'برای ادامه پرداخت، به سفارش قبلی منتقل شدید.';
+    public const MSG_ALREADY = 'این درخواست قبلاً ثبت شده است.';
+
+    public const MSG_HAS_PENDING = 'یک سفارش پرداخت‌نشده برای این خرید دارید.';
+
+    public const MSG_REDIRECTED = 'برای ادامه پرداخت، به سفارش قبلی منتقل شدید.';
+
     public const MSG_PLAN_INACTIVE = 'این پلن در حال حاضر فعال نیست.';
-    public const MSG_EXPIRED       = 'اعتبار درخواست خرید به پایان رسیده است. لطفاً دوباره تلاش کنید.';
+
+    public const MSG_EXPIRED = 'اعتبار درخواست خرید به پایان رسیده است. لطفاً دوباره تلاش کنید.';
 
     /**
      * Create the order, or return the existing one for a repeated/concurrent
@@ -37,17 +41,17 @@ class OrderIdempotencyService
      *
      * @param  array{plan_id?:?int,user_service_id?:?int,options?:array}  $target
      * @param  \Closure(string):Order  $creator  Re-reads the plan/service under
-     *         lock, verifies it, computes the server-side price, and creates ONE
-     *         Order with purchase_fingerprint set to the given value.
+     *                                           lock, verifies it, computes the server-side price, and creates ONE
+     *                                           Order with purchase_fingerprint set to the given value.
      * @return array{order:Order, reused:bool, message:?string}
      *
      * @throws \RuntimeException Persian message on any validation failure (never retried).
      */
     public function createOrReturn(User $user, string $operation, array $target, ?string $token, \Closure $creator): array
     {
-        $planId    = $target['plan_id'] ?? null;
+        $planId = $target['plan_id'] ?? null;
         $serviceId = $target['user_service_id'] ?? null;
-        $options   = $target['options'] ?? [];
+        $options = $target['options'] ?? [];
 
         $fingerprint = PurchaseToken::fingerprint($user->id, $operation, $planId, $serviceId, $options);
 
@@ -74,7 +78,7 @@ class OrderIdempotencyService
                 }
 
                 // ── 2. Recent unpaid order for the same intent → redirect to it. ──
-                $window   = (int) config('zedproxy.purchase.pending_reuse_minutes', 30);
+                $window = (int) config('zedproxy.purchase.pending_reuse_minutes', 30);
                 $existing = Order::where('user_id', $user->id)
                     ->where('purchase_fingerprint', $fingerprint)
                     ->where('payment_status', Order::PAYMENT_UNPAID)
@@ -88,6 +92,7 @@ class OrderIdempotencyService
                     if ($intent) {
                         $intent->update(['order_id' => $existing->id, 'status' => PurchaseIntent::STATUS_CONSUMED, 'consumed_at' => now()]);
                     }
+
                     return ['order' => $existing, 'reused' => true, 'message' => self::MSG_HAS_PENDING];
                 }
 
@@ -131,14 +136,14 @@ class OrderIdempotencyService
 
         try {
             return PurchaseIntent::create([
-                'key'                 => $key,
-                'user_id'             => $user->id,
-                'operation_type'      => $operation,
-                'plan_id'             => $planId,
-                'user_service_id'     => $serviceId,
+                'key' => $key,
+                'user_id' => $user->id,
+                'operation_type' => $operation,
+                'plan_id' => $planId,
+                'user_service_id' => $serviceId,
                 'request_fingerprint' => $fingerprint,
-                'status'              => PurchaseIntent::STATUS_PENDING,
-                'expires_at'          => now()->addMinutes(max(1, (int) config('zedproxy.purchase.intent_ttl_minutes', 30))),
+                'status' => PurchaseIntent::STATUS_PENDING,
+                'expires_at' => now()->addMinutes(max(1, (int) config('zedproxy.purchase.intent_ttl_minutes', 30))),
             ]);
         } catch (QueryException $e) {
             // Concurrent first-claim won the unique(key) race — read theirs (blocks
@@ -147,6 +152,7 @@ class OrderIdempotencyService
             if (! $intent) {
                 throw $e;
             }
+
             return $intent;
         }
     }
@@ -156,7 +162,7 @@ class OrderIdempotencyService
      * null when no token was supplied (fingerprint-only protection still applies).
      *
      * @throws \RuntimeException MSG_EXPIRED when the token is invalid/expired/for
-     *         another user/for a different plan (i.e. tampered after issue).
+     *                           another user/for a different plan (i.e. tampered after issue).
      */
     private function validateToken(?string $token, User $user, string $operation, ?int $planId, ?int $serviceId, array $options): ?string
     {

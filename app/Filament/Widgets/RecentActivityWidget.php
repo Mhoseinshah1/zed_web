@@ -33,11 +33,11 @@ class RecentActivityWidget extends Widget
             ->limit(4)
             ->get(['id', 'order_number', 'user_id', 'final_price_toman', 'paid_at'])
             ->each(fn (Order $o) => $items->push([
-                'icon'  => 'heroicon-o-check-circle',
+                'icon' => 'heroicon-o-check-circle',
                 'color' => 'success',
                 'title' => 'پرداخت موفق',
-                'meta'  => 'سفارش ' . $o->order_number . ' — ' . number_format((int) $o->final_price_toman) . ' تومان',
-                'time'  => $o->paid_at,
+                'meta' => 'سفارش '.$o->order_number.' — '.number_format((int) $o->final_price_toman).' تومان',
+                'time' => $o->paid_at,
             ]));
 
         User::query()
@@ -45,11 +45,11 @@ class RecentActivityWidget extends Widget
             ->limit(4)
             ->get(['id', 'name', 'username', 'created_at'])
             ->each(fn (User $u) => $items->push([
-                'icon'  => 'heroicon-o-user-plus',
+                'icon' => 'heroicon-o-user-plus',
                 'color' => 'primary',
                 'title' => 'کاربر جدید',
-                'meta'  => ($u->name ?: $u->username) . ' ثبت‌نام کرد',
-                'time'  => $u->created_at,
+                'meta' => ($u->name ?: $u->username).' ثبت‌نام کرد',
+                'time' => $u->created_at,
             ]));
 
         SupportTicket::query()
@@ -57,11 +57,11 @@ class RecentActivityWidget extends Widget
             ->limit(4)
             ->get(['id', 'ticket_number', 'subject', 'created_at'])
             ->each(fn (SupportTicket $t) => $items->push([
-                'icon'  => 'heroicon-o-chat-bubble-left-right',
+                'icon' => 'heroicon-o-chat-bubble-left-right',
                 'color' => 'info',
                 'title' => 'تیکت جدید',
-                'meta'  => $t->subject ?: $t->ticket_number,
-                'time'  => $t->created_at,
+                'meta' => $t->subject ?: $t->ticket_number,
+                'time' => $t->created_at,
             ]));
 
         $items = $items

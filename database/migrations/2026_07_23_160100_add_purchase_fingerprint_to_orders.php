@@ -57,7 +57,7 @@ return new class extends Migration
             $lines = $dupes->map(fn ($r) => "user={$r->user_id} fp={$r->purchase_fingerprint} → {$r->cnt}")->implode('; ');
             throw new RuntimeException(
                 "Cannot add {$this->indexName}: duplicate unpaid orders share a fingerprint.\n{$lines}\n"
-                . 'Resolve them first (nothing was deleted).'
+                .'Resolve them first (nothing was deleted).'
             );
         }
 
@@ -65,8 +65,8 @@ return new class extends Migration
         if (in_array($driver, ['pgsql', 'sqlite'], true)) {
             DB::statement(
                 "CREATE UNIQUE INDEX {$this->indexName} ON orders (user_id, purchase_fingerprint) "
-                . "WHERE purchase_fingerprint IS NOT NULL AND payment_status = 'unpaid' "
-                . "AND status NOT IN ('cancelled', 'failed')"
+                ."WHERE purchase_fingerprint IS NOT NULL AND payment_status = 'unpaid' "
+                ."AND status NOT IN ('cancelled', 'failed')"
             );
         }
         // MySQL has no partial index; the application-level guard + intent key
@@ -98,9 +98,10 @@ return new class extends Migration
             if ($driver === 'sqlite') {
                 return DB::table('sqlite_master')->where('type', 'index')->where('name', $this->indexName)->exists();
             }
-        } catch (\Throwable) {
+        } catch (Throwable) {
             return false;
         }
+
         return false;
     }
 };

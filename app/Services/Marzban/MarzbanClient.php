@@ -3,9 +3,9 @@
 namespace App\Services\Marzban;
 
 use App\Models\VpnPanel;
+use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
-use Illuminate\Http\Client\Response;
 
 /**
  * Marzban REST API client.
@@ -27,7 +27,8 @@ use Illuminate\Http\Client\Response;
 class MarzbanClient
 {
     private const TOKEN_TTL = 3500; // cache ~58 min; Marzban tokens last 24 h
-    private const TIMEOUT   = 20;   // seconds
+
+    private const TIMEOUT = 20;   // seconds
 
     public function __construct(private VpnPanel $panel) {}
 
@@ -72,6 +73,7 @@ class MarzbanClient
     public function testConnection(): array
     {
         $this->login(); // always force a fresh login to validate credentials
+
         return $this->request('GET', '/api/system');
     }
 
@@ -94,34 +96,34 @@ class MarzbanClient
 
     public function getUser(string $username): array
     {
-        return $this->request('GET', '/api/user/' . rawurlencode($username));
+        return $this->request('GET', '/api/user/'.rawurlencode($username));
     }
 
     public function updateUser(string $username, array $payload): array
     {
-        return $this->request('PUT', '/api/user/' . rawurlencode($username), $payload);
+        return $this->request('PUT', '/api/user/'.rawurlencode($username), $payload);
     }
 
     public function deleteUser(string $username): void
     {
-        $this->request('DELETE', '/api/user/' . rawurlencode($username));
+        $this->request('DELETE', '/api/user/'.rawurlencode($username));
     }
 
     // ── User actions ──────────────────────────────────────────────────────────
 
     public function resetTraffic(string $username): array
     {
-        return $this->request('POST', '/api/user/' . rawurlencode($username) . '/reset');
+        return $this->request('POST', '/api/user/'.rawurlencode($username).'/reset');
     }
 
     public function revokeSubscription(string $username): array
     {
-        return $this->request('POST', '/api/user/' . rawurlencode($username) . '/revoke_sub');
+        return $this->request('POST', '/api/user/'.rawurlencode($username).'/revoke_sub');
     }
 
     public function getUsage(string $username): array
     {
-        return $this->request('GET', '/api/user/' . rawurlencode($username) . '/usage');
+        return $this->request('GET', '/api/user/'.rawurlencode($username).'/usage');
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
@@ -133,6 +135,7 @@ class MarzbanClient
     {
         try {
             $this->getUser($username);
+
             return true;
         } catch (MarzbanException $e) {
             if ($e->getCode() === 404) {
@@ -156,17 +159,17 @@ class MarzbanClient
      */
     public function normalizeUserResponse(array $response): array
     {
-        $usedBytes  = (int) ($response['used_traffic'] ?? 0);
+        $usedBytes = (int) ($response['used_traffic'] ?? 0);
         $limitBytes = (int) ($response['data_limit'] ?? 0);
 
         return [
-            'username'         => $response['username'] ?? null,
-            'status'           => $response['status'] ?? null,
-            'used_traffic_gb'  => $usedBytes > 0 ? round($usedBytes / 1_073_741_824, 2) : 0,
-            'data_limit_gb'    => $limitBytes > 0 ? round($limitBytes / 1_073_741_824, 2) : 0,
-            'expire'           => $response['expire'] ?? null,
+            'username' => $response['username'] ?? null,
+            'status' => $response['status'] ?? null,
+            'used_traffic_gb' => $usedBytes > 0 ? round($usedBytes / 1_073_741_824, 2) : 0,
+            'data_limit_gb' => $limitBytes > 0 ? round($limitBytes / 1_073_741_824, 2) : 0,
+            'expire' => $response['expire'] ?? null,
             'subscription_url' => $response['subscription_url'] ?? null,
-            'links'            => $response['links'] ?? [],
+            'links' => $response['links'] ?? [],
         ];
     }
 
@@ -179,17 +182,18 @@ class MarzbanClient
             ->asJson()
             ->acceptJson();
 
-        $response = match(strtoupper($method)) {
-            'GET'    => $http->get($this->url($path)),
-            'POST'   => $http->post($this->url($path), $data ?: (object)[]),
-            'PUT'    => $http->put($this->url($path), $data),
+        $response = match (strtoupper($method)) {
+            'GET' => $http->get($this->url($path)),
+            'POST' => $http->post($this->url($path), $data ?: (object) []),
+            'PUT' => $http->put($this->url($path), $data),
             'DELETE' => $http->delete($this->url($path)),
-            default  => throw new \InvalidArgumentException("Unsupported HTTP method: {$method}"),
+            default => throw new \InvalidArgumentException("Unsupported HTTP method: {$method}"),
         };
 
         // Token expired → refresh once and retry
         if ($response->status() === 401 && ! $retried) {
             Cache::forget($this->tokenKey());
+
             return $this->request($method, $path, $data, true);
         }
 
@@ -206,12 +210,13 @@ class MarzbanClient
                 return $cached;
             }
         }
+
         return $this->login();
     }
 
     private function url(string $path): string
     {
-        return rtrim($this->panel->base_url, '/') . $path;
+        return rtrim($this->panel->base_url, '/').$path;
     }
 
     private function tokenKey(): string
@@ -226,7 +231,7 @@ class MarzbanClient
         }
 
         $status = $response->status();
-        $body   = substr($response->body(), 0, 500);
+        $body = substr($response->body(), 0, 500);
 
         throw new MarzbanException(
             "Marzban API error [{$context}]: HTTP {$status} — {$body}",

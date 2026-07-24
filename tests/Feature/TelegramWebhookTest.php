@@ -2,8 +2,8 @@
 
 namespace Tests\Feature;
 
+use App\Models\BackupLog;
 use App\Models\Order;
-use App\Models\PaymentTransaction;
 use App\Models\SiteSetting;
 use App\Models\User;
 use App\Models\WalletTransaction;
@@ -17,8 +17,10 @@ class TelegramWebhookTest extends TestCase
 {
     use RefreshDatabase;
 
-    private const CHAT  = '-1001234567890';
+    private const CHAT = '-1001234567890';
+
     private const ADMIN = '555000111';
+
     private const SECRET = 'super-secret-webhook-token';
 
     private function configureBot(): void
@@ -34,11 +36,11 @@ class TelegramWebhookTest extends TestCase
     {
         return [
             'update_id' => 1,
-            'message'   => [
+            'message' => [
                 'message_id' => 10,
-                'from'       => ['id' => (int) $fromId, 'is_bot' => false, 'first_name' => 'Admin'],
-                'chat'       => ['id' => (int) $chatId, 'type' => 'supergroup'],
-                'text'       => $text,
+                'from' => ['id' => (int) $fromId, 'is_bot' => false, 'first_name' => 'Admin'],
+                'chat' => ['id' => (int) $chatId, 'type' => 'supergroup'],
+                'text' => $text,
             ],
         ];
     }
@@ -46,6 +48,7 @@ class TelegramWebhookTest extends TestCase
     private function callWebhook(array $update, ?string $secret = self::SECRET)
     {
         $headers = $secret !== null ? ['X-Telegram-Bot-Api-Secret-Token' => $secret] : [];
+
         return $this->postJson('/telegram/webhook', $update, $headers);
     }
 
@@ -106,6 +109,7 @@ class TelegramWebhookTest extends TestCase
         $this->callWebhook($this->update('/help@ZedBot'))->assertOk();
         Http::assertSent(function ($req) {
             $text = (string) ($req['text'] ?? '');
+
             // Backup commands are live now — help must describe them, not "فاز بعد".
             return str_contains($text, 'دستورهای بات')
                 && str_contains($text, '/backup — اجرای بکاپ دستی')
@@ -134,6 +138,7 @@ class TelegramWebhookTest extends TestCase
 
         Http::assertSent(function ($req) {
             $text = (string) ($req['text'] ?? '');
+
             return str_contains($text, 'مالی امروز')
                 && str_contains($text, number_format(300000))   // sales
                 && str_contains($text, number_format(50000));   // topups
@@ -155,16 +160,17 @@ class TelegramWebhookTest extends TestCase
         $this->configureBot();
         Http::fake(['*' => Http::response(['ok' => true, 'result' => ['message_id' => 1]], 200)]);
 
-        \App\Models\BackupLog::create([
-            'type'       => \App\Models\BackupLog::TYPE_MANUAL,
-            'status'     => \App\Models\BackupLog::STATUS_SUCCESS,
-            'file_size'  => 3 * 1048576,
+        BackupLog::create([
+            'type' => BackupLog::TYPE_MANUAL,
+            'status' => BackupLog::STATUS_SUCCESS,
+            'file_size' => 3 * 1048576,
             'started_at' => now(),
         ]);
 
         $this->callWebhook($this->update('/backup_status'))->assertOk();
         Http::assertSent(function ($req) {
             $text = (string) ($req['text'] ?? '');
+
             return str_contains($text, 'وضعیت آخرین بکاپ') && str_contains($text, 'موفق');
         });
     }

@@ -9,6 +9,7 @@ use Filament\Forms\Contracts\HasForms;
 use Filament\Forms\Form;
 use Filament\Notifications\Notification;
 use Filament\Pages\Page;
+use Illuminate\Support\Facades\Cache;
 
 /**
  * تنظیمات سئو — global SEO defaults (site name, default title/description/OG
@@ -21,12 +22,17 @@ class SeoSettingsPage extends Page implements HasForms
 
     protected static string $view = 'filament.pages.seo-settings';
 
-    protected static ?string $navigationIcon   = 'heroicon-o-globe-alt';
-    protected static ?string $navigationGroup  = 'مدیریت محتوا';
-    protected static ?string $navigationLabel  = 'تنظیمات سئو';
-    protected static ?string $title            = 'تنظیمات سئو';
-    protected static ?string $slug             = 'seo/settings';
-    protected static ?int    $navigationSort   = 86;
+    protected static ?string $navigationIcon = 'heroicon-o-globe-alt';
+
+    protected static ?string $navigationGroup = 'مدیریت محتوا';
+
+    protected static ?string $navigationLabel = 'تنظیمات سئو';
+
+    protected static ?string $title = 'تنظیمات سئو';
+
+    protected static ?string $slug = 'seo/settings';
+
+    protected static ?int $navigationSort = 86;
 
     /** @var array<string,mixed> */
     public array $data = [];
@@ -106,7 +112,7 @@ class SeoSettingsPage extends Page implements HasForms
             SeoSettings::set($key, (string) $value);
         }
         SeoSettings::flush();
-        \Illuminate\Support\Facades\Cache::forget('seo_sitemap:index');
+        Cache::forget('seo_sitemap:index');
 
         Notification::make()->title('تنظیمات سئو ذخیره شد.')->success()->send();
     }

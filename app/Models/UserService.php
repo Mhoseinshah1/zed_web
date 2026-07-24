@@ -11,27 +11,40 @@ class UserService extends Model
 {
     // Service statuses
     const STATUS_PENDING_PROVISION = 'pending_provision';
-    const STATUS_ACTIVE            = 'active';
-    const STATUS_DISABLED          = 'disabled';
-    const STATUS_EXPIRED           = 'expired';
-    const STATUS_CANCELLED         = 'cancelled';
-    const STATUS_FAILED            = 'failed';
+
+    const STATUS_ACTIVE = 'active';
+
+    const STATUS_DISABLED = 'disabled';
+
+    const STATUS_EXPIRED = 'expired';
+
+    const STATUS_CANCELLED = 'cancelled';
+
+    const STATUS_FAILED = 'failed';
 
     /** User-facing Persian message when a duplicate service creation is blocked. */
     const MSG_DUPLICATE_SERVICE = 'سرویس این سفارش قبلاً ایجاد شده و امکان ایجاد سرویس تکراری وجود ندارد.';
 
     // Provision statuses
-    const PROVISION_PENDING         = 'pending';
+    const PROVISION_PENDING = 'pending';
+
     const PROVISION_MANUAL_REQUIRED = 'manual_required';
-    const PROVISION_PROVISIONED     = 'provisioned';
-    const PROVISION_FAILED          = 'failed';
-    const PROVISION_SKIPPED         = 'skipped';
+
+    const PROVISION_PROVISIONED = 'provisioned';
+
+    const PROVISION_FAILED = 'failed';
+
+    const PROVISION_SKIPPED = 'skipped';
 
     // Marzban sync statuses
-    const SYNC_SYNCED    = 'synced';
-    const SYNC_FAILED    = 'failed';
-    const SYNC_PENDING   = 'pending';
-    const SYNC_DISABLED  = 'disabled';
+    const SYNC_SYNCED = 'synced';
+
+    const SYNC_FAILED = 'failed';
+
+    const SYNC_PENDING = 'pending';
+
+    const SYNC_DISABLED = 'disabled';
+
     const SYNC_NOT_FOUND = 'not_found';
 
     protected $fillable = [
@@ -79,24 +92,24 @@ class UserService extends Model
     ];
 
     protected $casts = [
-        'traffic_total_gb'     => 'integer',
-        'traffic_used_gb'      => 'integer',
+        'traffic_total_gb' => 'integer',
+        'traffic_used_gb' => 'integer',
         'traffic_remaining_gb' => 'integer',
-        'duration_days'        => 'integer',
-        'starts_at'            => 'datetime',
-        'expires_at'           => 'datetime',
-        'activated_at'         => 'datetime',
-        'disabled_at'          => 'datetime',
-        'last_synced_at'       => 'datetime',
-        'marzban_expire_at'    => 'datetime',
-        'marzban_online_at'    => 'datetime',
-        'last_manual_sync_at'  => 'datetime',
+        'duration_days' => 'integer',
+        'starts_at' => 'datetime',
+        'expires_at' => 'datetime',
+        'activated_at' => 'datetime',
+        'disabled_at' => 'datetime',
+        'last_synced_at' => 'datetime',
+        'marzban_expire_at' => 'datetime',
+        'marzban_online_at' => 'datetime',
+        'last_manual_sync_at' => 'datetime',
         'marzban_used_traffic' => 'integer',
-        'marzban_data_limit'   => 'integer',
-        'marzban_raw'          => 'array',
-        'remote_inbound_id'    => 'integer',
-        'links_json'           => 'array',
-        'remote_raw'           => 'array',
+        'marzban_data_limit' => 'integer',
+        'marzban_raw' => 'array',
+        'remote_inbound_id' => 'integer',
+        'links_json' => 'array',
+        'remote_raw' => 'array',
     ];
 
     protected static function booted(): void
@@ -111,7 +124,7 @@ class UserService extends Model
     private static function generateServiceNumber(): string
     {
         do {
-            $number = 'SVC-' . date('Ymd') . '-' . strtoupper(Str::random(5));
+            $number = 'SVC-'.date('Ymd').'-'.strtoupper(Str::random(5));
         } while (self::where('service_number', $number)->exists());
 
         return $number;
@@ -158,20 +171,29 @@ class UserService extends Model
 
     public function isExpired(): bool
     {
-        if ($this->status === self::STATUS_EXPIRED) return true;
+        if ($this->status === self::STATUS_EXPIRED) {
+            return true;
+        }
+
         return $this->expires_at && $this->expires_at->isPast();
     }
 
     public function daysRemaining(): ?int
     {
-        if (! $this->expires_at) return null;
+        if (! $this->expires_at) {
+            return null;
+        }
         $days = (int) now()->diffInDays($this->expires_at, false);
+
         return max(0, $days);
     }
 
     public function trafficRemainingGb(): ?int
     {
-        if ($this->traffic_total_gb === null) return null;
+        if ($this->traffic_total_gb === null) {
+            return null;
+        }
+
         return max(0, $this->traffic_total_gb - ($this->traffic_used_gb ?? 0));
     }
 
@@ -183,21 +205,21 @@ class UserService extends Model
         );
 
         $this->update([
-            'status'           => self::STATUS_ACTIVE,
+            'status' => self::STATUS_ACTIVE,
             'provision_status' => ($this->config_link || $this->subscription_link)
                 ? self::PROVISION_PROVISIONED
                 : self::PROVISION_MANUAL_REQUIRED,
-            'activated_at'     => $this->activated_at ?? now(),
-            'starts_at'        => $starts,
-            'expires_at'       => $expires,
-            'disabled_at'      => null,
+            'activated_at' => $this->activated_at ?? now(),
+            'starts_at' => $starts,
+            'expires_at' => $expires,
+            'disabled_at' => null,
         ]);
     }
 
     public function markDisabled(): void
     {
         $this->update([
-            'status'      => self::STATUS_DISABLED,
+            'status' => self::STATUS_DISABLED,
             'disabled_at' => now(),
         ]);
     }
@@ -214,26 +236,26 @@ class UserService extends Model
 
     public function statusLabel(): string
     {
-        return match($this->status) {
+        return match ($this->status) {
             self::STATUS_PENDING_PROVISION => 'در انتظار ساخت',
-            self::STATUS_ACTIVE            => 'فعال',
-            self::STATUS_DISABLED          => 'غیرفعال',
-            self::STATUS_EXPIRED           => 'منقضی شده',
-            self::STATUS_CANCELLED         => 'لغو شده',
-            self::STATUS_FAILED            => 'ناموفق',
-            default                        => $this->status,
+            self::STATUS_ACTIVE => 'فعال',
+            self::STATUS_DISABLED => 'غیرفعال',
+            self::STATUS_EXPIRED => 'منقضی شده',
+            self::STATUS_CANCELLED => 'لغو شده',
+            self::STATUS_FAILED => 'ناموفق',
+            default => $this->status,
         };
     }
 
     public function provisionStatusLabel(): string
     {
-        return match($this->provision_status) {
-            self::PROVISION_PENDING         => 'در انتظار',
+        return match ($this->provision_status) {
+            self::PROVISION_PENDING => 'در انتظار',
             self::PROVISION_MANUAL_REQUIRED => 'نیاز به اقدام دستی',
-            self::PROVISION_PROVISIONED     => 'ساخته شده',
-            self::PROVISION_FAILED          => 'ناموفق',
-            self::PROVISION_SKIPPED         => 'رد شده',
-            default                         => $this->provision_status,
+            self::PROVISION_PROVISIONED => 'ساخته شده',
+            self::PROVISION_FAILED => 'ناموفق',
+            self::PROVISION_SKIPPED => 'رد شده',
+            default => $this->provision_status,
         };
     }
 
@@ -241,22 +263,22 @@ class UserService extends Model
     {
         return [
             self::STATUS_PENDING_PROVISION => 'در انتظار ساخت',
-            self::STATUS_ACTIVE            => 'فعال',
-            self::STATUS_DISABLED          => 'غیرفعال',
-            self::STATUS_EXPIRED           => 'منقضی شده',
-            self::STATUS_CANCELLED         => 'لغو شده',
-            self::STATUS_FAILED            => 'ناموفق',
+            self::STATUS_ACTIVE => 'فعال',
+            self::STATUS_DISABLED => 'غیرفعال',
+            self::STATUS_EXPIRED => 'منقضی شده',
+            self::STATUS_CANCELLED => 'لغو شده',
+            self::STATUS_FAILED => 'ناموفق',
         ];
     }
 
     public static function allProvisionStatuses(): array
     {
         return [
-            self::PROVISION_PENDING         => 'در انتظار',
+            self::PROVISION_PENDING => 'در انتظار',
             self::PROVISION_MANUAL_REQUIRED => 'نیاز به اقدام دستی',
-            self::PROVISION_PROVISIONED     => 'ساخته شده',
-            self::PROVISION_FAILED          => 'ناموفق',
-            self::PROVISION_SKIPPED         => 'رد شده',
+            self::PROVISION_PROVISIONED => 'ساخته شده',
+            self::PROVISION_FAILED => 'ناموفق',
+            self::PROVISION_SKIPPED => 'رد شده',
         ];
     }
 
@@ -291,10 +313,10 @@ class UserService extends Model
     public static function allSyncStatuses(): array
     {
         return [
-            self::SYNC_SYNCED    => 'سینک‌شده',
-            self::SYNC_FAILED    => 'خطا در سینک',
-            self::SYNC_PENDING   => 'در انتظار سینک',
-            self::SYNC_DISABLED  => 'غیرفعال',
+            self::SYNC_SYNCED => 'سینک‌شده',
+            self::SYNC_FAILED => 'خطا در سینک',
+            self::SYNC_PENDING => 'در انتظار سینک',
+            self::SYNC_DISABLED => 'غیرفعال',
             self::SYNC_NOT_FOUND => 'پیدا نشده در Marzban',
         ];
     }

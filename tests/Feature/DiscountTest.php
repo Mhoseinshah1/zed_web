@@ -2,6 +2,8 @@
 
 namespace Tests\Feature;
 
+use App\Filament\Pages\FinancialReport;
+use App\Filament\Resources\DiscountCodeResource;
 use App\Models\DiscountCode;
 use App\Models\DiscountRedemption;
 use App\Models\Order;
@@ -22,9 +24,10 @@ class DiscountTest extends TestCase
     {
         static $i = 0;
         $i++;
+
         return User::factory()->create(array_merge([
-            'username'             => "disc_user_{$i}",
-            'email'                => "disc_{$i}@test.com",
+            'username' => "disc_user_{$i}",
+            'email' => "disc_{$i}@test.com",
             'wallet_balance_toman' => 0,
         ], $attrs));
     }
@@ -32,9 +35,9 @@ class DiscountTest extends TestCase
     private function makePlan(int $price = 100000): Plan
     {
         return Plan::factory()->create([
-            'price_toman'   => $price,
-            'is_active'     => true,
-            'traffic_gb'    => 20,
+            'price_toman' => $price,
+            'is_active' => true,
+            'traffic_gb' => 20,
             'duration_days' => 30,
         ]);
     }
@@ -42,26 +45,26 @@ class DiscountTest extends TestCase
     private function makeOrder(User $user, Plan $plan, array $attrs = []): Order
     {
         return Order::create(array_merge([
-            'user_id'           => $user->id,
-            'plan_id'           => $plan->id,
-            'plan_name'         => $plan->name,
-            'price_toman'       => $plan->price_toman,
+            'user_id' => $user->id,
+            'plan_id' => $plan->id,
+            'plan_name' => $plan->name,
+            'price_toman' => $plan->price_toman,
             'final_price_toman' => $plan->price_toman,
-            'discount_toman'    => 0,
-            'traffic_gb'        => $plan->traffic_gb,
-            'duration_days'     => $plan->duration_days,
-            'status'            => Order::STATUS_PENDING,
-            'payment_status'    => Order::PAYMENT_UNPAID,
+            'discount_toman' => 0,
+            'traffic_gb' => $plan->traffic_gb,
+            'duration_days' => $plan->duration_days,
+            'status' => Order::STATUS_PENDING,
+            'payment_status' => Order::PAYMENT_UNPAID,
         ], $attrs));
     }
 
     private function makeDiscountCode(array $attrs = []): DiscountCode
     {
         return DiscountCode::create(array_merge([
-            'code'     => 'TEST10',
-            'type'     => DiscountCode::TYPE_PERCENT,
-            'value'    => 10,
-            'is_active'=> true,
+            'code' => 'TEST10',
+            'type' => DiscountCode::TYPE_PERCENT,
+            'value' => 10,
+            'is_active' => true,
             'per_user_usage_limit' => 1,
         ], $attrs));
     }
@@ -71,10 +74,10 @@ class DiscountTest extends TestCase
     public function test_admin_can_create_discount_code(): void
     {
         $code = DiscountCode::create([
-            'title'     => 'تست',
-            'code'      => 'NEWCODE',
-            'type'      => DiscountCode::TYPE_PERCENT,
-            'value'     => 20,
+            'title' => 'تست',
+            'code' => 'NEWCODE',
+            'type' => DiscountCode::TYPE_PERCENT,
+            'value' => 20,
             'is_active' => true,
             'per_user_usage_limit' => 1,
         ]);
@@ -85,16 +88,16 @@ class DiscountTest extends TestCase
 
     public function test_discount_code_resource_is_in_mali_group(): void
     {
-        $this->assertEquals('سفارش‌ها و مالی', \App\Filament\Resources\DiscountCodeResource::getNavigationGroup());
+        $this->assertEquals('سفارش‌ها و مالی', DiscountCodeResource::getNavigationGroup());
     }
 
     // ── Task 3: Percent discount calculates correctly ─────────────────────────
 
     public function test_percent_discount_calculates_correctly(): void
     {
-        $code  = $this->makeDiscountCode(['type' => DiscountCode::TYPE_PERCENT, 'value' => 20]);
-        $user  = $this->makeUser();
-        $plan  = $this->makePlan(100000);
+        $code = $this->makeDiscountCode(['type' => DiscountCode::TYPE_PERCENT, 'value' => 20]);
+        $user = $this->makeUser();
+        $plan = $this->makePlan(100000);
         $order = $this->makeOrder($user, $plan);
 
         $amount = app(DiscountService::class)->calculateDiscount($order, $code);
@@ -104,9 +107,9 @@ class DiscountTest extends TestCase
 
     public function test_fixed_discount_calculates_correctly(): void
     {
-        $code  = $this->makeDiscountCode(['type' => DiscountCode::TYPE_FIXED, 'value' => 15000]);
-        $user  = $this->makeUser();
-        $plan  = $this->makePlan(100000);
+        $code = $this->makeDiscountCode(['type' => DiscountCode::TYPE_FIXED, 'value' => 15000]);
+        $user = $this->makeUser();
+        $plan = $this->makePlan(100000);
         $order = $this->makeOrder($user, $plan);
 
         $amount = app(DiscountService::class)->calculateDiscount($order, $code);
@@ -117,12 +120,12 @@ class DiscountTest extends TestCase
     public function test_max_discount_cap_works_for_percent(): void
     {
         $code = $this->makeDiscountCode([
-            'type'               => DiscountCode::TYPE_PERCENT,
-            'value'              => 50,
-            'max_discount_amount'=> 10000,
+            'type' => DiscountCode::TYPE_PERCENT,
+            'value' => 50,
+            'max_discount_amount' => 10000,
         ]);
-        $user  = $this->makeUser();
-        $plan  = $this->makePlan(100000);
+        $user = $this->makeUser();
+        $plan = $this->makePlan(100000);
         $order = $this->makeOrder($user, $plan);
 
         $amount = app(DiscountService::class)->calculateDiscount($order, $code);
@@ -132,9 +135,9 @@ class DiscountTest extends TestCase
 
     public function test_fixed_discount_cannot_exceed_order_amount(): void
     {
-        $code  = $this->makeDiscountCode(['type' => DiscountCode::TYPE_FIXED, 'value' => 200000]);
-        $user  = $this->makeUser();
-        $plan  = $this->makePlan(100000);
+        $code = $this->makeDiscountCode(['type' => DiscountCode::TYPE_FIXED, 'value' => 200000]);
+        $user = $this->makeUser();
+        $plan = $this->makePlan(100000);
         $order = $this->makeOrder($user, $plan);
 
         $amount = app(DiscountService::class)->calculateDiscount($order, $code);
@@ -146,9 +149,9 @@ class DiscountTest extends TestCase
 
     public function test_min_order_amount_respected(): void
     {
-        $code  = $this->makeDiscountCode(['min_order_amount' => 200000]);
-        $user  = $this->makeUser();
-        $plan  = $this->makePlan(100000);
+        $code = $this->makeDiscountCode(['min_order_amount' => 200000]);
+        $user = $this->makeUser();
+        $plan = $this->makePlan(100000);
         $order = $this->makeOrder($user, $plan);
 
         $result = app(DiscountService::class)->validateCode($user, $order, 'TEST10');
@@ -162,8 +165,8 @@ class DiscountTest extends TestCase
         $code = $this->makeDiscountCode([
             'expires_at' => now()->subDay(),
         ]);
-        $user  = $this->makeUser();
-        $plan  = $this->makePlan();
+        $user = $this->makeUser();
+        $plan = $this->makePlan();
         $order = $this->makeOrder($user, $plan);
 
         $result = app(DiscountService::class)->validateCode($user, $order, 'TEST10');
@@ -175,8 +178,8 @@ class DiscountTest extends TestCase
     public function test_inactive_code_rejected(): void
     {
         $this->makeDiscountCode(['is_active' => false]);
-        $user  = $this->makeUser();
-        $plan  = $this->makePlan();
+        $user = $this->makeUser();
+        $plan = $this->makePlan();
         $order = $this->makeOrder($user, $plan);
 
         $result = app(DiscountService::class)->validateCode($user, $order, 'TEST10');
@@ -188,8 +191,8 @@ class DiscountTest extends TestCase
     public function test_future_code_rejected(): void
     {
         $this->makeDiscountCode(['starts_at' => now()->addDay()]);
-        $user  = $this->makeUser();
-        $plan  = $this->makePlan();
+        $user = $this->makeUser();
+        $plan = $this->makePlan();
         $order = $this->makeOrder($user, $plan);
 
         $result = app(DiscountService::class)->validateCode($user, $order, 'TEST10');
@@ -200,8 +203,8 @@ class DiscountTest extends TestCase
 
     public function test_nonexistent_code_rejected(): void
     {
-        $user  = $this->makeUser();
-        $plan  = $this->makePlan();
+        $user = $this->makeUser();
+        $plan = $this->makePlan();
         $order = $this->makeOrder($user, $plan);
 
         $result = app(DiscountService::class)->validateCode($user, $order, 'NONEXISTENT');
@@ -212,31 +215,31 @@ class DiscountTest extends TestCase
 
     public function test_total_usage_limit_works(): void
     {
-        $code  = $this->makeDiscountCode(['total_usage_limit' => 2, 'per_user_usage_limit' => 5]);
+        $code = $this->makeDiscountCode(['total_usage_limit' => 2, 'per_user_usage_limit' => 5]);
         $user1 = $this->makeUser();
         $user2 = $this->makeUser();
         $user3 = $this->makeUser();
-        $plan  = $this->makePlan();
+        $plan = $this->makePlan();
 
         // Use up the limit
         DiscountRedemption::create([
             'discount_code_id' => $code->id,
-            'user_id'          => $user1->id,
-            'status'           => DiscountRedemption::STATUS_USED,
-            'original_amount'  => 100000,
-            'discount_amount'  => 10000,
-            'final_amount'     => 90000,
+            'user_id' => $user1->id,
+            'status' => DiscountRedemption::STATUS_USED,
+            'original_amount' => 100000,
+            'discount_amount' => 10000,
+            'final_amount' => 90000,
         ]);
         DiscountRedemption::create([
             'discount_code_id' => $code->id,
-            'user_id'          => $user2->id,
-            'status'           => DiscountRedemption::STATUS_USED,
-            'original_amount'  => 100000,
-            'discount_amount'  => 10000,
-            'final_amount'     => 90000,
+            'user_id' => $user2->id,
+            'status' => DiscountRedemption::STATUS_USED,
+            'original_amount' => 100000,
+            'discount_amount' => 10000,
+            'final_amount' => 90000,
         ]);
 
-        $order  = $this->makeOrder($user3, $plan);
+        $order = $this->makeOrder($user3, $plan);
         $result = app(DiscountService::class)->validateCode($user3, $order, 'TEST10');
 
         $this->assertFalse($result['valid']);
@@ -252,14 +255,14 @@ class DiscountTest extends TestCase
         // Mark as already used
         DiscountRedemption::create([
             'discount_code_id' => $code->id,
-            'user_id'          => $user->id,
-            'status'           => DiscountRedemption::STATUS_USED,
-            'original_amount'  => 100000,
-            'discount_amount'  => 10000,
-            'final_amount'     => 90000,
+            'user_id' => $user->id,
+            'status' => DiscountRedemption::STATUS_USED,
+            'original_amount' => 100000,
+            'discount_amount' => 10000,
+            'final_amount' => 90000,
         ]);
 
-        $order  = $this->makeOrder($user, $plan);
+        $order = $this->makeOrder($user, $plan);
         $result = app(DiscountService::class)->validateCode($user, $order, 'TEST10');
 
         $this->assertFalse($result['valid']);
@@ -270,8 +273,8 @@ class DiscountTest extends TestCase
     {
         $plan1 = $this->makePlan();
         $plan2 = $this->makePlan();
-        $code  = $this->makeDiscountCode(['allowed_plan_ids' => [$plan1->id]]);
-        $user  = $this->makeUser();
+        $code = $this->makeDiscountCode(['allowed_plan_ids' => [$plan1->id]]);
+        $user = $this->makeUser();
         $order = $this->makeOrder($user, $plan2);
 
         $result = app(DiscountService::class)->validateCode($user, $order, 'TEST10');
@@ -285,8 +288,8 @@ class DiscountTest extends TestCase
     public function test_order_stores_discount_snapshot(): void
     {
         $this->makeDiscountCode(['type' => DiscountCode::TYPE_PERCENT, 'value' => 20]);
-        $user  = $this->makeUser();
-        $plan  = $this->makePlan(100000);
+        $user = $this->makeUser();
+        $plan = $this->makePlan(100000);
         $order = $this->makeOrder($user, $plan);
 
         app(DiscountService::class)->applyToOrder($user, $order, 'TEST10');
@@ -311,9 +314,9 @@ class DiscountTest extends TestCase
 
         // Verify wallet topup route does not accept discount codes
         $response = $this->actingAs($user)->post(route('dashboard.wallet.topup.submit'), [
-            'amount'            => 100000,
+            'amount' => 100000,
             'payment_method_id' => 999,
-            'discount_code'     => 'TEST10',
+            'discount_code' => 'TEST10',
         ]);
 
         // No redemption created from wallet topup
@@ -324,8 +327,8 @@ class DiscountTest extends TestCase
 
     public function test_user_sees_discount_section_on_unpaid_order(): void
     {
-        $user  = $this->makeUser();
-        $plan  = $this->makePlan();
+        $user = $this->makeUser();
+        $plan = $this->makePlan();
         $order = $this->makeOrder($user, $plan);
 
         $this->actingAs($user)
@@ -336,12 +339,12 @@ class DiscountTest extends TestCase
 
     public function test_user_does_not_see_discount_section_on_paid_order(): void
     {
-        $user  = $this->makeUser();
-        $plan  = $this->makePlan();
+        $user = $this->makeUser();
+        $plan = $this->makePlan();
         $order = $this->makeOrder($user, $plan, [
-            'status'         => Order::STATUS_COMPLETED,
+            'status' => Order::STATUS_COMPLETED,
             'payment_status' => Order::PAYMENT_PAID,
-            'paid_at'        => now(),
+            'paid_at' => now(),
         ]);
 
         $this->actingAs($user)
@@ -353,8 +356,8 @@ class DiscountTest extends TestCase
     public function test_apply_discount_via_http(): void
     {
         $this->makeDiscountCode(['type' => DiscountCode::TYPE_FIXED, 'value' => 10000]);
-        $user  = $this->makeUser();
-        $plan  = $this->makePlan(100000);
+        $user = $this->makeUser();
+        $plan = $this->makePlan(100000);
         $order = $this->makeOrder($user, $plan);
 
         $this->actingAs($user)
@@ -369,8 +372,8 @@ class DiscountTest extends TestCase
     public function test_remove_discount_via_http(): void
     {
         $this->makeDiscountCode(['type' => DiscountCode::TYPE_FIXED, 'value' => 10000]);
-        $user  = $this->makeUser();
-        $plan  = $this->makePlan(100000);
+        $user = $this->makeUser();
+        $plan = $this->makePlan(100000);
         $order = $this->makeOrder($user, $plan);
 
         app(DiscountService::class)->applyToOrder($user, $order, 'TEST10');
@@ -391,9 +394,9 @@ class DiscountTest extends TestCase
     {
         Queue::fake();
 
-        $code  = $this->makeDiscountCode(['type' => DiscountCode::TYPE_FIXED, 'value' => 20000]);
-        $user  = $this->makeUser();
-        $plan  = $this->makePlan(100000);
+        $code = $this->makeDiscountCode(['type' => DiscountCode::TYPE_FIXED, 'value' => 20000]);
+        $user = $this->makeUser();
+        $plan = $this->makePlan(100000);
         $order = $this->makeOrder($user, $plan);
 
         app(DiscountService::class)->applyToOrder($user, $order, 'TEST10');
@@ -403,11 +406,11 @@ class DiscountTest extends TestCase
 
         // Simulate what PaymentController::submit does for manual payment
         $tx = PaymentTransaction::create([
-            'order_id'     => $order->id,
-            'user_id'      => $user->id,
-            'provider'     => 'manual',
-            'method'       => 'manual',
-            'status'       => PaymentTransaction::STATUS_SUBMITTED,
+            'order_id' => $order->id,
+            'user_id' => $user->id,
+            'provider' => 'manual',
+            'method' => 'manual',
+            'status' => PaymentTransaction::STATUS_SUBMITTED,
             'amount_toman' => $order->final_price_toman, // must use final_price_toman
         ]);
 
@@ -419,8 +422,8 @@ class DiscountTest extends TestCase
         Queue::fake();
 
         $this->makeDiscountCode(['type' => DiscountCode::TYPE_FIXED, 'value' => 10000]);
-        $user  = $this->makeUser();
-        $plan  = $this->makePlan(100000);
+        $user = $this->makeUser();
+        $plan = $this->makePlan(100000);
         $order = $this->makeOrder($user, $plan);
 
         app(DiscountService::class)->applyToOrder($user, $order, 'TEST10');
@@ -428,15 +431,15 @@ class DiscountTest extends TestCase
 
         $this->assertDatabaseHas('discount_redemptions', [
             'order_id' => $order->id,
-            'status'   => DiscountRedemption::STATUS_RESERVED,
+            'status' => DiscountRedemption::STATUS_RESERVED,
         ]);
 
         $tx = PaymentTransaction::create([
-            'order_id'     => $order->id,
-            'user_id'      => $user->id,
-            'provider'     => 'manual',
-            'method'       => 'manual',
-            'status'       => PaymentTransaction::STATUS_SUBMITTED,
+            'order_id' => $order->id,
+            'user_id' => $user->id,
+            'provider' => 'manual',
+            'method' => 'manual',
+            'status' => PaymentTransaction::STATUS_SUBMITTED,
             'amount_toman' => $order->final_price_toman,
         ]);
 
@@ -444,7 +447,7 @@ class DiscountTest extends TestCase
 
         $this->assertDatabaseHas('discount_redemptions', [
             'order_id' => $order->id,
-            'status'   => DiscountRedemption::STATUS_USED,
+            'status' => DiscountRedemption::STATUS_USED,
         ]);
     }
 
@@ -453,19 +456,19 @@ class DiscountTest extends TestCase
         Queue::fake();
 
         $this->makeDiscountCode(['type' => DiscountCode::TYPE_FIXED, 'value' => 10000]);
-        $user  = $this->makeUser();
-        $plan  = $this->makePlan(100000);
+        $user = $this->makeUser();
+        $plan = $this->makePlan(100000);
         $order = $this->makeOrder($user, $plan);
 
         app(DiscountService::class)->applyToOrder($user, $order, 'TEST10');
         $order->refresh();
 
         $tx = PaymentTransaction::create([
-            'order_id'     => $order->id,
-            'user_id'      => $user->id,
-            'provider'     => 'manual',
-            'method'       => 'manual',
-            'status'       => PaymentTransaction::STATUS_SUBMITTED,
+            'order_id' => $order->id,
+            'user_id' => $user->id,
+            'provider' => 'manual',
+            'method' => 'manual',
+            'status' => PaymentTransaction::STATUS_SUBMITTED,
             'amount_toman' => $order->final_price_toman,
         ]);
 
@@ -487,19 +490,19 @@ class DiscountTest extends TestCase
 
     public function test_financial_report_sales_uses_final_amount(): void
     {
-        $user  = $this->makeUser();
-        $plan  = $this->makePlan(100000);
+        $user = $this->makeUser();
+        $plan = $this->makePlan(100000);
         $order = $this->makeOrder($user, $plan, [
-            'status'            => Order::STATUS_COMPLETED,
-            'payment_status'    => Order::PAYMENT_PAID,
+            'status' => Order::STATUS_COMPLETED,
+            'payment_status' => Order::PAYMENT_PAID,
             'final_price_toman' => 80000, // after 20,000 discount
-            'discount_toman'    => 20000,
-            'paid_at'           => now(),
+            'discount_toman' => 20000,
+            'paid_at' => now(),
         ]);
 
-        $report = new \App\Filament\Pages\FinancialReport();
+        $report = new FinancialReport;
         $report->dateFrom = today()->format('Y-m-d');
-        $report->dateTo   = today()->format('Y-m-d');
+        $report->dateTo = today()->format('Y-m-d');
 
         $this->assertEquals(80000, $report->getSalesToday()); // uses final_price_toman
     }
@@ -512,26 +515,26 @@ class DiscountTest extends TestCase
 
         DiscountRedemption::create([
             'discount_code_id' => $code->id,
-            'user_id'          => $user->id,
-            'status'           => DiscountRedemption::STATUS_USED,
-            'original_amount'  => 100000,
-            'discount_amount'  => 10000,
-            'final_amount'     => 90000,
-            'used_at'          => now(),
+            'user_id' => $user->id,
+            'status' => DiscountRedemption::STATUS_USED,
+            'original_amount' => 100000,
+            'discount_amount' => 10000,
+            'final_amount' => 90000,
+            'used_at' => now(),
         ]);
         DiscountRedemption::create([
             'discount_code_id' => $code->id,
-            'user_id'          => $user->id,
-            'status'           => DiscountRedemption::STATUS_USED,
-            'original_amount'  => 100000,
-            'discount_amount'  => 10000,
-            'final_amount'     => 90000,
-            'used_at'          => now(),
+            'user_id' => $user->id,
+            'status' => DiscountRedemption::STATUS_USED,
+            'original_amount' => 100000,
+            'discount_amount' => 10000,
+            'final_amount' => 90000,
+            'used_at' => now(),
         ]);
 
-        $report = new \App\Filament\Pages\FinancialReport();
+        $report = new FinancialReport;
         $report->dateFrom = today()->format('Y-m-d');
-        $report->dateTo   = today()->format('Y-m-d');
+        $report->dateTo = today()->format('Y-m-d');
 
         $this->assertEquals(20000, $report->getTotalDiscountsRange());
         $this->assertEquals(2, $report->getDiscountCountRange());
@@ -544,7 +547,7 @@ class DiscountTest extends TestCase
         $this->makeDiscountCode();
         $owner = $this->makeUser();
         $other = $this->makeUser();
-        $plan  = $this->makePlan();
+        $plan = $this->makePlan();
         $order = $this->makeOrder($owner, $plan);
 
         $this->actingAs($other)
@@ -555,10 +558,10 @@ class DiscountTest extends TestCase
     public function test_user_cannot_apply_discount_to_paid_order(): void
     {
         $this->makeDiscountCode();
-        $user  = $this->makeUser();
-        $plan  = $this->makePlan();
+        $user = $this->makeUser();
+        $plan = $this->makePlan();
         $order = $this->makeOrder($user, $plan, [
-            'status'         => Order::STATUS_COMPLETED,
+            'status' => Order::STATUS_COMPLETED,
             'payment_status' => Order::PAYMENT_PAID,
         ]);
 
@@ -572,24 +575,24 @@ class DiscountTest extends TestCase
     {
         // Capacity policy: a non-expired `reserved` redemption temporarily
         // consumes capacity, so a second user cannot reserve past the limit.
-        $code  = $this->makeDiscountCode(['total_usage_limit' => 1]);
+        $code = $this->makeDiscountCode(['total_usage_limit' => 1]);
         $user1 = $this->makeUser();
         $user2 = $this->makeUser();
-        $plan  = $this->makePlan();
+        $plan = $this->makePlan();
 
         DiscountRedemption::create([
             'discount_code_id' => $code->id,
-            'user_id'          => $user1->id,
-            'order_id'         => $this->makeOrder($user1, $plan)->id,
-            'status'           => DiscountRedemption::STATUS_RESERVED,
-            'original_amount'  => 100000,
-            'discount_amount'  => 10000,
-            'final_amount'     => 90000,
-            'reserved_at'      => now(),
-            'expires_at'       => now()->addMinutes(30),
+            'user_id' => $user1->id,
+            'order_id' => $this->makeOrder($user1, $plan)->id,
+            'status' => DiscountRedemption::STATUS_RESERVED,
+            'original_amount' => 100000,
+            'discount_amount' => 10000,
+            'final_amount' => 90000,
+            'reserved_at' => now(),
+            'expires_at' => now()->addMinutes(30),
         ]);
 
-        $order  = $this->makeOrder($user2, $plan);
+        $order = $this->makeOrder($user2, $plan);
         $result = app(DiscountService::class)->validateCode($user2, $order, 'TEST10');
 
         $this->assertFalse($result['valid']);
@@ -599,24 +602,24 @@ class DiscountTest extends TestCase
     public function test_expired_reservation_does_not_consume_capacity(): void
     {
         // A reservation whose hold has lapsed frees capacity for others.
-        $code  = $this->makeDiscountCode(['total_usage_limit' => 1]);
+        $code = $this->makeDiscountCode(['total_usage_limit' => 1]);
         $user1 = $this->makeUser();
         $user2 = $this->makeUser();
-        $plan  = $this->makePlan();
+        $plan = $this->makePlan();
 
         DiscountRedemption::create([
             'discount_code_id' => $code->id,
-            'user_id'          => $user1->id,
-            'order_id'         => $this->makeOrder($user1, $plan)->id,
-            'status'           => DiscountRedemption::STATUS_RESERVED,
-            'original_amount'  => 100000,
-            'discount_amount'  => 10000,
-            'final_amount'     => 90000,
-            'reserved_at'      => now()->subHour(),
-            'expires_at'       => now()->subMinutes(5),
+            'user_id' => $user1->id,
+            'order_id' => $this->makeOrder($user1, $plan)->id,
+            'status' => DiscountRedemption::STATUS_RESERVED,
+            'original_amount' => 100000,
+            'discount_amount' => 10000,
+            'final_amount' => 90000,
+            'reserved_at' => now()->subHour(),
+            'expires_at' => now()->subMinutes(5),
         ]);
 
-        $order  = $this->makeOrder($user2, $plan);
+        $order = $this->makeOrder($user2, $plan);
         $result = app(DiscountService::class)->validateCode($user2, $order, 'TEST10');
 
         $this->assertTrue($result['valid']);
@@ -625,30 +628,30 @@ class DiscountTest extends TestCase
     public function test_release_reservation_on_order_cancellation(): void
     {
         $this->makeDiscountCode();
-        $user  = $this->makeUser();
-        $plan  = $this->makePlan(100000);
+        $user = $this->makeUser();
+        $plan = $this->makePlan(100000);
         $order = $this->makeOrder($user, $plan);
 
         app(DiscountService::class)->applyToOrder($user, $order, 'TEST10');
 
         $this->assertDatabaseHas('discount_redemptions', [
             'order_id' => $order->id,
-            'status'   => DiscountRedemption::STATUS_RESERVED,
+            'status' => DiscountRedemption::STATUS_RESERVED,
         ]);
 
         app(DiscountService::class)->releaseReservation($order);
 
         $this->assertDatabaseHas('discount_redemptions', [
             'order_id' => $order->id,
-            'status'   => DiscountRedemption::STATUS_CANCELLED,
+            'status' => DiscountRedemption::STATUS_CANCELLED,
         ]);
     }
 
     public function test_discount_code_is_case_insensitive(): void
     {
         $this->makeDiscountCode(['code' => 'TEST10']);
-        $user  = $this->makeUser();
-        $plan  = $this->makePlan();
+        $user = $this->makeUser();
+        $plan = $this->makePlan();
         $order = $this->makeOrder($user, $plan);
 
         $result = app(DiscountService::class)->validateCode($user, $order, 'test10');
@@ -663,20 +666,20 @@ class DiscountTest extends TestCase
     public function test_discount_code_index_page_renders_with_null_dates(): void
     {
         $admin = User::factory()->create([
-            'username'          => 'dc_idx_admin',
-            'is_admin'          => true,
+            'username' => 'dc_idx_admin',
+            'is_admin' => true,
             'email_verified_at' => now(),
         ]);
 
         // Record with null starts_at and expires_at — previously caused DateMalformedStringException
         DiscountCode::create([
-            'code'                 => 'NULLDATES',
-            'type'                 => DiscountCode::TYPE_PERCENT,
-            'value'                => 15,
-            'is_active'            => true,
+            'code' => 'NULLDATES',
+            'type' => DiscountCode::TYPE_PERCENT,
+            'value' => 15,
+            'is_active' => true,
             'per_user_usage_limit' => 1,
-            'starts_at'            => null,
-            'expires_at'           => null,
+            'starts_at' => null,
+            'expires_at' => null,
         ]);
 
         $this->actingAs($admin)
@@ -687,19 +690,19 @@ class DiscountTest extends TestCase
     public function test_discount_code_index_page_renders_with_real_dates(): void
     {
         $admin = User::factory()->create([
-            'username'          => 'dc_idx_admin2',
-            'is_admin'          => true,
+            'username' => 'dc_idx_admin2',
+            'is_admin' => true,
             'email_verified_at' => now(),
         ]);
 
         DiscountCode::create([
-            'code'                 => 'WITHDATES',
-            'type'                 => DiscountCode::TYPE_FIXED,
-            'value'                => 5000,
-            'is_active'            => false,
+            'code' => 'WITHDATES',
+            'type' => DiscountCode::TYPE_FIXED,
+            'value' => 5000,
+            'is_active' => false,
             'per_user_usage_limit' => 1,
-            'starts_at'            => now()->subDay(),
-            'expires_at'           => now()->subHour(),
+            'starts_at' => now()->subDay(),
+            'expires_at' => now()->subHour(),
         ]);
 
         $this->actingAs($admin)
@@ -710,8 +713,8 @@ class DiscountTest extends TestCase
     public function test_discount_code_create_page_still_opens(): void
     {
         $admin = User::factory()->create([
-            'username'          => 'dc_create_admin',
-            'is_admin'          => true,
+            'username' => 'dc_create_admin',
+            'is_admin' => true,
             'email_verified_at' => now(),
         ]);
 

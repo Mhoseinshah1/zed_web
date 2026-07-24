@@ -2,11 +2,10 @@
 
 namespace Tests\Feature;
 
+use App\Filament\Pages\TelegramSettingsPage;
 use App\Jobs\RunBackupJob;
-use App\Jobs\SendTelegramAdminMessageJob;
 use App\Models\BackupLog;
 use App\Models\SiteSetting;
-use App\Models\TelegramAdminNotificationLog;
 use App\Models\TelegramAdminTopic;
 use App\Models\User;
 use App\Services\Backup\BackupService;
@@ -14,10 +13,12 @@ use App\Services\Backup\BackupSettings;
 use App\Services\Telegram\TelegramClient;
 use App\Services\Telegram\TelegramSettings;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Process;
 use Illuminate\Support\Facades\Queue;
+use Livewire\Livewire;
 use Tests\TestCase;
 
 class BackupTelegramTest extends TestCase
@@ -29,14 +30,14 @@ class BackupTelegramTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
-        \Illuminate\Support\Facades\Cache::flush();
-        $this->tmp = sys_get_temp_dir() . '/zpbk_' . uniqid();
+        Cache::flush();
+        $this->tmp = sys_get_temp_dir().'/zpbk_'.uniqid();
         @mkdir($this->tmp, 0777, true);
     }
 
     protected function tearDown(): void
     {
-        @exec('rm -rf ' . escapeshellarg($this->tmp));
+        @exec('rm -rf '.escapeshellarg($this->tmp));
         parent::tearDown();
     }
 
@@ -66,8 +67,8 @@ class BackupTelegramTest extends TestCase
         TelegramAdminTopic::query()->update(['message_thread_id' => null]);
         Http::fake(['*' => Http::response(['ok' => true, 'result' => ['message_thread_id' => 50]], 200)]);
 
-        \Livewire\Livewire::actingAs(User::factory()->create(['is_admin' => true]))
-            ->test(\App\Filament\Pages\TelegramSettingsPage::class)
+        Livewire::actingAs(User::factory()->create(['is_admin' => true]))
+            ->test(TelegramSettingsPage::class)
             ->callAction('autoCreateTopics');
 
         $this->assertSame(50, TelegramAdminTopic::findByKey('sales')->message_thread_id);
@@ -89,17 +90,17 @@ class BackupTelegramTest extends TestCase
         if (! $this->hasTar()) {
             $this->markTestSkipped('tar not available');
         }
-        $src = $this->tmp . '/src';
+        $src = $this->tmp.'/src';
         @mkdir($src, 0777, true);
-        file_put_contents($src . '/.env', 'APP_KEY=secret');
-        file_put_contents($src . '/server.key', 'PRIVATE');
-        file_put_contents($src . '/normal.txt', 'hello');
+        file_put_contents($src.'/.env', 'APP_KEY=secret');
+        file_put_contents($src.'/server.key', 'PRIVATE');
+        file_put_contents($src.'/normal.txt', 'hello');
 
-        $archive = $this->tmp . '/out.tar.gz';
+        $archive = $this->tmp.'/out.tar.gz';
         app(BackupService::class)->createArchive($archive, [$src], app(BackupService::class)->excludePatterns());
 
         $list = [];
-        exec('tar -tzf ' . escapeshellarg($archive), $list);
+        exec('tar -tzf '.escapeshellarg($archive), $list);
         $joined = implode("\n", $list);
 
         $this->assertStringContainsString('normal.txt', $joined);

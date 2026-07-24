@@ -11,12 +11,14 @@ use App\Models\SiteSetting;
  */
 class ReferralSettings
 {
-    const MODE_ALL_USERS         = 'all_users';
-    const MODE_REPRESENTATIVES   = 'representatives_only';
+    const MODE_ALL_USERS = 'all_users';
+
+    const MODE_REPRESENTATIVES = 'representatives_only';
 
     public static function mode(): string
     {
         $mode = (string) SiteSetting::get('referral_mode', self::MODE_ALL_USERS);
+
         return in_array($mode, [self::MODE_ALL_USERS, self::MODE_REPRESENTATIVES], true)
             ? $mode
             : self::MODE_ALL_USERS;
@@ -40,6 +42,7 @@ class ReferralSettings
     public static function defaultCommissionType(): string
     {
         $type = (string) SiteSetting::get('default_commission_type', 'percent');
+
         return in_array($type, ['percent', 'fixed'], true) ? $type : 'percent';
     }
 
@@ -62,11 +65,11 @@ class ReferralSettings
     public static function commissionEnabledForType(string $orderType): bool
     {
         return match ($orderType) {
-            Order::TYPE_NEW_SERVICE   => (bool) SiteSetting::get('commission_on_new_service', true),
-            Order::TYPE_RENEWAL       => (bool) SiteSetting::get('commission_on_renewal', true),
+            Order::TYPE_NEW_SERVICE => (bool) SiteSetting::get('commission_on_new_service', true),
+            Order::TYPE_RENEWAL => (bool) SiteSetting::get('commission_on_renewal', true),
             Order::TYPE_EXTRA_TRAFFIC => (bool) SiteSetting::get('commission_on_extra_traffic', true),
-            Order::TYPE_EXTRA_TIME    => (bool) SiteSetting::get('commission_on_extra_time', true),
-            default                   => false, // wallet_topup and anything else
+            Order::TYPE_EXTRA_TIME => (bool) SiteSetting::get('commission_on_extra_time', true),
+            default => false, // wallet_topup and anything else
         };
     }
 

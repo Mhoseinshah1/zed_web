@@ -16,7 +16,7 @@ class SupportTicketController extends Controller
 
     private const ATTACHMENT_MESSAGES = [
         'attachments.*.mimes' => 'فرمت فایل پیوست مجاز نیست. فقط jpg، png، webp، pdf و txt پذیرفته می‌شود.',
-        'attachments.*.max'   => 'حجم هر فایل پیوست نباید بیشتر از ۵ مگابایت باشد.',
+        'attachments.*.max' => 'حجم هر فایل پیوست نباید بیشتر از ۵ مگابایت باشد.',
     ];
 
     public function __construct(
@@ -41,25 +41,25 @@ class SupportTicketController extends Controller
         return view('dashboard.tickets.create', [
             'categories' => SupportTicketCategory::active()->ordered()->get(),
             'priorities' => SupportTicket::priorities(),
-            'orders'     => $user->orders()->latest()->limit(50)->get(),
-            'services'   => $user->services()->latest()->limit(50)->get(),
+            'orders' => $user->orders()->latest()->limit(50)->get(),
+            'services' => $user->services()->latest()->limit(50)->get(),
         ]);
     }
 
     public function store(Request $request): RedirectResponse
     {
         $validated = $request->validate([
-            'subject'         => ['required', 'string', 'max:255'],
-            'body'            => ['required', 'string', 'max:5000'],
-            'category_id'     => ['nullable', 'integer', 'exists:support_ticket_categories,id'],
-            'priority'        => ['nullable', 'string'],
-            'order_id'        => ['nullable', 'integer'],
+            'subject' => ['required', 'string', 'max:255'],
+            'body' => ['required', 'string', 'max:5000'],
+            'category_id' => ['nullable', 'integer', 'exists:support_ticket_categories,id'],
+            'priority' => ['nullable', 'string'],
+            'order_id' => ['nullable', 'integer'],
             'user_service_id' => ['nullable', 'integer'],
-            'attachments'     => ['nullable', 'array', 'max:5'],
-            'attachments.*'   => self::ATTACHMENT_RULES,
+            'attachments' => ['nullable', 'array', 'max:5'],
+            'attachments.*' => self::ATTACHMENT_RULES,
         ], array_merge([
             'subject.required' => 'موضوع تیکت الزامی است.',
-            'body.required'    => 'متن پیام الزامی است.',
+            'body.required' => 'متن پیام الزامی است.',
         ], self::ATTACHMENT_MESSAGES));
 
         $ticket = $this->tickets->createTicket(
@@ -70,7 +70,7 @@ class SupportTicketController extends Controller
 
         return redirect()
             ->route('dashboard.tickets.show', $ticket)
-            ->with('success', 'تیکت شما با موفقیت ثبت شد. شماره تیکت: ' . $ticket->ticket_number);
+            ->with('success', 'تیکت شما با موفقیت ثبت شد. شماره تیکت: '.$ticket->ticket_number);
     }
 
     public function show(SupportTicket $ticket): View
@@ -90,8 +90,8 @@ class SupportTicketController extends Controller
         abort_if($ticket->user_id !== auth()->id(), 403);
 
         $validated = $request->validate([
-            'body'          => ['required', 'string', 'max:5000'],
-            'attachments'   => ['nullable', 'array', 'max:5'],
+            'body' => ['required', 'string', 'max:5000'],
+            'attachments' => ['nullable', 'array', 'max:5'],
             'attachments.*' => self::ATTACHMENT_RULES,
         ], array_merge([
             'body.required' => 'متن پیام الزامی است.',

@@ -8,8 +8,11 @@ use App\Models\TelegramAdminNotificationLog;
 use App\Models\TelegramAdminTopic;
 use App\Models\User;
 use App\Services\Telegram\TelegramAdminNotifier;
+use App\Services\Telegram\TelegramClient;
 use App\Services\Telegram\TelegramSettings;
+use App\Services\Telegram\TelegramTemplates;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
@@ -22,7 +25,7 @@ class TelegramAdminTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
-        \Illuminate\Support\Facades\Cache::flush(); // throttle uses the cache
+        Cache::flush(); // throttle uses the cache
     }
 
     private function configureBot(): void
@@ -96,7 +99,7 @@ class TelegramAdminTest extends TestCase
         app(TelegramAdminNotifier::class)->event('payment_success', ['user' => 'x', 'order' => 'ZP-2', 'amount' => '1', 'method' => 'm']);
         $log = TelegramAdminNotificationLog::where('event_key', 'payment_success')->firstOrFail();
 
-        (new SendTelegramAdminMessageJob($log->id))->handle(app(\App\Services\Telegram\TelegramClient::class), app(TelegramSettings::class));
+        (new SendTelegramAdminMessageJob($log->id))->handle(app(TelegramClient::class), app(TelegramSettings::class));
 
         $log->refresh();
         $this->assertSame(TelegramAdminNotificationLog::STATUS_SENT, $log->status);
@@ -184,7 +187,7 @@ class TelegramAdminTest extends TestCase
         $log = TelegramAdminNotificationLog::where('event_key', 'order_paid')->firstOrFail();
 
         try {
-            (new SendTelegramAdminMessageJob($log->id))->handle(app(\App\Services\Telegram\TelegramClient::class), app(TelegramSettings::class));
+            (new SendTelegramAdminMessageJob($log->id))->handle(app(TelegramClient::class), app(TelegramSettings::class));
         } catch (\Throwable $e) {
             (new SendTelegramAdminMessageJob($log->id))->failed($e);
         }
@@ -199,7 +202,7 @@ class TelegramAdminTest extends TestCase
     public function test_user_provided_text_is_escaped(): void
     {
         $this->configureBot();
-        [$title, $message] = app(\App\Services\Telegram\TelegramTemplates::class)
+        [$title, $message] = app(TelegramTemplates::class)
             ->render('ticket_created', ['user' => '<b>hax</b>', 'ticket' => 'T-1', 'subject' => 'a<script>']);
 
         $this->assertStringContainsString('&lt;b&gt;hax&lt;/b&gt;', $message);

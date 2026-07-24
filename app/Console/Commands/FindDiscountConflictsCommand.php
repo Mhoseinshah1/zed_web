@@ -38,6 +38,7 @@ class FindDiscountConflictsCommand extends Command
 
         if ($activeDupes->isEmpty() && $usedDupes->isEmpty()) {
             $this->info('هیچ تداخلی در کدهای تخفیف یافت نشد.');
+
             return self::SUCCESS;
         }
 

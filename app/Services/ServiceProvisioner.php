@@ -20,15 +20,15 @@ class ServiceProvisioner
         // unique index. On a race the loser gets the existing service and does
         // NOT re-dispatch the job or write a duplicate log.
         [$service, $created] = $this->firstOrCreateServiceForOrder($order, [
-            'user_id'          => $order->user_id,
-            'plan_id'          => $order->plan_id,
-            'plan_name'        => $order->plan_name,
+            'user_id' => $order->user_id,
+            'plan_id' => $order->plan_id,
+            'plan_name' => $order->plan_name,
             // Pin the plan's chosen panel (null = default fallback below).
-            'vpn_panel_id'     => $order->plan?->vpn_panel_id,
+            'vpn_panel_id' => $order->plan?->vpn_panel_id,
             'traffic_total_gb' => $order->traffic_gb,
-            'traffic_used_gb'  => 0,
-            'duration_days'    => $order->duration_days,
-            'status'           => UserService::STATUS_PENDING_PROVISION,
+            'traffic_used_gb' => 0,
+            'duration_days' => $order->duration_days,
+            'status' => UserService::STATUS_PENDING_PROVISION,
             'provision_status' => UserService::PROVISION_MANUAL_REQUIRED,
         ]);
 
@@ -43,9 +43,9 @@ class ServiceProvisioner
         // ProvisioningService so all panel types are honoured).
         $panel = ($service->vpn_panel_id ? VpnPanel::find($service->vpn_panel_id) : null)
             ?? VpnPanel::where('type', VpnPanel::TYPE_MARZBAN)
-                   ->where('is_active', true)
-                   ->where('is_default', true)
-                   ->first()
+                ->where('is_active', true)
+                ->where('is_default', true)
+                ->first()
             ?? VpnPanel::where('is_active', true)->where('is_default', true)->first();
 
         if ($panel) {
@@ -54,10 +54,10 @@ class ServiceProvisioner
 
             VpnServiceProvisionLog::create([
                 'user_service_id' => $service->id,
-                'vpn_panel_id'    => $panel->id,
-                'action'          => 'create_placeholder_service',
-                'status'          => 'success',
-                'message'         => "Dispatching provisioning via panel: {$panel->name} ({$panel->type})",
+                'vpn_panel_id' => $panel->id,
+                'action' => 'create_placeholder_service',
+                'status' => 'success',
+                'message' => "Dispatching provisioning via panel: {$panel->name} ({$panel->type})",
             ]);
 
             // Idempotent dispatch — ShouldBeUnique keyed on the service id means a
@@ -66,9 +66,9 @@ class ServiceProvisioner
         } else {
             VpnServiceProvisionLog::create([
                 'user_service_id' => $service->id,
-                'action'          => 'create_placeholder_service',
-                'status'          => 'skipped',
-                'message'         => 'No active default panel found. Manual provisioning required.',
+                'action' => 'create_placeholder_service',
+                'status' => 'skipped',
+                'message' => 'No active default panel found. Manual provisioning required.',
             ]);
         }
 
@@ -82,9 +82,9 @@ class ServiceProvisioner
 
             VpnServiceProvisionLog::create([
                 'user_service_id' => $service->id,
-                'action'          => 'manual_activate',
-                'status'          => 'success',
-                'message'         => 'Service manually activated by admin.',
+                'action' => 'manual_activate',
+                'status' => 'success',
+                'message' => 'Service manually activated by admin.',
             ]);
 
             return $service->fresh();
@@ -98,9 +98,9 @@ class ServiceProvisioner
 
             VpnServiceProvisionLog::create([
                 'user_service_id' => $service->id,
-                'action'          => 'manual_disable',
-                'status'          => 'success',
-                'message'         => 'Service manually disabled by admin.',
+                'action' => 'manual_disable',
+                'status' => 'success',
+                'message' => 'Service manually disabled by admin.',
             ]);
 
             return $service->fresh();
@@ -114,9 +114,9 @@ class ServiceProvisioner
 
             VpnServiceProvisionLog::create([
                 'user_service_id' => $service->id,
-                'action'          => 'manual_cancel',
-                'status'          => 'success',
-                'message'         => 'Service manually cancelled by admin.',
+                'action' => 'manual_cancel',
+                'status' => 'success',
+                'message' => 'Service manually cancelled by admin.',
             ]);
 
             return $service->fresh();
@@ -130,9 +130,9 @@ class ServiceProvisioner
 
             VpnServiceProvisionLog::create([
                 'user_service_id' => $service->id,
-                'action'          => 'manual_expire',
-                'status'          => 'success',
-                'message'         => 'Service manually marked as expired by admin.',
+                'action' => 'manual_expire',
+                'status' => 'success',
+                'message' => 'Service manually marked as expired by admin.',
             ]);
 
             return $service->fresh();

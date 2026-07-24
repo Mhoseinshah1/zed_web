@@ -10,11 +10,11 @@ class WalletController extends Controller
 {
     public function index()
     {
-        $user         = auth()->user();
+        $user = auth()->user();
         $transactions = $user->walletTransactions()->latest()->paginate(20);
 
         $walletEnabled = SiteText::getBool('wallet_enabled', true);
-        $topupEnabled  = $walletEnabled && SiteText::getBool('wallet_topup_enabled', true);
+        $topupEnabled = $walletEnabled && SiteText::getBool('wallet_topup_enabled', true);
 
         return view('dashboard.wallet', compact('user', 'transactions', 'walletEnabled', 'topupEnabled'));
     }
@@ -22,7 +22,7 @@ class WalletController extends Controller
     public function topupForm()
     {
         $walletEnabled = SiteText::getBool('wallet_enabled', true);
-        $topupEnabled  = SiteText::getBool('wallet_topup_enabled', true);
+        $topupEnabled = SiteText::getBool('wallet_topup_enabled', true);
 
         abort_unless($walletEnabled && $topupEnabled, 404);
 
@@ -34,9 +34,9 @@ class WalletController extends Controller
             ->values()
             ->all();
 
-        $minAmount    = max(1, (int) SiteText::get('wallet_min_topup_amount', '100000'));
+        $minAmount = max(1, (int) SiteText::get('wallet_min_topup_amount', '100000'));
         $maxAmountRaw = SiteText::get('wallet_max_topup_amount', '');
-        $maxAmount    = ($maxAmountRaw !== '' && (int) $maxAmountRaw > 0) ? max($minAmount, (int) $maxAmountRaw) : null;
+        $maxAmount = ($maxAmountRaw !== '' && (int) $maxAmountRaw > 0) ? max($minAmount, (int) $maxAmountRaw) : null;
 
         $methods = collect();
 
@@ -62,13 +62,13 @@ class WalletController extends Controller
     public function processTopup(Request $request)
     {
         $walletEnabled = SiteText::getBool('wallet_enabled', true);
-        $topupEnabled  = SiteText::getBool('wallet_topup_enabled', true);
+        $topupEnabled = SiteText::getBool('wallet_topup_enabled', true);
 
         abort_unless($walletEnabled && $topupEnabled, 403);
 
-        $minAmount    = max(1, (int) SiteText::get('wallet_min_topup_amount', '100000'));
+        $minAmount = max(1, (int) SiteText::get('wallet_min_topup_amount', '100000'));
         $maxAmountRaw = SiteText::get('wallet_max_topup_amount', '');
-        $maxAmount    = ($maxAmountRaw !== '' && (int) $maxAmountRaw > 0) ? max($minAmount, (int) $maxAmountRaw) : null;
+        $maxAmount = ($maxAmountRaw !== '' && (int) $maxAmountRaw > 0) ? max($minAmount, (int) $maxAmountRaw) : null;
 
         $amountRules = ['required', 'integer', "min:{$minAmount}"];
         if ($maxAmount !== null) {
@@ -77,18 +77,19 @@ class WalletController extends Controller
 
         $request->validate([
             'payment_method_id' => ['required', 'exists:payment_methods,id'],
-            'amount'            => $amountRules,
+            'amount' => $amountRules,
         ]);
 
-        $method      = PaymentMethod::findOrFail($request->payment_method_id);
+        $method = PaymentMethod::findOrFail($request->payment_method_id);
         $amountToman = (int) $request->amount;
-        $user        = auth()->user();
+        $user = auth()->user();
 
         if ($method->isNowPayments()) {
             abort_unless(
                 SiteText::getBool('wallet_topup_nowpayments_enabled', true) && $method->is_active,
                 422
             );
+
             return app(NowPaymentsController::class)
                 ->createWalletTopup($user, $amountToman, $method);
         }
@@ -98,6 +99,7 @@ class WalletController extends Controller
                 SiteText::getBool('wallet_topup_centralpay_enabled', false) && $method->is_active,
                 422
             );
+
             return app(CentralPayController::class)
                 ->initiateTopup($user, $amountToman, $method);
         }

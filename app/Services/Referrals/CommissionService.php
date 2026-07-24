@@ -9,6 +9,7 @@ use App\Models\User;
 use App\Models\WalletTransaction;
 use App\Services\Notifications\NotificationService;
 use App\Services\WalletService;
+use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
@@ -65,11 +66,11 @@ class CommissionService
             return $existing;
         }
 
-        [$type, $value]    = $this->resolveRate($referrer);
-        $original          = (int) $order->price_toman;
-        $final             = (int) $order->final_price_toman;
-        $base              = ReferralSettings::commissionAfterDiscount() ? $final : $original;
-        $amount            = $this->calculate($type, $value, $base);
+        [$type, $value] = $this->resolveRate($referrer);
+        $original = (int) $order->price_toman;
+        $final = (int) $order->final_price_toman;
+        $base = ReferralSettings::commissionAfterDiscount() ? $final : $original;
+        $amount = $this->calculate($type, $value, $base);
 
         if ($amount <= 0) {
             return null;
@@ -78,17 +79,17 @@ class CommissionService
         try {
             $commission = Commission::create([
                 'representative_user_id' => $referrer->id,
-                'referred_user_id'       => $buyer->id,
-                'order_id'               => $order->id,
-                'order_type'             => $order->order_type,
-                'original_amount'        => $original,
-                'final_amount'           => $final,
-                'commission_type'        => $type,
-                'commission_value'       => $value,
-                'commission_amount'      => $amount,
-                'status'                 => Commission::STATUS_PENDING,
+                'referred_user_id' => $buyer->id,
+                'order_id' => $order->id,
+                'order_type' => $order->order_type,
+                'original_amount' => $original,
+                'final_amount' => $final,
+                'commission_type' => $type,
+                'commission_value' => $value,
+                'commission_amount' => $amount,
+                'status' => Commission::STATUS_PENDING,
             ]);
-        } catch (\Illuminate\Database\QueryException $e) {
+        } catch (QueryException $e) {
             // Unique order_id collision under a race → fetch the winner.
             return Commission::where('order_id', $order->id)->first();
         }
@@ -119,6 +120,7 @@ class CommissionService
 
         if ($already) {
             $commission->update(['status' => Commission::STATUS_CREDITED, 'credited_at' => now()]);
+
             return;
         }
 
@@ -129,7 +131,7 @@ class CommissionService
                     $commission->commission_amount,
                     WalletTransaction::TYPE_REPRESENTATIVE_COMMISSION,
                     [
-                        'order_id'    => $commission->order_id,
+                        'order_id' => $commission->order_id,
                         'description' => 'پورسانت فروش نماینده',
                     ],
                 );
@@ -138,21 +140,22 @@ class CommissionService
                 $referrer->increment('commission_balance', $commission->commission_amount);
 
                 $commission->update([
-                    'status'      => Commission::STATUS_CREDITED,
+                    'status' => Commission::STATUS_CREDITED,
                     'credited_at' => now(),
                 ]);
             });
         } catch (\Throwable $e) {
             Log::error('CommissionService: wallet credit failed', [
                 'commission_id' => $commission->id,
-                'error'         => $e->getMessage(),
+                'error' => $e->getMessage(),
             ]);
 
             $this->notifications->notifyAdmins(
                 Notification::TYPE_ADMIN_WARNING,
                 ['message' => "واریز پورسانت #{$commission->id} به کیف پول نماینده ناموفق بود. نیاز به تلاش مجدد."],
-                'commission_credit_failed:' . $commission->id,
+                'commission_credit_failed:'.$commission->id,
             );
+
             return;
         }
 
@@ -162,18 +165,18 @@ class CommissionService
             $referrer,
             [
                 'user_name' => $referrer->name ?? $referrer->username,
-                'amount'    => number_format($commission->commission_amount),
+                'amount' => number_format($commission->commission_amount),
             ],
-            'commission_credited:' . $commission->id,
+            'commission_credited:'.$commission->id,
         );
     }
 
     public function cancel(Commission $commission, ?string $note = null): void
     {
         $commission->update([
-            'status'       => Commission::STATUS_CANCELLED,
+            'status' => Commission::STATUS_CANCELLED,
             'cancelled_at' => now(),
-            'admin_note'   => $note ?? $commission->admin_note,
+            'admin_note' => $note ?? $commission->admin_note,
         ]);
     }
 

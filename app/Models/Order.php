@@ -7,6 +7,7 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Str;
 
 class Order extends Model
@@ -14,30 +15,47 @@ class Order extends Model
     use HasFactory;
 
     // Order types
-    const TYPE_NEW_SERVICE   = 'new_service';
-    const TYPE_RENEWAL       = 'renewal';
+    const TYPE_NEW_SERVICE = 'new_service';
+
+    const TYPE_RENEWAL = 'renewal';
+
     const TYPE_EXTRA_TRAFFIC = 'extra_traffic';
-    const TYPE_EXTRA_TIME    = 'extra_time';
+
+    const TYPE_EXTRA_TIME = 'extra_time';
 
     // Order statuses
-    const STATUS_PENDING              = 'pending';
-    const STATUS_AWAITING_PAYMENT     = 'awaiting_payment';
-    const STATUS_PAID                 = 'paid';
-    const STATUS_PROCESSING           = 'processing';
-    const STATUS_PROVISIONING         = 'provisioning';
-    const STATUS_PROVISIONING_FAILED  = 'provisioning_failed';
-    const STATUS_COMPLETED            = 'completed';
-    const STATUS_CANCELLED            = 'cancelled';
-    const STATUS_FAILED               = 'failed';
-    const STATUS_RENEWAL_FAILED       = 'renewal_failed';
-    const STATUS_ADDON_FAILED         = 'addon_failed';
+    const STATUS_PENDING = 'pending';
+
+    const STATUS_AWAITING_PAYMENT = 'awaiting_payment';
+
+    const STATUS_PAID = 'paid';
+
+    const STATUS_PROCESSING = 'processing';
+
+    const STATUS_PROVISIONING = 'provisioning';
+
+    const STATUS_PROVISIONING_FAILED = 'provisioning_failed';
+
+    const STATUS_COMPLETED = 'completed';
+
+    const STATUS_CANCELLED = 'cancelled';
+
+    const STATUS_FAILED = 'failed';
+
+    const STATUS_RENEWAL_FAILED = 'renewal_failed';
+
+    const STATUS_ADDON_FAILED = 'addon_failed';
 
     // Payment statuses
-    const PAYMENT_UNPAID    = 'unpaid';
-    const PAYMENT_PENDING   = 'pending';
-    const PAYMENT_PAID      = 'paid';
-    const PAYMENT_FAILED    = 'failed';
-    const PAYMENT_REFUNDED  = 'refunded';
+    const PAYMENT_UNPAID = 'unpaid';
+
+    const PAYMENT_PENDING = 'pending';
+
+    const PAYMENT_PAID = 'paid';
+
+    const PAYMENT_FAILED = 'failed';
+
+    const PAYMENT_REFUNDED = 'refunded';
 
     /** User-facing Persian message when an already-processed order is re-submitted. */
     const MSG_ALREADY_PROCESSED = 'این سفارش قبلاً پردازش شده است.';
@@ -88,32 +106,32 @@ class Order extends Model
     ];
 
     protected $casts = [
-        'price_toman'        => 'integer',
-        'final_price_toman'  => 'integer',
-        'discount_toman'     => 'integer',
-        'discount_code_id'   => 'integer',
-        'discount_value'     => 'integer',
-        'traffic_gb'         => 'integer',
-        'duration_days'      => 'integer',
-        'renewal_days'            => 'integer',
-        'renewal_package_id'      => 'integer',
-        'user_service_id'         => 'integer',
-        'original_plan_id'        => 'integer',
+        'price_toman' => 'integer',
+        'final_price_toman' => 'integer',
+        'discount_toman' => 'integer',
+        'discount_code_id' => 'integer',
+        'discount_value' => 'integer',
+        'traffic_gb' => 'integer',
+        'duration_days' => 'integer',
+        'renewal_days' => 'integer',
+        'renewal_package_id' => 'integer',
+        'user_service_id' => 'integer',
+        'original_plan_id' => 'integer',
         'renewal_cashback_amount' => 'integer',
-        'original_expire_at'      => 'datetime',
-        'new_expire_at'           => 'datetime',
-        'renewal_applied_at'      => 'datetime',
-        'extra_traffic_gb'        => 'integer',
-        'extra_time_days'         => 'integer',
-        'unit_price'              => 'integer',
-        'original_data_limit'     => 'integer',
-        'new_data_limit'          => 'integer',
-        'addon_applied_at'        => 'datetime',
-        'last_retry_at'           => 'datetime',
-        'failure_reviewed_at'     => 'datetime',
-        'paid_at'             => 'datetime',
-        'completed_at'       => 'datetime',
-        'cancelled_at'       => 'datetime',
+        'original_expire_at' => 'datetime',
+        'new_expire_at' => 'datetime',
+        'renewal_applied_at' => 'datetime',
+        'extra_traffic_gb' => 'integer',
+        'extra_time_days' => 'integer',
+        'unit_price' => 'integer',
+        'original_data_limit' => 'integer',
+        'new_data_limit' => 'integer',
+        'addon_applied_at' => 'datetime',
+        'last_retry_at' => 'datetime',
+        'failure_reviewed_at' => 'datetime',
+        'paid_at' => 'datetime',
+        'completed_at' => 'datetime',
+        'cancelled_at' => 'datetime',
     ];
 
     protected static function booted(): void
@@ -128,7 +146,7 @@ class Order extends Model
     private static function generateOrderNumber(): string
     {
         do {
-            $number = 'ZED-' . date('Ymd') . '-' . strtoupper(Str::random(5));
+            $number = 'ZED-'.date('Ymd').'-'.strtoupper(Str::random(5));
         } while (self::where('order_number', $number)->exists());
 
         return $number;
@@ -215,12 +233,12 @@ class Order extends Model
     }
 
     /** The applied_at marker relevant to this order type (null if not applied). */
-    public function appliedAt(): ?\Illuminate\Support\Carbon
+    public function appliedAt(): ?Carbon
     {
         return match (true) {
             $this->isRenewal() => $this->renewal_applied_at,
-            $this->isAddon()   => $this->addon_applied_at,
-            default            => $this->service?->created_at,
+            $this->isAddon() => $this->addon_applied_at,
+            default => $this->service?->created_at,
         };
     }
 
@@ -238,51 +256,51 @@ class Order extends Model
     public static function allOrderTypes(): array
     {
         return [
-            self::TYPE_NEW_SERVICE   => 'خرید سرویس',
-            self::TYPE_RENEWAL       => 'تمدید سرویس',
+            self::TYPE_NEW_SERVICE => 'خرید سرویس',
+            self::TYPE_RENEWAL => 'تمدید سرویس',
             self::TYPE_EXTRA_TRAFFIC => 'خرید حجم اضافه',
-            self::TYPE_EXTRA_TIME    => 'خرید زمان اضافه',
+            self::TYPE_EXTRA_TIME => 'خرید زمان اضافه',
         ];
     }
 
     public function statusLabel(): string
     {
-        return match($this->status) {
-            self::STATUS_PENDING             => 'در انتظار',
-            self::STATUS_AWAITING_PAYMENT    => 'در انتظار پرداخت',
-            self::STATUS_PAID                => 'پرداخت شده',
-            self::STATUS_PROCESSING          => 'در حال پردازش',
-            self::STATUS_PROVISIONING        => 'در حال ساخت سرویس',
+        return match ($this->status) {
+            self::STATUS_PENDING => 'در انتظار',
+            self::STATUS_AWAITING_PAYMENT => 'در انتظار پرداخت',
+            self::STATUS_PAID => 'پرداخت شده',
+            self::STATUS_PROCESSING => 'در حال پردازش',
+            self::STATUS_PROVISIONING => 'در حال ساخت سرویس',
             self::STATUS_PROVISIONING_FAILED => 'خطا در ساخت سرویس',
-            self::STATUS_COMPLETED           => 'فعال',
-            self::STATUS_CANCELLED           => 'لغو شده',
-            self::STATUS_FAILED              => 'ناموفق',
-            self::STATUS_RENEWAL_FAILED      => 'خطا در تمدید',
-            self::STATUS_ADDON_FAILED        => 'خطا در اعمال تغییرات سرویس',
-            default                          => $this->status,
+            self::STATUS_COMPLETED => 'فعال',
+            self::STATUS_CANCELLED => 'لغو شده',
+            self::STATUS_FAILED => 'ناموفق',
+            self::STATUS_RENEWAL_FAILED => 'خطا در تمدید',
+            self::STATUS_ADDON_FAILED => 'خطا در اعمال تغییرات سرویس',
+            default => $this->status,
         };
     }
 
     public function paymentStatusLabel(): string
     {
-        return match($this->payment_status) {
-            self::PAYMENT_UNPAID   => 'پرداخت نشده',
-            self::PAYMENT_PENDING  => 'در انتظار',
-            self::PAYMENT_PAID     => 'پرداخت شده',
-            self::PAYMENT_FAILED   => 'ناموفق',
+        return match ($this->payment_status) {
+            self::PAYMENT_UNPAID => 'پرداخت نشده',
+            self::PAYMENT_PENDING => 'در انتظار',
+            self::PAYMENT_PAID => 'پرداخت شده',
+            self::PAYMENT_FAILED => 'ناموفق',
             self::PAYMENT_REFUNDED => 'برگشت داده شده',
-            default                => $this->payment_status,
+            default => $this->payment_status,
         };
     }
 
     public function trafficLabel(): string
     {
-        return $this->traffic_gb ? $this->traffic_gb . ' گیگابایت' : 'نامحدود';
+        return $this->traffic_gb ? $this->traffic_gb.' گیگابایت' : 'نامحدود';
     }
 
     public function durationLabel(): string
     {
-        return $this->duration_days ? $this->duration_days . ' روز' : 'نامحدود';
+        return $this->duration_days ? $this->duration_days.' روز' : 'نامحدود';
     }
 
     public function formattedPrice(): string
@@ -293,27 +311,27 @@ class Order extends Model
     public static function allStatuses(): array
     {
         return [
-            self::STATUS_PENDING             => 'در انتظار',
-            self::STATUS_AWAITING_PAYMENT    => 'در انتظار پرداخت',
-            self::STATUS_PAID                => 'پرداخت شده',
-            self::STATUS_PROCESSING          => 'در حال پردازش',
-            self::STATUS_PROVISIONING        => 'در حال ساخت سرویس',
+            self::STATUS_PENDING => 'در انتظار',
+            self::STATUS_AWAITING_PAYMENT => 'در انتظار پرداخت',
+            self::STATUS_PAID => 'پرداخت شده',
+            self::STATUS_PROCESSING => 'در حال پردازش',
+            self::STATUS_PROVISIONING => 'در حال ساخت سرویس',
             self::STATUS_PROVISIONING_FAILED => 'خطا در ساخت سرویس',
-            self::STATUS_COMPLETED           => 'فعال',
-            self::STATUS_CANCELLED           => 'لغو شده',
-            self::STATUS_FAILED              => 'ناموفق',
-            self::STATUS_RENEWAL_FAILED      => 'خطا در تمدید',
-            self::STATUS_ADDON_FAILED        => 'خطا در اعمال تغییرات سرویس',
+            self::STATUS_COMPLETED => 'فعال',
+            self::STATUS_CANCELLED => 'لغو شده',
+            self::STATUS_FAILED => 'ناموفق',
+            self::STATUS_RENEWAL_FAILED => 'خطا در تمدید',
+            self::STATUS_ADDON_FAILED => 'خطا در اعمال تغییرات سرویس',
         ];
     }
 
     public static function allPaymentStatuses(): array
     {
         return [
-            self::PAYMENT_UNPAID   => 'پرداخت نشده',
-            self::PAYMENT_PENDING  => 'در انتظار',
-            self::PAYMENT_PAID     => 'پرداخت شده',
-            self::PAYMENT_FAILED   => 'ناموفق',
+            self::PAYMENT_UNPAID => 'پرداخت نشده',
+            self::PAYMENT_PENDING => 'در انتظار',
+            self::PAYMENT_PAID => 'پرداخت شده',
+            self::PAYMENT_FAILED => 'ناموفق',
             self::PAYMENT_REFUNDED => 'برگشت داده شده',
         ];
     }

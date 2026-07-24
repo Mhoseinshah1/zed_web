@@ -5,6 +5,7 @@ namespace Tests\Feature;
 use App\Filament\Pages\AppearanceSettings;
 use App\Models\SiteSetting;
 use App\Models\User;
+use App\Services\Theme\AppearanceManager;
 use App\Services\Theme\ThemeManager;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Livewire\Livewire;
@@ -163,16 +164,16 @@ class ThemeTest extends TestCase
         Livewire::actingAs($this->admin())
             ->test(AppearanceSettings::class)
             ->fillForm([
-                'appearance_mode'              => 'light',
-                'site_theme_preset'            => 'luxury_gold',
-                'primary_color'                => '#ff0000',
-                'accent_color'                 => '#00ff00',
-                'admin_density'                => 'compact',
-                'admin_sidebar_size'           => 'large',
-                'admin_brand_display'          => 'logo_text',
-                'admin_brand_text'             => 'My Panel',
+                'appearance_mode' => 'light',
+                'site_theme_preset' => 'luxury_gold',
+                'primary_color' => '#ff0000',
+                'accent_color' => '#00ff00',
+                'admin_density' => 'compact',
+                'admin_sidebar_size' => 'large',
+                'admin_brand_display' => 'logo_text',
+                'admin_brand_text' => 'My Panel',
                 'allow_user_appearance_switch' => false,
-                'allow_user_theme_switch'      => true,
+                'allow_user_theme_switch' => true,
             ])
             ->call('save');
 
@@ -186,8 +187,8 @@ class ThemeTest extends TestCase
         $this->assertSame('large', SiteSetting::get('admin_sidebar_size'));
         $this->assertSame('logo_text', SiteSetting::get('admin_brand_display'));
         $this->assertSame('My Panel', SiteSetting::get('admin_brand_text'));
-        $this->assertFalse(\App\Services\Theme\AppearanceManager::allowUserAppearanceSwitch());
-        $this->assertTrue(\App\Services\Theme\AppearanceManager::allowUserThemeSwitch());
+        $this->assertFalse(AppearanceManager::allowUserAppearanceSwitch());
+        $this->assertTrue(AppearanceManager::allowUserThemeSwitch());
 
         // Unrelated keys this page does not manage are untouched.
         $this->assertSame('16px', SiteSetting::get('card_radius'));

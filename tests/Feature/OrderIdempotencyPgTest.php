@@ -54,12 +54,12 @@ class OrderIdempotencyPgTest extends TestCase
     public function test_twenty_forked_workers_create_exactly_one_order(): void
     {
         $user = User::create([
-            'name' => 'Idem', 'username' => self::PREFIX . 'user',
-            'email' => self::PREFIX . 'user@test.com', 'password' => bcrypt('x'),
+            'name' => 'Idem', 'username' => self::PREFIX.'user',
+            'email' => self::PREFIX.'user@test.com', 'password' => bcrypt('x'),
         ]);
 
         $plan = Plan::create([
-            'name' => self::PREFIX . 'plan', 'slug' => self::PREFIX . 'plan',
+            'name' => self::PREFIX.'plan', 'slug' => self::PREFIX.'plan',
             'price_toman' => 100000, 'is_active' => true, 'traffic_gb' => 20, 'duration_days' => 30,
         ]);
 
@@ -78,7 +78,7 @@ class OrderIdempotencyPgTest extends TestCase
                 DB::reconnect();
                 $status = 1;
                 try {
-                    $u    = User::find($user->id);
+                    $u = User::find($user->id);
                     $fresh = Plan::find($plan->id);
                     app(OrderIdempotencyService::class)->createOrReturn(
                         $u,
@@ -86,19 +86,19 @@ class OrderIdempotencyPgTest extends TestCase
                         ['plan_id' => $fresh->id],
                         $token,
                         fn (string $fp): Order => Order::create([
-                            'order_type'           => Order::TYPE_NEW_SERVICE,
-                            'user_id'              => $u->id,
+                            'order_type' => Order::TYPE_NEW_SERVICE,
+                            'user_id' => $u->id,
                             'purchase_fingerprint' => $fp,
-                            'plan_id'              => $fresh->id,
-                            'plan_name'            => $fresh->name,
-                            'plan_slug'            => $fresh->slug,
-                            'traffic_gb'           => $fresh->traffic_gb,
-                            'duration_days'        => $fresh->duration_days,
-                            'price_toman'          => $fresh->price_toman,
-                            'final_price_toman'    => $fresh->price_toman,
-                            'discount_toman'       => 0,
-                            'status'               => Order::STATUS_PENDING,
-                            'payment_status'       => Order::PAYMENT_UNPAID,
+                            'plan_id' => $fresh->id,
+                            'plan_name' => $fresh->name,
+                            'plan_slug' => $fresh->slug,
+                            'traffic_gb' => $fresh->traffic_gb,
+                            'duration_days' => $fresh->duration_days,
+                            'price_toman' => $fresh->price_toman,
+                            'final_price_toman' => $fresh->price_toman,
+                            'discount_toman' => 0,
+                            'status' => Order::STATUS_PENDING,
+                            'payment_status' => Order::PAYMENT_UNPAID,
                         ]),
                     );
                     $status = 0;
@@ -132,13 +132,13 @@ class OrderIdempotencyPgTest extends TestCase
     private function cleanup(): void
     {
         try {
-            $userIds = DB::table('users')->where('username', 'like', self::PREFIX . '%')->pluck('id');
+            $userIds = DB::table('users')->where('username', 'like', self::PREFIX.'%')->pluck('id');
             if ($userIds->isNotEmpty()) {
                 DB::table('purchase_intents')->whereIn('user_id', $userIds)->delete();
                 DB::table('orders')->whereIn('user_id', $userIds)->delete();
                 DB::table('users')->whereIn('id', $userIds)->delete();
             }
-            DB::table('plans')->where('slug', 'like', self::PREFIX . '%')->delete();
+            DB::table('plans')->where('slug', 'like', self::PREFIX.'%')->delete();
         } catch (\Throwable) {
             // best-effort cleanup
         }

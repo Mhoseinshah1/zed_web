@@ -22,12 +22,12 @@ class MapTemplateTest extends TestCase
         return Location::create(array_merge([
             'country_name' => 'آلمان',
             'country_code' => 'DE',
-            'flag_emoji'   => '🇩🇪',
-            'latitude'     => 51.1657,
-            'longitude'    => 10.4515,
-            'ping_ms'      => 18,
-            'is_active'    => true,
-            'sort_order'   => 1,
+            'flag_emoji' => '🇩🇪',
+            'latitude' => 51.1657,
+            'longitude' => 10.4515,
+            'ping_ms' => 18,
+            'is_active' => true,
+            'sort_order' => 1,
         ], $overrides));
     }
 

@@ -4,6 +4,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Support\Str;
@@ -11,6 +12,7 @@ use Illuminate\Support\Str;
 class Plan extends Model
 {
     use HasFactory;
+
     protected $fillable = [
         'name', 'slug', 'description', 'short_description', 'feature_list',
         'traffic_gb', 'duration_days',
@@ -23,16 +25,16 @@ class Plan extends Model
     ];
 
     protected $casts = [
-        'is_active'                => 'boolean',
-        'is_featured'              => 'boolean',
-        'is_economic'              => 'boolean',
-        'sort_order'               => 'integer',
-        'feature_list'             => 'array',
-        'renewal_enabled'          => 'boolean',
-        'renewal_price'            => 'integer',
-        'renewal_duration_days'    => 'integer',
+        'is_active' => 'boolean',
+        'is_featured' => 'boolean',
+        'is_economic' => 'boolean',
+        'sort_order' => 'integer',
+        'feature_list' => 'array',
+        'renewal_enabled' => 'boolean',
+        'renewal_price' => 'integer',
+        'renewal_duration_days' => 'integer',
         'renewal_cashback_enabled' => 'boolean',
-        'renewal_cashback_value'   => 'integer',
+        'renewal_cashback_value' => 'integer',
     ];
 
     public function features(): BelongsToMany
@@ -40,7 +42,7 @@ class Plan extends Model
         return $this->belongsToMany(Feature::class, 'feature_plan');
     }
 
-    public function category(): \Illuminate\Database\Eloquent\Relations\BelongsTo
+    public function category(): BelongsTo
     {
         return $this->belongsTo(PlanCategory::class, 'category_id');
     }
@@ -49,7 +51,7 @@ class Plan extends Model
      * The VPN panel this plan provisions on. Null = use the default panel
      * (unchanged legacy behaviour).
      */
-    public function vpnPanel(): \Illuminate\Database\Eloquent\Relations\BelongsTo
+    public function vpnPanel(): BelongsTo
     {
         return $this->belongsTo(VpnPanel::class, 'vpn_panel_id');
     }
@@ -80,12 +82,12 @@ class Plan extends Model
 
     public function trafficLabel(): string
     {
-        return $this->traffic_gb ? $this->traffic_gb . ' گیگابایت' : 'نامحدود';
+        return $this->traffic_gb ? $this->traffic_gb.' گیگابایت' : 'نامحدود';
     }
 
     public function durationLabel(): string
     {
-        return $this->duration_days ? $this->duration_days . ' روزه' : 'نامحدود';
+        return $this->duration_days ? $this->duration_days.' روزه' : 'نامحدود';
     }
 
     public function scopeActive($query)

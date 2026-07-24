@@ -14,12 +14,17 @@ class BannerResource extends Resource
 {
     protected static ?string $model = Banner::class;
 
-    protected static ?string $navigationIcon   = 'heroicon-o-megaphone';
-    protected static ?string $navigationGroup   = 'مدیریت محتوا';
-    protected static ?string $navigationLabel   = 'بنرها';
-    protected static ?string $modelLabel        = 'بنر';
-    protected static ?string $pluralModelLabel  = 'بنرها';
-    protected static ?int    $navigationSort    = 40;
+    protected static ?string $navigationIcon = 'heroicon-o-megaphone';
+
+    protected static ?string $navigationGroup = 'مدیریت محتوا';
+
+    protected static ?string $navigationLabel = 'بنرها';
+
+    protected static ?string $modelLabel = 'بنر';
+
+    protected static ?string $pluralModelLabel = 'بنرها';
+
+    protected static ?int $navigationSort = 40;
 
     public static function form(Form $form): Form
     {
@@ -89,9 +94,9 @@ class BannerResource extends Resource
     public static function getPages(): array
     {
         return [
-            'index'  => Pages\ListBanners::route('/'),
+            'index' => Pages\ListBanners::route('/'),
             'create' => Pages\CreateBanner::route('/create'),
-            'edit'   => Pages\EditBanner::route('/{record}/edit'),
+            'edit' => Pages\EditBanner::route('/{record}/edit'),
         ];
     }
 }

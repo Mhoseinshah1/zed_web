@@ -2,14 +2,15 @@
 
 namespace App\Services\Telegram;
 
+use App\Jobs\RunBackupJob;
+use App\Models\BackupLog;
 use App\Models\Order;
 use App\Models\PaymentTransaction;
 use App\Models\SupportTicket;
 use App\Models\User;
-use App\Models\UserService;
 use App\Models\VpnPanel;
 use App\Models\WalletTransaction;
-use App\Services\Telegram\DailyReportService;
+use App\Services\Backup\BackupSettings;
 use Illuminate\Support\Facades\DB;
 
 /**
@@ -56,23 +57,24 @@ class TelegramCommandRouter
         }
         $first = explode(' ', $text)[0];        // "/status@Bot"
         $first = explode('@', ltrim($first, '/'))[0]; // "status"
+
         return strtolower($first);
     }
 
     private function handle(string $command): string
     {
         return match ($command) {
-            'help'              => $this->help(),
-            'status'            => $this->status(),
-            'finance_today'     => $this->financeToday(),
-            'orders_today'      => $this->ordersToday(),
-            'open_tickets'      => $this->openTickets(),
+            'help' => $this->help(),
+            'status' => $this->status(),
+            'finance_today' => $this->financeToday(),
+            'orders_today' => $this->ordersToday(),
+            'open_tickets' => $this->openTickets(),
             'failed_operations' => $this->failedOperations(),
-            'panels'            => $this->panels(),
-            'daily_report'      => $this->dailyReport(),
-            'backup'            => $this->backup(),
-            'backup_status'     => $this->backupStatus(),
-            default             => '',
+            'panels' => $this->panels(),
+            'daily_report' => $this->dailyReport(),
+            'backup' => $this->backup(),
+            'backup_status' => $this->backupStatus(),
+            default => '',
         };
     }
 
@@ -81,34 +83,34 @@ class TelegramCommandRouter
     private function help(): string
     {
         return "🤖 <b>دستورهای بات مدیریت زدپروکسی</b>\n\n"
-            . "/status — وضعیت کلی سیستم\n"
-            . "/finance_today — مالی امروز\n"
-            . "/orders_today — سفارش‌های امروز\n"
-            . "/open_tickets — تیکت‌های باز\n"
-            . "/failed_operations — عملیات ناموفق\n"
-            . "/panels — سلامت پنل‌های VPN\n"
-            . "/daily_report — گزارش روزانه\n"
-            . "/backup — اجرای بکاپ دستی\n"
-            . "/backup_status — وضعیت آخرین بکاپ\n"
-            . "/help — همین راهنما";
+            ."/status — وضعیت کلی سیستم\n"
+            ."/finance_today — مالی امروز\n"
+            ."/orders_today — سفارش‌های امروز\n"
+            ."/open_tickets — تیکت‌های باز\n"
+            ."/failed_operations — عملیات ناموفق\n"
+            ."/panels — سلامت پنل‌های VPN\n"
+            ."/daily_report — گزارش روزانه\n"
+            ."/backup — اجرای بکاپ دستی\n"
+            ."/backup_status — وضعیت آخرین بکاپ\n"
+            .'/help — همین راهنما';
     }
 
     private function status(): string
     {
         $db = $this->dbOk() ? '🟢 متصل' : '🔴 قطع';
 
-        $panels  = VpnPanel::query()->where('is_active', true)->get();
-        $online  = $panels->where('health_status', VpnPanel::HEALTH_ONLINE)->count();
+        $panels = VpnPanel::query()->where('is_active', true)->get();
+        $online = $panels->where('health_status', VpnPanel::HEALTH_ONLINE)->count();
         $offline = $panels->where('health_status', VpnPanel::HEALTH_OFFLINE)->count();
 
         $failed = $this->failedOperationsCount();
 
         return "📊 <b>وضعیت سیستم</b>\n"
-            . "🗄 پایگاه داده: {$db}\n"
-            . "🖥 پنل‌ها: 🟢 {$online} آنلاین / 🔴 {$offline} آفلاین\n"
-            . "⚠️ عملیات ناموفق: {$failed}\n"
-            . "🧰 صف: " . config('queue.default') . "\n"
-            . "⏰ زمان: " . now()->format('Y/m/d H:i');
+            ."🗄 پایگاه داده: {$db}\n"
+            ."🖥 پنل‌ها: 🟢 {$online} آنلاین / 🔴 {$offline} آفلاین\n"
+            ."⚠️ عملیات ناموفق: {$failed}\n"
+            .'🧰 صف: '.config('queue.default')."\n"
+            .'⏰ زمان: '.now()->format('Y/m/d H:i');
     }
 
     private function financeToday(): string
@@ -117,8 +119,8 @@ class TelegramCommandRouter
 
         $paidOrders = Order::where('payment_status', Order::PAYMENT_PAID)
             ->where('paid_at', '>=', $today);
-        $sales       = (int) (clone $paidOrders)->sum('final_price_toman');
-        $paidCount   = (clone $paidOrders)->count();
+        $sales = (int) (clone $paidOrders)->sum('final_price_toman');
+        $paidCount = (clone $paidOrders)->count();
 
         $failedPayments = PaymentTransaction::where('status', PaymentTransaction::STATUS_FAILED)
             ->where('created_at', '>=', $today)->count();
@@ -128,27 +130,27 @@ class TelegramCommandRouter
             ->where('created_at', '>=', $today)->sum('amount_toman');
 
         return "💰 <b>مالی امروز</b>\n"
-            . "💵 فروش: " . number_format($sales) . " تومان\n"
-            . "✅ سفارش پرداخت‌شده: {$paidCount}\n"
-            . "❌ پرداخت ناموفق: {$failedPayments}\n"
-            . "👛 شارژ کیف پول: " . number_format($topups) . " تومان";
+            .'💵 فروش: '.number_format($sales)." تومان\n"
+            ."✅ سفارش پرداخت‌شده: {$paidCount}\n"
+            ."❌ پرداخت ناموفق: {$failedPayments}\n"
+            .'👛 شارژ کیف پول: '.number_format($topups).' تومان';
     }
 
     private function ordersToday(): string
     {
         $today = now()->startOfDay();
-        $base  = Order::where('created_at', '>=', $today);
+        $base = Order::where('created_at', '>=', $today);
 
-        $total   = (clone $base)->count();
-        $paid    = (clone $base)->where('payment_status', Order::PAYMENT_PAID)->count();
+        $total = (clone $base)->count();
+        $paid = (clone $base)->where('payment_status', Order::PAYMENT_PAID)->count();
         $pending = (clone $base)->where('payment_status', Order::PAYMENT_PENDING)->count();
-        $failed  = (clone $base)->whereIn('status', [Order::STATUS_FAILED, Order::STATUS_CANCELLED])->count();
+        $failed = (clone $base)->whereIn('status', [Order::STATUS_FAILED, Order::STATUS_CANCELLED])->count();
 
         return "🧾 <b>سفارش‌های امروز</b>\n"
-            . "📦 کل: {$total}\n"
-            . "✅ پرداخت‌شده: {$paid}\n"
-            . "⏳ در انتظار: {$pending}\n"
-            . "❌ ناموفق/لغو: {$failed}";
+            ."📦 کل: {$total}\n"
+            ."✅ پرداخت‌شده: {$paid}\n"
+            ."⏳ در انتظار: {$pending}\n"
+            ."❌ ناموفق/لغو: {$failed}";
     }
 
     private function openTickets(): string
@@ -160,8 +162,8 @@ class TelegramCommandRouter
             SupportTicket::STATUS_ANSWERED,
         ];
 
-        $count   = SupportTicket::whereIn('status', $openStatuses)->count();
-        $latest  = SupportTicket::whereIn('status', $openStatuses)
+        $count = SupportTicket::whereIn('status', $openStatuses)->count();
+        $latest = SupportTicket::whereIn('status', $openStatuses)
             ->latest('last_reply_at')->limit(5)->get();
 
         $lines = "🎫 <b>تیکت‌های باز</b>\n📨 تعداد: {$count}\n";
@@ -177,9 +179,9 @@ class TelegramCommandRouter
     {
         $statuses = [
             Order::STATUS_PROVISIONING_FAILED => 'ساخت سرویس',
-            Order::STATUS_RENEWAL_FAILED      => 'تمدید',
-            Order::STATUS_ADDON_FAILED        => 'حجم/زمان اضافه',
-            Order::STATUS_FAILED              => 'سفارش',
+            Order::STATUS_RENEWAL_FAILED => 'تمدید',
+            Order::STATUS_ADDON_FAILED => 'حجم/زمان اضافه',
+            Order::STATUS_FAILED => 'سفارش',
         ];
 
         $lines = "⚠️ <b>عملیات ناموفق</b>\n";
@@ -204,9 +206,9 @@ class TelegramCommandRouter
         $lines = "🖥 <b>سلامت پنل‌های VPN</b>\n";
         foreach ($panels as $p) {
             $icon = match ($p->health_status) {
-                VpnPanel::HEALTH_ONLINE  => '🟢',
+                VpnPanel::HEALTH_ONLINE => '🟢',
                 VpnPanel::HEALTH_OFFLINE => '🔴',
-                default                  => '⚪️',
+                default => '⚪️',
             };
             $name = $this->templates->escape((string) $p->name);
             $type = $this->templates->escape((string) ($p->type ?? '—'));
@@ -221,31 +223,34 @@ class TelegramCommandRouter
     {
         // Also push it to the dedicated daily-report topic, and reply inline.
         app(DailyReportService::class)->send();
+
         return app(DailyReportService::class)->buildText();
     }
 
     private function backup(): string
     {
-        $settings = app(\App\Services\Backup\BackupSettings::class);
+        $settings = app(BackupSettings::class);
         if (! $settings->enabled()) {
             return "💾 <b>بکاپ</b>\nقابلیت بکاپ غیرفعال است. از پنل مدیریت آن را فعال کنید.";
         }
-        \App\Jobs\RunBackupJob::dispatch(\App\Models\BackupLog::TYPE_MANUAL);
+        RunBackupJob::dispatch(BackupLog::TYPE_MANUAL);
+
         return "💾 <b>بکاپ شروع شد</b>\nنتیجه در تاپیک «بکاپ و سرور» ارسال می‌شود.";
     }
 
     private function backupStatus(): string
     {
-        $last = \App\Models\BackupLog::latestLog();
+        $last = BackupLog::latestLog();
         if (! $last) {
             return "💾 <b>وضعیت بکاپ</b>\nهنوز بکاپی انجام نشده است.";
         }
         $status = match ($last->status) {
-            \App\Models\BackupLog::STATUS_SUCCESS => '🟢 موفق (' . $last->sizeMb() . ' MB)',
-            \App\Models\BackupLog::STATUS_FAILED  => '🔴 ناموفق',
-            default                               => '⏳ در حال اجرا',
+            BackupLog::STATUS_SUCCESS => '🟢 موفق ('.$last->sizeMb().' MB)',
+            BackupLog::STATUS_FAILED => '🔴 ناموفق',
+            default => '⏳ در حال اجرا',
         };
-        return "💾 <b>وضعیت آخرین بکاپ</b>\nوضعیت: {$status}\n🕒 زمان: " . $last->updated_at->format('Y/m/d H:i');
+
+        return "💾 <b>وضعیت آخرین بکاپ</b>\nوضعیت: {$status}\n🕒 زمان: ".$last->updated_at->format('Y/m/d H:i');
     }
 
     // ── helpers ──────────────────────────────────────────────────────────────
@@ -254,6 +259,7 @@ class TelegramCommandRouter
     {
         try {
             DB::connection()->getPdo();
+
             return true;
         } catch (\Throwable $e) {
             return false;

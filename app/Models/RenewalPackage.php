@@ -22,10 +22,10 @@ class RenewalPackage extends Model
     ];
 
     protected $casts = [
-        'duration_days'   => 'integer',
-        'price_toman'     => 'integer',
-        'is_active'       => 'boolean',
-        'sort_order'      => 'integer',
+        'duration_days' => 'integer',
+        'price_toman' => 'integer',
+        'is_active' => 'boolean',
+        'sort_order' => 'integer',
         'allowed_plan_ids' => 'array',
     ];
 
@@ -36,12 +36,12 @@ class RenewalPackage extends Model
 
     public function formattedPrice(): string
     {
-        return number_format($this->price_toman) . ' تومان';
+        return number_format($this->price_toman).' تومان';
     }
 
     public function durationLabel(): string
     {
-        return $this->duration_days . ' روز';
+        return $this->duration_days.' روز';
     }
 
     /**
@@ -53,6 +53,7 @@ class RenewalPackage extends Model
         if (empty($this->allowed_plan_ids)) {
             return true;
         }
+
         return in_array($planId, $this->allowed_plan_ids, false);
     }
 }

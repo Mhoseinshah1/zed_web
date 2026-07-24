@@ -28,19 +28,19 @@ class FinancialReportTest extends TestCase
         // Create paid order = sales
         $user = User::factory()->create();
         Order::factory()->create([
-            'user_id'        => $user->id,
+            'user_id' => $user->id,
             'payment_status' => Order::PAYMENT_PAID,
             'final_price_toman' => 500_000,
-            'paid_at'        => now(),
+            'paid_at' => now(),
         ]);
 
         // Create approved wallet_topup payment transaction = NOT sales
         PaymentTransaction::factory()->create([
-            'user_id'          => $user->id,
-            'payment_purpose'  => 'wallet_topup',
-            'status'           => PaymentTransaction::STATUS_APPROVED,
-            'amount_toman'     => 200_000,
-            'paid_at'          => now(),
+            'user_id' => $user->id,
+            'payment_purpose' => 'wallet_topup',
+            'status' => PaymentTransaction::STATUS_APPROVED,
+            'amount_toman' => 200_000,
+            'paid_at' => now(),
         ]);
 
         $salesToday = Order::where('payment_status', Order::PAYMENT_PAID)
@@ -54,19 +54,19 @@ class FinancialReportTest extends TestCase
     {
         $user = User::factory()->create();
         Order::factory()->create([
-            'user_id'           => $user->id,
-            'payment_status'    => Order::PAYMENT_PAID,
+            'user_id' => $user->id,
+            'payment_status' => Order::PAYMENT_PAID,
             'final_price_toman' => 1_000_000,
-            'paid_at'           => now()->startOfMonth()->addDay(),
+            'paid_at' => now()->startOfMonth()->addDay(),
         ]);
 
         $topupWallet = WalletTransaction::factory()->create([
-            'user_id'      => $user->id,
-            'type'         => WalletTransaction::TYPE_TOPUP,
-            'direction'    => WalletTransaction::DIRECTION_CREDIT,
-            'status'       => WalletTransaction::STATUS_COMPLETED,
+            'user_id' => $user->id,
+            'type' => WalletTransaction::TYPE_TOPUP,
+            'direction' => WalletTransaction::DIRECTION_CREDIT,
+            'status' => WalletTransaction::STATUS_COMPLETED,
             'amount_toman' => 300_000,
-            'created_at'   => now(),
+            'created_at' => now(),
         ]);
 
         $salesMonth = Order::where('payment_status', Order::PAYMENT_PAID)
@@ -81,12 +81,12 @@ class FinancialReportTest extends TestCase
         $user = User::factory()->create();
 
         WalletTransaction::factory()->create([
-            'user_id'      => $user->id,
-            'type'         => WalletTransaction::TYPE_TOPUP,
-            'direction'    => WalletTransaction::DIRECTION_CREDIT,
-            'status'       => WalletTransaction::STATUS_COMPLETED,
+            'user_id' => $user->id,
+            'type' => WalletTransaction::TYPE_TOPUP,
+            'direction' => WalletTransaction::DIRECTION_CREDIT,
+            'status' => WalletTransaction::STATUS_COMPLETED,
             'amount_toman' => 500_000,
-            'created_at'   => today(),
+            'created_at' => today(),
         ]);
 
         // Wallet topup should show as deposit, not order sales
@@ -108,19 +108,19 @@ class FinancialReportTest extends TestCase
     {
         $user = User::factory()->create();
         Order::factory()->create([
-            'user_id'           => $user->id,
-            'payment_status'    => Order::PAYMENT_PAID,
+            'user_id' => $user->id,
+            'payment_status' => Order::PAYMENT_PAID,
             'final_price_toman' => 750_000,
-            'paid_at'           => now(),
+            'paid_at' => now(),
         ]);
 
         WalletTransaction::factory()->create([
-            'user_id'      => $user->id,
-            'type'         => WalletTransaction::TYPE_ORDER_PAYMENT,
-            'direction'    => WalletTransaction::DIRECTION_DEBIT,
-            'status'       => WalletTransaction::STATUS_COMPLETED,
+            'user_id' => $user->id,
+            'type' => WalletTransaction::TYPE_ORDER_PAYMENT,
+            'direction' => WalletTransaction::DIRECTION_DEBIT,
+            'status' => WalletTransaction::STATUS_COMPLETED,
             'amount_toman' => 750_000,
-            'created_at'   => now(),
+            'created_at' => now(),
         ]);
 
         $salesToday = Order::where('payment_status', Order::PAYMENT_PAID)
@@ -134,10 +134,10 @@ class FinancialReportTest extends TestCase
     {
         $user = User::factory()->create();
         Order::factory()->create([
-            'user_id'           => $user->id,
-            'payment_status'    => Order::PAYMENT_FAILED,
+            'user_id' => $user->id,
+            'payment_status' => Order::PAYMENT_FAILED,
             'final_price_toman' => 400_000,
-            'paid_at'           => null,
+            'paid_at' => null,
         ]);
 
         $salesToday = Order::where('payment_status', Order::PAYMENT_PAID)
@@ -151,10 +151,10 @@ class FinancialReportTest extends TestCase
     {
         $user = User::factory()->create();
         Order::factory()->create([
-            'user_id'           => $user->id,
-            'payment_status'    => Order::PAYMENT_PENDING,
+            'user_id' => $user->id,
+            'payment_status' => Order::PAYMENT_PENDING,
             'final_price_toman' => 300_000,
-            'paid_at'           => null,
+            'paid_at' => null,
         ]);
 
         $salesToday = Order::where('payment_status', Order::PAYMENT_PAID)
@@ -169,15 +169,15 @@ class FinancialReportTest extends TestCase
         $user = User::factory()->create();
 
         Order::factory()->create([
-            'user_id'           => $user->id,
-            'payment_status'    => Order::PAYMENT_REFUNDED,
+            'user_id' => $user->id,
+            'payment_status' => Order::PAYMENT_REFUNDED,
             'final_price_toman' => 200_000,
-            'paid_at'           => now(),
+            'paid_at' => now(),
         ]);
 
         Order::factory()->create([
-            'user_id'        => $user->id,
-            'status'         => Order::STATUS_CANCELLED,
+            'user_id' => $user->id,
+            'status' => Order::STATUS_CANCELLED,
             'payment_status' => Order::PAYMENT_UNPAID,
             'final_price_toman' => 100_000,
         ]);
@@ -194,35 +194,35 @@ class FinancialReportTest extends TestCase
         $user = User::factory()->create();
 
         PaymentTransaction::factory()->create([
-            'user_id'         => $user->id,
-            'provider'        => 'nowpayments',
+            'user_id' => $user->id,
+            'provider' => 'nowpayments',
             'payment_purpose' => 'order_payment',
-            'status'          => PaymentTransaction::STATUS_APPROVED,
-            'amount_toman'    => 100_000,
-            'paid_at'         => now(),
+            'status' => PaymentTransaction::STATUS_APPROVED,
+            'amount_toman' => 100_000,
+            'paid_at' => now(),
         ]);
 
         PaymentTransaction::factory()->create([
-            'user_id'         => $user->id,
-            'provider'        => 'centralpay',
+            'user_id' => $user->id,
+            'provider' => 'centralpay',
             'payment_purpose' => 'order_payment',
-            'status'          => PaymentTransaction::STATUS_APPROVED,
-            'amount_toman'    => 200_000,
-            'paid_at'         => now(),
+            'status' => PaymentTransaction::STATUS_APPROVED,
+            'amount_toman' => 200_000,
+            'paid_at' => now(),
         ]);
 
         WalletTransaction::factory()->create([
-            'user_id'      => $user->id,
-            'type'         => WalletTransaction::TYPE_ORDER_PAYMENT,
-            'direction'    => WalletTransaction::DIRECTION_DEBIT,
-            'status'       => WalletTransaction::STATUS_COMPLETED,
+            'user_id' => $user->id,
+            'type' => WalletTransaction::TYPE_ORDER_PAYMENT,
+            'direction' => WalletTransaction::DIRECTION_DEBIT,
+            'status' => WalletTransaction::STATUS_COMPLETED,
             'amount_toman' => 300_000,
-            'created_at'   => now(),
+            'created_at' => now(),
         ]);
 
-        $now     = PaymentTransaction::where('provider', 'nowpayments')->where('status', PaymentTransaction::STATUS_APPROVED)->sum('amount_toman');
+        $now = PaymentTransaction::where('provider', 'nowpayments')->where('status', PaymentTransaction::STATUS_APPROVED)->sum('amount_toman');
         $central = PaymentTransaction::where('provider', 'centralpay')->where('status', PaymentTransaction::STATUS_APPROVED)->sum('amount_toman');
-        $wallet  = WalletTransaction::where('type', WalletTransaction::TYPE_ORDER_PAYMENT)->where('status', WalletTransaction::STATUS_COMPLETED)->sum('amount_toman');
+        $wallet = WalletTransaction::where('type', WalletTransaction::TYPE_ORDER_PAYMENT)->where('status', WalletTransaction::STATUS_COMPLETED)->sum('amount_toman');
 
         $this->assertEquals(100_000, $now);
         $this->assertEquals(200_000, $central);
@@ -234,12 +234,12 @@ class FinancialReportTest extends TestCase
         $user = User::factory()->create();
 
         PaymentTransaction::factory()->create([
-            'user_id'         => $user->id,
-            'provider'        => 'nowpayments',
+            'user_id' => $user->id,
+            'provider' => 'nowpayments',
             'payment_purpose' => 'wallet_topup',
-            'status'          => PaymentTransaction::STATUS_APPROVED,
-            'amount_toman'    => 500_000,
-            'paid_at'         => now(),
+            'status' => PaymentTransaction::STATUS_APPROVED,
+            'amount_toman' => 500_000,
+            'paid_at' => now(),
         ]);
 
         $nowSales = PaymentTransaction::where('provider', 'nowpayments')
@@ -285,16 +285,16 @@ class FinancialReportTest extends TestCase
         $user = User::factory()->create();
 
         Order::factory()->create([
-            'user_id'           => $user->id,
-            'payment_status'    => Order::PAYMENT_PAID,
+            'user_id' => $user->id,
+            'payment_status' => Order::PAYMENT_PAID,
             'final_price_toman' => 500_000,
-            'paid_at'           => now()->subMonths(2),
+            'paid_at' => now()->subMonths(2),
         ]);
         Order::factory()->create([
-            'user_id'           => $user->id,
-            'payment_status'    => Order::PAYMENT_PAID,
+            'user_id' => $user->id,
+            'payment_status' => Order::PAYMENT_PAID,
             'final_price_toman' => 300_000,
-            'paid_at'           => now(),
+            'paid_at' => now(),
         ]);
 
         $thisMonthSales = Order::where('payment_status', Order::PAYMENT_PAID)

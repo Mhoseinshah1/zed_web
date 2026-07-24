@@ -23,19 +23,24 @@ use Filament\Pages\Page;
  * only shows a placeholder, and the value is overwritten only when a new one is
  * entered.
  */
-class TelegramSettingsPage extends Page implements HasForms, HasActions
+class TelegramSettingsPage extends Page implements HasActions, HasForms
 {
-    use InteractsWithForms;
     use InteractsWithActions;
+    use InteractsWithForms;
 
     protected static string $view = 'filament.pages.telegram-settings';
 
-    protected static ?string $navigationIcon  = 'heroicon-o-paper-airplane';
+    protected static ?string $navigationIcon = 'heroicon-o-paper-airplane';
+
     protected static ?string $navigationGroup = 'اعلان‌ها و پیام‌ها';
+
     protected static ?string $navigationLabel = 'تنظیمات بات تلگرام';
-    protected static ?string $title           = 'تنظیمات بات مدیریت تلگرام';
-    protected static ?string $slug            = 'telegram/settings';
-    protected static ?int    $navigationSort  = 30;
+
+    protected static ?string $title = 'تنظیمات بات مدیریت تلگرام';
+
+    protected static ?string $slug = 'telegram/settings';
+
+    protected static ?int $navigationSort = 30;
 
     /** @var array<string,mixed> */
     public array $data = [];
@@ -55,16 +60,16 @@ class TelegramSettingsPage extends Page implements HasForms, HasActions
 
         $categories = [];
         foreach (TelegramSettings::CATEGORIES as $cat) {
-            $categories['cat_' . $cat] = $s->categoryEnabled($cat);
+            $categories['cat_'.$cat] = $s->categoryEnabled($cat);
         }
 
         $this->form->fill(array_merge([
-            'telegram_admin_enabled'        => $s->enabled(),
-            'telegram_bot_token_new'        => null,
-            'telegram_admin_chat_id'        => $s->chatId(),
-            'telegram_admin_user_ids'       => (string) SiteSetting::get('telegram_admin_user_ids', ''),
-            'telegram_parse_mode'           => $s->parseMode(),
-            'telegram_silent'               => $s->silent(),
+            'telegram_admin_enabled' => $s->enabled(),
+            'telegram_bot_token_new' => null,
+            'telegram_admin_chat_id' => $s->chatId(),
+            'telegram_admin_user_ids' => (string) SiteSetting::get('telegram_admin_user_ids', ''),
+            'telegram_parse_mode' => $s->parseMode(),
+            'telegram_silent' => $s->silent(),
             'telegram_rate_limit_duplicates' => $s->rateLimitDuplicates(),
         ], $categories));
     }
@@ -73,7 +78,7 @@ class TelegramSettingsPage extends Page implements HasForms, HasActions
     {
         $catToggles = [];
         foreach (TelegramSettings::CATEGORIES as $cat) {
-            $catToggles[] = Forms\Components\Toggle::make('cat_' . $cat)
+            $catToggles[] = Forms\Components\Toggle::make('cat_'.$cat)
                 ->label($this->categoryLabel($cat))
                 ->default(true)->inline(false);
         }
@@ -137,7 +142,7 @@ class TelegramSettingsPage extends Page implements HasForms, HasActions
         SiteSetting::set('telegram_rate_limit_duplicates', ! empty($data['telegram_rate_limit_duplicates']) ? 'true' : 'false');
 
         foreach (TelegramSettings::CATEGORIES as $cat) {
-            $this->settings()->setCategoryEnabled($cat, ! empty($data['cat_' . $cat]));
+            $this->settings()->setCategoryEnabled($cat, ! empty($data['cat_'.$cat]));
         }
 
         // Only overwrite the token when a new value was entered.
@@ -158,9 +163,9 @@ class TelegramSettingsPage extends Page implements HasForms, HasActions
             ->action(function () {
                 try {
                     $me = app(TelegramClient::class)->getMe();
-                    Notification::make()->title('اتصال موفق: @' . ($me['username'] ?? '—'))->success()->send();
+                    Notification::make()->title('اتصال موفق: @'.($me['username'] ?? '—'))->success()->send();
                 } catch (\Throwable $e) {
-                    Notification::make()->title('اتصال ناموفق: ' . $e->getMessage())->danger()->send();
+                    Notification::make()->title('اتصال ناموفق: '.$e->getMessage())->danger()->send();
                 }
             });
     }
@@ -173,9 +178,9 @@ class TelegramSettingsPage extends Page implements HasForms, HasActions
                 try {
                     $chat = app(TelegramClient::class)->getChat();
                     $name = $chat['title'] ?? $chat['username'] ?? (string) ($chat['id'] ?? '—');
-                    Notification::make()->title('گروه: ' . $name . ' (نوع: ' . ($chat['type'] ?? '—') . ')')->success()->send();
+                    Notification::make()->title('گروه: '.$name.' (نوع: '.($chat['type'] ?? '—').')')->success()->send();
                 } catch (\Throwable $e) {
-                    Notification::make()->title('دریافت اطلاعات گروه ناموفق: ' . $e->getMessage())->danger()->send();
+                    Notification::make()->title('دریافت اطلاعات گروه ناموفق: '.$e->getMessage())->danger()->send();
                 }
             });
     }
@@ -189,7 +194,7 @@ class TelegramSettingsPage extends Page implements HasForms, HasActions
                     app(TelegramClient::class)->sendMessage('✅ پیام تست از زدپروکسی — اتصال بات مدیریت برقرار است.');
                     Notification::make()->title('پیام تست ارسال شد.')->success()->send();
                 } catch (\Throwable $e) {
-                    Notification::make()->title('ارسال پیام تست ناموفق: ' . $e->getMessage())->danger()->send();
+                    Notification::make()->title('ارسال پیام تست ناموفق: '.$e->getMessage())->danger()->send();
                 }
             });
     }
@@ -201,10 +206,11 @@ class TelegramSettingsPage extends Page implements HasForms, HasActions
             ->requiresConfirmation()
             ->action(function () {
                 $client = app(TelegramClient::class);
-                $ok = 0; $fail = 0;
+                $ok = 0;
+                $fail = 0;
                 foreach (TelegramAdminTopic::where('is_active', true)->get() as $topic) {
                     try {
-                        $client->sendMessage('✅ تست تاپیک: ' . $topic->title, $topic->message_thread_id);
+                        $client->sendMessage('✅ تست تاپیک: '.$topic->title, $topic->message_thread_id);
                         $ok++;
                     } catch (\Throwable $e) {
                         $fail++;
@@ -222,11 +228,12 @@ class TelegramSettingsPage extends Page implements HasForms, HasActions
             ->requiresConfirmation()
             ->modalDescription('برای هر تاپیک فعالِ بدون شناسه، یک تاپیک در گروه ساخته و شناسه آن ذخیره می‌شود. بات باید ادمین گروه با دسترسی «مدیریت تاپیک‌ها» باشد و گروه باید حالت Topics فعال داشته باشد.')
             ->action(function () {
-                $client  = app(TelegramClient::class);
+                $client = app(TelegramClient::class);
                 $pending = TelegramAdminTopic::where('is_active', true)->whereNull('message_thread_id')->get();
 
                 if ($pending->isEmpty()) {
                     Notification::make()->title('همه تاپیک‌های فعال شناسه دارند.')->info()->send();
+
                     return;
                 }
 
@@ -240,6 +247,7 @@ class TelegramSettingsPage extends Page implements HasForms, HasActions
                         }
                     } catch (\Throwable $e) {
                         Notification::make()->title($this->topicErrorMessage($e->getMessage()))->danger()->send();
+
                         return; // stop on the first hard error (usually rights/forum)
                     }
                 }
@@ -261,6 +269,7 @@ class TelegramSettingsPage extends Page implements HasForms, HasActions
         if (str_contains($low, 'chat not found') || str_contains($low, 'chat_id')) {
             return 'شناسه گروه مدیریت نادرست است یا بات عضو گروه نیست.';
         }
+
         return 'ساخت تاپیک ناموفق بود. تنظیمات بات و دسترسی‌ها را بررسی کنید.';
     }
 
@@ -276,7 +285,7 @@ class TelegramSettingsPage extends Page implements HasForms, HasActions
                     app(TelegramClient::class)->setWebhook(route('telegram.webhook'), $secret);
                     Notification::make()->title('Webhook با موفقیت ثبت شد.')->success()->send();
                 } catch (\Throwable $e) {
-                    Notification::make()->title('ثبت Webhook ناموفق: ' . $e->getMessage())->danger()->send();
+                    Notification::make()->title('ثبت Webhook ناموفق: '.$e->getMessage())->danger()->send();
                 }
             });
     }
@@ -291,7 +300,7 @@ class TelegramSettingsPage extends Page implements HasForms, HasActions
                     app(TelegramClient::class)->deleteWebhook();
                     Notification::make()->title('Webhook حذف شد.')->success()->send();
                 } catch (\Throwable $e) {
-                    Notification::make()->title('حذف Webhook ناموفق: ' . $e->getMessage())->danger()->send();
+                    Notification::make()->title('حذف Webhook ناموفق: '.$e->getMessage())->danger()->send();
                 }
             });
     }
@@ -304,15 +313,15 @@ class TelegramSettingsPage extends Page implements HasForms, HasActions
                 try {
                     $info = app(TelegramClient::class)->getWebhookInfo();
                     // NEVER show the secret — only safe status fields.
-                    $url     = $info['url'] ?? '—';
+                    $url = $info['url'] ?? '—';
                     $pending = (int) ($info['pending_update_count'] ?? 0);
                     $lastErr = $info['last_error_message'] ?? '—';
                     Notification::make()
                         ->title('وضعیت Webhook')
-                        ->body("آدرس: " . ($url !== '' ? 'ثبت‌شده' : 'ثبت‌نشده') . " — در صف: {$pending} — آخرین خطا: {$lastErr}")
+                        ->body('آدرس: '.($url !== '' ? 'ثبت‌شده' : 'ثبت‌نشده')." — در صف: {$pending} — آخرین خطا: {$lastErr}")
                         ->info()->send();
                 } catch (\Throwable $e) {
-                    Notification::make()->title('دریافت وضعیت ناموفق: ' . $e->getMessage())->danger()->send();
+                    Notification::make()->title('دریافت وضعیت ناموفق: '.$e->getMessage())->danger()->send();
                 }
             });
     }

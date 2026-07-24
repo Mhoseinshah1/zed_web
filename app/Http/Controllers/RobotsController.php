@@ -34,7 +34,7 @@ class RobotsController extends Controller
             $lines[] = 'User-agent: *';
             $lines[] = 'Allow: /';
             foreach (self::FORCED_DISALLOW as $path) {
-                $lines[] = 'Disallow: ' . $path;
+                $lines[] = 'Disallow: '.$path;
             }
 
             // Admin-defined extra rules, filtered so they cannot re-open a
@@ -48,11 +48,11 @@ class RobotsController extends Controller
 
             if (SeoSettings::sitemapEnabled()) {
                 $lines[] = '';
-                $lines[] = 'Sitemap: ' . $seo->baseUrl() . '/sitemap.xml';
+                $lines[] = 'Sitemap: '.$seo->baseUrl().'/sitemap.xml';
             }
         }
 
-        return response(implode("\n", $lines) . "\n", 200, [
+        return response(implode("\n", $lines)."\n", 200, [
             'Content-Type' => 'text/plain; charset=UTF-8',
         ]);
     }
@@ -71,6 +71,7 @@ class RobotsController extends Controller
                 $out[] = $line;
             }
         }
+
         return $out;
     }
 
@@ -86,6 +87,7 @@ class RobotsController extends Controller
                 return true;
             }
         }
+
         return false;
     }
 }

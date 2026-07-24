@@ -3,6 +3,7 @@
 namespace App\Filament\Resources;
 
 use App\Filament\Resources\NotificationResource\Pages;
+use App\Filament\Support\UserAccountColumn;
 use App\Models\Notification as NotificationModel;
 use Filament\Forms\Components\DatePicker;
 use Filament\Notifications\Notification as FilamentNotification;
@@ -18,16 +19,22 @@ class NotificationResource extends Resource
 {
     protected static ?string $model = NotificationModel::class;
 
-    protected static ?string $navigationIcon   = 'heroicon-o-bell-alert';
-    protected static ?string $navigationGroup   = 'اعلان‌ها و پیام‌ها';
-    protected static ?string $navigationLabel   = 'اعلان‌های سیستم';
-    protected static ?string $modelLabel        = 'اعلان';
-    protected static ?string $pluralModelLabel  = 'اعلان‌ها';
-    protected static ?int    $navigationSort    = 10;
+    protected static ?string $navigationIcon = 'heroicon-o-bell-alert';
+
+    protected static ?string $navigationGroup = 'اعلان‌ها و پیام‌ها';
+
+    protected static ?string $navigationLabel = 'اعلان‌های سیستم';
+
+    protected static ?string $modelLabel = 'اعلان';
+
+    protected static ?string $pluralModelLabel = 'اعلان‌ها';
+
+    protected static ?int $navigationSort = 10;
 
     public static function getNavigationBadge(): ?string
     {
         $count = static::getModel()::query()->whereNull('read_at')->count();
+
         return $count > 0 ? (string) $count : null;
     }
 
@@ -53,7 +60,7 @@ class NotificationResource extends Resource
                     ->label('نوع')
                     ->formatStateUsing(fn ($state) => NotificationModel::typeLabels()[$state] ?? $state)
                     ->colors([
-                        'danger'  => [
+                        'danger' => [
                             NotificationModel::TYPE_MARZBAN_UPDATE_FAILED,
                             NotificationModel::TYPE_PROVISIONING_FAILED,
                             NotificationModel::TYPE_PAYMENT_FAILED,
@@ -77,7 +84,7 @@ class NotificationResource extends Resource
                     ->tooltip(fn (NotificationModel $record) => $record->message)
                     ->wrap(),
 
-                \App\Filament\Support\UserAccountColumn::make(),
+                UserAccountColumn::make(),
 
                 Tables\Columns\TextColumn::make('user.username')
                     ->label('کاربر')
@@ -110,8 +117,8 @@ class NotificationResource extends Resource
                     ->options(['system' => 'سیستم', 'user' => 'کاربر'])
                     ->query(fn (Builder $query, array $data) => match ($data['value'] ?? null) {
                         'system' => $query->whereNull('user_id'),
-                        'user'   => $query->whereNotNull('user_id'),
-                        default  => $query,
+                        'user' => $query->whereNotNull('user_id'),
+                        default => $query,
                     }),
 
                 SelectFilter::make('user_id')

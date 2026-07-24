@@ -110,7 +110,7 @@ class AdminAppearanceTest extends TestCase
         SiteSetting::set('admin_sidebar_size', 'small');
 
         $admin = User::factory()->create(['is_admin' => true]);
-        $html  = $this->actingAs($admin)->get('/zed-admin')->getContent();
+        $html = $this->actingAs($admin)->get('/zed-admin')->getContent();
 
         $this->assertStringContainsString('zedproxy-appearance-vars', $html);
         foreach ([
@@ -131,7 +131,7 @@ class AdminAppearanceTest extends TestCase
         SiteSetting::set('button_radius', '12px');
 
         $admin = User::factory()->create(['is_admin' => true]);
-        $html  = $this->actingAs($admin)->get('/zed-admin')->getContent();
+        $html = $this->actingAs($admin)->get('/zed-admin')->getContent();
 
         // Shell sheet present and scoped to .fi-body.
         $this->assertStringContainsString('id="zp-admin-shell"', $html);
@@ -156,7 +156,7 @@ class AdminAppearanceTest extends TestCase
     public function test_appearance_settings_page_renders(): void
     {
         $admin = User::factory()->create(['is_admin' => true]);
-        $html  = $this->actingAs($admin)->get('/zed-admin/appearance')->getContent();
+        $html = $this->actingAs($admin)->get('/zed-admin/appearance')->getContent();
 
         $this->assertStringContainsString('تنظیمات ظاهر', $html);
         $this->assertStringContainsString('تراکم نمایش', $html);
@@ -175,7 +175,7 @@ class AdminAppearanceTest extends TestCase
     public function test_no_duplicate_appearance_navigation(): void
     {
         $admin = User::factory()->create(['is_admin' => true]);
-        $html  = $this->actingAs($admin)->get('/zed-admin')->getContent();
+        $html = $this->actingAs($admin)->get('/zed-admin')->getContent();
 
         $this->assertStringNotContainsString('استودیو تم', $html);
         $this->assertStringNotContainsString('پنل تم', $html);

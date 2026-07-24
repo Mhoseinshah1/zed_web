@@ -14,12 +14,17 @@ class LocationResource extends Resource
 {
     protected static ?string $model = Location::class;
 
-    protected static ?string $navigationIcon  = 'heroicon-o-globe-alt';
+    protected static ?string $navigationIcon = 'heroicon-o-globe-alt';
+
     protected static ?string $navigationGroup = 'مدیریت محتوا';
+
     protected static ?string $navigationLabel = 'لوکیشن‌ها';
-    protected static ?string $modelLabel      = 'لوکیشن';
+
+    protected static ?string $modelLabel = 'لوکیشن';
+
     protected static ?string $pluralModelLabel = 'لوکیشن‌ها';
-    protected static ?int $navigationSort     = 60;
+
+    protected static ?int $navigationSort = 60;
 
     public static function form(Form $form): Form
     {
@@ -111,9 +116,9 @@ class LocationResource extends Resource
     public static function getPages(): array
     {
         return [
-            'index'  => Pages\ListLocations::route('/'),
+            'index' => Pages\ListLocations::route('/'),
             'create' => Pages\CreateLocation::route('/create'),
-            'edit'   => Pages\EditLocation::route('/{record}/edit'),
+            'edit' => Pages\EditLocation::route('/{record}/edit'),
         ];
     }
 }

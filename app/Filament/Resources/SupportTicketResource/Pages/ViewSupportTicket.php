@@ -23,7 +23,7 @@ class ViewSupportTicket extends ViewRecord
 {
     protected static string $resource = SupportTicketResource::class;
 
-    public function mount(int | string $record): void
+    public function mount(int|string $record): void
     {
         parent::mount($record);
         app(SupportTicketService::class)->markReadByAdmin($this->record);
@@ -50,7 +50,7 @@ class ViewSupportTicket extends ViewRecord
                     Components\TextEntry::make('user.email')->label('ایمیل'),
                     Components\TextEntry::make('user.wallet_balance_toman')
                         ->label('موجودی کیف پول')
-                        ->formatStateUsing(fn ($state) => number_format((int) $state) . ' تومان'),
+                        ->formatStateUsing(fn ($state) => number_format((int) $state).' تومان'),
                     Components\TextEntry::make('active_services_count')
                         ->label('سرویس‌های فعال')
                         ->state(fn (SupportTicket $record) => (string) ($record->user?->activeServicesCount() ?? 0)),
@@ -106,7 +106,7 @@ class ViewSupportTicket extends ViewRecord
                 ])
                 ->action(function (array $data) use ($ticket) {
                     $ticket->update([
-                        'status'    => $data['status'],
+                        'status' => $data['status'],
                         'closed_at' => $data['status'] === SupportTicket::STATUS_CLOSED ? now() : null,
                     ]);
                     Notification::make()->title('وضعیت تیکت به‌روزرسانی شد.')->success()->send();

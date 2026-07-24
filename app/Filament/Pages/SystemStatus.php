@@ -10,11 +10,15 @@ use Illuminate\Support\Facades\Storage;
 
 class SystemStatus extends Page
 {
-    protected static ?string $navigationIcon  = 'heroicon-o-server';
+    protected static ?string $navigationIcon = 'heroicon-o-server';
+
     protected static ?string $navigationGroup = 'سیستم';
+
     protected static ?string $navigationLabel = 'وضعیت سیستم';
-    protected static ?string $title           = 'وضعیت سیستم';
-    protected static ?int $navigationSort     = 10;
+
+    protected static ?string $title = 'وضعیت سیستم';
+
+    protected static ?int $navigationSort = 10;
 
     protected static string $view = 'filament.pages.system-status';
 
@@ -24,7 +28,7 @@ class SystemStatus extends Page
 
     public function mount(): void
     {
-        $this->checks    = $this->runChecks();
+        $this->checks = $this->runChecks();
         $this->scheduler = $this->schedulerStatus();
     }
 
@@ -33,16 +37,16 @@ class SystemStatus extends Page
      */
     private function schedulerStatus(): array
     {
-        $last     = SchedulerHeartbeat::lastRunAt();
-        $healthy  = SchedulerHeartbeat::isHealthy();
+        $last = SchedulerHeartbeat::lastRunAt();
+        $healthy = SchedulerHeartbeat::isHealthy();
         $timezone = (string) config('app.timezone', 'UTC');
 
         return [
-            'ok'          => $healthy,
-            'last_run'    => $last?->setTimezone($timezone)->format('Y-m-d H:i:s'),
+            'ok' => $healthy,
+            'last_run' => $last?->setTimezone($timezone)->format('Y-m-d H:i:s'),
             'age_seconds' => SchedulerHeartbeat::ageSeconds(),
-            'timezone'    => $timezone,
-            'message'     => $healthy ? null : 'زمان‌بندی وظایف به‌درستی اجرا نمی‌شود.',
+            'timezone' => $timezone,
+            'message' => $healthy ? null : 'زمان‌بندی وظایف به‌درستی اجرا نمی‌شود.',
         ];
     }
 
@@ -77,16 +81,16 @@ class SystemStatus extends Page
 
         // Queue
         $checks['queue'] = [
-            'label'  => 'Queue',
-            'ok'     => config('queue.default') === 'redis',
-            'detail' => 'درایور: ' . config('queue.default'),
+            'label' => 'Queue',
+            'ok' => config('queue.default') === 'redis',
+            'detail' => 'درایور: '.config('queue.default'),
         ];
 
         // Cache
         $checks['cache'] = [
-            'label'  => 'Cache',
-            'ok'     => config('cache.default') === 'redis',
-            'detail' => 'درایور: ' . config('cache.default'),
+            'label' => 'Cache',
+            'ok' => config('cache.default') === 'redis',
+            'detail' => 'درایور: '.config('cache.default'),
         ];
 
         return $checks;

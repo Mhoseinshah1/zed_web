@@ -25,12 +25,17 @@ class AppearanceSettings extends Page implements HasForms
 
     protected static string $view = 'filament.pages.appearance-settings';
 
-    protected static ?string $navigationIcon  = 'heroicon-o-swatch';
+    protected static ?string $navigationIcon = 'heroicon-o-swatch';
+
     protected static ?string $navigationGroup = 'ظاهر سایت';
+
     protected static ?string $navigationLabel = 'تنظیمات ظاهر';
-    protected static ?string $title           = 'تنظیمات ظاهر';
-    protected static ?string $slug            = 'appearance';
-    protected static ?int    $navigationSort  = 10;
+
+    protected static ?string $title = 'تنظیمات ظاهر';
+
+    protected static ?string $slug = 'appearance';
+
+    protected static ?int $navigationSort = 10;
 
     /** @var array<string,mixed> */
     public array $data = [];
@@ -38,16 +43,16 @@ class AppearanceSettings extends Page implements HasForms
     public function mount(): void
     {
         $this->form->fill([
-            'appearance_mode'              => AppearanceManager::appearanceMode(),
-            'site_theme_preset'            => AppearanceManager::activePreset(),
-            'primary_color'                => $this->storedColor('primary_color'),
-            'accent_color'                 => $this->storedColor('accent_color'),
-            'admin_density'                => AdminAppearanceResolver::density(),
-            'admin_sidebar_size'           => AdminAppearanceResolver::sidebarSize(),
-            'admin_brand_display'          => AdminAppearanceResolver::brandDisplay(),
-            'admin_brand_text'             => AdminAppearanceResolver::brandText(),
+            'appearance_mode' => AppearanceManager::appearanceMode(),
+            'site_theme_preset' => AppearanceManager::activePreset(),
+            'primary_color' => $this->storedColor('primary_color'),
+            'accent_color' => $this->storedColor('accent_color'),
+            'admin_density' => AdminAppearanceResolver::density(),
+            'admin_sidebar_size' => AdminAppearanceResolver::sidebarSize(),
+            'admin_brand_display' => AdminAppearanceResolver::brandDisplay(),
+            'admin_brand_text' => AdminAppearanceResolver::brandText(),
             'allow_user_appearance_switch' => AppearanceManager::allowUserAppearanceSwitch(),
-            'allow_user_theme_switch'      => AppearanceManager::allowUserThemeSwitch(),
+            'allow_user_theme_switch' => AppearanceManager::allowUserThemeSwitch(),
         ]);
     }
 
@@ -141,6 +146,7 @@ class AppearanceSettings extends Page implements HasForms
     private function storedColor(string $key): ?string
     {
         $v = (string) SiteSetting::get($key, '');
+
         return preg_match('/^#[0-9a-fA-F]{6}$/', $v) === 1 ? $v : null;
     }
 
@@ -149,8 +155,9 @@ class AppearanceSettings extends Page implements HasForms
     {
         $value = trim($value);
         if (preg_match('/^#?[0-9a-fA-F]{6}$/', $value) === 1) {
-            return str_starts_with($value, '#') ? $value : '#' . $value;
+            return str_starts_with($value, '#') ? $value : '#'.$value;
         }
+
         return '';
     }
 }

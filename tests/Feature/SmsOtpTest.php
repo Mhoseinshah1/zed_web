@@ -7,7 +7,6 @@ use App\Models\SiteSetting;
 use App\Models\User;
 use App\Services\Phone\PhoneVerificationService;
 use App\Services\Sms\SmsService;
-use App\Support\PhoneNumber;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\Hash;
@@ -152,7 +151,7 @@ class SmsOtpTest extends TestCase
     public function test_expired_otp_fails(): void
     {
         $user = User::factory()->unverifiedPhone()->create();
-        $res  = app(PhoneVerificationService::class)->requestCode($user);
+        $res = app(PhoneVerificationService::class)->requestCode($user);
         PhoneVerificationCode::where('user_id', $user->id)->update(['expires_at' => now()->subMinute()]);
 
         $this->assertFalse(app(PhoneVerificationService::class)->verifyCode($user, $res['code']));
@@ -161,7 +160,7 @@ class SmsOtpTest extends TestCase
     public function test_used_otp_cannot_be_reused(): void
     {
         $user = User::factory()->unverifiedPhone()->create();
-        $res  = app(PhoneVerificationService::class)->requestCode($user);
+        $res = app(PhoneVerificationService::class)->requestCode($user);
 
         $this->assertTrue(app(PhoneVerificationService::class)->verifyCode($user, $res['code']));
 
@@ -173,7 +172,7 @@ class SmsOtpTest extends TestCase
     {
         SiteSetting::set('otp_max_attempts', 3);
         $user = User::factory()->unverifiedPhone()->create();
-        $res  = app(PhoneVerificationService::class)->requestCode($user);
+        $res = app(PhoneVerificationService::class)->requestCode($user);
 
         for ($i = 0; $i < 3; $i++) {
             app(PhoneVerificationService::class)->verify($user, '111111');
@@ -218,7 +217,7 @@ class SmsOtpTest extends TestCase
         SiteSetting::set('otp_daily_cap', 3);
         SiteSetting::set('otp_resend_cooldown_seconds', 60);
         $user = User::factory()->unverifiedPhone()->create();
-        $svc  = app(PhoneVerificationService::class);
+        $svc = app(PhoneVerificationService::class);
 
         // Send up to the cap, spacing each send beyond the resend cooldown.
         for ($i = 0; $i < 3; $i++) {
@@ -257,7 +256,7 @@ class SmsOtpTest extends TestCase
     public function test_user_can_verify_phone_from_account_settings(): void
     {
         $user = User::factory()->unverifiedPhone()->create();
-        $res  = app(PhoneVerificationService::class)->requestCode($user);
+        $res = app(PhoneVerificationService::class)->requestCode($user);
 
         $this->actingAs($user)
             ->post(route('dashboard.profile.phone.verify'), ['code' => $res['code']])
@@ -285,11 +284,11 @@ class SmsOtpTest extends TestCase
         SiteSetting::set('phone_verification_enabled', 'false');
 
         $this->post('/register', [
-            'name'                  => 'Plain User',
-            'username'              => 'plainuser',
-            'email'                 => 'plain@example.com',
-            'phone'                 => '09120009988',
-            'password'              => 'password123',
+            'name' => 'Plain User',
+            'username' => 'plainuser',
+            'email' => 'plain@example.com',
+            'phone' => '09120009988',
+            'password' => 'password123',
             'password_confirmation' => 'password123',
         ])->assertRedirect(route('dashboard.index'));
 
@@ -305,11 +304,11 @@ class SmsOtpTest extends TestCase
         SiteSetting::set('phone_verification_required_on_register', 'true');
 
         $response = $this->post('/register', [
-            'name'                  => 'Otp User',
-            'username'              => 'otpuser',
-            'email'                 => 'otp@example.com',
-            'phone'                 => '09120007766',
-            'password'              => 'password123',
+            'name' => 'Otp User',
+            'username' => 'otpuser',
+            'email' => 'otp@example.com',
+            'phone' => '09120007766',
+            'password' => 'password123',
             'password_confirmation' => 'password123',
         ]);
 

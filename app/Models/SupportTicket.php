@@ -9,15 +9,22 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class SupportTicket extends Model
 {
-    const STATUS_OPEN          = 'open';
-    const STATUS_WAITING_USER  = 'waiting_user';
-    const STATUS_WAITING_ADMIN = 'waiting_admin';
-    const STATUS_ANSWERED      = 'answered';
-    const STATUS_CLOSED        = 'closed';
+    const STATUS_OPEN = 'open';
 
-    const PRIORITY_LOW    = 'low';
+    const STATUS_WAITING_USER = 'waiting_user';
+
+    const STATUS_WAITING_ADMIN = 'waiting_admin';
+
+    const STATUS_ANSWERED = 'answered';
+
+    const STATUS_CLOSED = 'closed';
+
+    const PRIORITY_LOW = 'low';
+
     const PRIORITY_NORMAL = 'normal';
-    const PRIORITY_HIGH   = 'high';
+
+    const PRIORITY_HIGH = 'high';
+
     const PRIORITY_URGENT = 'urgent';
 
     protected $fillable = [
@@ -38,9 +45,9 @@ class SupportTicket extends Model
 
     protected $casts = [
         'last_reply_at' => 'datetime',
-        'closed_at'     => 'datetime',
-        'user_unread'   => 'boolean',
-        'admin_unread'  => 'boolean',
+        'closed_at' => 'datetime',
+        'user_unread' => 'boolean',
+        'admin_unread' => 'boolean',
     ];
 
     protected static function booted(): void
@@ -128,20 +135,20 @@ class SupportTicket extends Model
     public static function statuses(): array
     {
         return [
-            self::STATUS_OPEN          => 'باز',
-            self::STATUS_WAITING_USER  => 'در انتظار پاسخ کاربر',
+            self::STATUS_OPEN => 'باز',
+            self::STATUS_WAITING_USER => 'در انتظار پاسخ کاربر',
             self::STATUS_WAITING_ADMIN => 'در انتظار پاسخ پشتیبانی',
-            self::STATUS_ANSWERED      => 'پاسخ داده شده',
-            self::STATUS_CLOSED        => 'بسته شده',
+            self::STATUS_ANSWERED => 'پاسخ داده شده',
+            self::STATUS_CLOSED => 'بسته شده',
         ];
     }
 
     public static function priorities(): array
     {
         return [
-            self::PRIORITY_LOW    => 'کم',
+            self::PRIORITY_LOW => 'کم',
             self::PRIORITY_NORMAL => 'عادی',
-            self::PRIORITY_HIGH   => 'زیاد',
+            self::PRIORITY_HIGH => 'زیاد',
             self::PRIORITY_URGENT => 'فوری',
         ];
     }

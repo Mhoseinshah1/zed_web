@@ -2,11 +2,16 @@
 
 namespace Tests\Feature;
 
+use App\Filament\Pages\FinancialReport;
+use App\Filament\Pages\WalletSettings;
+use App\Filament\Resources\DiscountCodeResource;
+use App\Filament\Resources\PaymentMethodResource;
+use App\Filament\Resources\PaymentTransactionResource;
+use App\Filament\Resources\WalletTransactionResource;
 use App\Models\DiscountCode;
 use App\Models\PaymentTransaction;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
-use Livewire\Livewire;
 use Tests\TestCase;
 
 /**
@@ -22,9 +27,9 @@ class PaymentTransactionResourceTest extends TestCase
     private function makeAdmin(): User
     {
         return User::factory()->create([
-            'username'          => 'ptx_admin',
-            'password'          => bcrypt('secret'),
-            'is_admin'          => true,
+            'username' => 'ptx_admin',
+            'password' => bcrypt('secret'),
+            'is_admin' => true,
             'email_verified_at' => now(),
         ]);
     }
@@ -34,8 +39,8 @@ class PaymentTransactionResourceTest extends TestCase
     private function makeUser(string $suffix = ''): User
     {
         return User::factory()->create([
-            'username'          => "ptx_user{$suffix}",
-            'is_admin'          => false,
+            'username' => "ptx_user{$suffix}",
+            'is_admin' => false,
             'email_verified_at' => now(),
         ]);
     }
@@ -45,12 +50,12 @@ class PaymentTransactionResourceTest extends TestCase
         // Wallet top-up transactions have a user but no order_id
         $user = $this->makeUser('1');
         PaymentTransaction::create([
-            'order_id'        => null,
-            'user_id'         => $user->id,
-            'provider'        => 'nowpayments',
+            'order_id' => null,
+            'user_id' => $user->id,
+            'provider' => 'nowpayments',
             'payment_purpose' => 'wallet_topup',
-            'status'          => PaymentTransaction::STATUS_PENDING,
-            'amount_toman'    => 100000,
+            'status' => PaymentTransaction::STATUS_PENDING,
+            'amount_toman' => 100000,
         ]);
 
         $this->actingAs($this->makeAdmin())
@@ -64,10 +69,10 @@ class PaymentTransactionResourceTest extends TestCase
         // The badge formatStateUsing closure must not crash on unknown values.
         $user = $this->makeUser('2');
         PaymentTransaction::create([
-            'order_id'     => null,
-            'user_id'      => $user->id,
-            'provider'     => null,
-            'status'       => 'unknown_legacy_status',
+            'order_id' => null,
+            'user_id' => $user->id,
+            'provider' => null,
+            'status' => 'unknown_legacy_status',
             'amount_toman' => 0,
         ]);
 
@@ -82,13 +87,13 @@ class PaymentTransactionResourceTest extends TestCase
         // The centralpay_check visibility callback must not crash and must hide the action.
         $user = $this->makeUser('3');
         PaymentTransaction::create([
-            'order_id'        => null,
-            'user_id'         => $user->id,
-            'provider'        => 'centralpay',
+            'order_id' => null,
+            'user_id' => $user->id,
+            'provider' => 'centralpay',
             'payment_purpose' => 'wallet_topup',
-            'status'          => PaymentTransaction::STATUS_PENDING,
-            'gateway_status'  => null,
-            'amount_toman'    => 200000,
+            'status' => PaymentTransaction::STATUS_PENDING,
+            'gateway_status' => null,
+            'amount_toman' => 200000,
         ]);
 
         // Page must render without 500 — null order no longer crashes the visibility callback
@@ -109,16 +114,16 @@ class PaymentTransactionResourceTest extends TestCase
     public function test_discount_code_can_be_created_via_admin(): void
     {
         DiscountCode::create([
-            'title'                => 'تست ادمین',
-            'code'                 => 'ADMINTEST',
-            'type'                 => DiscountCode::TYPE_FIXED,
-            'value'                => 50000,
-            'is_active'            => true,
+            'title' => 'تست ادمین',
+            'code' => 'ADMINTEST',
+            'type' => DiscountCode::TYPE_FIXED,
+            'value' => 50000,
+            'is_active' => true,
             'per_user_usage_limit' => 2,
         ]);
 
         $this->assertDatabaseHas('discount_codes', [
-            'code'  => 'ADMINTEST',
+            'code' => 'ADMINTEST',
             'value' => 50000,
         ]);
     }
@@ -127,37 +132,37 @@ class PaymentTransactionResourceTest extends TestCase
 
     public function test_payment_transaction_resource_uses_mali_navigation_group(): void
     {
-        $group = \App\Filament\Resources\PaymentTransactionResource::getNavigationGroup();
+        $group = PaymentTransactionResource::getNavigationGroup();
         $this->assertEquals('سفارش‌ها و مالی', $group);
     }
 
     public function test_wallet_transaction_resource_uses_mali_navigation_group(): void
     {
-        $group = \App\Filament\Resources\WalletTransactionResource::getNavigationGroup();
+        $group = WalletTransactionResource::getNavigationGroup();
         $this->assertEquals('سفارش‌ها و مالی', $group);
     }
 
     public function test_payment_method_resource_uses_mali_navigation_group(): void
     {
-        $group = \App\Filament\Resources\PaymentMethodResource::getNavigationGroup();
+        $group = PaymentMethodResource::getNavigationGroup();
         $this->assertEquals('سفارش‌ها و مالی', $group);
     }
 
     public function test_discount_code_resource_uses_mali_navigation_group(): void
     {
-        $group = \App\Filament\Resources\DiscountCodeResource::getNavigationGroup();
+        $group = DiscountCodeResource::getNavigationGroup();
         $this->assertEquals('سفارش‌ها و مالی', $group);
     }
 
     public function test_financial_report_page_uses_mali_navigation_group(): void
     {
-        $group = \App\Filament\Pages\FinancialReport::getNavigationGroup();
+        $group = FinancialReport::getNavigationGroup();
         $this->assertEquals('سفارش‌ها و مالی', $group);
     }
 
     public function test_wallet_settings_page_uses_mali_navigation_group(): void
     {
-        $group = \App\Filament\Pages\WalletSettings::getNavigationGroup();
+        $group = WalletSettings::getNavigationGroup();
         $this->assertEquals('سفارش‌ها و مالی', $group);
     }
 
@@ -165,11 +170,11 @@ class PaymentTransactionResourceTest extends TestCase
 
     public function test_mali_navigation_sort_order_is_correct(): void
     {
-        $this->assertEquals(20, \App\Filament\Pages\FinancialReport::getNavigationSort());
-        $this->assertEquals(30, \App\Filament\Resources\PaymentTransactionResource::getNavigationSort());
-        $this->assertEquals(40, \App\Filament\Resources\WalletTransactionResource::getNavigationSort());
-        $this->assertEquals(50, \App\Filament\Pages\WalletSettings::getNavigationSort());
-        $this->assertEquals(60, \App\Filament\Resources\PaymentMethodResource::getNavigationSort());
-        $this->assertEquals(70, \App\Filament\Resources\DiscountCodeResource::getNavigationSort());
+        $this->assertEquals(20, FinancialReport::getNavigationSort());
+        $this->assertEquals(30, PaymentTransactionResource::getNavigationSort());
+        $this->assertEquals(40, WalletTransactionResource::getNavigationSort());
+        $this->assertEquals(50, WalletSettings::getNavigationSort());
+        $this->assertEquals(60, PaymentMethodResource::getNavigationSort());
+        $this->assertEquals(70, DiscountCodeResource::getNavigationSort());
     }
 }

@@ -51,12 +51,12 @@ class DiscountConcurrencyPgTest extends TestCase
     public function test_twenty_forked_workers_never_exceed_the_limit(): void
     {
         $plan = Plan::create([
-            'name' => self::PREFIX . 'plan', 'slug' => self::PREFIX . 'plan',
+            'name' => self::PREFIX.'plan', 'slug' => self::PREFIX.'plan',
             'price_toman' => 100000, 'is_active' => true, 'traffic_gb' => 20, 'duration_days' => 30,
         ]);
 
         $code = DiscountCode::create([
-            'title' => 'fork', 'code' => self::PREFIX . 'CODE',
+            'title' => 'fork', 'code' => self::PREFIX.'CODE',
             'type' => DiscountCode::TYPE_FIXED, 'value' => 10000,
             'total_usage_limit' => 5, 'per_user_usage_limit' => 1, 'is_active' => true,
         ]);
@@ -65,8 +65,8 @@ class DiscountConcurrencyPgTest extends TestCase
         $orderIds = [];
         for ($i = 0; $i < 20; $i++) {
             $user = User::create([
-                'name' => 'F', 'username' => self::PREFIX . $i,
-                'email' => self::PREFIX . $i . '@test.com', 'password' => bcrypt('x'),
+                'name' => 'F', 'username' => self::PREFIX.$i,
+                'email' => self::PREFIX.$i.'@test.com', 'password' => bcrypt('x'),
             ]);
             $order = Order::create([
                 'user_id' => $user->id, 'plan_id' => $plan->id, 'plan_name' => $plan->name,
@@ -90,9 +90,9 @@ class DiscountConcurrencyPgTest extends TestCase
                 DB::reconnect();
                 $status = 0;
                 try {
-                    $user  = User::find($userId);
+                    $user = User::find($userId);
                     $order = Order::find($orderId);
-                    app(DiscountService::class)->applyToOrder($user, $order, self::PREFIX . 'CODE');
+                    app(DiscountService::class)->applyToOrder($user, $order, self::PREFIX.'CODE');
                 } catch (\Throwable $e) {
                     $status = 1; // rejected (capacity full) or transient
                 }
@@ -122,14 +122,14 @@ class DiscountConcurrencyPgTest extends TestCase
     private function cleanup(): void
     {
         try {
-            $userIds = DB::table('users')->where('username', 'like', self::PREFIX . '%')->pluck('id');
+            $userIds = DB::table('users')->where('username', 'like', self::PREFIX.'%')->pluck('id');
             if ($userIds->isNotEmpty()) {
                 DB::table('discount_redemptions')->whereIn('user_id', $userIds)->delete();
                 DB::table('orders')->whereIn('user_id', $userIds)->delete();
                 DB::table('users')->whereIn('id', $userIds)->delete();
             }
-            DB::table('discount_codes')->where('code', 'like', self::PREFIX . '%')->delete();
-            DB::table('plans')->where('slug', 'like', self::PREFIX . '%')->delete();
+            DB::table('discount_codes')->where('code', 'like', self::PREFIX.'%')->delete();
+            DB::table('plans')->where('slug', 'like', self::PREFIX.'%')->delete();
         } catch (\Throwable) {
             // best-effort cleanup
         }

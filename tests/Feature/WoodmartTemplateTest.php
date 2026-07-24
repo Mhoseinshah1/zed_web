@@ -2,7 +2,6 @@
 
 namespace Tests\Feature;
 
-use App\Models\Location;
 use App\Models\Plan;
 use App\Models\PlanCategory;
 use App\Models\SiteSetting;

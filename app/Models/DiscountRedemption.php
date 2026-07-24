@@ -21,9 +21,12 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 class DiscountRedemption extends Model
 {
     const STATUS_RESERVED = 'reserved';
-    const STATUS_USED     = 'used';
+
+    const STATUS_USED = 'used';
+
     const STATUS_RELEASED = 'released';
-    const STATUS_EXPIRED  = 'expired';
+
+    const STATUS_EXPIRED = 'expired';
 
     /** @deprecated legacy alias, migrated to STATUS_RELEASED. Kept for BC only. */
     const STATUS_CANCELLED = 'released';
@@ -45,11 +48,11 @@ class DiscountRedemption extends Model
     protected $casts = [
         'original_amount' => 'integer',
         'discount_amount' => 'integer',
-        'final_amount'    => 'integer',
-        'reserved_at'     => 'datetime',
-        'expires_at'      => 'datetime',
-        'used_at'         => 'datetime',
-        'released_at'     => 'datetime',
+        'final_amount' => 'integer',
+        'reserved_at' => 'datetime',
+        'expires_at' => 'datetime',
+        'used_at' => 'datetime',
+        'released_at' => 'datetime',
     ];
 
     public function discountCode(): BelongsTo
@@ -110,10 +113,10 @@ class DiscountRedemption extends Model
     {
         return match ($this->status) {
             self::STATUS_RESERVED => 'رزرو شده',
-            self::STATUS_USED     => 'استفاده شده',
+            self::STATUS_USED => 'استفاده شده',
             self::STATUS_RELEASED => 'آزاد شده',
-            self::STATUS_EXPIRED  => 'منقضی',
-            default               => $this->status,
+            self::STATUS_EXPIRED => 'منقضی',
+            default => $this->status,
         };
     }
 }

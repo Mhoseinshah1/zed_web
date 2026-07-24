@@ -2,6 +2,7 @@
 
 namespace App\Filament\Pages;
 
+use App\Models\Commission;
 use App\Models\DiscountRedemption;
 use App\Models\Order;
 use App\Models\PaymentTransaction;
@@ -13,7 +14,7 @@ use Filament\Forms\Contracts\HasForms;
 use Filament\Forms\Form;
 use Filament\Pages\Page;
 use Illuminate\Support\Carbon;
-use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Collection;
 
 class FinancialReport extends Page implements HasForms
 {
@@ -21,24 +22,30 @@ class FinancialReport extends Page implements HasForms
 
     protected static string $view = 'filament.pages.financial-report';
 
-    protected static ?string $navigationIcon  = 'heroicon-o-chart-bar-square';
+    protected static ?string $navigationIcon = 'heroicon-o-chart-bar-square';
+
     protected static ?string $navigationGroup = 'سفارش‌ها و مالی';
+
     protected static ?string $navigationLabel = 'گزارش مالی';
-    protected static ?string $title           = 'داشبورد مالی';
-    protected static ?string $slug            = 'reports/financial';
-    protected static ?int    $navigationSort  = 20;
+
+    protected static ?string $title = 'داشبورد مالی';
+
+    protected static ?string $slug = 'reports/financial';
+
+    protected static ?int $navigationSort = 20;
 
     public string $dateFrom = '';
-    public string $dateTo   = '';
+
+    public string $dateTo = '';
 
     public function mount(): void
     {
         $this->dateFrom = now()->startOfMonth()->format('Y-m-d');
-        $this->dateTo   = now()->format('Y-m-d');
+        $this->dateTo = now()->format('Y-m-d');
 
         $this->form->fill([
             'dateFrom' => $this->dateFrom,
-            'dateTo'   => $this->dateTo,
+            'dateTo' => $this->dateTo,
         ]);
     }
 
@@ -66,20 +73,20 @@ class FinancialReport extends Page implements HasForms
     {
         $data = $this->form->getState();
         $this->dateFrom = $data['dateFrom'] ?? now()->startOfMonth()->format('Y-m-d');
-        $this->dateTo   = $data['dateTo']   ?? now()->format('Y-m-d');
+        $this->dateTo = $data['dateTo'] ?? now()->format('Y-m-d');
     }
 
     public function resetToToday(): void
     {
         $this->dateFrom = now()->format('Y-m-d');
-        $this->dateTo   = now()->format('Y-m-d');
+        $this->dateTo = now()->format('Y-m-d');
         $this->form->fill(['dateFrom' => $this->dateFrom, 'dateTo' => $this->dateTo]);
     }
 
     public function resetToMonth(): void
     {
         $this->dateFrom = now()->startOfMonth()->format('Y-m-d');
-        $this->dateTo   = now()->format('Y-m-d');
+        $this->dateTo = now()->format('Y-m-d');
         $this->form->fill(['dateFrom' => $this->dateFrom, 'dateTo' => $this->dateTo]);
     }
 
@@ -259,7 +266,7 @@ class FinancialReport extends Page implements HasForms
 
     public function getCommissionsRange(): int
     {
-        return (int) \App\Models\Commission::where('status', \App\Models\Commission::STATUS_CREDITED)
+        return (int) Commission::where('status', Commission::STATUS_CREDITED)
             ->whereBetween('credited_at', [$this->from(), $this->to()])
             ->sum('commission_amount');
     }
@@ -383,7 +390,7 @@ class FinancialReport extends Page implements HasForms
     public function getProviderBreakdown(): array
     {
         $from = $this->from();
-        $to   = $this->to();
+        $to = $this->to();
 
         $walletSales = WalletTransaction::where('type', WalletTransaction::TYPE_ORDER_PAYMENT)
             ->where('direction', WalletTransaction::DIRECTION_DEBIT)
@@ -395,46 +402,46 @@ class FinancialReport extends Page implements HasForms
         $rows = PaymentTransaction::where('payment_purpose', 'order_payment')
             ->where('status', PaymentTransaction::STATUS_APPROVED)
             ->whereBetween('paid_at', [$from, $to])
-            ->selectRaw("provider, COUNT(*) as cnt, COALESCE(SUM(amount_toman),0) as total")
+            ->selectRaw('provider, COUNT(*) as cnt, COALESCE(SUM(amount_toman),0) as total')
             ->groupBy('provider')
             ->get()
             ->keyBy('provider');
 
         $totalSales = max(1,
-            (int)($walletSales->total ?? 0)
-            + (int)($rows->get('nowpayments')->total ?? 0)
-            + (int)($rows->get('centralpay')->total ?? 0)
-            + (int)($rows->get('manual')->total ?? 0)
+            (int) ($walletSales->total ?? 0)
+            + (int) ($rows->get('nowpayments')->total ?? 0)
+            + (int) ($rows->get('centralpay')->total ?? 0)
+            + (int) ($rows->get('manual')->total ?? 0)
         );
 
         return [
             [
-                'label'   => 'کیف پول',
-                'count'   => (int)($walletSales->cnt ?? 0),
-                'total'   => (int)($walletSales->total ?? 0),
-                'share'   => round((int)($walletSales->total ?? 0) / $totalSales * 100, 1),
-                'color'   => 'info',
+                'label' => 'کیف پول',
+                'count' => (int) ($walletSales->cnt ?? 0),
+                'total' => (int) ($walletSales->total ?? 0),
+                'share' => round((int) ($walletSales->total ?? 0) / $totalSales * 100, 1),
+                'color' => 'info',
             ],
             [
-                'label'   => 'NOWPayments',
-                'count'   => (int)($rows->get('nowpayments')->cnt ?? 0),
-                'total'   => (int)($rows->get('nowpayments')->total ?? 0),
-                'share'   => round((int)($rows->get('nowpayments')->total ?? 0) / $totalSales * 100, 1),
-                'color'   => 'warning',
+                'label' => 'NOWPayments',
+                'count' => (int) ($rows->get('nowpayments')->cnt ?? 0),
+                'total' => (int) ($rows->get('nowpayments')->total ?? 0),
+                'share' => round((int) ($rows->get('nowpayments')->total ?? 0) / $totalSales * 100, 1),
+                'color' => 'warning',
             ],
             [
-                'label'   => 'CentralPay',
-                'count'   => (int)($rows->get('centralpay')->cnt ?? 0),
-                'total'   => (int)($rows->get('centralpay')->total ?? 0),
-                'share'   => round((int)($rows->get('centralpay')->total ?? 0) / $totalSales * 100, 1),
-                'color'   => 'success',
+                'label' => 'CentralPay',
+                'count' => (int) ($rows->get('centralpay')->cnt ?? 0),
+                'total' => (int) ($rows->get('centralpay')->total ?? 0),
+                'share' => round((int) ($rows->get('centralpay')->total ?? 0) / $totalSales * 100, 1),
+                'color' => 'success',
             ],
             [
-                'label'   => 'دستی / سایر',
-                'count'   => (int)($rows->get('manual')->cnt ?? 0),
-                'total'   => (int)($rows->get('manual')->total ?? 0),
-                'share'   => round((int)($rows->get('manual')->total ?? 0) / $totalSales * 100, 1),
-                'color'   => 'gray',
+                'label' => 'دستی / سایر',
+                'count' => (int) ($rows->get('manual')->cnt ?? 0),
+                'total' => (int) ($rows->get('manual')->total ?? 0),
+                'share' => round((int) ($rows->get('manual')->total ?? 0) / $totalSales * 100, 1),
+                'color' => 'gray',
             ],
         ];
     }
@@ -455,19 +462,19 @@ class FinancialReport extends Page implements HasForms
             ->count();
 
         return [
-            'total_balance'      => $this->getTotalWalletBalance(),
-            'topup_range'        => $this->getWalletTopupRange(),
-            'topup_month'        => $this->getWalletTopupMonth(),
-            'spending_range'     => $this->getWalletSalesRange(),
-            'spending_month'     => $this->getWalletSpendingMonth(),
-            'topup_count'        => $topupCount,
-            'admin_count'        => $adminCount,
+            'total_balance' => $this->getTotalWalletBalance(),
+            'topup_range' => $this->getWalletTopupRange(),
+            'topup_month' => $this->getWalletTopupMonth(),
+            'spending_range' => $this->getWalletSalesRange(),
+            'spending_month' => $this->getWalletSpendingMonth(),
+            'topup_count' => $topupCount,
+            'admin_count' => $adminCount,
         ];
     }
 
     // ─── Risky items ─────────────────────────────────────────────────────────
 
-    public function getProvisioningFailedOrders(): \Illuminate\Support\Collection
+    public function getProvisioningFailedOrders(): Collection
     {
         return Order::where('status', Order::STATUS_PROVISIONING_FAILED)
             ->with('user')
@@ -476,7 +483,7 @@ class FinancialReport extends Page implements HasForms
             ->get();
     }
 
-    public function getOldPendingPayments(): \Illuminate\Support\Collection
+    public function getOldPendingPayments(): Collection
     {
         return PaymentTransaction::whereIn('status', [
             PaymentTransaction::STATUS_PENDING,
@@ -488,7 +495,7 @@ class FinancialReport extends Page implements HasForms
             ->get();
     }
 
-    public function getRecentFailedPayments(): \Illuminate\Support\Collection
+    public function getRecentFailedPayments(): Collection
     {
         return PaymentTransaction::whereIn('status', [
             PaymentTransaction::STATUS_FAILED,
@@ -501,7 +508,7 @@ class FinancialReport extends Page implements HasForms
             ->get();
     }
 
-    public function getPaidWithoutService(): \Illuminate\Support\Collection
+    public function getPaidWithoutService(): Collection
     {
         return Order::where('payment_status', Order::PAYMENT_PAID)
             ->whereDoesntHave('service')
@@ -540,21 +547,21 @@ class FinancialReport extends Page implements HasForms
 
     public function getSales7DaysChartData(): array
     {
-        $days   = collect();
+        $days = collect();
         $labels = [];
-        $data   = [];
+        $data = [];
 
         $rows = Order::where('payment_status', Order::PAYMENT_PAID)
             ->where('paid_at', '>=', now()->subDays(6)->startOfDay())
-            ->selectRaw("DATE(paid_at) as day, COALESCE(SUM(final_price_toman),0) as total")
+            ->selectRaw('DATE(paid_at) as day, COALESCE(SUM(final_price_toman),0) as total')
             ->groupBy('day')
             ->orderBy('day')
             ->pluck('total', 'day');
 
         for ($i = 6; $i >= 0; $i--) {
-            $date     = now()->subDays($i)->format('Y-m-d');
+            $date = now()->subDays($i)->format('Y-m-d');
             $labels[] = now()->subDays($i)->format('m/d');
-            $data[]   = (int)($rows[$date] ?? 0);
+            $data[] = (int) ($rows[$date] ?? 0);
         }
 
         return compact('labels', 'data');
@@ -563,19 +570,19 @@ class FinancialReport extends Page implements HasForms
     public function getSales30DaysChartData(): array
     {
         $labels = [];
-        $data   = [];
+        $data = [];
 
         $rows = Order::where('payment_status', Order::PAYMENT_PAID)
             ->where('paid_at', '>=', now()->subDays(29)->startOfDay())
-            ->selectRaw("DATE(paid_at) as day, COALESCE(SUM(final_price_toman),0) as total")
+            ->selectRaw('DATE(paid_at) as day, COALESCE(SUM(final_price_toman),0) as total')
             ->groupBy('day')
             ->orderBy('day')
             ->pluck('total', 'day');
 
         for ($i = 29; $i >= 0; $i--) {
-            $date     = now()->subDays($i)->format('Y-m-d');
+            $date = now()->subDays($i)->format('Y-m-d');
             $labels[] = now()->subDays($i)->format('m/d');
-            $data[]   = (int)($rows[$date] ?? 0);
+            $data[] = (int) ($rows[$date] ?? 0);
         }
 
         return compact('labels', 'data');
@@ -584,21 +591,21 @@ class FinancialReport extends Page implements HasForms
     public function getWalletTopup30DaysChartData(): array
     {
         $labels = [];
-        $data   = [];
+        $data = [];
 
         $rows = WalletTransaction::where('type', WalletTransaction::TYPE_TOPUP)
             ->where('direction', WalletTransaction::DIRECTION_CREDIT)
             ->where('status', WalletTransaction::STATUS_COMPLETED)
             ->where('created_at', '>=', now()->subDays(29)->startOfDay())
-            ->selectRaw("DATE(created_at) as day, COALESCE(SUM(amount_toman),0) as total")
+            ->selectRaw('DATE(created_at) as day, COALESCE(SUM(amount_toman),0) as total')
             ->groupBy('day')
             ->orderBy('day')
             ->pluck('total', 'day');
 
         for ($i = 29; $i >= 0; $i--) {
-            $date     = now()->subDays($i)->format('Y-m-d');
+            $date = now()->subDays($i)->format('Y-m-d');
             $labels[] = now()->subDays($i)->format('m/d');
-            $data[]   = (int)($rows[$date] ?? 0);
+            $data[] = (int) ($rows[$date] ?? 0);
         }
 
         return compact('labels', 'data');
@@ -607,7 +614,7 @@ class FinancialReport extends Page implements HasForms
     public function getPaymentProviderChartData(): array
     {
         $from = $this->from();
-        $to   = $this->to();
+        $to = $this->to();
 
         $wallet = (int) WalletTransaction::where('type', WalletTransaction::TYPE_ORDER_PAYMENT)
             ->where('direction', WalletTransaction::DIRECTION_DEBIT)
@@ -635,14 +642,14 @@ class FinancialReport extends Page implements HasForms
 
         return [
             'labels' => ['کیف پول', 'NOWPayments', 'CentralPay', 'دستی'],
-            'data'   => [$wallet, $now, $central, $manual],
+            'data' => [$wallet, $now, $central, $manual],
         ];
     }
 
     public function getPaymentStatusChartData(): array
     {
         $from = $this->from();
-        $to   = $this->to();
+        $to = $this->to();
 
         $rows = PaymentTransaction::whereBetween('created_at', [$from, $to])
             ->selectRaw("
@@ -656,12 +663,12 @@ class FinancialReport extends Page implements HasForms
 
         return [
             'labels' => ['موفق', 'در انتظار', 'ناموفق', 'منقضی', 'مسترد'],
-            'data'   => [
-                (int)($rows->success  ?? 0),
-                (int)($rows->pending  ?? 0),
-                (int)($rows->failed   ?? 0),
-                (int)($rows->expired  ?? 0),
-                (int)($rows->refunded ?? 0),
+            'data' => [
+                (int) ($rows->success ?? 0),
+                (int) ($rows->pending ?? 0),
+                (int) ($rows->failed ?? 0),
+                (int) ($rows->expired ?? 0),
+                (int) ($rows->refunded ?? 0),
             ],
         ];
     }

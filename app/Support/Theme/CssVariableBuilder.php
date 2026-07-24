@@ -18,13 +18,14 @@ class CssVariableBuilder
     {
         $out = '';
         foreach ($vars as $name => $value) {
-            $name  = self::safeName($name);
+            $name = self::safeName($name);
             $value = self::safeValue((string) $value);
             if ($name === '' || $value === '') {
                 continue;
             }
-            $out .= $name . ':' . $value . ';';
+            $out .= $name.':'.$value.';';
         }
+
         return $out;
     }
 
@@ -35,7 +36,7 @@ class CssVariableBuilder
      */
     public static function block(string $selector, array $vars): string
     {
-        return $selector . '{' . self::declarations($vars) . '}';
+        return $selector.'{'.self::declarations($vars).'}';
     }
 
     /** A custom-property name, normalised to start with `--`. */
@@ -46,8 +47,9 @@ class CssVariableBuilder
             return '';
         }
         if (! str_starts_with($name, '--')) {
-            $name = '--' . ltrim($name, '-');
+            $name = '--'.ltrim($name, '-');
         }
+
         // Allow only sane custom-property characters.
         return preg_replace('/[^a-zA-Z0-9_-]/', '', $name) ?? '';
     }
@@ -57,6 +59,7 @@ class CssVariableBuilder
     {
         // No braces, semicolons, angle brackets, or back-slashes in a value.
         $value = preg_replace('/[{};<>\\\\]/', '', $value) ?? '';
+
         return trim($value);
     }
 }

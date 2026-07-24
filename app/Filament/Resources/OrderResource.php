@@ -3,8 +3,12 @@
 namespace App\Filament\Resources;
 
 use App\Filament\Resources\OrderResource\Pages;
+use App\Filament\Support\UserAccountColumn;
 use App\Models\Order;
 use App\Models\ProvisioningAttempt;
+use App\Models\UserService;
+use App\Services\Addons\ServiceAddonService;
+use App\Services\Discounts\DiscountService;
 use App\Services\Provisioning\ProvisioningService;
 use App\Services\Renewals\RenewalService;
 use App\Services\ServiceProvisioner;
@@ -22,12 +26,17 @@ class OrderResource extends Resource
 {
     protected static ?string $model = Order::class;
 
-    protected static ?string $navigationIcon   = 'heroicon-o-shopping-cart';
-    protected static ?string $navigationGroup  = 'سفارش‌ها و مالی';
-    protected static ?string $navigationLabel  = 'سفارش‌ها';
-    protected static ?string $modelLabel       = 'سفارش';
+    protected static ?string $navigationIcon = 'heroicon-o-shopping-cart';
+
+    protected static ?string $navigationGroup = 'سفارش‌ها و مالی';
+
+    protected static ?string $navigationLabel = 'سفارش‌ها';
+
+    protected static ?string $modelLabel = 'سفارش';
+
     protected static ?string $pluralModelLabel = 'سفارش‌ها';
-    protected static ?int    $navigationSort   = 10;
+
+    protected static ?int $navigationSort = 10;
 
     /** Sidebar badge: orders awaiting payment review (actionable count, real data). */
     public static function getNavigationBadge(): ?string
@@ -65,7 +74,7 @@ class OrderResource extends Resource
                         ->content(fn (?Order $record) => $record?->user?->email ?? '—'),
                     Forms\Components\Placeholder::make('user_wallet')
                         ->label('موجودی کیف پول')
-                        ->content(fn (?Order $record) => number_format((int) ($record?->user?->wallet_balance_toman ?? 0)) . ' تومان'),
+                        ->content(fn (?Order $record) => number_format((int) ($record?->user?->wallet_balance_toman ?? 0)).' تومان'),
                     Forms\Components\Placeholder::make('user_active_services')
                         ->label('سرویس‌های فعال')
                         ->content(fn (?Order $record) => (string) ($record?->user?->activeServicesCount() ?? 0)),
@@ -147,13 +156,13 @@ class OrderResource extends Resource
                     ->label('نوع')
                     ->formatStateUsing(fn ($state) => Order::allOrderTypes()[$state] ?? $state)
                     ->colors([
-                        'info'    => Order::TYPE_NEW_SERVICE,
+                        'info' => Order::TYPE_NEW_SERVICE,
                         'success' => Order::TYPE_RENEWAL,
                         'warning' => Order::TYPE_EXTRA_TRAFFIC,
                         'primary' => Order::TYPE_EXTRA_TIME,
                     ]),
 
-                \App\Filament\Support\UserAccountColumn::make(),
+                UserAccountColumn::make(),
 
                 Tables\Columns\TextColumn::make('user.username')
                     ->label('کاربر')
@@ -176,41 +185,42 @@ class OrderResource extends Resource
                         if (! $tx) {
                             return '—';
                         }
+
                         return match ($tx->provider) {
                             'nowpayments' => 'NOWPayments',
-                            'centralpay'  => 'CentralPay',
-                            'manual'      => 'دستی',
-                            default       => 'کیف پول',
+                            'centralpay' => 'CentralPay',
+                            'manual' => 'دستی',
+                            default => 'کیف پول',
                         };
                     })
                     ->badge()
                     ->color(fn (string $state): string => match ($state) {
                         'NOWPayments' => 'warning',
-                        'CentralPay'  => 'success',
-                        'دستی'        => 'gray',
-                        'کیف پول'     => 'info',
-                        default       => 'gray',
+                        'CentralPay' => 'success',
+                        'دستی' => 'gray',
+                        'کیف پول' => 'info',
+                        default => 'gray',
                     }),
 
                 Tables\Columns\BadgeColumn::make('payment_status')
                     ->label('پرداخت')
                     ->formatStateUsing(fn ($state) => Order::allPaymentStatuses()[$state] ?? $state)
                     ->colors([
-                        'gray'    => ['unpaid'],
+                        'gray' => ['unpaid'],
                         'warning' => ['pending'],
                         'success' => ['paid'],
-                        'danger'  => ['failed'],
-                        'info'    => ['refunded'],
+                        'danger' => ['failed'],
+                        'info' => ['refunded'],
                     ]),
 
                 Tables\Columns\BadgeColumn::make('status')
                     ->label('وضعیت سفارش')
                     ->formatStateUsing(fn ($state) => Order::allStatuses()[$state] ?? $state)
                     ->colors([
-                        'gray'    => ['pending', 'awaiting_payment'],
+                        'gray' => ['pending', 'awaiting_payment'],
                         'warning' => ['paid', 'processing', 'provisioning'],
                         'success' => ['completed'],
-                        'danger'  => ['provisioning_failed', 'cancelled', 'failed'],
+                        'danger' => ['provisioning_failed', 'cancelled', 'failed'],
                     ]),
 
                 Tables\Columns\TextColumn::make('commission_info')
@@ -221,7 +231,8 @@ class OrderResource extends Resource
                             return '—';
                         }
                         $rep = $record->user?->referrer?->account_id ?? '—';
-                        return number_format($c->commission_amount) . ' (' . ($c->statusLabel()) . ') • ' . $rep;
+
+                        return number_format($c->commission_amount).' ('.($c->statusLabel()).') • '.$rep;
                     })
                     ->toggleable(),
 
@@ -301,14 +312,14 @@ class OrderResource extends Resource
                     ->label('درگاه پرداخت')
                     ->options([
                         'nowpayments' => 'NOWPayments',
-                        'centralpay'  => 'CentralPay',
-                        'manual'      => 'دستی',
+                        'centralpay' => 'CentralPay',
+                        'manual' => 'دستی',
                     ])
                     ->query(fn (Builder $query, array $data) => $data['value']
                         ? $query->whereHas('paymentTransactions', fn ($q) => $q->where('provider', $data['value']))
                         : $query),
 
-                Tables\Filters\Filter::make('date_range')
+                Filter::make('date_range')
                     ->form([
                         Forms\Components\DatePicker::make('created_from')->label('از تاریخ'),
                         Forms\Components\DatePicker::make('created_until')->label('تا تاریخ'),
@@ -333,7 +344,7 @@ class OrderResource extends Resource
                         ]) && $record->payment_status === Order::PAYMENT_PAID;
 
                         $hasActiveService = $record->service
-                            && $record->service->status === \App\Models\UserService::STATUS_ACTIVE;
+                            && $record->service->status === UserService::STATUS_ACTIVE;
 
                         return $isRetryable && ! $hasActiveService;
                     })
@@ -358,6 +369,7 @@ class OrderResource extends Resource
                         $attempts = ProvisioningAttempt::where('order_id', $record->id)
                             ->orderByDesc('attempt_number')
                             ->get();
+
                         return view('filament.modals.provisioning-attempts', compact('attempts'));
                     })
                     ->modalHeading('لاگ‌های ساخت سرویس')
@@ -404,12 +416,12 @@ class OrderResource extends Resource
                     ])
                     ->action(function (Order $record, array $data) {
                         $record->update([
-                            'status'       => Order::STATUS_CANCELLED,
+                            'status' => Order::STATUS_CANCELLED,
                             'cancelled_at' => now(),
-                            'admin_notes'  => $data['admin_notes'] ?? $record->admin_notes,
+                            'admin_notes' => $data['admin_notes'] ?? $record->admin_notes,
                         ]);
                         // Admin invalidates the order → free any held discount capacity.
-                        app(\App\Services\Discounts\DiscountService::class)
+                        app(DiscountService::class)
                             ->releaseReservation($record, 'admin_cancelled');
                         Notification::make()->title('سفارش لغو شد.')->warning()->send();
                     })
@@ -431,7 +443,8 @@ class OrderResource extends Resource
                         // creation is atomic regardless, but surface a clear
                         // Persian message instead of silently returning.
                         if ($record->fresh()->service !== null) {
-                            Notification::make()->title(\App\Models\UserService::MSG_DUPLICATE_SERVICE)->warning()->send();
+                            Notification::make()->title(UserService::MSG_DUPLICATE_SERVICE)->warning()->send();
+
                             return;
                         }
                         try {
@@ -475,7 +488,7 @@ class OrderResource extends Resource
                         && $record->payment_status === Order::PAYMENT_PAID)
                     ->action(function (Order $record) {
                         try {
-                            $addon = app(\App\Services\Addons\ServiceAddonService::class);
+                            $addon = app(ServiceAddonService::class);
                             if ($record->order_type === Order::TYPE_EXTRA_TRAFFIC) {
                                 $addon->applyExtraTraffic($record);
                             } else {
@@ -501,7 +514,7 @@ class OrderResource extends Resource
     {
         return [
             'index' => Pages\ListOrders::route('/'),
-            'edit'  => Pages\EditOrder::route('/{record}/edit'),
+            'edit' => Pages\EditOrder::route('/{record}/edit'),
         ];
     }
 }

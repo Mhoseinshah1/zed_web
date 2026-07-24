@@ -2,17 +2,19 @@
 
 namespace Tests\Feature;
 
+use App\Filament\Pages\FinancialReport;
 use App\Models\Commission;
+use App\Models\Notification;
 use App\Models\Order;
 use App\Models\PaymentTransaction;
 use App\Models\SiteSetting;
 use App\Models\User;
+use App\Models\WalletTransaction;
 use App\Services\Orders\MarkOrderAsPaidService;
 use App\Services\Referrals\CommissionService;
 use App\Services\Referrals\ReferralService;
 use App\Services\Referrals\ReferralSettings;
 use App\Services\Referrals\RepresentativeService;
-use App\Services\WalletService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
@@ -34,15 +36,15 @@ class ReferralCommissionTest extends TestCase
     private function paidOrder(User $buyer, string $type = Order::TYPE_NEW_SERVICE, int $price = 100000, int $final = 100000, array $attrs = []): Order
     {
         return Order::create(array_merge([
-            'order_type'        => $type,
-            'user_id'           => $buyer->id,
-            'plan_name'         => 'p',
-            'price_toman'       => $price,
+            'order_type' => $type,
+            'user_id' => $buyer->id,
+            'plan_name' => 'p',
+            'price_toman' => $price,
             'final_price_toman' => $final,
-            'discount_toman'    => $price - $final,
-            'status'            => Order::STATUS_PAID,
-            'payment_status'    => Order::PAYMENT_PAID,
-            'paid_at'           => now(),
+            'discount_toman' => $price - $final,
+            'status' => Order::STATUS_PAID,
+            'payment_status' => Order::PAYMENT_PAID,
+            'paid_at' => now(),
         ], $attrs));
     }
 
@@ -66,7 +68,7 @@ class ReferralCommissionTest extends TestCase
     public function test_referral_link_stores_ref_in_session(): void
     {
         $referrer = User::factory()->create();
-        $this->get('/register?ref=' . $referrer->referral_code);
+        $this->get('/register?ref='.$referrer->referral_code);
         $this->assertEquals($referrer->referral_code, session('referral_code'));
     }
 
@@ -135,9 +137,9 @@ class ReferralCommissionTest extends TestCase
 
     public function test_referred_by_is_not_overwritten(): void
     {
-        $first  = User::factory()->create();
+        $first = User::factory()->create();
         $second = User::factory()->create();
-        $user   = User::factory()->create(['referred_by_user_id' => $first->id]);
+        $user = User::factory()->create(['referred_by_user_id' => $first->id]);
 
         app(ReferralService::class)->attachReferrer($user, $second->referral_code);
         $this->assertSame($first->id, $user->fresh()->referred_by_user_id);
@@ -171,7 +173,7 @@ class ReferralCommissionTest extends TestCase
     public function test_admin_can_approve_and_reject_representative(): void
     {
         $svc = app(RepresentativeService::class);
-        $a   = User::factory()->create(['representative_status' => User::REP_PENDING]);
+        $a = User::factory()->create(['representative_status' => User::REP_PENDING]);
         $svc->approve($a);
         $this->assertTrue($a->fresh()->isApprovedRepresentative());
 
@@ -187,7 +189,8 @@ class ReferralCommissionTest extends TestCase
         $this->setMode(ReferralSettings::MODE_ALL_USERS);
         $this->setCommission('percent', 10);
         $referrer = User::factory()->create(['wallet_balance_toman' => 0]);
-        $buyer    = User::factory()->create(['referred_by_user_id' => $referrer->id]);
+        $buyer = User::factory()->create(['referred_by_user_id' => $referrer->id]);
+
         return [$referrer, $buyer];
     }
 
@@ -260,8 +263,8 @@ class ReferralCommissionTest extends TestCase
         $this->setMode(ReferralSettings::MODE_REPRESENTATIVES);
         $this->setCommission('percent', 10);
         $referrer = User::factory()->create(); // not a rep
-        $buyer    = User::factory()->create(['referred_by_user_id' => $referrer->id]);
-        $order    = $this->paidOrder($buyer);
+        $buyer = User::factory()->create(['referred_by_user_id' => $referrer->id]);
+        $order = $this->paidOrder($buyer);
 
         $this->assertNull(app(CommissionService::class)->recordForOrder($order));
     }
@@ -307,13 +310,13 @@ class ReferralCommissionTest extends TestCase
         app(CommissionService::class)->recordForOrder($order);
 
         $this->assertDatabaseHas('wallet_transactions', [
-            'user_id'      => $referrer->id,
-            'type'         => \App\Models\WalletTransaction::TYPE_REPRESENTATIVE_COMMISSION,
+            'user_id' => $referrer->id,
+            'type' => WalletTransaction::TYPE_REPRESENTATIVE_COMMISSION,
             'amount_toman' => 10000,
         ]);
         $this->assertDatabaseHas('notifications', [
             'user_id' => $referrer->id,
-            'type'    => \App\Models\Notification::TYPE_COMMISSION_CREDITED,
+            'type' => Notification::TYPE_COMMISSION_CREDITED,
         ]);
     }
 
@@ -361,9 +364,9 @@ class ReferralCommissionTest extends TestCase
         $order = $this->paidOrder($buyer);
         app(CommissionService::class)->recordForOrder($order);
 
-        $report = app(\App\Filament\Pages\FinancialReport::class);
+        $report = app(FinancialReport::class);
         $report->dateFrom = now()->subDay()->format('Y-m-d');
-        $report->dateTo   = now()->addDay()->format('Y-m-d');
+        $report->dateTo = now()->addDay()->format('Y-m-d');
 
         $this->assertSame(10000, $report->getCommissionsRange());
     }

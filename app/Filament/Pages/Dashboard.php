@@ -16,9 +16,12 @@ use Filament\Pages\Dashboard as BaseDashboard;
 class Dashboard extends BaseDashboard
 {
     protected static ?string $navigationGroup = 'داشبورد';
+
     protected static ?string $navigationLabel = 'داشبورد مدیریت';
-    protected static ?string $title           = 'داشبورد مدیریت';
-    protected static ?int    $navigationSort  = 1;
+
+    protected static ?string $title = 'داشبورد مدیریت';
+
+    protected static ?int $navigationSort = 1;
 
     /** A 6-column grid so the widgets below can span cleanly (4 + 2). */
     public function getColumns(): int|string|array

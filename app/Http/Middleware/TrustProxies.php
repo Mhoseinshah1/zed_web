@@ -119,7 +119,7 @@ class TrustProxies extends Middleware
 
         Log::debug('proxy.resolved', [
             'client_ip' => $request->ip(),
-            'proxy_ip'  => $request->server->get('REMOTE_ADDR'),
+            'proxy_ip' => $request->server->get('REMOTE_ADDR'),
         ]);
     }
 }

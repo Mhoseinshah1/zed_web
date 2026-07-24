@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Models\User;
 use App\Services\Auth\LoginThrottleSettings;
+use Filament\Pages\Auth\Login;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
@@ -40,10 +41,10 @@ class UserAuthTest extends TestCase
     public function test_post_register_is_not_405(): void
     {
         $response = $this->post('/register', [
-            'name'                  => 'Test User',
-            'username'              => 'testuser',
-            'email'                 => 'test@example.com',
-            'password'              => 'password123',
+            'name' => 'Test User',
+            'username' => 'testuser',
+            'email' => 'test@example.com',
+            'password' => 'password123',
             'password_confirmation' => 'password123',
         ]);
 
@@ -74,11 +75,11 @@ class UserAuthTest extends TestCase
     public function test_user_can_register_with_valid_data(): void
     {
         $response = $this->post('/register', [
-            'name'                  => 'New User',
-            'username'              => 'newuser',
-            'email'                 => 'newuser@example.com',
-            'phone'                 => '09123456789',
-            'password'              => 'password123',
+            'name' => 'New User',
+            'username' => 'newuser',
+            'email' => 'newuser@example.com',
+            'phone' => '09123456789',
+            'password' => 'password123',
             'password_confirmation' => 'password123',
         ]);
 
@@ -92,11 +93,11 @@ class UserAuthTest extends TestCase
         User::factory()->create(['username' => 'taken', 'email' => 'taken@example.com']);
 
         $response = $this->post('/register', [
-            'name'                  => 'Another User',
-            'username'              => 'taken',
-            'email'                 => 'other@example.com',
-            'phone'                 => '09120000001',
-            'password'              => 'password123',
+            'name' => 'Another User',
+            'username' => 'taken',
+            'email' => 'other@example.com',
+            'phone' => '09120000001',
+            'password' => 'password123',
             'password_confirmation' => 'password123',
         ]);
 
@@ -109,11 +110,11 @@ class UserAuthTest extends TestCase
         User::factory()->create(['username' => 'user1', 'email' => 'dup@example.com']);
 
         $response = $this->post('/register', [
-            'name'                  => 'Another User',
-            'username'              => 'user2',
-            'email'                 => 'dup@example.com',
-            'phone'                 => '09120000002',
-            'password'              => 'password123',
+            'name' => 'Another User',
+            'username' => 'user2',
+            'email' => 'dup@example.com',
+            'phone' => '09120000002',
+            'password' => 'password123',
             'password_confirmation' => 'password123',
         ]);
 
@@ -265,14 +266,14 @@ class UserAuthTest extends TestCase
         // $this->rateLimit(5) brute-force protection stays active.
         $authenticate = new \ReflectionMethod(\App\Filament\Pages\Auth\Login::class, 'authenticate');
         $this->assertSame(
-            \Filament\Pages\Auth\Login::class,
+            Login::class,
             $authenticate->getDeclaringClass()->getName(),
             'Custom admin Login must not override authenticate() or it would bypass Filament throttling.'
         );
 
         // The inherited authenticate() does call the rate limiter.
         $source = (string) file_get_contents(
-            (new \ReflectionClass(\Filament\Pages\Auth\Login::class))->getFileName()
+            (new \ReflectionClass(Login::class))->getFileName()
         );
         $this->assertStringContainsString('$this->rateLimit(', $source);
     }

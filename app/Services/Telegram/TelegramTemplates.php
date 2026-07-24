@@ -26,11 +26,11 @@ class TelegramTemplates
         $template = TelegramTemplate::findByKey($key);
 
         if ($template && $template->is_active) {
-            $title   = $template->title;
+            $title = $template->title;
             $message = $template->message;
         } else {
             $default = self::defaults()[$key] ?? ['title' => $key, 'message' => '{message}'];
-            $title   = $default['title'];
+            $title = $default['title'];
             $message = $default['message'];
         }
 
@@ -54,6 +54,7 @@ class TelegramTemplates
             // Escape every MarkdownV2 special character.
             return preg_replace('/([_*\[\]()~`>#+\-=|{}.!\\\\])/', '\\\\$1', $text) ?? $text;
         }
+
         // HTML mode: only &, <, > are significant.
         return str_replace(['&', '<', '>'], ['&amp;', '&lt;', '&gt;'], $text);
     }
@@ -61,8 +62,9 @@ class TelegramTemplates
     private function substitute(string $text, array $context): string
     {
         foreach ($context as $key => $value) {
-            $text = str_replace('{' . $key . '}', $value, $text);
+            $text = str_replace('{'.$key.'}', $value, $text);
         }
+
         return $text;
     }
 
@@ -166,7 +168,7 @@ class TelegramTemplates
             ],
             'daily_report' => [
                 'title' => '🗓 گزارش روزانه',
-                'message' => "{message}",
+                'message' => '{message}',
                 'variables' => '{message}',
             ],
         ];
@@ -180,10 +182,10 @@ class TelegramTemplates
                 continue;
             }
             TelegramTemplate::create([
-                'key'                 => $key,
-                'title'               => $tpl['title'],
-                'message'             => $tpl['message'],
-                'is_active'           => true,
+                'key' => $key,
+                'title' => $tpl['title'],
+                'message' => $tpl['message'],
+                'is_active' => true,
                 'available_variables' => $tpl['variables'],
             ]);
         }

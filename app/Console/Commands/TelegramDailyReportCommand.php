@@ -15,6 +15,7 @@ class TelegramDailyReportCommand extends Command
     {
         $report->send();
         $this->info('Daily report dispatched.');
+
         return self::SUCCESS;
     }
 }

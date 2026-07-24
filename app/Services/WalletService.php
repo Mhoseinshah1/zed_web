@@ -2,9 +2,12 @@
 
 namespace App\Services;
 
+use App\Models\Notification;
 use App\Models\PaymentTransaction;
 use App\Models\User;
 use App\Models\WalletTransaction;
+use App\Services\Notifications\NotificationService;
+use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
 use RuntimeException;
 
@@ -26,19 +29,19 @@ class WalletService
             $locked = User::where('id', $user->id)->lockForUpdate()->first();
 
             $before = $locked->wallet_balance_toman;
-            $after  = $before + $amount;
+            $after = $before + $amount;
 
             // wallet_balance_toman is not mass-assignable — set it explicitly.
             $locked->forceFill(['wallet_balance_toman' => $after])->save();
 
             return WalletTransaction::create(array_merge([
-                'user_id'              => $user->id,
-                'type'                 => $type,
-                'direction'            => WalletTransaction::DIRECTION_CREDIT,
-                'amount_toman'         => $amount,
+                'user_id' => $user->id,
+                'type' => $type,
+                'direction' => WalletTransaction::DIRECTION_CREDIT,
+                'amount_toman' => $amount,
                 'balance_before_toman' => $before,
-                'balance_after_toman'  => $after,
-                'status'               => WalletTransaction::STATUS_COMPLETED,
+                'balance_after_toman' => $after,
+                'status' => WalletTransaction::STATUS_COMPLETED,
             ], $extra));
         });
     }
@@ -53,19 +56,19 @@ class WalletService
             }
 
             $before = $locked->wallet_balance_toman;
-            $after  = $before - $amount;
+            $after = $before - $amount;
 
             // wallet_balance_toman is not mass-assignable — set it explicitly.
             $locked->forceFill(['wallet_balance_toman' => $after])->save();
 
             return WalletTransaction::create(array_merge([
-                'user_id'              => $user->id,
-                'type'                 => $type,
-                'direction'            => WalletTransaction::DIRECTION_DEBIT,
-                'amount_toman'         => $amount,
+                'user_id' => $user->id,
+                'type' => $type,
+                'direction' => WalletTransaction::DIRECTION_DEBIT,
+                'amount_toman' => $amount,
                 'balance_before_toman' => $before,
-                'balance_after_toman'  => $after,
-                'status'               => WalletTransaction::STATUS_COMPLETED,
+                'balance_after_toman' => $after,
+                'status' => WalletTransaction::STATUS_COMPLETED,
             ], $extra));
         });
     }
@@ -106,10 +109,10 @@ class WalletService
 
                 return $this->credit($user, (int) $tx->amount_toman, WalletTransaction::TYPE_TOPUP, [
                     'payment_transaction_id' => $tx->id,
-                    'description'            => 'شارژ کیف پول از طریق درگاه پرداخت',
+                    'description' => 'شارژ کیف پول از طریق درگاه پرداخت',
                 ]);
             });
-        } catch (\Illuminate\Database\QueryException $e) {
+        } catch (QueryException $e) {
             // Lost a concurrent race — the other writer already credited this tx.
             if ($this->isDuplicatePaymentTransaction($e)) {
                 return WalletTransaction::where('payment_transaction_id', $tx->id)->firstOrFail();
@@ -119,14 +122,14 @@ class WalletService
 
         // Notify only on a genuinely new credit (never re-notify a duplicate).
         if ($created) {
-            app(\App\Services\Notifications\NotificationService::class)->notify(
-                \App\Models\Notification::TYPE_WALLET_TOPUP_SUCCESS,
+            app(NotificationService::class)->notify(
+                Notification::TYPE_WALLET_TOPUP_SUCCESS,
                 $user,
                 [
-                    'user_name'     => $user->name ?? $user->username,
+                    'user_name' => $user->name ?? $user->username,
                     'wallet_amount' => number_format((int) $tx->amount_toman),
                 ],
-                'wallet_topup_success:tx:' . $tx->id,
+                'wallet_topup_success:tx:'.$tx->id,
             );
         }
 
@@ -134,7 +137,7 @@ class WalletService
     }
 
     /** True when the query error is a UNIQUE violation on payment_transaction_id. */
-    private function isDuplicatePaymentTransaction(\Illuminate\Database\QueryException $e): bool
+    private function isDuplicatePaymentTransaction(QueryException $e): bool
     {
         $sqlState = $e->errorInfo[0] ?? null;
 

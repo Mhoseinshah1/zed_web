@@ -15,12 +15,17 @@ class PlanCategoryResource extends Resource
 {
     protected static ?string $model = PlanCategory::class;
 
-    protected static ?string $navigationIcon   = 'heroicon-o-tag';
-    protected static ?string $navigationGroup   = 'فروشگاه و پلن‌ها';
-    protected static ?string $navigationLabel   = 'دسته‌بندی پلن‌ها';
-    protected static ?string $modelLabel        = 'دسته‌بندی پلن';
-    protected static ?string $pluralModelLabel  = 'دسته‌بندی پلن‌ها';
-    protected static ?int    $navigationSort    = 20;
+    protected static ?string $navigationIcon = 'heroicon-o-tag';
+
+    protected static ?string $navigationGroup = 'فروشگاه و پلن‌ها';
+
+    protected static ?string $navigationLabel = 'دسته‌بندی پلن‌ها';
+
+    protected static ?string $modelLabel = 'دسته‌بندی پلن';
+
+    protected static ?string $pluralModelLabel = 'دسته‌بندی پلن‌ها';
+
+    protected static ?int $navigationSort = 20;
 
     public static function form(Form $form): Form
     {
@@ -30,7 +35,7 @@ class PlanCategoryResource extends Resource
                     ->live(onBlur: true)
                     ->afterStateUpdated(function (string $operation, $state, Forms\Set $set) {
                         if ($operation === 'create') {
-                            $set('slug', Str::slug($state, '-', 'fa') ?: 'cat-' . Str::random(6));
+                            $set('slug', Str::slug($state, '-', 'fa') ?: 'cat-'.Str::random(6));
                         }
                     }),
                 Forms\Components\TextInput::make('slug')->label('اسلاگ')->required()
@@ -71,9 +76,9 @@ class PlanCategoryResource extends Resource
     public static function getPages(): array
     {
         return [
-            'index'  => Pages\ListPlanCategories::route('/'),
+            'index' => Pages\ListPlanCategories::route('/'),
             'create' => Pages\CreatePlanCategory::route('/create'),
-            'edit'   => Pages\EditPlanCategory::route('/{record}/edit'),
+            'edit' => Pages\EditPlanCategory::route('/{record}/edit'),
         ];
     }
 }

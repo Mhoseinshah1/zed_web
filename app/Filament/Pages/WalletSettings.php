@@ -13,13 +13,19 @@ class WalletSettings extends Page
 {
     use Forms\Concerns\InteractsWithForms;
 
-    protected static ?string $navigationIcon  = 'heroicon-o-wallet';
+    protected static ?string $navigationIcon = 'heroicon-o-wallet';
+
     protected static ?string $navigationGroup = 'سفارش‌ها و مالی';
+
     protected static ?string $navigationLabel = 'تنظیمات کیف پول';
-    protected static ?string $title           = 'تنظیمات کیف پول';
-    protected static ?int    $navigationSort  = 50;
-    protected static ?string $slug            = 'settings/wallet';
-    protected static string  $view            = 'filament.pages.wallet-settings';
+
+    protected static ?string $title = 'تنظیمات کیف پول';
+
+    protected static ?int $navigationSort = 50;
+
+    protected static ?string $slug = 'settings/wallet';
+
+    protected static string $view = 'filament.pages.wallet-settings';
 
     public ?array $data = [];
 
@@ -46,15 +52,15 @@ class WalletSettings extends Page
     ];
 
     private const DEFAULTS = [
-        'wallet_enabled'                       => '1',
-        'wallet_payment_enabled'               => '1',
-        'wallet_topup_enabled'                 => '1',
-        'wallet_topup_nowpayments_enabled'     => '1',
-        'wallet_topup_centralpay_enabled'      => '0',
-        'wallet_min_topup_amount'              => '100000',
-        'wallet_max_topup_amount'              => '',
-        'wallet_currency'                      => 'IRT',
-        'wallet_topup_preset_amounts'          => '100000,250000,500000,1000000,2000000',
+        'wallet_enabled' => '1',
+        'wallet_payment_enabled' => '1',
+        'wallet_topup_enabled' => '1',
+        'wallet_topup_nowpayments_enabled' => '1',
+        'wallet_topup_centralpay_enabled' => '0',
+        'wallet_min_topup_amount' => '100000',
+        'wallet_max_topup_amount' => '',
+        'wallet_currency' => 'IRT',
+        'wallet_topup_preset_amounts' => '100000,250000,500000,1000000,2000000',
         'wallet_admin_adjustment_requires_note' => '1',
     ];
 
@@ -121,7 +127,7 @@ class WalletSettings extends Page
         $data = $this->form->getState();
 
         foreach (self::ALL_KEYS as $key) {
-            $value    = $data[$key] ?? null;
+            $value = $data[$key] ?? null;
             $strValue = $this->castToString($key, $value);
 
             // updateOrCreate guarantees the row is created when missing,
@@ -129,10 +135,10 @@ class WalletSettings extends Page
             SiteText::updateOrCreate(
                 ['key' => $key],
                 [
-                    'value'      => $strValue,
-                    'group'      => 'wallet',
-                    'label'      => $key,
-                    'type'       => in_array($key, self::BOOLEAN_KEYS) ? 'boolean' : 'text',
+                    'value' => $strValue,
+                    'group' => 'wallet',
+                    'label' => $key,
+                    'type' => in_array($key, self::BOOLEAN_KEYS) ? 'boolean' : 'text',
                     'sort_order' => array_search($key, self::ALL_KEYS) + 100,
                 ]
             );
@@ -193,6 +199,7 @@ class WalletSettings extends Page
             return $value;
         }
         $str = strtolower((string) $value);
+
         return $str === '1' || $str === 'true' || $str === 'yes';
     }
 }

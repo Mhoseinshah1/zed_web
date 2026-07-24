@@ -11,7 +11,7 @@ class TutorialsController extends Controller
     public function index(SeoManager $seo): View
     {
         $tutorials = Tutorial::active()->ordered()->get();
-        $grouped   = $tutorials->groupBy('platform');
+        $grouped = $tutorials->groupBy('platform');
 
         $seo->forKey('tutorials')->breadcrumbs([
             ['name' => 'خانه', 'url' => route('home')],
@@ -24,7 +24,7 @@ class TutorialsController extends Controller
     public function show(string $slug, SeoManager $seo): View
     {
         $tutorial = Tutorial::where('slug', $slug)->where('is_active', true)->firstOrFail();
-        $related  = Tutorial::active()->ordered()
+        $related = Tutorial::active()->ordered()
             ->where('id', '!=', $tutorial->id)
             ->where('platform', $tutorial->platform)
             ->limit(4)->get();

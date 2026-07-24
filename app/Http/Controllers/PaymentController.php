@@ -25,7 +25,7 @@ class PaymentController extends Controller
         }
 
         $methods = PaymentMethod::active()->ordered()->get();
-        $user    = auth()->user();
+        $user = auth()->user();
 
         return view('dashboard.orders.pay', compact('order', 'methods', 'user'));
     }
@@ -37,22 +37,22 @@ class PaymentController extends Controller
         abort_if($order->payment_status === Order::PAYMENT_PAID, 403);
 
         $request->validate([
-            'payment_method_id'     => ['required', 'exists:payment_methods,id'],
+            'payment_method_id' => ['required', 'exists:payment_methods,id'],
             'transaction_reference' => ['nullable', 'string', 'max:255'],
-            'user_note'             => ['nullable', 'string', 'max:1000'],
+            'user_note' => ['nullable', 'string', 'max:1000'],
         ]);
 
         $method = PaymentMethod::findOrFail($request->payment_method_id);
 
         // NOWPayments — delegate to dedicated controller
         if ($method->isNowPayments()) {
-            return app(\App\Http\Controllers\NowPaymentsController::class)
+            return app(NowPaymentsController::class)
                 ->create($request, $order);
         }
 
         // CentralPay — delegate to dedicated controller
         if ($method->isCentralPay()) {
-            return app(\App\Http\Controllers\CentralPayController::class)
+            return app(CentralPayController::class)
                 ->initiate($request, $order);
         }
 
@@ -94,7 +94,7 @@ class PaymentController extends Controller
 
         // Wallet payment — immediate approval
         if ($method->type === PaymentMethod::TYPE_WALLET) {
-            $walletEnabled        = SiteText::getBool('wallet_enabled', true);
+            $walletEnabled = SiteText::getBool('wallet_enabled', true);
             $walletPaymentEnabled = SiteText::getBool('wallet_payment_enabled', true);
 
             if (! $walletEnabled || ! $walletPaymentEnabled) {
@@ -132,20 +132,20 @@ class PaymentController extends Controller
             }
 
             PaymentTransaction::create([
-                'order_id'              => $order->id,
-                'user_id'               => $order->user_id,
-                'payment_method_id'     => $method->id,
-                'provider'              => 'manual',
-                'method'                => $method->type,
-                'status'                => PaymentTransaction::STATUS_SUBMITTED,
-                'amount_toman'          => $order->final_price_toman,
+                'order_id' => $order->id,
+                'user_id' => $order->user_id,
+                'payment_method_id' => $method->id,
+                'provider' => 'manual',
+                'method' => $method->type,
+                'status' => PaymentTransaction::STATUS_SUBMITTED,
+                'amount_toman' => $order->final_price_toman,
                 'transaction_reference' => $request->transaction_reference,
-                'user_note'             => $request->user_note,
+                'user_note' => $request->user_note,
             ]);
 
             $order->update([
                 'payment_status' => Order::PAYMENT_PENDING,
-                'status'         => Order::STATUS_AWAITING_PAYMENT,
+                'status' => Order::STATUS_AWAITING_PAYMENT,
             ]);
 
             return true;

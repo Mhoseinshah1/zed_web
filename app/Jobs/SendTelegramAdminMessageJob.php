@@ -21,7 +21,8 @@ class SendTelegramAdminMessageJob implements ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
-    public int   $tries   = 3;
+    public int $tries = 3;
+
     public array $backoff = [10, 30, 90];
 
     public function __construct(private int $logId) {}
@@ -41,10 +42,10 @@ class SendTelegramAdminMessageJob implements ShouldQueue
         );
 
         $log->update([
-            'status'              => TelegramAdminNotificationLog::STATUS_SENT,
+            'status' => TelegramAdminNotificationLog::STATUS_SENT,
             'telegram_message_id' => $result['message_id'] ?: null,
-            'sent_at'             => now(),
-            'error'               => null,
+            'sent_at' => now(),
+            'error' => null,
         ]);
 
         if ($topic = TelegramAdminTopic::findByKey($log->topic_key)) {
@@ -57,9 +58,9 @@ class SendTelegramAdminMessageJob implements ShouldQueue
         $log = TelegramAdminNotificationLog::find($this->logId);
         if ($log) {
             $log->update([
-                'status'    => TelegramAdminNotificationLog::STATUS_FAILED,
+                'status' => TelegramAdminNotificationLog::STATUS_FAILED,
                 'failed_at' => now(),
-                'error'     => mb_substr($e->getMessage(), 0, 500),
+                'error' => mb_substr($e->getMessage(), 0, 500),
             ]);
             if ($topic = TelegramAdminTopic::findByKey($log->topic_key)) {
                 $topic->update(['last_error' => mb_substr($e->getMessage(), 0, 500)]);

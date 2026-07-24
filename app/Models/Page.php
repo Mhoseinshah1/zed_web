@@ -4,6 +4,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Str;
 
 class Page extends Model
@@ -19,25 +20,25 @@ class Page extends Model
     ];
 
     protected $casts = [
-        'is_active'          => 'boolean',
-        'show_in_footer'     => 'boolean',
-        'sort_order'         => 'integer',
-        'robots_index'       => 'boolean',
-        'robots_follow'      => 'boolean',
+        'is_active' => 'boolean',
+        'show_in_footer' => 'boolean',
+        'sort_order' => 'integer',
+        'robots_index' => 'boolean',
+        'robots_follow' => 'boolean',
         'include_in_sitemap' => 'boolean',
-        'sitemap_priority'   => 'float',
+        'sitemap_priority' => 'float',
     ];
 
     protected static function booted(): void
     {
         static::saving(function (Page $page) {
             if (empty($page->slug)) {
-                $page->slug = Str::slug($page->title) ?: 'page-' . uniqid();
+                $page->slug = Str::slug($page->title) ?: 'page-'.uniqid();
             }
         });
 
         // Invalidate the pages sitemap cache when CMS content changes.
-        $bust = fn () => \Illuminate\Support\Facades\Cache::forget('seo_sitemap:pages');
+        $bust = fn () => Cache::forget('seo_sitemap:pages');
         static::saved($bust);
         static::deleted($bust);
     }

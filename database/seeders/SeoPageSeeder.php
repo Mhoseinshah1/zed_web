@@ -24,23 +24,23 @@ class SeoPageSeeder extends Seeder
     private function pages(): array
     {
         $index = fn (array $extra = []) => array_merge([
-            'robots_index'   => true,
-            'robots_follow'  => true,
-            'lock_noindex'   => false,
-            'og_type'        => 'website',
-            'twitter_card'   => 'summary_large_image',
+            'robots_index' => true,
+            'robots_follow' => true,
+            'lock_noindex' => false,
+            'og_type' => 'website',
+            'twitter_card' => 'summary_large_image',
             'include_in_sitemap' => true,
-            'sitemap_priority'   => 0.6,
+            'sitemap_priority' => 0.6,
             'sitemap_change_frequency' => 'weekly',
-            'is_active'      => true,
+            'is_active' => true,
         ], $extra);
 
         $noindex = fn (array $extra = []) => array_merge($index(), [
-            'robots_index'       => false,
-            'robots_follow'      => false,
-            'lock_noindex'       => true,
+            'robots_index' => false,
+            'robots_follow' => false,
+            'lock_noindex' => true,
             'include_in_sitemap' => false,
-            'is_active'          => true,
+            'is_active' => true,
         ], $extra);
 
         return [

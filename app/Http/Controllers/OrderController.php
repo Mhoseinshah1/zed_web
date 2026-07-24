@@ -11,12 +11,14 @@ class OrderController extends Controller
     public function index()
     {
         $orders = auth()->user()->orders()->latest()->paginate(15);
+
         return view('dashboard.orders.index', compact('orders'));
     }
 
     public function show(Order $order)
     {
         abort_if($order->user_id !== auth()->id(), 403);
+
         return view('dashboard.orders.show', compact('order'));
     }
 
@@ -40,7 +42,7 @@ class OrderController extends Controller
             return back()->withErrors(['discount_code' => $e->getMessage()]);
         }
 
-        return back()->with('discount_success', \App\Services\Discounts\DiscountService::MSG_APPLIED);
+        return back()->with('discount_success', DiscountService::MSG_APPLIED);
     }
 
     public function removeDiscount(Order $order, DiscountService $discountService)
@@ -53,6 +55,6 @@ class OrderController extends Controller
 
         $discountService->removeFromOrder($order);
 
-        return back()->with('discount_success', \App\Services\Discounts\DiscountService::MSG_REMOVED);
+        return back()->with('discount_success', DiscountService::MSG_REMOVED);
     }
 }

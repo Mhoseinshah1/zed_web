@@ -40,9 +40,9 @@ class CheckMarzbanPanels extends Command
 
             $panel->update([
                 'last_health_checked_at' => now(),
-                'health_status'          => VpnPanel::HEALTH_ONLINE,
-                'health_error'           => null,
-                'system_info'            => $this->safeSystem($system),
+                'health_status' => VpnPanel::HEALTH_ONLINE,
+                'health_error' => null,
+                'system_info' => $this->safeSystem($system),
             ]);
 
             $this->line(" • {$panel->name}: online");
@@ -51,8 +51,8 @@ class CheckMarzbanPanels extends Command
 
             $panel->update([
                 'last_health_checked_at' => now(),
-                'health_status'          => VpnPanel::HEALTH_OFFLINE,
-                'health_error'           => $safe,
+                'health_status' => VpnPanel::HEALTH_OFFLINE,
+                'health_error' => $safe,
             ]);
 
             Log::warning('CheckMarzbanPanels: panel offline', ['panel_id' => $panel->id, 'error' => $safe]);
@@ -60,7 +60,7 @@ class CheckMarzbanPanels extends Command
             app(NotificationService::class)->notifyAdmins(
                 Notification::TYPE_ADMIN_WARNING,
                 ['message' => "پنل Marzban «{$panel->name}» در دسترس نیست: {$safe}"],
-                'panel_health_failed:' . $panel->id . ':' . now()->format('YmdH'),
+                'panel_health_failed:'.$panel->id.':'.now()->format('YmdH'),
             );
 
             $this->line(" • {$panel->name}: OFFLINE — {$safe}");
@@ -77,6 +77,7 @@ class CheckMarzbanPanels extends Command
     private function sanitize(string $message): string
     {
         $message = preg_replace('/Bearer\s+\S+/i', 'Bearer [redacted]', $message) ?? $message;
+
         return mb_substr($message, 0, 500);
     }
 }

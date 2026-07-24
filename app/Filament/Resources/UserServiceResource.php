@@ -3,11 +3,13 @@
 namespace App\Filament\Resources;
 
 use App\Filament\Resources\UserServiceResource\Pages;
+use App\Filament\Support\UserAccountColumn;
 use App\Jobs\ProvisionMarzbanServiceJob;
 use App\Models\Plan;
 use App\Models\UserService;
 use App\Models\VpnPanel;
 use App\Models\VpnServiceProvisionLog;
+use App\Services\Addons\ServiceAddonService;
 use App\Services\Marzban\MarzbanClient;
 use App\Services\Renewals\RenewalService;
 use App\Services\ServiceProvisioner;
@@ -24,12 +26,17 @@ class UserServiceResource extends Resource
 {
     protected static ?string $model = UserService::class;
 
-    protected static ?string $navigationIcon   = 'heroicon-o-signal';
-    protected static ?string $navigationGroup  = 'سرویس‌ها و پنل‌های VPN';
-    protected static ?string $navigationLabel  = 'سرویس‌ها';
-    protected static ?string $modelLabel       = 'سرویس';
+    protected static ?string $navigationIcon = 'heroicon-o-signal';
+
+    protected static ?string $navigationGroup = 'سرویس‌ها و پنل‌های VPN';
+
+    protected static ?string $navigationLabel = 'سرویس‌ها';
+
+    protected static ?string $modelLabel = 'سرویس';
+
     protected static ?string $pluralModelLabel = 'سرویس‌ها';
-    protected static ?int    $navigationSort   = 10;
+
+    protected static ?int $navigationSort = 10;
 
     public static function form(Form $form): Form
     {
@@ -165,7 +172,7 @@ class UserServiceResource extends Resource
                     ->fontFamily('mono')
                     ->copyable(),
 
-                \App\Filament\Support\UserAccountColumn::make(),
+                UserAccountColumn::make(),
 
                 Tables\Columns\TextColumn::make('user.username')
                     ->label('کاربر')
@@ -189,9 +196,9 @@ class UserServiceResource extends Resource
                     ->colors([
                         'success' => ['active'],
                         'warning' => ['pending_provision'],
-                        'info'    => ['disabled'],
-                        'gray'    => ['expired'],
-                        'danger'  => ['cancelled', 'failed'],
+                        'info' => ['disabled'],
+                        'gray' => ['expired'],
+                        'danger' => ['cancelled', 'failed'],
                     ]),
 
                 Tables\Columns\BadgeColumn::make('provision_status')
@@ -200,8 +207,8 @@ class UserServiceResource extends Resource
                     ->colors([
                         'warning' => ['pending', 'manual_required'],
                         'success' => ['provisioned'],
-                        'danger'  => ['failed'],
-                        'gray'    => ['skipped'],
+                        'danger' => ['failed'],
+                        'gray' => ['skipped'],
                     ]),
 
                 Tables\Columns\TextColumn::make('traffic_total_gb')
@@ -334,6 +341,7 @@ class UserServiceResource extends Resource
                                 ->title('هیچ پنل Marzban پیش‌فرض فعالی یافت نشد.')
                                 ->danger()
                                 ->send();
+
                             return;
                         }
 
@@ -362,36 +370,37 @@ class UserServiceResource extends Resource
                         $panel = $record->vpnPanel;
                         if (! $panel) {
                             Notification::make()->title('پنل VPN مشخص نشده.')->danger()->send();
+
                             return;
                         }
 
                         try {
-                            $client      = new MarzbanClient($panel);
+                            $client = new MarzbanClient($panel);
                             $marzbanUser = $client->getUser($record->remote_username);
-                            $normalized  = $client->normalizeUserResponse($marzbanUser);
-                            $subLink     = $client->extractSubscriptionLink($marzbanUser);
+                            $normalized = $client->normalizeUserResponse($marzbanUser);
+                            $subLink = $client->extractSubscriptionLink($marzbanUser);
 
                             $updates = [
-                                'traffic_used_gb'   => $normalized['used_traffic_gb'],
+                                'traffic_used_gb' => $normalized['used_traffic_gb'],
                                 'subscription_link' => $subLink ?? $record->subscription_link,
-                                'config_link'       => $marzbanUser['links'][0] ?? $record->config_link,
-                                'last_synced_at'    => now(),
+                                'config_link' => $marzbanUser['links'][0] ?? $record->config_link,
+                                'last_synced_at' => now(),
                             ];
 
                             if (! empty($normalized['expire'])) {
-                                $updates['expires_at'] = \Carbon\Carbon::createFromTimestamp($normalized['expire']);
+                                $updates['expires_at'] = Carbon::createFromTimestamp($normalized['expire']);
                             }
 
                             $record->update($updates);
 
-                            \App\Models\VpnServiceProvisionLog::create([
-                                'user_service_id'  => $record->id,
-                                'vpn_panel_id'     => $panel->id,
-                                'action'           => 'marzban_sync_user',
-                                'status'           => 'success',
-                                'message'          => "Synced from Marzban. Status: {$normalized['status']}. Used: {$normalized['used_traffic_gb']} GB.",
+                            VpnServiceProvisionLog::create([
+                                'user_service_id' => $record->id,
+                                'vpn_panel_id' => $panel->id,
+                                'action' => 'marzban_sync_user',
+                                'status' => 'success',
+                                'message' => "Synced from Marzban. Status: {$normalized['status']}. Used: {$normalized['used_traffic_gb']} GB.",
                                 'response_payload' => [
-                                    'status'       => $normalized['status'],
+                                    'status' => $normalized['status'],
                                     'used_traffic' => $normalized['used_traffic_gb'],
                                 ],
                             ]);
@@ -403,12 +412,12 @@ class UserServiceResource extends Resource
                                 ->send();
 
                         } catch (\Throwable $e) {
-                            \App\Models\VpnServiceProvisionLog::create([
+                            VpnServiceProvisionLog::create([
                                 'user_service_id' => $record->id,
-                                'vpn_panel_id'    => $panel->id,
-                                'action'          => 'marzban_sync_user',
-                                'status'          => 'failed',
-                                'message'         => $e->getMessage(),
+                                'vpn_panel_id' => $panel->id,
+                                'action' => 'marzban_sync_user',
+                                'status' => 'failed',
+                                'message' => $e->getMessage(),
                             ]);
 
                             Notification::make()
@@ -432,6 +441,7 @@ class UserServiceResource extends Resource
                         $panel = $record->vpnPanel;
                         if (! $panel) {
                             Notification::make()->title('پنل VPN مشخص نشده.')->danger()->send();
+
                             return;
                         }
 
@@ -441,12 +451,12 @@ class UserServiceResource extends Resource
 
                             $record->update(['traffic_used_gb' => 0, 'last_synced_at' => now()]);
 
-                            \App\Models\VpnServiceProvisionLog::create([
+                            VpnServiceProvisionLog::create([
                                 'user_service_id' => $record->id,
-                                'vpn_panel_id'    => $panel->id,
-                                'action'          => 'marzban_reset_traffic',
-                                'status'          => 'success',
-                                'message'         => "Traffic reset for '{$record->remote_username}'.",
+                                'vpn_panel_id' => $panel->id,
+                                'action' => 'marzban_reset_traffic',
+                                'status' => 'success',
+                                'message' => "Traffic reset for '{$record->remote_username}'.",
                             ]);
 
                             Notification::make()->title('ترافیک با موفقیت ریست شد.')->success()->send();
@@ -468,22 +478,23 @@ class UserServiceResource extends Resource
                         $panel = $record->vpnPanel;
                         if (! $panel) {
                             Notification::make()->title('پنل VPN مشخص نشده.')->danger()->send();
+
                             return;
                         }
 
                         try {
-                            $client      = new MarzbanClient($panel);
+                            $client = new MarzbanClient($panel);
                             $marzbanUser = $client->revokeSubscription($record->remote_username);
-                            $newSubLink  = $client->extractSubscriptionLink($marzbanUser);
+                            $newSubLink = $client->extractSubscriptionLink($marzbanUser);
 
                             $record->update(['subscription_link' => $newSubLink, 'last_synced_at' => now()]);
 
-                            \App\Models\VpnServiceProvisionLog::create([
+                            VpnServiceProvisionLog::create([
                                 'user_service_id' => $record->id,
-                                'vpn_panel_id'    => $panel->id,
-                                'action'          => 'marzban_revoke_subscription',
-                                'status'          => 'success',
-                                'message'         => "Subscription revoked for '{$record->remote_username}'.",
+                                'vpn_panel_id' => $panel->id,
+                                'action' => 'marzban_revoke_subscription',
+                                'status' => 'success',
+                                'message' => "Subscription revoked for '{$record->remote_username}'.",
                             ]);
 
                             Notification::make()->title('اشتراک با موفقیت لغو و لینک جدید ذخیره شد.')->success()->send();
@@ -504,6 +515,7 @@ class UserServiceResource extends Resource
                         $panel = $record->vpnPanel;
                         if (! $panel) {
                             Notification::make()->title('پنل VPN مشخص نشده.')->danger()->send();
+
                             return;
                         }
 
@@ -513,12 +525,12 @@ class UserServiceResource extends Resource
 
                             $record->update(['status' => UserService::STATUS_DISABLED]);
 
-                            \App\Models\VpnServiceProvisionLog::create([
+                            VpnServiceProvisionLog::create([
                                 'user_service_id' => $record->id,
-                                'vpn_panel_id'    => $panel->id,
-                                'action'          => 'marzban_disable_user',
-                                'status'          => 'success',
-                                'message'         => "User '{$record->remote_username}' disabled on Marzban.",
+                                'vpn_panel_id' => $panel->id,
+                                'action' => 'marzban_disable_user',
+                                'status' => 'success',
+                                'message' => "User '{$record->remote_username}' disabled on Marzban.",
                             ]);
 
                             Notification::make()->title('سرویس غیرفعال شد.')->success()->send();
@@ -539,6 +551,7 @@ class UserServiceResource extends Resource
                         $panel = $record->vpnPanel;
                         if (! $panel) {
                             Notification::make()->title('پنل VPN مشخص نشده.')->danger()->send();
+
                             return;
                         }
 
@@ -548,12 +561,12 @@ class UserServiceResource extends Resource
 
                             $record->update(['status' => UserService::STATUS_ACTIVE]);
 
-                            \App\Models\VpnServiceProvisionLog::create([
+                            VpnServiceProvisionLog::create([
                                 'user_service_id' => $record->id,
-                                'vpn_panel_id'    => $panel->id,
-                                'action'          => 'marzban_enable_user',
-                                'status'          => 'success',
-                                'message'         => "User '{$record->remote_username}' enabled on Marzban.",
+                                'vpn_panel_id' => $panel->id,
+                                'action' => 'marzban_enable_user',
+                                'status' => 'success',
+                                'message' => "User '{$record->remote_username}' enabled on Marzban.",
                             ]);
 
                             Notification::make()->title('سرویس فعال شد.')->success()->send();
@@ -575,6 +588,7 @@ class UserServiceResource extends Resource
                         $panel = $record->vpnPanel;
                         if (! $panel) {
                             Notification::make()->title('پنل VPN مشخص نشده.')->danger()->send();
+
                             return;
                         }
 
@@ -583,30 +597,30 @@ class UserServiceResource extends Resource
                             $client->deleteUser($record->remote_username);
 
                             $record->update([
-                                'status'            => UserService::STATUS_CANCELLED,
-                                'provision_status'  => UserService::PROVISION_FAILED,
+                                'status' => UserService::STATUS_CANCELLED,
+                                'provision_status' => UserService::PROVISION_FAILED,
                                 'subscription_link' => null,
-                                'config_link'       => null,
-                                'last_synced_at'    => now(),
-                                'admin_notes'       => trim(($record->admin_notes ?? '') . "\nRemote Marzban user deleted on " . now()->toDateTimeString()),
+                                'config_link' => null,
+                                'last_synced_at' => now(),
+                                'admin_notes' => trim(($record->admin_notes ?? '')."\nRemote Marzban user deleted on ".now()->toDateTimeString()),
                             ]);
 
                             VpnServiceProvisionLog::create([
                                 'user_service_id' => $record->id,
-                                'vpn_panel_id'    => $panel->id,
-                                'action'          => 'marzban_delete_user',
-                                'status'          => 'success',
-                                'message'         => "Remote Marzban user '{$record->remote_username}' deleted from panel '{$panel->name}'.",
+                                'vpn_panel_id' => $panel->id,
+                                'action' => 'marzban_delete_user',
+                                'status' => 'success',
+                                'message' => "Remote Marzban user '{$record->remote_username}' deleted from panel '{$panel->name}'.",
                             ]);
 
                             Notification::make()->title('کاربر از مرزبان حذف شد.')->success()->send();
                         } catch (\Throwable $e) {
                             VpnServiceProvisionLog::create([
                                 'user_service_id' => $record->id,
-                                'vpn_panel_id'    => $panel->id,
-                                'action'          => 'marzban_delete_user',
-                                'status'          => 'failed',
-                                'message'         => $e->getMessage(),
+                                'vpn_panel_id' => $panel->id,
+                                'action' => 'marzban_delete_user',
+                                'status' => 'failed',
+                                'message' => $e->getMessage(),
                             ]);
                             Notification::make()->title('خطا در حذف از مرزبان')->body($e->getMessage())->danger()->send();
                         }
@@ -634,6 +648,7 @@ class UserServiceResource extends Resource
 
                         if (! $panel) {
                             Notification::make()->title('هیچ پنل Marzban پیش‌فرض فعالی یافت نشد.')->danger()->send();
+
                             return;
                         }
 
@@ -642,20 +657,20 @@ class UserServiceResource extends Resource
 
                             VpnServiceProvisionLog::create([
                                 'user_service_id' => $record->id,
-                                'vpn_panel_id'    => $panel->id,
-                                'action'          => 'marzban_recreate_user',
-                                'status'          => 'success',
-                                'message'         => "Service recreated on panel '{$panel->name}'.",
+                                'vpn_panel_id' => $panel->id,
+                                'action' => 'marzban_recreate_user',
+                                'status' => 'success',
+                                'message' => "Service recreated on panel '{$panel->name}'.",
                             ]);
 
                             Notification::make()->title('سرویس با موفقیت در مرزبان ساخته شد.')->success()->send();
                         } catch (\Throwable $e) {
                             VpnServiceProvisionLog::create([
                                 'user_service_id' => $record->id,
-                                'vpn_panel_id'    => $panel->id,
-                                'action'          => 'marzban_recreate_user',
-                                'status'          => 'failed',
-                                'message'         => $e->getMessage(),
+                                'vpn_panel_id' => $panel->id,
+                                'action' => 'marzban_recreate_user',
+                                'status' => 'failed',
+                                'message' => $e->getMessage(),
                             ]);
                             Notification::make()->title('خطا در ساخت سرویس')->body($e->getMessage())->danger()->send();
                         }
@@ -673,15 +688,15 @@ class UserServiceResource extends Resource
                     ->action(function (UserService $record): void {
                         $record->update([
                             'subscription_link' => null,
-                            'config_link'       => null,
+                            'config_link' => null,
                         ]);
 
                         VpnServiceProvisionLog::create([
                             'user_service_id' => $record->id,
-                            'vpn_panel_id'    => $record->vpn_panel_id,
-                            'action'          => 'clear_local_links',
-                            'status'          => 'success',
-                            'message'         => 'Local subscription_link and config_link cleared by admin.',
+                            'vpn_panel_id' => $record->vpn_panel_id,
+                            'action' => 'clear_local_links',
+                            'status' => 'success',
+                            'message' => 'Local subscription_link and config_link cleared by admin.',
                         ]);
 
                         Notification::make()->title('لینک‌های محلی پاک شدند.')->success()->send();
@@ -711,7 +726,7 @@ class UserServiceResource extends Resource
                                 ->ordered()
                                 ->get()
                                 ->mapWithKeys(fn (Plan $p) => [
-                                    $p->id => "{$p->name} — " . number_format($p->effectiveRenewalPrice()) . ' تومان / ' . ($p->effectiveRenewalDays() ?? '—') . ' روز',
+                                    $p->id => "{$p->name} — ".number_format($p->effectiveRenewalPrice()).' تومان / '.($p->effectiveRenewalDays() ?? '—').' روز',
                                 ]))
                             ->required()
                             ->helperText('مدت تمدید از پلن انتخاب‌شده محاسبه می‌شود.'),
@@ -724,14 +739,16 @@ class UserServiceResource extends Resource
                         $plan = Plan::find($data['plan_id']);
                         if (! $plan) {
                             Notification::make()->title('پلن یافت نشد.')->danger()->send();
+
                             return;
                         }
 
                         try {
                             $renewalService = app(RenewalService::class);
-                            $renewalDays    = $plan->effectiveRenewalDays();
+                            $renewalDays = $plan->effectiveRenewalDays();
                             if (! $renewalDays) {
                                 Notification::make()->title('مدت پلن تعریف نشده است.')->danger()->send();
+
                                 return;
                             }
 
@@ -744,7 +761,7 @@ class UserServiceResource extends Resource
 
                             $record->update([
                                 'expires_at' => $newExpiry,
-                                'status'     => UserService::STATUS_ACTIVE,
+                                'status' => UserService::STATUS_ACTIVE,
                             ]);
 
                             $note = "Manual renewal with plan '{$plan->name}': +{$renewalDays} days. New expiry: {$newExpiry->toDateTimeString()}.";
@@ -754,10 +771,10 @@ class UserServiceResource extends Resource
 
                             VpnServiceProvisionLog::create([
                                 'user_service_id' => $record->id,
-                                'vpn_panel_id'    => $record->vpn_panel_id,
-                                'action'          => 'admin_manual_renewal',
-                                'status'          => 'success',
-                                'message'         => $note,
+                                'vpn_panel_id' => $record->vpn_panel_id,
+                                'action' => 'admin_manual_renewal',
+                                'status' => 'success',
+                                'message' => $note,
                             ]);
 
                             Notification::make()
@@ -796,6 +813,7 @@ class UserServiceResource extends Resource
                         $gb = (int) $data['traffic_gb'];
                         if ($gb <= 0) {
                             Notification::make()->title('مقدار حجم معتبر نیست.')->danger()->send();
+
                             return;
                         }
 
@@ -805,7 +823,7 @@ class UserServiceResource extends Resource
                             if (! empty($data['update_marzban']) && filled($record->remote_username) && $record->vpnPanel) {
                                 $client = new MarzbanClient($record->vpnPanel);
                                 $client->updateUser($record->remote_username, [
-                                    'data_limit' => (int) ($newTotal * \App\Services\Addons\ServiceAddonService::BYTES_PER_GB),
+                                    'data_limit' => (int) ($newTotal * ServiceAddonService::BYTES_PER_GB),
                                 ]);
                             }
 
@@ -818,10 +836,10 @@ class UserServiceResource extends Resource
 
                             VpnServiceProvisionLog::create([
                                 'user_service_id' => $record->id,
-                                'vpn_panel_id'    => $record->vpn_panel_id,
-                                'action'          => 'admin_manual_add_traffic',
-                                'status'          => 'success',
-                                'message'         => $note,
+                                'vpn_panel_id' => $record->vpn_panel_id,
+                                'action' => 'admin_manual_add_traffic',
+                                'status' => 'success',
+                                'message' => $note,
                             ]);
 
                             Notification::make()->title('حجم اضافه با موفقیت اعمال شد.')->success()->send();
@@ -856,6 +874,7 @@ class UserServiceResource extends Resource
                         $days = (int) $data['days'];
                         if ($days <= 0) {
                             Notification::make()->title('مقدار روز معتبر نیست.')->danger()->send();
+
                             return;
                         }
 
@@ -872,7 +891,7 @@ class UserServiceResource extends Resource
 
                             $record->update([
                                 'expires_at' => $newExpiry,
-                                'status'     => UserService::STATUS_ACTIVE,
+                                'status' => UserService::STATUS_ACTIVE,
                             ]);
 
                             $note = "Manual add time: +{$days} days. New expiry: {$newExpiry->toDateTimeString()}.";
@@ -882,10 +901,10 @@ class UserServiceResource extends Resource
 
                             VpnServiceProvisionLog::create([
                                 'user_service_id' => $record->id,
-                                'vpn_panel_id'    => $record->vpn_panel_id,
-                                'action'          => 'admin_manual_add_time',
-                                'status'          => 'success',
-                                'message'         => $note,
+                                'vpn_panel_id' => $record->vpn_panel_id,
+                                'action' => 'admin_manual_add_time',
+                                'status' => 'success',
+                                'message' => $note,
                             ]);
 
                             Notification::make()
@@ -910,9 +929,9 @@ class UserServiceResource extends Resource
     public static function getPages(): array
     {
         return [
-            'index'  => Pages\ListUserServices::route('/'),
+            'index' => Pages\ListUserServices::route('/'),
             'create' => Pages\CreateUserService::route('/create'),
-            'edit'   => Pages\EditUserService::route('/{record}/edit'),
+            'edit' => Pages\EditUserService::route('/{record}/edit'),
         ];
     }
 }

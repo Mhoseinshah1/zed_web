@@ -14,7 +14,7 @@ class CheckoutController extends Controller
     {
         abort_if(! $plan->is_active, 404);
 
-        $user  = $request->user();
+        $user = $request->user();
         $token = $request->input('purchase_token');
 
         try {
@@ -32,19 +32,19 @@ class CheckoutController extends Controller
                     }
 
                     return Order::create([
-                        'order_type'           => Order::TYPE_NEW_SERVICE,
-                        'user_id'              => $user->id,
+                        'order_type' => Order::TYPE_NEW_SERVICE,
+                        'user_id' => $user->id,
                         'purchase_fingerprint' => $fingerprint,
-                        'plan_id'              => $fresh->id,
-                        'plan_name'            => $fresh->name,
-                        'plan_slug'            => $fresh->slug,
-                        'traffic_gb'           => $fresh->traffic_gb,
-                        'duration_days'        => $fresh->duration_days,
-                        'price_toman'          => $fresh->price_toman,
-                        'final_price_toman'    => $fresh->price_toman,
-                        'discount_toman'       => 0,
-                        'status'               => Order::STATUS_PENDING,
-                        'payment_status'       => Order::PAYMENT_UNPAID,
+                        'plan_id' => $fresh->id,
+                        'plan_name' => $fresh->name,
+                        'plan_slug' => $fresh->slug,
+                        'traffic_gb' => $fresh->traffic_gb,
+                        'duration_days' => $fresh->duration_days,
+                        'price_toman' => $fresh->price_toman,
+                        'final_price_toman' => $fresh->price_toman,
+                        'discount_toman' => 0,
+                        'status' => Order::STATUS_PENDING,
+                        'payment_status' => Order::PAYMENT_UNPAID,
                     ]);
                 },
             );

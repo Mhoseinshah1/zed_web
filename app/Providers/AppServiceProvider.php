@@ -2,6 +2,7 @@
 
 namespace App\Providers;
 
+use App\Services\Seo\SeoManager;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\RateLimiter;
@@ -16,7 +17,7 @@ class AppServiceProvider extends ServiceProvider
     {
         // One SeoManager per request: controllers enrich it and <x-seo-head>
         // renders the resolved SeoData exactly once.
-        $this->app->scoped(\App\Services\Seo\SeoManager::class);
+        $this->app->scoped(SeoManager::class);
     }
 
     /**

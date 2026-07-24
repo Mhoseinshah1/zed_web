@@ -22,12 +22,17 @@ class ExtraAddonSettingsPage extends Page implements HasForms
 
     protected static string $view = 'filament.pages.extra-addon-settings';
 
-    protected static ?string $navigationIcon  = 'heroicon-o-plus-circle';
+    protected static ?string $navigationIcon = 'heroicon-o-plus-circle';
+
     protected static ?string $navigationGroup = 'فروشگاه و پلن‌ها';
+
     protected static ?string $navigationLabel = 'تنظیمات خرید حجم و زمان اضافه';
-    protected static ?string $title           = 'تنظیمات خرید حجم و زمان اضافه';
-    protected static ?string $slug            = 'settings/extra-addons';
-    protected static ?int    $navigationSort  = 50;
+
+    protected static ?string $title = 'تنظیمات خرید حجم و زمان اضافه';
+
+    protected static ?string $slug = 'settings/extra-addons';
+
+    protected static ?int $navigationSort = 50;
 
     /** @var array<string, mixed> */
     public array $data = [];
@@ -35,16 +40,16 @@ class ExtraAddonSettingsPage extends Page implements HasForms
     public function mount(): void
     {
         $this->form->fill([
-            'extra_traffic_enabled'                 => (bool) SiteSetting::get('extra_traffic_enabled', true),
-            'extra_traffic_price_per_gb'            => SiteSetting::get('extra_traffic_price_per_gb', null),
-            'extra_traffic_min_gb'                  => (int) SiteSetting::get('extra_traffic_min_gb', 1),
-            'extra_traffic_max_gb'                  => (int) SiteSetting::get('extra_traffic_max_gb', 100),
-            'extra_time_enabled'                    => (bool) SiteSetting::get('extra_time_enabled', true),
-            'extra_time_price_per_day'              => SiteSetting::get('extra_time_price_per_day', null),
-            'extra_time_min_days'                   => (int) SiteSetting::get('extra_time_min_days', 1),
-            'extra_time_max_days'                   => (int) SiteSetting::get('extra_time_max_days', 30),
+            'extra_traffic_enabled' => (bool) SiteSetting::get('extra_traffic_enabled', true),
+            'extra_traffic_price_per_gb' => SiteSetting::get('extra_traffic_price_per_gb', null),
+            'extra_traffic_min_gb' => (int) SiteSetting::get('extra_traffic_min_gb', 1),
+            'extra_traffic_max_gb' => (int) SiteSetting::get('extra_traffic_max_gb', 100),
+            'extra_time_enabled' => (bool) SiteSetting::get('extra_time_enabled', true),
+            'extra_time_price_per_day' => SiteSetting::get('extra_time_price_per_day', null),
+            'extra_time_min_days' => (int) SiteSetting::get('extra_time_min_days', 1),
+            'extra_time_max_days' => (int) SiteSetting::get('extra_time_max_days', 30),
             'extra_addon_apply_to_expired_services' => (bool) SiteSetting::get('extra_addon_apply_to_expired_services', true),
-            'extra_addon_admin_note'                => SiteSetting::get('extra_addon_admin_note', null),
+            'extra_addon_admin_note' => SiteSetting::get('extra_addon_admin_note', null),
         ]);
     }
 

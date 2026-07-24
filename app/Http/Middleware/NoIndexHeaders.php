@@ -17,6 +17,7 @@ class NoIndexHeaders
     {
         $response = $next($request);
         $response->headers->set('X-Robots-Tag', 'noindex, nofollow, noarchive');
+
         return $response;
     }
 }

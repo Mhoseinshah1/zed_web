@@ -18,8 +18,8 @@ class ProfileController extends Controller
     public function index(): View
     {
         return view('dashboard.profile', [
-            'user'                  => auth()->user(),
-            'verificationEnabled'   => $this->phoneVerification->isEnabled(),
+            'user' => auth()->user(),
+            'verificationEnabled' => $this->phoneVerification->isEnabled(),
         ]);
     }
 
@@ -37,10 +37,10 @@ class ProfileController extends Controller
         }
 
         return view('dashboard.profile-complete', [
-            'user'                => $user,
+            'user' => $user,
             'verificationEnabled' => $this->phoneVerification->isEnabled(),
-            'verificationRequired'=> $this->phoneVerification->isRequiredOnRegister(),
-            'intended'            => $request->query('intended'),
+            'verificationRequired' => $this->phoneVerification->isRequiredOnRegister(),
+            'intended' => $request->query('intended'),
         ]);
     }
 
@@ -67,9 +67,9 @@ class ProfileController extends Controller
 
         // Changing the phone resets verification.
         $user->update([
-            'phone'                => $request->input('phone'),
-            'normalized_phone'     => $normalized,
-            'phone_verified_at'    => null,
+            'phone' => $request->input('phone'),
+            'normalized_phone' => $normalized,
+            'phone_verified_at' => null,
             'profile_completed_at' => $user->profile_completed_at ?? now(),
         ]);
 
@@ -83,7 +83,7 @@ class ProfileController extends Controller
         }
 
         $result = $this->phoneVerification->requestCode(auth()->user(), [
-            'ip'         => request()->ip(),
+            'ip' => request()->ip(),
             'user_agent' => substr((string) request()->userAgent(), 0, 255),
         ]);
 
@@ -122,6 +122,7 @@ class ProfileController extends Controller
         if ($this->phoneVerification->isRequiredOnRegister() && ! $user->hasVerifiedPhone()) {
             return false;
         }
+
         return true;
     }
 }

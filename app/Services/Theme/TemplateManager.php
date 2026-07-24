@@ -14,7 +14,8 @@ use App\Models\SiteSetting;
  */
 class TemplateManager
 {
-    public const SETTING_KEY    = 'active_homepage_template';
+    public const SETTING_KEY = 'active_homepage_template';
+
     public const DEFAULT_TEMPLATE = 'classic';
 
     /**
@@ -26,40 +27,40 @@ class TemplateManager
     {
         return [
             'classic' => [
-                'title'       => 'قالب کلاسیک',
+                'title' => 'قالب کلاسیک',
                 'description' => 'چیدمان فعلی سایت؛ هیرو مرکزی، ویژگی‌ها، پلن‌ها، لوکیشن‌ها و سوالات متداول.',
-                'preview'     => 'classic',
-                'accent'      => 'linear-gradient(135deg,#6366f1,#a855f7 55%,#22d3ee)',
+                'preview' => 'classic',
+                'accent' => 'linear-gradient(135deg,#6366f1,#a855f7 55%,#22d3ee)',
             ],
             'modern' => [
-                'title'       => 'قالب مدرن',
+                'title' => 'قالب مدرن',
                 'description' => 'نوار اعتماد بالای منو، هدر شیشه‌ای، هیرو با متن گرادینتی و نوار اعتماد چهارتایی با کارت پلن ویژه.',
-                'preview'     => 'modern',
-                'accent'      => 'linear-gradient(135deg,#1e3a8a,#3b82f6 50%,#22d3ee)',
+                'preview' => 'modern',
+                'accent' => 'linear-gradient(135deg,#1e3a8a,#3b82f6 50%,#22d3ee)',
             ],
             'shop' => [
-                'title'       => 'قالب فروشگاهی',
+                'title' => 'قالب فروشگاهی',
                 'description' => 'فروش‌محور · با گالری سرورها، نظرات و آمار زنده',
-                'preview'     => 'shop',
-                'accent'      => 'linear-gradient(135deg,#0ea5e9,#22d3ee 55%,#34d399)',
+                'preview' => 'shop',
+                'accent' => 'linear-gradient(135deg,#0ea5e9,#22d3ee 55%,#34d399)',
             ],
             'matrix' => [
-                'title'       => 'قالب هکری',
+                'title' => 'قالب هکری',
                 'description' => 'سبک ماتریکس · ترمینال زنده و نمودار تونل رمزنگاری',
-                'preview'     => 'matrix',
-                'accent'      => 'linear-gradient(135deg,#10b981,#22d3ee)',
+                'preview' => 'matrix',
+                'accent' => 'linear-gradient(135deg,#10b981,#22d3ee)',
             ],
             'map' => [
-                'title'       => 'قالب نقشه‌ای',
+                'title' => 'قالب نقشه‌ای',
                 'description' => 'نقشه‌ی تعاملی سرورها · آمار زنده · لوکیشن‌محور',
-                'preview'     => 'map',
-                'accent'      => 'linear-gradient(135deg,#2563eb,#22d3ee 60%,#34d399)',
+                'preview' => 'map',
+                'accent' => 'linear-gradient(135deg,#2563eb,#22d3ee 60%,#34d399)',
             ],
             'woodmart' => [
-                'title'       => 'قالب وودمارت',
+                'title' => 'قالب وودمارت',
                 'description' => 'سبک فروشگاهی · کارت‌های محصول · دسته‌بندی · روشن و تیره',
-                'preview'     => 'woodmart',
-                'accent'      => 'linear-gradient(135deg,#e8552a,#ff7a4d)',
+                'preview' => 'woodmart',
+                'accent' => 'linear-gradient(135deg,#e8552a,#ff7a4d)',
             ],
         ];
     }
@@ -82,6 +83,7 @@ class TemplateManager
             return null;
         }
         $key = trim($key);
+
         return self::isValid($key) ? $key : null;
     }
 
@@ -89,6 +91,7 @@ class TemplateManager
     public static function activeTemplate(): string
     {
         $value = self::normalize((string) SiteSetting::get(self::SETTING_KEY, self::DEFAULT_TEMPLATE));
+
         return $value ?? self::DEFAULT_TEMPLATE;
     }
 

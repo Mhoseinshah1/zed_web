@@ -22,9 +22,9 @@ class VpnInbound extends Model
     ];
 
     protected $casts = [
-        'is_active'  => 'boolean',
+        'is_active' => 'boolean',
         'is_default' => 'boolean',
-        'port'       => 'integer',
+        'port' => 'integer',
     ];
 
     public function vpnPanel(): BelongsTo

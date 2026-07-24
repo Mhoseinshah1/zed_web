@@ -23,32 +23,32 @@ class TelegramAdminNotifier
 {
     /** event key => [topic key, category]. */
     private const EVENT_MAP = [
-        'order_created'          => ['sales', 'sales'],
-        'order_paid'             => ['sales', 'sales'],
-        'order_failed'           => ['sales', 'sales'],
-        'payment_success'        => ['payments', 'payments'],
-        'payment_failed'         => ['payments', 'payments'],
-        'payment_duplicate'      => ['payments', 'payments'],
-        'wallet_topup'           => ['wallet', 'wallet'],
-        'wallet_payment'         => ['wallet', 'wallet'],
-        'wallet_adjustment'      => ['wallet', 'wallet'],
-        'ticket_created'         => ['tickets', 'tickets'],
-        'ticket_replied'         => ['tickets', 'tickets'],
-        'user_registered'        => ['users', 'users'],
-        'user_phone_verified'    => ['users', 'users'],
-        'service_provisioned'    => ['services', 'services'],
-        'service_renewed'        => ['services', 'services'],
-        'service_failed'         => ['errors', 'errors'],
-        'service_sync_failed'    => ['errors', 'errors'],
-        'panel_down'             => ['panels', 'panels'],
-        'panel_recovered'        => ['panels', 'panels'],
-        'panel_auth_failed'      => ['panels', 'panels'],
+        'order_created' => ['sales', 'sales'],
+        'order_paid' => ['sales', 'sales'],
+        'order_failed' => ['sales', 'sales'],
+        'payment_success' => ['payments', 'payments'],
+        'payment_failed' => ['payments', 'payments'],
+        'payment_duplicate' => ['payments', 'payments'],
+        'wallet_topup' => ['wallet', 'wallet'],
+        'wallet_payment' => ['wallet', 'wallet'],
+        'wallet_adjustment' => ['wallet', 'wallet'],
+        'ticket_created' => ['tickets', 'tickets'],
+        'ticket_replied' => ['tickets', 'tickets'],
+        'user_registered' => ['users', 'users'],
+        'user_phone_verified' => ['users', 'users'],
+        'service_provisioned' => ['services', 'services'],
+        'service_renewed' => ['services', 'services'],
+        'service_failed' => ['errors', 'errors'],
+        'service_sync_failed' => ['errors', 'errors'],
+        'panel_down' => ['panels', 'panels'],
+        'panel_recovered' => ['panels', 'panels'],
+        'panel_auth_failed' => ['panels', 'panels'],
         'representative_request' => ['representatives', 'representatives'],
-        'admin_change'           => ['admin', 'admin'],
-        'system_alert'           => ['system', 'system'],
-        'backup_success'         => ['backup_server', 'backup_server'],
-        'backup_failed'          => ['backup_server', 'backup_server'],
-        'daily_report'           => ['daily_report', 'daily_report'],
+        'admin_change' => ['admin', 'admin'],
+        'system_alert' => ['system', 'system'],
+        'backup_success' => ['backup_server', 'backup_server'],
+        'backup_failed' => ['backup_server', 'backup_server'],
+        'daily_report' => ['daily_report', 'daily_report'],
     ];
 
     /** Noisy categories that are throttled harder when rate-limiting is on. */
@@ -124,6 +124,7 @@ class TelegramAdminNotifier
             return $log;
         } catch (\Throwable $e) {
             TelegramSettings::safeLog('send() failed', ['event' => $eventKey, 'error' => class_basename($e)]);
+
             return null;
         }
     }
@@ -135,9 +136,9 @@ class TelegramAdminNotifier
         // very short window (guards double IPN/callbacks). Noisy categories are
         // throttled for longer when rate-limiting is enabled.
         $isNoisy = in_array($category, self::NOISY, true);
-        $window  = ($isNoisy && $this->settings->rateLimitDuplicates()) ? 600 : 15;
+        $window = ($isNoisy && $this->settings->rateLimitDuplicates()) ? 600 : 15;
 
-        $ref = $relatedType && $relatedId ? "{$relatedType}:{$relatedId}" : 'm:' . substr(sha1($message), 0, 12);
+        $ref = $relatedType && $relatedId ? "{$relatedType}:{$relatedId}" : 'm:'.substr(sha1($message), 0, 12);
         $key = "tg:dd:{$eventKey}:{$ref}";
 
         // Cache::add returns false if the key already exists → duplicate.
@@ -152,17 +153,17 @@ class TelegramAdminNotifier
         ?int $threadId = null, ?string $chatId = null,
     ): TelegramAdminNotificationLog {
         return TelegramAdminNotificationLog::create([
-            'event_key'         => $eventKey,
-            'topic_key'         => $topicKey,
-            'chat_id'           => $chatId,
+            'event_key' => $eventKey,
+            'topic_key' => $topicKey,
+            'chat_id' => $chatId,
             'message_thread_id' => $threadId,
-            'title'             => $title,
-            'message'           => $message,
-            'status'            => $status,
-            'error'             => $error,
-            'related_type'      => $relatedType,
-            'related_id'        => $relatedId,
-            'metadata'          => $metadata ?: null,
+            'title' => $title,
+            'message' => $message,
+            'status' => $status,
+            'error' => $error,
+            'related_type' => $relatedType,
+            'related_id' => $relatedId,
+            'metadata' => $metadata ?: null,
         ]);
     }
 
@@ -175,6 +176,7 @@ class TelegramAdminNotifier
         if (is_int($related)) {
             return [null, $related];
         }
+
         return [null, null];
     }
 

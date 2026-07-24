@@ -18,7 +18,8 @@ class RunBackupJob implements ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
-    public int $tries   = 1;
+    public int $tries = 1;
+
     public int $timeout = 1800;
 
     public function __construct(private string $type = BackupLog::TYPE_MANUAL) {}

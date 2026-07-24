@@ -21,34 +21,39 @@ class SiteSettingsPage extends Page implements HasForms
 
     protected static string $view = 'filament.pages.cms-settings';
 
-    protected static ?string $navigationIcon  = 'heroicon-o-cog-6-tooth';
+    protected static ?string $navigationIcon = 'heroicon-o-cog-6-tooth';
+
     protected static ?string $navigationGroup = 'مدیریت محتوا';
+
     protected static ?string $navigationLabel = 'تنظیمات سایت';
-    protected static ?string $title           = 'تنظیمات سایت';
-    protected static ?string $slug            = 'content/site-settings';
-    protected static ?int    $navigationSort  = 10;
+
+    protected static ?string $title = 'تنظیمات سایت';
+
+    protected static ?string $slug = 'content/site-settings';
+
+    protected static ?int $navigationSort = 10;
 
     /** @var array<string,mixed> */
     public array $data = [];
 
     /** Setting key => Persian label. */
     public const KEYS = [
-        'site_name'           => 'نام سایت',
-        'brand_name'          => 'نام برند',
-        'site_title'          => 'عنوان سایت',
-        'site_description'    => 'توضیحات سایت',
-        'logo'                => 'لوگو',
-        'dark_logo'           => 'لوگوی حالت تاریک',
-        'footer_logo'         => 'لوگوی فوتر',
-        'favicon'             => 'فاوآیکن',
-        'support_title'       => 'عنوان پشتیبانی',
+        'site_name' => 'نام سایت',
+        'brand_name' => 'نام برند',
+        'site_title' => 'عنوان سایت',
+        'site_description' => 'توضیحات سایت',
+        'logo' => 'لوگو',
+        'dark_logo' => 'لوگوی حالت تاریک',
+        'footer_logo' => 'لوگوی فوتر',
+        'favicon' => 'فاوآیکن',
+        'support_title' => 'عنوان پشتیبانی',
         'support_description' => 'توضیحات پشتیبانی',
-        'support_email'       => 'ایمیل پشتیبانی',
-        'support_phone'       => 'شماره پشتیبانی',
-        'footer_text'         => 'متن فوتر',
-        'copyright_text'      => 'متن کپی‌رایت',
-        'primary_cta_text'    => 'متن دکمه اصلی',
-        'primary_cta_url'     => 'لینک دکمه اصلی',
+        'support_email' => 'ایمیل پشتیبانی',
+        'support_phone' => 'شماره پشتیبانی',
+        'footer_text' => 'متن فوتر',
+        'copyright_text' => 'متن کپی‌رایت',
+        'primary_cta_text' => 'متن دکمه اصلی',
+        'primary_cta_url' => 'لینک دکمه اصلی',
     ];
 
     public function mount(): void

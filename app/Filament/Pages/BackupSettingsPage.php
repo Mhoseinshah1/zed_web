@@ -5,7 +5,10 @@ namespace App\Filament\Pages;
 use App\Jobs\RunBackupJob;
 use App\Models\BackupLog;
 use App\Models\SiteSetting;
+use App\Services\Backup\BackupScheduler;
+use App\Services\Backup\BackupService;
 use App\Services\Backup\BackupSettings;
+use App\Services\Telegram\TelegramAdminNotifier;
 use Filament\Actions\Action;
 use Filament\Actions\Concerns\InteractsWithActions;
 use Filament\Actions\Contracts\HasActions;
@@ -15,24 +18,30 @@ use Filament\Forms\Contracts\HasForms;
 use Filament\Forms\Form;
 use Filament\Notifications\Notification;
 use Filament\Pages\Page;
+use Illuminate\Support\Carbon;
 
 /**
  * بکاپ و سرور — server backup settings + manual run + last status.
  * The optional archive password is stored encrypted and never re-displayed.
  */
-class BackupSettingsPage extends Page implements HasForms, HasActions
+class BackupSettingsPage extends Page implements HasActions, HasForms
 {
-    use InteractsWithForms;
     use InteractsWithActions;
+    use InteractsWithForms;
 
     protected static string $view = 'filament.pages.backup-settings';
 
-    protected static ?string $navigationIcon  = 'heroicon-o-server-stack';
+    protected static ?string $navigationIcon = 'heroicon-o-server-stack';
+
     protected static ?string $navigationGroup = 'اعلان‌ها و پیام‌ها';
+
     protected static ?string $navigationLabel = 'بکاپ و سرور';
-    protected static ?string $title           = 'بکاپ سرور';
-    protected static ?string $slug            = 'backup/settings';
-    protected static ?int    $navigationSort  = 40;
+
+    protected static ?string $title = 'بکاپ سرور';
+
+    protected static ?string $slug = 'backup/settings';
+
+    protected static ?int $navigationSort = 40;
 
     /** @var array<string,mixed> */
     public array $data = [];
@@ -46,25 +55,25 @@ class BackupSettingsPage extends Page implements HasForms, HasActions
     {
         $s = $this->settings();
         $this->form->fill([
-            'backup_enabled'                 => $s->enabled(),
-            'backup_auto_enabled'            => $s->autoEnabled(),
-            'backup_schedule_mode'           => $s->scheduleMode(),
-            'backup_interval_minutes'        => $s->intervalMinutes(),
-            'backup_schedule_time'           => $s->scheduleTime(),
-            'backup_retention_days'          => $s->retentionDays(),
-            'backup_storage_path'            => (string) SiteSetting::get('backup_storage_path', ''),
-            'backup_include_database'        => $s->includeDatabase(),
-            'backup_include_storage'         => $s->includeStorage(),
-            'backup_include_uploads'         => $s->includeUploads(),
-            'backup_include_project_files'   => $s->includeProjectFiles(),
+            'backup_enabled' => $s->enabled(),
+            'backup_auto_enabled' => $s->autoEnabled(),
+            'backup_schedule_mode' => $s->scheduleMode(),
+            'backup_interval_minutes' => $s->intervalMinutes(),
+            'backup_schedule_time' => $s->scheduleTime(),
+            'backup_retention_days' => $s->retentionDays(),
+            'backup_storage_path' => (string) SiteSetting::get('backup_storage_path', ''),
+            'backup_include_database' => $s->includeDatabase(),
+            'backup_include_storage' => $s->includeStorage(),
+            'backup_include_uploads' => $s->includeUploads(),
+            'backup_include_project_files' => $s->includeProjectFiles(),
             'backup_exclude_sensitive_files' => $s->excludeSensitive(),
-            'backup_encrypt_enabled'         => $s->encryptEnabled(),
-            'backup_password_new'            => null,
-            'backup_send_file_to_telegram'   => $s->sendFileToTelegram(),
+            'backup_encrypt_enabled' => $s->encryptEnabled(),
+            'backup_password_new' => null,
+            'backup_send_file_to_telegram' => $s->sendFileToTelegram(),
             'backup_send_report_to_telegram' => $s->sendReportToTelegram(),
             'backup_max_telegram_file_size_mb' => $s->maxTelegramFileMb(),
-            'daily_report_enabled'           => (bool) SiteSetting::get('daily_report_enabled', false),
-            'daily_report_time'              => (string) SiteSetting::get('daily_report_time', '21:00'),
+            'daily_report_enabled' => (bool) SiteSetting::get('daily_report_enabled', false),
+            'daily_report_time' => (string) SiteSetting::get('daily_report_time', '21:00'),
         ]);
     }
 
@@ -74,9 +83,9 @@ class BackupSettingsPage extends Page implements HasForms, HasActions
     }
 
     /** Next automatic run for the status panel (null = auto backup off). */
-    public function nextRunAt(): ?\Illuminate\Support\Carbon
+    public function nextRunAt(): ?Carbon
     {
-        return app(\App\Services\Backup\BackupScheduler::class)->nextRunAt();
+        return app(BackupScheduler::class)->nextRunAt();
     }
 
     public function form(Form $form): Form
@@ -91,7 +100,7 @@ class BackupSettingsPage extends Page implements HasForms, HasActions
                 Forms\Components\Select::make('backup_schedule_mode')->label('نوع زمان‌بندی بکاپ')
                     ->options([
                         BackupSettings::MODE_FIXED_TIME => 'در ساعت مشخص (روزانه)',
-                        BackupSettings::MODE_INTERVAL   => 'هر چند دقیقه/ساعت یک‌بار',
+                        BackupSettings::MODE_INTERVAL => 'هر چند دقیقه/ساعت یک‌بار',
                     ])
                     ->default(BackupSettings::MODE_FIXED_TIME)->native(false)->live(),
 
@@ -101,8 +110,8 @@ class BackupSettingsPage extends Page implements HasForms, HasActions
                 Forms\Components\TextInput::make('backup_interval_minutes')->label('فاصله اجرای بکاپ (دقیقه)')
                     ->numeric()->minValue($this->settings()->minIntervalMinutes())->default(60)
                     ->visible(fn (Forms\Get $get) => $get('backup_schedule_mode') === BackupSettings::MODE_INTERVAL)
-                    ->helperText('مثال: ۵، ۱۵، ۳۰، ۶۰، ۳۶۰، ۷۲۰، ۱۴۴۰. حداقل ' . $this->settings()->minIntervalMinutes()
-                        . ' دقیقه. بکاپ با فاصله زمانی خیلی کوتاه ممکن است فشار زیادی به سرور وارد کند.'),
+                    ->helperText('مثال: ۵، ۱۵، ۳۰، ۶۰، ۳۶۰، ۷۲۰، ۱۴۴۰. حداقل '.$this->settings()->minIntervalMinutes()
+                        .' دقیقه. بکاپ با فاصله زمانی خیلی کوتاه ممکن است فشار زیادی به سرور وارد کند.'),
 
                 Forms\Components\TextInput::make('backup_retention_days')->label('روزهای نگهداری بکاپ')->numeric()->minValue(1)->default(7),
                 Forms\Components\TextInput::make('backup_storage_path')->label('مسیر ذخیره بکاپ (اختیاری)')->placeholder(storage_path('app/backups'))->columnSpanFull(),
@@ -185,6 +194,7 @@ class BackupSettingsPage extends Page implements HasForms, HasActions
             ->action(function () {
                 if (! $this->settings()->enabled()) {
                     Notification::make()->title('سیستم بکاپ در حال حاضر غیرفعال است.')->warning()->send();
+
                     return;
                 }
                 RunBackupJob::dispatch(BackupLog::TYPE_MANUAL);
@@ -199,7 +209,7 @@ class BackupSettingsPage extends Page implements HasForms, HasActions
             ->requiresConfirmation()
             ->modalDescription('بکاپ‌های قدیمی‌تر از دوره نگهداری حذف می‌شوند.')
             ->action(function () {
-                $removed = app(\App\Services\Backup\BackupService::class)->cleanupOld();
+                $removed = app(BackupService::class)->cleanupOld();
                 Notification::make()->title("پاکسازی انجام شد ({$removed} فایل حذف شد).")->success()->send();
             });
     }
@@ -211,9 +221,9 @@ class BackupSettingsPage extends Page implements HasForms, HasActions
             ->action(function () {
                 $last = BackupLog::latestLog();
                 $text = $last
-                    ? "💾 آخرین بکاپ: {$last->status} — " . $last->updated_at->format('Y/m/d H:i')
+                    ? "💾 آخرین بکاپ: {$last->status} — ".$last->updated_at->format('Y/m/d H:i')
                     : '💾 هنوز بکاپی انجام نشده است.';
-                app(\App\Services\Telegram\TelegramAdminNotifier::class)
+                app(TelegramAdminNotifier::class)
                     ->send('backup_status', 'backup_server', 'وضعیت بکاپ', $text);
                 Notification::make()->title('گزارش تست به تلگرام ارسال شد.')->success()->send();
             });

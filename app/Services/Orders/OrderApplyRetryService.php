@@ -3,6 +3,7 @@
 namespace App\Services\Orders;
 
 use App\Models\Order;
+use App\Models\UserService;
 use App\Services\Addons\ServiceAddonService;
 use App\Services\Provisioning\ProvisioningService;
 use App\Services\Renewals\RenewalService;
@@ -21,7 +22,7 @@ class OrderApplyRetryService
 {
     public function __construct(
         private readonly ProvisioningService $provisioner,
-        private readonly RenewalService      $renewalService,
+        private readonly RenewalService $renewalService,
         private readonly ServiceAddonService $addonService,
     ) {}
 
@@ -41,7 +42,7 @@ class OrderApplyRetryService
         return match (true) {
             $order->isRenewal() => $this->retryRenewal($order),
             $order->order_type === Order::TYPE_EXTRA_TRAFFIC => $this->retryAddon($order, 'traffic'),
-            $order->order_type === Order::TYPE_EXTRA_TIME    => $this->retryAddon($order, 'time'),
+            $order->order_type === Order::TYPE_EXTRA_TIME => $this->retryAddon($order, 'time'),
             default => $this->retryNewService($order),
         };
     }
@@ -50,7 +51,8 @@ class OrderApplyRetryService
     {
         // Idempotent: provisionOrder returns early if the service is already active.
         $service = $this->provisioner->provisionOrder($order, forceRetry: true);
-        return $service->status === \App\Models\UserService::STATUS_ACTIVE;
+
+        return $service->status === UserService::STATUS_ACTIVE;
     }
 
     private function retryRenewal(Order $order): bool
@@ -59,6 +61,7 @@ class OrderApplyRetryService
             return true; // already applied
         }
         $this->renewalService->applyRenewal($order);
+
         return $order->fresh()->renewal_applied_at !== null;
     }
 

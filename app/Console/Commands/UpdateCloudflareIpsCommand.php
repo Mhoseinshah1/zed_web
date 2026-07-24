@@ -39,11 +39,13 @@ class UpdateCloudflareIpsCommand extends Command
                 $response = Http::timeout(15)->get($url);
             } catch (\Throwable $e) {
                 $this->error("دریافت محدوده‌های Cloudflare از {$url} ناموفق بود: {$e->getMessage()}");
+
                 return self::FAILURE;
             }
 
             if (! $response->successful()) {
                 $this->error("دریافت {$url} با وضعیت {$response->status()} ناموفق بود.");
+
                 return self::FAILURE;
             }
 
@@ -61,6 +63,7 @@ class UpdateCloudflareIpsCommand extends Command
         // upstream response must not shrink the trusted list.
         if (count($ranges) < 5) {
             $this->error('پاسخ دریافتی معتبر نبود؛ محدوده‌های ذخیره‌شده تغییری نکردند.');
+
             return self::FAILURE;
         }
 
@@ -69,7 +72,7 @@ class UpdateCloudflareIpsCommand extends Command
             json_encode(array_values($ranges), JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES),
         );
 
-        $this->info('محدوده‌های IP کلادفلر به‌روزرسانی شد (' . count($ranges) . ' مورد).');
+        $this->info('محدوده‌های IP کلادفلر به‌روزرسانی شد ('.count($ranges).' مورد).');
 
         return self::SUCCESS;
     }

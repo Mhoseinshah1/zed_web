@@ -6,6 +6,7 @@ use App\Filament\Resources\CommissionResource\Pages;
 use App\Models\Commission;
 use App\Models\Order;
 use App\Services\Referrals\CommissionService;
+use Filament\Forms\Components\Textarea;
 use Filament\Notifications\Notification;
 use Filament\Resources\Resource;
 use Filament\Tables;
@@ -16,12 +17,17 @@ class CommissionResource extends Resource
 {
     protected static ?string $model = Commission::class;
 
-    protected static ?string $navigationIcon   = 'heroicon-o-banknotes';
-    protected static ?string $navigationGroup   = 'نمایندگان و بازاریابی';
-    protected static ?string $navigationLabel   = 'پورسانت‌ها';
-    protected static ?string $modelLabel        = 'پورسانت';
-    protected static ?string $pluralModelLabel  = 'پورسانت‌ها';
-    protected static ?int    $navigationSort    = 30;
+    protected static ?string $navigationIcon = 'heroicon-o-banknotes';
+
+    protected static ?string $navigationGroup = 'نمایندگان و بازاریابی';
+
+    protected static ?string $navigationLabel = 'پورسانت‌ها';
+
+    protected static ?string $modelLabel = 'پورسانت';
+
+    protected static ?string $pluralModelLabel = 'پورسانت‌ها';
+
+    protected static ?int $navigationSort = 30;
 
     public static function table(Table $table): Table
     {
@@ -46,7 +52,7 @@ class CommissionResource extends Resource
                     ->formatStateUsing(fn ($state) => Order::allOrderTypes()[$state] ?? $state),
                 Tables\Columns\TextColumn::make('commission_amount')
                     ->label('مبلغ پورسانت')
-                    ->formatStateUsing(fn ($state) => number_format((int) $state) . ' تومان')
+                    ->formatStateUsing(fn ($state) => number_format((int) $state).' تومان')
                     ->sortable(),
                 Tables\Columns\BadgeColumn::make('status')
                     ->label('وضعیت')
@@ -54,7 +60,7 @@ class CommissionResource extends Resource
                     ->colors([
                         'success' => [Commission::STATUS_CREDITED],
                         'warning' => [Commission::STATUS_PENDING],
-                        'danger'  => [Commission::STATUS_CANCELLED, Commission::STATUS_REVERSED],
+                        'danger' => [Commission::STATUS_CANCELLED, Commission::STATUS_REVERSED],
                     ]),
                 Tables\Columns\TextColumn::make('created_at')->label('تاریخ')->dateTime('Y/m/d H:i')->sortable(),
             ])
@@ -80,7 +86,7 @@ class CommissionResource extends Resource
                     ->icon('heroicon-o-x-circle')
                     ->color('danger')
                     ->visible(fn (Commission $r) => $r->status === Commission::STATUS_PENDING)
-                    ->form([\Filament\Forms\Components\Textarea::make('admin_note')->label('یادداشت')->rows(2)])
+                    ->form([Textarea::make('admin_note')->label('یادداشت')->rows(2)])
                     ->requiresConfirmation()
                     ->action(function (Commission $r, array $data) {
                         app(CommissionService::class)->cancel($r, $data['admin_note'] ?? null);

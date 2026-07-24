@@ -3,7 +3,6 @@
 namespace App\Filament\Resources;
 
 use App\Filament\Resources\RepresentativeResource\Pages;
-use App\Models\Commission;
 use App\Models\User;
 use App\Services\Referrals\RepresentativeService;
 use Filament\Forms;
@@ -21,12 +20,17 @@ class RepresentativeResource extends Resource
 {
     protected static ?string $model = User::class;
 
-    protected static ?string $navigationIcon   = 'heroicon-o-user-group';
-    protected static ?string $navigationGroup   = 'نمایندگان و بازاریابی';
-    protected static ?string $navigationLabel   = 'نمایندگان';
-    protected static ?string $modelLabel        = 'نماینده';
-    protected static ?string $pluralModelLabel  = 'نمایندگان';
-    protected static ?int    $navigationSort    = 20;
+    protected static ?string $navigationIcon = 'heroicon-o-user-group';
+
+    protected static ?string $navigationGroup = 'نمایندگان و بازاریابی';
+
+    protected static ?string $navigationLabel = 'نمایندگان';
+
+    protected static ?string $modelLabel = 'نماینده';
+
+    protected static ?string $pluralModelLabel = 'نمایندگان';
+
+    protected static ?int $navigationSort = 20;
 
     /** Only users who are representatives or have a pending/processed request. */
     public static function getEloquentQuery(): Builder
@@ -37,6 +41,7 @@ class RepresentativeResource extends Resource
     public static function getNavigationBadge(): ?string
     {
         $count = parent::getEloquentQuery()->where('representative_status', User::REP_PENDING)->count();
+
         return $count > 0 ? (string) $count : null;
     }
 
@@ -63,7 +68,7 @@ class RepresentativeResource extends Resource
                     ->colors([
                         'success' => [User::REP_APPROVED],
                         'warning' => [User::REP_PENDING],
-                        'danger'  => [User::REP_REJECTED, User::REP_DISABLED],
+                        'danger' => [User::REP_REJECTED, User::REP_DISABLED],
                     ]),
                 Tables\Columns\TextColumn::make('referred_users_count')->label('معرفی‌شده‌ها')->counts('referredUsers'),
                 Tables\Columns\TextColumn::make('total_commission_earned')
@@ -121,8 +126,8 @@ class RepresentativeResource extends Resource
                     ])
                     ->action(function (User $r, array $data) {
                         $r->update([
-                            'commission_type'         => $data['commission_type'] ?? null,
-                            'commission_rate'         => $data['commission_rate'] ?? null,
+                            'commission_type' => $data['commission_type'] ?? null,
+                            'commission_rate' => $data['commission_rate'] ?? null,
                             'commission_fixed_amount' => $data['commission_fixed_amount'] ?? null,
                         ]);
                         Notification::make()->title('پورسانت نماینده تنظیم شد.')->success()->send();

@@ -44,6 +44,7 @@ trait CreatesUserServiceForOrder
             // Layer 3 — the unique index is the final guard.
             try {
                 $service = UserService::create(array_merge($attributes, ['order_id' => $order->id]));
+
                 return [$service, true];
             } catch (QueryException $e) {
                 if ($this->isUniqueViolation($e)) {
@@ -65,6 +66,7 @@ trait CreatesUserServiceForOrder
             return true;
         }
         $msg = strtolower($e->getMessage());
+
         return str_contains($msg, 'unique') || str_contains($msg, 'duplicate');
     }
 }
