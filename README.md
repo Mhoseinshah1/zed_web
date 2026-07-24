@@ -274,20 +274,27 @@ Each job publishes a stable check name suitable for branch protection:
 | **Integration Tests (PostgreSQL)** | Real PostgreSQL 16 + Redis 7 services. Runs the financial and concurrency-sensitive suites (provisioning, payment, wallet, commission, renewal/add-ons, discount concurrency, order idempotency incl. the forked real-concurrency test) plus scheduler locking and a real-Redis backup-lock test. |
 | **Code Style** | `composer validate --strict`, optimized autoload generation (`--strict-psr`), `php -l` syntax lint, and `vendor/bin/pint --test`. |
 | **Frontend Build** | `npm ci` (locked) + `npm run build`, and asserts `public/build/manifest.json` exists. |
-| **Shell Tests** | `bash -n` on every script, ShellCheck (errors only), and the mocked installer/deploy helper tests (no real infrastructure is touched). |
-| **Security Audit** | `composer audit` + `npm audit` (severity policy below), gitleaks secret scan, committed-`.env` and private-key detection, and best-effort dependency review on PRs. |
+| **Shell Tests** | `bash -n` on every script, ShellCheck (errors only), the mocked installer/deploy/**supply-chain** helper tests, the forbidden-pattern scan (`curl\|bash`/`curl\|php`/`npm install` fallback/`composer update`), lock-file + runtime-version-policy + version-drift validation, and deployment version-metadata generation. No real infrastructure is touched. |
+| **Security Audit** | `composer audit` + `npm audit` under **one** allowlist-aware policy (below) shared verbatim with the installer and deploy; gitleaks secret scan, committed-`.env` and private-key detection, and best-effort dependency review on PRs. |
 | **Migration Validation** | Fresh PostgreSQL migrate, `migrate:status` (no pending), idempotent re-run, PostgreSQL partial-index presence, and the duplicate-data guard. |
+
+> **CI architecture note.** There is exactly **one** authoritative implementation of each check. The supply-chain verification that briefly lived in a separate `supply-chain.yml` (PR #63, created before PR #62 merged) has been folded into **Shell Tests** (helper tests, forbidden-pattern scan, lock-file/version checks, metadata generation) and **Security Audit** (the unified audit policy). `supply-chain.yml` was removed to eliminate duplicate jobs; no coverage was lost.
 
 ### Supported runtime versions
 
-| Component | Version in CI |
-| --- | --- |
-| PHP | 8.3 |
-| PostgreSQL | 16 |
-| Redis | 7 |
-| Node.js | 22 |
+The **authoritative source of truth** is `scripts/lib/supply-chain-lib.sh` (the `ZSC_*` constants). CI, the installer, the deploy scripts, and this README must agree with it — the *Shell Tests* job fails on drift (it checks `ci.yml`'s `PHP_VERSION`/`NODE_VERSION` and `install.sh`'s `NODE_VERSION` against the policy, and that this table's PHP range is present).
 
-These match production; the installer provisions the same major versions.
+| Component | Supported policy | Used in CI |
+| --- | --- | --- |
+| Ubuntu | 22.04, 24.04, 26.04 | — |
+| PHP | 8.2 – 8.4 | 8.3 |
+| PostgreSQL | 14 – 17 | 16 |
+| Redis | 6 – 7 | 7 |
+| Composer | 2.2 – 2.x | 2.x |
+| Node.js | 22 | 22 |
+| npm | 10 – 11 | bundled with Node 22 |
+
+These match production; the installer provisions the same major versions and rejects unsupported ones unless `ZP_ALLOW_UNSUPPORTED=1`.
 
 ### Which tests require PostgreSQL
 
@@ -317,8 +324,10 @@ npm ci && npm run build
 # Shell Tests
 bash tests/installer/run-tests.sh
 bash tests/deploy/run-tests.sh
+bash tests/supply-chain/run-tests.sh
 
-# Security Audit
+# Security Audit (the authoritative gate applies the allowlist-aware policy;
+# these are quick local approximations)
 composer audit --abandoned=report
 npm audit --audit-level=high
 
@@ -330,10 +339,14 @@ DB_CONNECTION=pgsql php artisan test --testsuite=Feature \
 
 ### Audit / severity policy
 
-- **Composer:** **high** and **critical** advisories fail the build; medium/low are reported as warnings (parsed from `composer audit --format=json`), and abandoned packages are ignored.
-- **npm:** **high** and **critical** advisories fail; lower severities are reported as warnings.
+There is **one** audit policy, implemented once in `scripts/lib/supply-chain-lib.sh` (`zsc_audit_decision` + `zsc_allowlist_entry_active`) and applied identically by the **installer** (`install.sh`), the **atomic deploy** (`scripts/deploy/deploy.sh`), and CI's **Security Audit**. CI can never pass an advisory the installer would reject, or vice-versa.
+
+- **Critical** (composer or npm) → **fail** (never allowlistable).
+- **High** (composer or npm) → **fail** *unless* an unexpired allowlist entry covers it.
+- **Moderate / low** → reported, non-blocking.
+- **Allowlist** — `.zedproxy/audit-allowlist`, one entry per line: `package|advisory|reason|expiry(YYYY-MM-DD)|owner`. An **expired** or **malformed/missing-expiry** entry does **not** suppress the finding; no blanket/wildcard entries. Abandoned composer packages are ignored (not a vulnerability).
 - **Secrets:** gitleaks runs with `--redact` so discovered values are never printed; a tracked real `.env` or an embedded private key fails the job.
-- **Dependency review:** GitHub's Dependency Review augments the audits on PRs but is best-effort (`continue-on-error`) because it needs the Dependency Graph API, which is not available on every private plan — `composer audit` and `npm audit` remain the enforced gates.
+- **Dependency review:** GitHub's Dependency Review augments the audits on PRs but is best-effort (`continue-on-error`) because it needs the Dependency Graph API, which is not available on every private plan — the `composer audit` + `npm audit` gate remains authoritative.
 
 ### Caching
 
