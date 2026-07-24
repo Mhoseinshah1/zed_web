@@ -401,6 +401,86 @@ zpd_supervisor_ok() {
 # zpd_supervisor_worker_group — the Supervisor program group name.
 zpd_supervisor_worker_group() { printf '%s' "${ZPD_WORKER_GROUP:-zedproxy-worker}"; }
 
+# ── Local loopback health virtual host ───────────────────────────────────────
+#
+# Deployment health is validated against an internal Nginx vhost bound to
+# LOOPBACK ONLY (127.0.0.1:<port>), so it never depends on Cloudflare, public
+# DNS, public TLS, or the public vhost. The installer creates it and the deployer
+# repairs it.
+
+zpd_local_health_conf_path() { printf '%s' "${ZPD_LOCAL_HEALTH_CONF:-/etc/nginx/conf.d/zedproxy-local-health.conf}"; }
+zpd_local_health_port()      { printf '%s' "${ZPD_LOCAL_HEALTH_PORT:-18080}"; }
+zpd_local_health_url()       { printf 'http://127.0.0.1:%s' "$(zpd_local_health_port)"; }
+
+# -----------------------------------------------------------------------------
+# zpd_local_health_conf_content BASE FPM_SOCK — the complete loopback-only vhost.
+# Serves <BASE>/current/public through index.php via the given PHP-FPM socket.
+# Binds ONLY to 127.0.0.1/[::1]; never to a public interface.
+# -----------------------------------------------------------------------------
+zpd_local_health_conf_content() {
+    local base="$1" sock="$2" port; port="$(zpd_local_health_port)"
+    cat <<CONF
+# ZedProxy INTERNAL loopback health vhost (managed). Loopback ONLY — never public.
+# Used by the atomic deployer to validate a release without Cloudflare/public TLS.
+server {
+    listen 127.0.0.1:${port};
+    listen [::1]:${port};
+    server_name _;
+    root ${base}/current/public;
+    index index.php;
+    access_log off;
+    add_header X-Robots-Tag "noindex, nofollow, noarchive" always;
+
+    location / { try_files \$uri \$uri/ /index.php?\$query_string; }
+
+    location ~ \.php\$ {
+        fastcgi_pass unix:${sock};
+        fastcgi_index index.php;
+        fastcgi_param SCRIPT_FILENAME \$realpath_root\$fastcgi_script_name;
+        include fastcgi_params;
+        fastcgi_read_timeout 30;
+    }
+
+    location ~ /\.(?!well-known).* { deny all; }
+    client_max_body_size 2M;
+}
+CONF
+}
+
+# -----------------------------------------------------------------------------
+# zpd_local_health_conf_ok CONF BASE PORT — validate a local-health vhost:
+#   - listens on 127.0.0.1:PORT
+#   - root goes through <BASE>/current/public
+#   - EVERY `listen` directive is loopback (127.0.0.1 or [::1]) — the port must
+#     never be exposed on an external interface.
+# -----------------------------------------------------------------------------
+zpd_local_health_conf_ok() {
+    local conf="$1" base="$2" port="${3:-$(zpd_local_health_port)}"
+    [ -f "$conf" ] || return 1
+    grep -Eq "listen[[:space:]]+127\.0\.0\.1:${port}\b" "$conf" || return 1
+    grep -Eq "root[[:space:]]+${base}/current/public;" "$conf" || return 1
+    # Reject any `listen` directive that is NOT loopback (position-independent, so
+    # a one-line `server { listen 0.0.0.0:PORT; }` is still caught).
+    if grep -oE 'listen[[:space:]]+[^;]+' "$conf" | grep -vqE '127\.0\.0\.1:|\[::1\]:'; then
+        return 1
+    fi
+    return 0
+}
+
+# ── Laravel maintenance-state file ───────────────────────────────────────────
+#
+# Laravel 8+ stores the "down" state in storage/framework/maintenance.php (the
+# file-based maintenance driver). Detecting the file is framework-compatible and
+# does NOT depend on translated console text.
+zpd_maintenance_file()     { printf '%s/storage/framework/maintenance.php' "${1:?}"; }
+zpd_maintenance_file_alt() { printf '%s/storage/framework/down' "${1:?}"; }
+
+# zpd_is_in_maintenance APP_DIR — return 0 when APP_DIR is in maintenance mode.
+zpd_is_in_maintenance() {
+    local d="${1:?}"
+    [ -f "$(zpd_maintenance_file "$d")" ] || [ -f "$(zpd_maintenance_file_alt "$d")" ]
+}
+
 # -----------------------------------------------------------------------------
 # zpd_supervisor_conf_content BASE — the complete worker program config pointing
 # at <BASE>/current/artisan with logs in shared storage. Used to (re)create the
@@ -812,3 +892,6 @@ zpd_msg_legacy_restored()  { printf 'فعال‌سازی نسخه جدید نا�
 zpd_msg_supervisor_failed(){ printf 'به‌روزرسانی تنظیمات صف پردازش ناموفق بود و نسخه قبلی بازیابی می‌شود.'; }
 zpd_msg_scheduler_failed() { printf 'انتقال زمان‌بندی Laravel به نسخه جدید ناموفق بود و تنظیمات قبلی بازیابی می‌شود.'; }
 zpd_msg_update_ref_bad()   { printf 'نسخه درخواستی به‌روزرسان قابل بازیابی نیست. عملیات متوقف شد.'; }
+zpd_msg_migrate_none()     { printf 'هیچ مهاجرت جدیدی اجرا نشد و دیتابیس تغییری نکرد.'; }
+zpd_msg_migrate_applied()  { printf 'مهاجرت‌های جدید اجرا شده‌اند؛ در صورت بروز ناسازگاری، نسخه پشتیبان دیتابیس را بررسی کنید.'; }
+zpd_msg_up_failed()        { printf 'خروج از حالت تعمیر و نگهداری ناموفق بود؛ نسخه جدید فعال نشد.'; }

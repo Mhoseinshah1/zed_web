@@ -6,7 +6,6 @@ use App\Http\Controllers\CheckoutController;
 use App\Http\Controllers\ContactController;
 use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\FaqController;
-use App\Http\Controllers\HealthController;
 use App\Http\Controllers\HomeController;
 use App\Http\Controllers\NotificationController;
 use App\Http\Controllers\NowPaymentsController;
@@ -47,14 +46,9 @@ Route::post('/telegram/webhook', [TelegramWebhookController::class, 'handle'])
     ->middleware('noindex')
     ->name('telegram.webhook');
 
-// Public health probes (unauthenticated, rate-limited, non-indexable).
-// Readiness returns only safe booleans; liveness never touches dependencies.
-Route::get('/health', [HealthController::class, 'check'])
-    ->middleware(['noindex', 'throttle:health'])
-    ->name('health');
-Route::get('/health/live', [HealthController::class, 'live'])
-    ->middleware(['noindex', 'throttle:health'])
-    ->name('health.live');
+// Public health probes are registered STATELESS in routes/health.php (outside
+// the `web` group) via bootstrap/app.php, so they never start a session or set
+// session/XSRF cookies. See routes/health.php.
 
 // ── SEO: XML sitemaps + robots.txt ───────────────────────────────────────────
 Route::get('/sitemap.xml', [SitemapController::class, 'index'])->name('sitemap.index');

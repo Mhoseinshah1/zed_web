@@ -397,14 +397,74 @@ jobs:
             || { echo '::error::deploy.sh does not (re)install command wrappers on activation.'; exit 1; }
           test -f scripts/deploy/install-command-wrappers.sh \
             || { echo '::error::Shared command-wrapper installer is missing.'; exit 1; }
-          # Defect 1: the strict cutover + expanded readiness must exist.
-          for fn in dep_cutover_supervisor dep_cutover_scheduler dep_verify_release dep_supervisor_group_running dep_check_pg dep_check_redis; do
+          # Defect 1: the strict cutover + SPLIT readiness (internal vs public
+          # HTTP) must exist. dep_verify_release was replaced by the two-phase
+          # dep_verify_internal_release / dep_verify_http_release.
+          for fn in dep_cutover_supervisor dep_cutover_scheduler \
+                    dep_verify_internal_release dep_verify_http_release \
+                    dep_supervisor_group_running dep_check_pg dep_check_redis; do
             grep -q "$fn" "$dep" || { echo "::error::deploy.sh missing ${fn} (strict cutover/readiness)."; exit 1; }
           done
           # Defect 3: update.sh resolves + verifies the exact updater SHA.
           grep -q 'RESOLVED_SHA' update.sh && grep -q 'GOT_SHA' update.sh \
             || { echo '::error::update.sh does not resolve/verify the exact updater SHA.'; exit 1; }
           echo 'Legacy-cutover invariants hold.'
+
+      - name: Assert maintenance-readiness + bounded-probe invariants (Prompt 17)
+        run: |
+          set -euo pipefail
+          dep=scripts/deploy/deploy.sh
+          lib=scripts/lib/deploy-lib.sh
+          # ── Defect A: tool-version probes must be BOUNDED + non-interactive.
+          # The bounded, non-interactive probe helper (timeout + </dev/null) and a
+          # globally-deadlined metadata collector must exist.
+          for fn in dep_probe_version dep_collect_metadata dep_tool_versions; do
+            grep -q "$fn" "$dep" || { echo "::error::deploy.sh missing ${fn} (bounded metadata)."; exit 1; }
+          done
+          grep -Eq 'timeout[[:space:]]+"?\$\{ZPD_PROBE_TIMEOUT' "$dep" \
+            || { echo '::error::dep_probe_version is not wrapped in a timeout.'; exit 1; }
+          grep -q '</dev/null' "$dep" \
+            || { echo '::error::probes do not redirect stdin from /dev/null (could block on input).'; exit 1; }
+          # No UNBOUNDED direct `composer --version` (or node/npm/php) may exist:
+          # every version probe MUST go through dep_probe_version (which is bounded).
+          if grep -REn '(\$ZPD_COMPOSER|\$ZPD_NODE|\$ZPD_NPM)[[:space:]"]+[^)]*--version' "$dep" \
+               | grep -v 'dep_probe_version'; then
+            echo '::error::An unbounded tool --version call exists outside dep_probe_version.'
+            exit 1
+          fi
+          # ── Defect B: public HTTP readiness must run AFTER `artisan up`.
+          # Phase A (internal) must NOT perform any public HTTP readiness.
+          if awk '/^dep_verify_internal_release\(\)/{f=1} f&&/^}/{f=0} f' "$dep" \
+               | grep -Eq 'dep_verify_http_release|dep_health'; then
+            echo '::error::Internal (maintenance) readiness performs a public HTTP check.'
+            exit 1
+          fi
+          # In dep_activate, dep_bring_up (exit maintenance) must precede the
+          # public HTTP readiness check — never the reverse.
+          up_ln="$(grep -n 'dep_bring_up "\$current_dir"' "$dep" | head -1 | cut -d: -f1)"
+          http_ln="$(grep -n 'dep_verify_http_release "\$ZPD_HEALTH_URL"' "$dep" | head -1 | cut -d: -f1)"
+          [ -n "$up_ln" ] && [ -n "$http_ln" ] && [ "$up_ln" -lt "$http_ln" ] \
+            || { echo '::error::HTTP readiness runs before artisan up in dep_activate.'; exit 1; }
+          # `php artisan up` must not be masked by "|| true" on any required path.
+          if grep -REn 'artisan up[^\n]*\|\| *true' "$dep"; then
+            echo '::error::A required `artisan up` is masked by "|| true".'
+            exit 1
+          fi
+          # ── Local loopback health vhost (127.0.0.1, never public).
+          for fn in dep_ensure_local_health zpd_local_health_conf_ok zpd_local_health_url; do
+            grep -Rq "$fn" "$dep" "$lib" || { echo "::error::missing ${fn} (loopback health vhost)."; exit 1; }
+          done
+          grep -q '127.0.0.1' "$lib" \
+            || { echo '::error::local health vhost is not bound to loopback (127.0.0.1).'; exit 1; }
+          # ── Migration-state honesty + maintenance-file (not translated text).
+          grep -q 'DEP_MIGRATION_STATUS' "$dep" \
+            || { echo '::error::deploy.sh does not track migration state.'; exit 1; }
+          grep -q 'zpd_maintenance_file' "$lib" \
+            || { echo '::error::maintenance state is not detected via the framework file.'; exit 1; }
+          # The health CLI probe must be bounded (timeout), never `|| true`.
+          grep -Eq 'timeout[[:space:]]+"?\$\{ZPD_HEALTH_CLI_TIMEOUT' "$dep" \
+            || { echo '::error::zedproxy:health CLI probe is not bounded by a timeout.'; exit 1; }
+          echo 'Maintenance-readiness + bounded-probe invariants hold.'
 
       # ── Supply-chain verification (authoritative home; formerly the separate
       #    supply-chain.yml workflow, folded in here to remove duplicate jobs). ──

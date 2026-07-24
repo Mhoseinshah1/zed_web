@@ -64,10 +64,19 @@ ZPD_CURL="${ZPD_CURL:-curl}"
 ZPD_GIT="${ZPD_GIT:-git}"
 ZPD_PSQL="${ZPD_PSQL:-psql}"
 ZPD_REDIS_CLI="${ZPD_REDIS_CLI:-redis-cli}"
+ZPD_NODE="${ZPD_NODE:-node}"
 
-ZPD_HEALTH_URL="${ZPD_HEALTH_URL:-http://localhost}"
+# Health is validated against the internal LOOPBACK vhost by default, never the
+# public host (no Cloudflare / public TLS dependency). deploy.env may override.
+ZPD_HEALTH_URL="${ZPD_HEALTH_URL:-$(zpd_local_health_url)}"
 ZPD_MIN_DISK_MB="${ZPD_MIN_DISK_MB:-1024}"
 ZPD_KEEP_RELEASES="${ZPD_KEEP_RELEASES:-5}"
+
+# Bounded, non-interactive probe / stage timeouts (seconds). Metadata is
+# informational and must NEVER block the deployment.
+ZPD_PROBE_TIMEOUT="${ZPD_PROBE_TIMEOUT:-5}"
+ZPD_META_TIMEOUT="${ZPD_META_TIMEOUT:-30}"
+ZPD_HEALTH_CLI_TIMEOUT="${ZPD_HEALTH_CLI_TIMEOUT:-20}"
 
 dep_log()  { printf '[%s] %s\n' "$(date -u +%H:%M:%S)" "$*"; }
 dep_warn() { printf '[%s] WARN: %s\n' "$(date -u +%H:%M:%S)" "$*" >&2; }
@@ -170,17 +179,75 @@ dep_build() {
     )
 }
 
-# dep_tool_versions RELEASE_DIR — print space-free "k=v" pairs for the toolchain
-# and the resolved git tag, for inclusion in the release manifest.
+# dep_probe_version CMD [ARGS...]
+#
+# Run an external version command SAFELY for informational metadata:
+#   - bounded by `timeout ${ZPD_PROBE_TIMEOUT}s` (a hung Composer can never block)
+#   - stdin from /dev/null (never reads the terminal → never "waits for input")
+#   - non-interactive env (COMPOSER_NO_INTERACTION=1, GIT_TERMINAL_PROMPT=0, …)
+# Prints the first version-like token (e.g. 2.8.1) or "unknown" on any
+# failure/timeout/malformed output. NEVER fails, blocks, or exposes secrets.
+dep_probe_version() {
+    local out
+    out="$(timeout "${ZPD_PROBE_TIMEOUT}s" env \
+            COMPOSER_NO_INTERACTION=1 COMPOSER_ALLOW_SUPERUSER=1 \
+            GIT_TERMINAL_PROMPT=0 CI=1 DEBIAN_FRONTEND=noninteractive \
+            "$@" </dev/null 2>/dev/null)" || { printf 'unknown'; return 0; }
+    out="$(printf '%s' "$out" | grep -oE '[0-9]+\.[0-9]+(\.[0-9]+)?' | head -n1)"
+    [ -n "$out" ] || out="unknown"
+    printf '%s' "$out"
+}
+
+# dep_wait_bounded PID SECS — wait up to SECS for PID; TERM then KILL on timeout.
+# Returns 0 if PID exited on its own, 124 if it had to be killed.
+dep_wait_bounded() {
+    local pid="$1" secs="$2" i=0
+    while kill -0 "$pid" 2>/dev/null; do
+        if [ "$i" -ge "$secs" ]; then
+            kill -TERM "$pid" 2>/dev/null || true
+            sleep 1
+            kill -KILL "$pid" 2>/dev/null || true
+            wait "$pid" 2>/dev/null || true
+            return 124
+        fi
+        sleep 1; i=$((i + 1))
+    done
+    wait "$pid" 2>/dev/null || true
+    return 0
+}
+
+# dep_tool_versions RELEASE_DIR SHA — NUL-delimited "k=v" toolchain metadata.
+# Every probe is individually bounded + non-interactive; the whole stage is also
+# protected by a global deadline at the call site (dep_collect_metadata). A
+# missing/slow version yields "unknown" and never aborts the deployment.
 dep_tool_versions() {
-    local rel="$1" sha="$2" tag="" php cv node npm
-    tag="$("$ZPD_GIT" -C "$rel" describe --tags --exact-match "$sha" 2>/dev/null || true)"
-    php="$("$ZPD_PHP" -r 'echo PHP_VERSION;' 2>/dev/null || echo unknown)"
-    cv="$("$ZPD_COMPOSER" --version --no-ansi 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1 || echo unknown)"
-    node="$(node --version 2>/dev/null || echo unknown)"
-    npm="$("$ZPD_NPM" --version 2>/dev/null || echo unknown)"
+    local rel="$1" sha="$2" tag php cv node npm
+    tag="$(timeout "${ZPD_PROBE_TIMEOUT}s" "$ZPD_GIT" -C "$rel" describe --tags --exact-match "$sha" </dev/null 2>/dev/null || true)"
+    php="$(dep_probe_version "$ZPD_PHP" -r 'echo PHP_VERSION;')"
+    cv="$(dep_probe_version "$ZPD_COMPOSER" --version --no-ansi)"
+    node="$(dep_probe_version "$ZPD_NODE" --version)"
+    npm="$(dep_probe_version "$ZPD_NPM" --version)"
     printf 'git_tag=%s\0php_version=%s\0composer_version=%s\0node_version=%s\0npm_version=%s\0' \
         "$tag" "$php" "$cv" "$node" "$npm"
+}
+
+# dep_collect_metadata RELEASE_DIR SHA OUT_FILE
+#
+# Collect release metadata into OUT_FILE, logging the stage explicitly and
+# enforcing a GLOBAL deadline (ZPD_META_TIMEOUT) so the terminal can never appear
+# frozen after the Blade cache output. On timeout the partial file is used and a
+# warning is logged — metadata is informational and never blocks activation.
+dep_collect_metadata() {
+    local rel="$1" sha="$2" out="$3"
+    dep_log "Collecting release metadata..."
+    : > "$out"
+    dep_tool_versions "$rel" "$sha" > "$out" &
+    local pid=$!
+    if dep_wait_bounded "$pid" "$ZPD_META_TIMEOUT"; then
+        dep_log "Release metadata collected."
+    else
+        dep_warn "metadata collection exceeded ${ZPD_META_TIMEOUT}s — continuing with partial metadata"
+    fi
 }
 
 # dep_smoke RELEASE_DIR — application smoke test before activation.
@@ -226,6 +293,182 @@ dep_verify_scheduler() {
     ( cd "$cur" 2>/dev/null || exit 1
       "$ZPD_PHP" artisan schedule:list >/dev/null 2>&1 || exit 1
     )
+}
+
+# ── Maintenance-mode helpers (framework-compatible; no translated text) ──────
+
+# dep_is_in_maintenance APP_DIR — 0 when the app is in maintenance mode.
+dep_is_in_maintenance() { zpd_is_in_maintenance "$1"; }
+
+# dep_bring_down APP_DIR — enter maintenance (best-effort; used to fence the app).
+dep_bring_down() {
+    ( cd "$1" 2>/dev/null && "$ZPD_PHP" artisan down --render="errors::503" </dev/null >/dev/null 2>&1 ) || true
+}
+
+# dep_bring_up APP_DIR — REQUIRED exit from maintenance. `artisan up` must succeed
+# AND the maintenance flag must actually be cleared. Returns 1 otherwise (never
+# `|| true`), so a stuck maintenance state fails activation/rollback.
+dep_bring_up() {
+    local d="$1"
+    if ! ( cd "$d" 2>/dev/null && "$ZPD_PHP" artisan up </dev/null >/dev/null 2>&1 ); then
+        dep_err "$(zpd_msg_up_failed)"
+        return 1
+    fi
+    if dep_is_in_maintenance "$d"; then
+        dep_err "$(zpd_msg_up_failed) (maintenance flag still present)"
+        return 1
+    fi
+    return 0
+}
+
+# ── Migration execution with honest state tracking ───────────────────────────
+# Sets the global DEP_MIGRATION_STATUS to one of:
+#   not_run | none_pending | applied | failed
+DEP_MIGRATION_STATUS="not_run"
+
+# dep_run_migrations RELEASE_DIR — run migrate --force from the new release and
+# record whether the database actually changed. Artisan's migrate output
+# ("Nothing to migrate." / "Migrating:" / "Migrated:" / "DONE") is NOT localized,
+# so parsing it is reliable. Returns non-zero only on an actual migration failure.
+dep_run_migrations() {
+    local rel="$1" out rc
+    out="$( cd "$rel" 2>/dev/null && "$ZPD_PHP" artisan migrate --force --no-interaction </dev/null 2>&1 )"; rc=$?
+    if [ "$rc" -ne 0 ]; then
+        DEP_MIGRATION_STATUS="failed"
+        # Show the tail of the (redacted) output so operators see the cause.
+        printf '%s\n' "$out" | zpd_mask_secrets | tail -n 8 >&2
+        return 1
+    fi
+    if printf '%s' "$out" | grep -qiE 'Nothing to migrate|No migrations? to run'; then
+        DEP_MIGRATION_STATUS="none_pending"
+    elif printf '%s' "$out" | grep -qiE 'Migrating:|Migrated:|DONE|[0-9]+ms'; then
+        DEP_MIGRATION_STATUS="applied"
+    else
+        # Succeeded but produced no recognisable "ran" markers → nothing changed.
+        DEP_MIGRATION_STATUS="none_pending"
+    fi
+    return 0
+}
+
+# ── Bounded CLI health + internal resource checks ────────────────────────────
+
+# dep_cli_health CURRENT_DIR — `php artisan zedproxy:health --json`, bounded by a
+# timeout. A timeout OR non-zero exit fails internal readiness; the failing
+# component is shown (redacted). Never `|| true`.
+dep_cli_health() {
+    local cur="$1" out rc
+    out="$( cd "$cur" 2>/dev/null && timeout "${ZPD_HEALTH_CLI_TIMEOUT}s" "$ZPD_PHP" artisan zedproxy:health --json </dev/null 2>&1 )"; rc=$?
+    if [ "$rc" -eq 124 ]; then
+        dep_err "internal health: zedproxy:health timed out after ${ZPD_HEALTH_CLI_TIMEOUT}s"
+        return 1
+    fi
+    if [ "$rc" -ne 0 ]; then
+        dep_err "internal health: zedproxy:health reported a failure"
+        printf '%s\n' "$out" | zpd_mask_secrets | tail -n 8 >&2
+        return 1
+    fi
+    return 0
+}
+
+# dep_check_shared_writable SHARED_DIR — shared storage exists and is writable.
+dep_check_shared_writable() {
+    local shared="$1" probe
+    [ -d "${shared}/storage" ] || { dep_err "readiness: shared storage missing"; return 1; }
+    probe="${shared}/storage/.zpd-write-test.$$"
+    if ( : > "$probe" ) 2>/dev/null; then rm -f "$probe"; return 0; fi
+    dep_err "readiness: shared storage not writable"
+    return 1
+}
+
+# dep_check_release_files CURRENT_DIR — required application + Vite build files.
+dep_check_release_files() {
+    local cur="$1"
+    [ -f "${cur}/artisan" ]                 || { dep_err "readiness: artisan missing"; return 1; }
+    [ -f "${cur}/public/index.php" ]        || { dep_err "readiness: public/index.php missing"; return 1; }
+    [ -f "${cur}/public/build/manifest.json" ] || { dep_err "readiness: Vite manifest missing"; return 1; }
+    return 0
+}
+
+# ── Local loopback health vhost management (install + repair) ─────────────────
+
+# dep_fpm_socket — the PHP-FPM socket path (derived from the running PHP version;
+# overridable via ZPD_FPM_SOCK).
+dep_fpm_socket() {
+    if [ -n "${ZPD_FPM_SOCK:-}" ]; then printf '%s' "$ZPD_FPM_SOCK"; return 0; fi
+    local ver; ver="$("$ZPD_PHP" -r 'echo PHP_MAJOR_VERSION.".".PHP_MINOR_VERSION;' </dev/null 2>/dev/null || echo 8.3)"
+    printf '/run/php/php%s-fpm-zedproxy.sock' "$ver"
+}
+
+# dep_ensure_local_health BASE — create or REPAIR the loopback-only health vhost
+# (127.0.0.1:<port> → current/public). Validates with `nginx -t`; restores the
+# previous config and returns 1 on validation failure. Idempotent — a config that
+# is already correct is left untouched (no reload).
+dep_ensure_local_health() {
+    local base="$1" conf port sock want
+    conf="$(zpd_local_health_conf_path)"
+    port="$(zpd_local_health_port)"
+    sock="$(dep_fpm_socket)"
+
+    if [ -f "$conf" ] && zpd_local_health_conf_ok "$conf" "$base" "$port"; then
+        return 0   # already correct
+    fi
+
+    dep_log "Repairing local health vhost (${conf} → 127.0.0.1:${port})…"
+    [ -f "$conf" ] && cp -a "$conf" "${conf}.zpd-prev" 2>/dev/null || true
+    want="$(zpd_local_health_conf_content "$base" "$sock")"
+    mkdir -p "$(dirname "$conf")" 2>/dev/null || true
+    printf '%s\n' "$want" > "$conf" 2>/dev/null || { dep_err "could not write ${conf}"; return 1; }
+    if ! zpd_local_health_conf_ok "$conf" "$base" "$port" || ! dep_validate_nginx; then
+        dep_err "local health vhost invalid — restoring previous config"
+        if [ -f "${conf}.zpd-prev" ]; then cp -a "${conf}.zpd-prev" "$conf" 2>/dev/null || true; else rm -f "$conf" 2>/dev/null || true; fi
+        return 1
+    fi
+    dep_reload_nginx || { dep_err "nginx reload failed after local-health repair"; return 1; }
+    return 0
+}
+
+# ── Split readiness: internal (maintenance-safe) vs public HTTP ──────────────
+
+# dep_verify_internal_release BASE RELEASE_ID SHA
+#
+# Phase A — everything that does NOT depend on a public HTTP application
+# response, so it is safe to run while the app is still in maintenance mode.
+dep_verify_internal_release() {
+    local base="$1" id="$2" sha="$3"
+    local cur manifest headsha mansha
+    cur="$(zpd_current_link)"
+    manifest="$(zpd_releases_dir)/${id}/RELEASE_MANIFEST.json"
+
+    [ -L "$cur" ]                             || { dep_err "internal: current symlink missing"; return 1; }
+    [ "$(zpd_current_release)" = "$id" ]      || { dep_err "internal: current != ${id}"; return 1; }
+    headsha="$(zpd_git_head_sha "$cur" 2>/dev/null)"
+    mansha="$(zpd_manifest_get "$manifest" git_sha 2>/dev/null)"
+    [ -n "$headsha" ] && [ "$mansha" = "$headsha" ] || { dep_err "internal: manifest SHA != deployed HEAD"; return 1; }
+    [ -z "$sha" ] || [ "$sha" = "$headsha" ]  || { dep_err "internal: deployed SHA mismatch"; return 1; }
+
+    dep_validate_nginx                        || { dep_err "internal: nginx -t failed"; return 1; }
+    zpd_nginx_root_ok "$(zpd_nginx_conf_path)" "$base"        || { dep_err "internal: Nginx root not on current/"; return 1; }
+    zpd_supervisor_ok "$(zpd_supervisor_conf_path)" "$base"   || { dep_err "internal: Supervisor not on current/"; return 1; }
+    dep_supervisor_group_running              || { dep_err "internal: worker group not running"; return 1; }
+    zpd_scheduler_cron_ok "$(zpd_scheduler_cron_path)" "$base" || { dep_err "internal: Scheduler not on current/"; return 1; }
+    dep_verify_scheduler "$cur"               || { dep_err "internal: schedule:list failed"; return 1; }
+
+    if declare -F zpw_verify_wrappers >/dev/null 2>&1; then
+        zpw_verify_wrappers "$base"           || { dep_err "internal: command wrappers not resolving current/"; return 1; }
+    fi
+
+    dep_check_pg "$(zpd_shared_dir)/.env"     || { dep_err "internal: PostgreSQL unreachable"; return 1; }
+    dep_check_redis "$(zpd_shared_dir)/.env"  || { dep_err "internal: Redis unreachable"; return 1; }
+    dep_check_shared_writable "$(zpd_shared_dir)" || return 1
+    dep_check_release_files "$cur"            || return 1
+    dep_cli_health "$cur"                     || return 1
+    return 0
+}
+
+# dep_verify_http_release [URL] — Phase B — the public HTTP readiness checks. Must
+# only be called AFTER `artisan up` and after maintenance mode is confirmed off.
+dep_verify_http_release() {
+    dep_health "${1:-$ZPD_HEALTH_URL}"
 }
 
 # ── Service reloads ──────────────────────────────────────────────────────────
@@ -357,45 +600,6 @@ dep_cutover_services() {
 # ── Wrapper backup location (for first-cutover rollback) ─────────────────────
 dep_wrapper_backup_dir() { printf '%s/shared/deploy/wrappers.precutover' "$(zpd_base)"; }
 
-# ── Expanded post-activation readiness (fail-closed) ─────────────────────────
-
-# dep_verify_release BASE RELEASE_ID SHA [HEALTH_URL]
-#
-# The full readiness gate. Verifies HTTP routes, the current symlink + resolved
-# release id, manifest-SHA == deployed HEAD, Nginx/Supervisor/Scheduler all on
-# current/, the worker group running, schedule:list, command-wrapper resolution,
-# and PostgreSQL + Redis connectivity. A failure of ANY check returns 1 so the
-# deployment is NEVER reported successful while Queue or Scheduler still runs
-# legacy code.
-dep_verify_release() {
-    local base="$1" id="$2" sha="$3" url="${4:-$ZPD_HEALTH_URL}"
-    local manifest mansha headsha
-    manifest="$(zpd_releases_dir)/${id}/RELEASE_MANIFEST.json"
-
-    dep_health "$url"                                       || { dep_err "readiness: HTTP checks failed"; return 1; }
-    [ -L "$(zpd_current_link)" ]                            || { dep_err "readiness: current symlink missing"; return 1; }
-    [ "$(zpd_current_release)" = "$id" ]                    || { dep_err "readiness: current != ${id}"; return 1; }
-
-    headsha="$(zpd_git_head_sha "$(zpd_current_link)" 2>/dev/null)"
-    mansha="$(zpd_manifest_get "$manifest" git_sha 2>/dev/null)"
-    [ -n "$headsha" ] && [ "$mansha" = "$headsha" ]        || { dep_err "readiness: manifest SHA != deployed HEAD"; return 1; }
-    [ -z "$sha" ] || [ "$sha" = "$headsha" ]               || { dep_err "readiness: deployed SHA mismatch"; return 1; }
-
-    zpd_nginx_root_ok "$(zpd_nginx_conf_path)" "$base"     || { dep_err "readiness: Nginx root not on current/"; return 1; }
-    zpd_supervisor_ok "$(zpd_supervisor_conf_path)" "$base" || { dep_err "readiness: Supervisor not on current/"; return 1; }
-    dep_supervisor_group_running                           || { dep_err "readiness: worker group not running"; return 1; }
-    zpd_scheduler_cron_ok "$(zpd_scheduler_cron_path)" "$base" || { dep_err "readiness: Scheduler not on current/"; return 1; }
-    dep_verify_scheduler "$(zpd_current_link)"             || { dep_err "readiness: schedule:list failed"; return 1; }
-
-    if declare -F zpw_verify_wrappers >/dev/null 2>&1; then
-        zpw_verify_wrappers "$base"                        || { dep_err "readiness: command wrappers not resolving current/"; return 1; }
-    fi
-
-    dep_check_pg "$(zpd_shared_dir)/.env"                  || { dep_err "readiness: PostgreSQL unreachable"; return 1; }
-    dep_check_redis "$(zpd_shared_dir)/.env"               || { dep_err "readiness: Redis unreachable"; return 1; }
-    return 0
-}
-
 # dep_activate RELEASE_ID PHP_FPM_SVC CURRENT_BEFORE [LEGACY] [SHA]
 #
 # The atomic activation sequence. When LEGACY=1 this is the first migration off a
@@ -418,13 +622,15 @@ dep_activate() {
     fi
 
     # 1. maintenance mode (against the currently-live app)
-    ( cd "$maint_dir" 2>/dev/null && "$ZPD_PHP" artisan down --render="errors::503" 2>/dev/null ) || true
+    dep_bring_down "$maint_dir"
 
     # 2. pause workers (stop consuming with the old code)
     "$ZPD_SUPERVISORCTL" stop "$(zpd_supervisor_worker_group):*" 2>/dev/null || true
 
-    # 3. migrations (run from the NEW release, which is linked to shared .env)
-    if ! ( cd "$(zpd_releases_dir)/${id}" && "$ZPD_PHP" artisan migrate --force ); then
+    # 3. migrations (run from the NEW release, which is linked to shared .env).
+    #    Records DEP_MIGRATION_STATUS = none_pending|applied|failed so the manifest
+    #    and any warning reflect whether the DB actually changed.
+    if ! dep_run_migrations "$(zpd_releases_dir)/${id}"; then
         dep_err "activation: migrations failed"
         return 30
     fi
@@ -459,14 +665,28 @@ dep_activate() {
     # 8. restart workers against the new release
     dep_restart_workers || { dep_err "activation: worker restart failed"; return 31; }
 
-    # 9. EXPANDED readiness — HTTP + symlink + SHA + Nginx/Supervisor/Scheduler on
-    #    current/ + worker group running + schedule:list + wrappers + PG + Redis.
-    if ! dep_verify_release "$base" "$id" "$sha" "$ZPD_HEALTH_URL"; then
+    # ── Phase A — INTERNAL readiness (still in maintenance mode) ─────────────
+    # Only checks that do NOT depend on a public HTTP application response, so a
+    # maintenance 503 can never be mistaken for an unhealthy release.
+    dep_log "Verifying internal readiness (maintenance mode)…"
+    if ! dep_verify_internal_release "$base" "$id" "$sha"; then
         return 31
     fi
 
-    # 10. exit maintenance only after success
-    ( cd "$current_dir" 2>/dev/null && "$ZPD_PHP" artisan up 2>/dev/null ) || true
+    # ── Bring the new release online, then verify maintenance is actually off ─
+    dep_log "Bringing the new release online…"
+    if ! dep_bring_up "$current_dir"; then
+        return 31
+    fi
+
+    # ── Phase B — PUBLIC HTTP readiness (application is now live) ────────────
+    dep_log "Verifying public HTTP readiness…"
+    if ! dep_verify_http_release "$ZPD_HEALTH_URL"; then
+        # Fence the failed release again so it does not keep serving during the
+        # rollback the caller is about to perform.
+        dep_bring_down "$current_dir"
+        return 31
+    fi
     return 0
 }
 
@@ -487,28 +707,32 @@ dep_first_cutover_rollback() {
     rm -f "$(zpd_current_link)" 2>/dev/null || true
     dep_reload_php_fpm "$fpm" || true
     dep_reload_nginx          || true
-    # Best-effort in the rollback path (the legacy config is already restored);
-    # surfaced as warnings rather than hidden, and never `|| true`.
     "$ZPD_SUPERVISORCTL" reread >/dev/null 2>&1 || dep_warn "supervisor reread during rollback failed"
     "$ZPD_SUPERVISORCTL" update >/dev/null 2>&1 || dep_warn "supervisor update during rollback failed"
     dep_restart_workers       || dep_warn "worker restart during rollback failed"
-    ( cd "$base" 2>/dev/null && "$ZPD_PHP" artisan up 2>/dev/null ) || true
+    # Bring the legacy app up BEFORE any HTTP check, then verify maintenance is
+    # actually off (a rollback is not healthy just because the symlink dropped).
+    dep_bring_up "$base"      || { dep_err "rollback: legacy app could not exit maintenance"; return 1; }
     dep_health "$ZPD_HEALTH_URL"
 }
 
 # ── Automatic rollback ───────────────────────────────────────────────────────
 
-# dep_rollback_code PREV_ID PHP_FPM_SVC — switch current back to PREV_ID and
-# reload services against it. Returns non-zero if the previous release can't be
-# restored.
+# dep_rollback_code PREV_ID PHP_FPM_SVC — restore the previous release and verify
+# it is ACTUALLY healthy. Correct order: switch → reload → restart workers →
+# `artisan up` (required) → confirm maintenance off → INTERNAL readiness → HTTP
+# readiness. Returns 0 only when the previous release passes every check — never
+# just because the symlink switched.
 dep_rollback_code() {
-    local prev="$1" fpm="$2"
+    local prev="$1" fpm="$2" base; base="$(zpd_base)"
     [ -n "$prev" ] || { dep_err "rollback: no previous release"; return 1; }
     zpd_switch_current "$prev" || { dep_err "rollback: switch back failed"; return 1; }
-    dep_reload_php_fpm "$fpm" || true
-    dep_reload_nginx          || true
-    dep_restart_workers       || true
-    ( cd "$(zpd_current_link)" 2>/dev/null && "$ZPD_PHP" artisan up 2>/dev/null ) || true
+    dep_reload_php_fpm "$fpm" || dep_warn "rollback: php-fpm reload failed"
+    dep_reload_nginx          || dep_warn "rollback: nginx reload failed"
+    dep_restart_workers       || dep_warn "rollback: worker restart failed"
+    dep_bring_up "$(zpd_current_link)" || { dep_err "rollback: previous release could not exit maintenance"; return 1; }
+    dep_verify_internal_release "$base" "$prev" "" || { dep_err "rollback: previous release failed internal readiness"; return 1; }
+    dep_verify_http_release "$ZPD_HEALTH_URL"      || { dep_err "rollback: previous release failed HTTP readiness"; return 1; }
     return 0
 }
 
@@ -529,8 +753,30 @@ dep_ensure_shared() {
 
 # ── main ─────────────────────────────────────────────────────────────────────
 
+# DEP_STAGE tracks the coarse stage so an interruption can be reported and the
+# active application restored (never left in maintenance / with stopped workers).
+DEP_STAGE="init"
+
+# _dep_on_interrupt — INT/TERM handler: record the stage, bring the active
+# release out of maintenance, restart workers, and exit non-zero (never success).
+# All recovery actions are individually bounded so cleanup cannot itself hang.
+_dep_on_interrupt() {
+    local st=$?
+    dep_err "deployment interrupted during stage: ${DEP_STAGE}"
+    local cur; cur="$(zpd_current_link)"
+    if [ -L "$cur" ]; then
+        ( cd "$cur" 2>/dev/null && timeout 15s "$ZPD_PHP" artisan up </dev/null >/dev/null 2>&1 ) || dep_warn "interrupt: could not exit maintenance"
+    fi
+    timeout 30s "$ZPD_SUPERVISORCTL" start "$(zpd_supervisor_worker_group):*" >/dev/null 2>&1 || dep_warn "interrupt: could not restart workers"
+    [ "$st" -ne 0 ] || st=130
+    exit "$st"
+}
+
 dep_main() {
     local base shared releases lockfile fpm ver legacy=0
+    trap '_dep_on_interrupt' INT TERM
+    DEP_STAGE="init"
+    DEP_MIGRATION_STATUS="not_run"
     # Load persistent non-secret config for this invocation (explicit env wins).
     zpd_load_deploy_env
     base="$(zpd_base)"; shared="$(zpd_shared_dir)"; releases="$(zpd_releases_dir)"
@@ -614,9 +860,19 @@ dep_main() {
     dep_smoke "$rel_dir" || { dep_err "smoke test failed"; mv "$rel_dir" "${rel_dir}.failed" 2>/dev/null || true; return 1; }
 
     # Record the RESOLVED full commit SHA, the repository, the requested ref, and
-    # the exact toolchain versions.
+    # the exact toolchain versions. Metadata collection is bounded + logged so it
+    # can never make the terminal appear frozen or block activation.
     local -a ver_pairs=()
-    mapfile -d '' -t ver_pairs < <(dep_tool_versions "$rel_dir" "$sha")
+    local _meta_file; _meta_file="$(mktemp 2>/dev/null || echo "/tmp/zpd-meta.$$")"
+    DEP_STAGE="metadata"
+    dep_collect_metadata "$rel_dir" "$sha" "$_meta_file"
+    mapfile -d '' -t ver_pairs < "$_meta_file" 2>/dev/null || ver_pairs=()
+    rm -f "$_meta_file"
+
+    # Ensure the internal loopback health vhost exists + points at current/public
+    # so Phase-B HTTP readiness never depends on the public host / Cloudflare / TLS.
+    dep_ensure_local_health "$base" || dep_warn "local health vhost repair failed (continuing)"
+
     zpd_write_manifest "$manifest" \
         "release_id=${id}" "git_sha=${sha}" "git_ref=${ref}" "repo_url=${repo}" \
         "previous_release=${current_before}" "legacy_migration=${legacy}" \
@@ -631,17 +887,25 @@ dep_main() {
     fi
 
     dep_log "Activating ${id}…"
+    DEP_STAGE="activate"
     dep_activate "$id" "$fpm" "$current_before" "$legacy" "$sha"
     local rc=$?
+    DEP_STAGE="post-activate"
 
     if [ "$rc" -eq 0 ]; then
         zpd_write_manifest "$manifest" \
             "release_id=${id}" "git_sha=${sha}" "git_ref=${ref}" "repo_url=${repo}" \
             "previous_release=${current_before}" "legacy_migration=${legacy}" \
             "started_at=${ts_start}" "finished_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            "result=success" "migration_status=applied" "health=ok" \
+            "result=success" "migration_status=${DEP_MIGRATION_STATUS}" "health=ok" \
             "${ver_pairs[@]}"
         zpd_write_manifest "$(zpd_state_file)" "active_release=${id}" "previous_release=${current_before}" "result=success"
+        # Honest migration reporting — only mention the DB backup when something
+        # actually ran.
+        case "$DEP_MIGRATION_STATUS" in
+            applied) dep_log "$(zpd_msg_migrate_applied)" ;;
+            *)       dep_log "$(zpd_msg_migrate_none)" ;;
+        esac
         dep_log "$(zpd_msg_success)"
         dep_cleanup_releases
         return 0
@@ -650,15 +914,20 @@ dep_main() {
     # ── Activation failed. ──
     dep_err "activation failed (rc=${rc})"
 
+    # Migration-state for the manifest: on a migrate-stage failure the DB change
+    # is `failed`; otherwise it reflects whether Artisan actually applied anything.
+    local mig_state="$DEP_MIGRATION_STATUS"
+    [ "$rc" -eq 30 ] && mig_state="failed"
+
     # First legacy→release cutover with no previous release: restore the legacy
     # application (its Nginx/Supervisor/scheduler config + drop `current`).
     if [ "$legacy" = "1" ] && [ -z "$current_before" ]; then
         dep_err "rolling back to the legacy application"
         if dep_first_cutover_rollback "$base" "$fpm"; then
             zpd_write_manifest "$manifest" "release_id=${id}" "git_sha=${sha}" "result=failed" \
-                "stage=first_cutover" "rolled_back_to=legacy" \
-                "migration_status=$( [ "$rc" -eq 30 ] && echo none || echo applied_not_rolled_back )"
+                "stage=first_cutover" "rolled_back_to=legacy" "migration_status=${mig_state}"
             mv "$rel_dir" "${rel_dir}.failed" 2>/dev/null || true
+            [ "$mig_state" = "applied" ] && { dep_warn "$(zpd_msg_migrate_applied)"; dep_warn "DB backup: $(zpd_backup_dir)/${id}/db.dump"; } || dep_log "$(zpd_msg_migrate_none)"
             dep_log "$(zpd_msg_legacy_restored)"
         else
             dep_err "legacy application could not be restored to a healthy state"
@@ -666,19 +935,22 @@ dep_main() {
         return 1
     fi
 
-    # Normal automatic code rollback to the previous release.
+    # Normal automatic code rollback to the previous release (dep_rollback_code
+    # itself now brings the previous release up and runs internal + HTTP readiness,
+    # so a rollback is reported healthy ONLY when the previous release truly is).
     dep_err "rolling back code to ${current_before:-<none>}"
-    if dep_rollback_code "$current_before" "$fpm" && dep_health "$ZPD_HEALTH_URL"; then
-        if [ "$rc" -eq 30 ]; then
-            zpd_write_manifest "$manifest" "release_id=${id}" "git_sha=${sha}" "result=failed" "stage=migrate" \
-                "rolled_back_to=${current_before}" "migration_status=none"
-            dep_log "$(zpd_msg_rolled_back)"
-        else
-            zpd_write_manifest "$manifest" "release_id=${id}" "git_sha=${sha}" "result=failed" "stage=activate" \
-                "rolled_back_to=${current_before}" "migration_status=applied_not_rolled_back"
-            dep_warn "$(zpd_msg_db_needs_review)"
+    if dep_rollback_code "$current_before" "$fpm"; then
+        zpd_write_manifest "$manifest" "release_id=${id}" "git_sha=${sha}" "result=failed" \
+            "stage=$( [ "$rc" -eq 30 ] && echo migrate || echo activate )" \
+            "rolled_back_to=${current_before}" "migration_status=${mig_state}"
+        # Only warn about the database when a migration ACTUALLY ran.
+        if [ "$mig_state" = "applied" ]; then
+            dep_warn "$(zpd_msg_migrate_applied)"
             dep_warn "DB backup: $(zpd_backup_dir)/${id}/db.dump"
+        else
+            dep_log "$(zpd_msg_migrate_none)"
         fi
+        dep_log "$(zpd_msg_rolled_back)"
         dep_log "$(zpd_msg_previous_active)"
     else
         dep_err "automatic rollback could not restore a healthy previous release"

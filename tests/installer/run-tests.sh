@@ -216,7 +216,8 @@ grep_none 'SUPERVISORCTL[^\n]*reread[^\n]*\|\| *true' "$DEPLOY_SH" "deploy.sh: \
 # The strict cutover functions and readiness gate exist.
 grep_has  'dep_cutover_supervisor'    "$DEPLOY_SH" "deploy.sh has a strict supervisor cutover"
 grep_has  'dep_cutover_scheduler'     "$DEPLOY_SH" "deploy.sh has a strict scheduler cutover"
-grep_has  'dep_verify_release'        "$DEPLOY_SH" "deploy.sh has an expanded readiness gate"
+grep_has  'dep_verify_internal_release' "$DEPLOY_SH" "deploy.sh has an internal (maintenance-safe) readiness phase"
+grep_has  'dep_verify_http_release'   "$DEPLOY_SH" "deploy.sh has a public HTTP readiness phase"
 grep_has  'dep_supervisor_group_running' "$DEPLOY_SH" "deploy.sh verifies the worker group is running"
 
 # No production repository fallback anywhere may be "." (root cause #1).
