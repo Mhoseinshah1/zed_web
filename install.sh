@@ -11,6 +11,20 @@
 # -e: exit on error, -u: unset variable = error, -o pipefail: pipe failure = error
 set -Eeuo pipefail
 
+# ─── Secret-safety: refuse shell tracing ──────────────────────────────────────
+# `bash -x install.sh` / `set -x` would echo every command — including the
+# generated admin/DB passwords and APP_KEY — to stderr (and thus the log). Refuse
+# outright, and pin PS4 to a fixed literal so it can never run a command
+# substitution that exfiltrates secrets.
+PS4='+ '
+case $- in
+    *x*)
+        printf '%s\n' "خطا: اجرای نصب‌کننده با ردیابی پوسته (bash -x یا set -x) به دلیل خطر افشای اسرار مجاز نیست." >&2
+        printf '%s\n' "ERROR: refusing to run the installer with shell tracing (bash -x / set -x) — it would leak secrets." >&2
+        exit 1
+        ;;
+esac
+
 # Prevent all interactive prompts from apt/dpkg during installation
 export DEBIAN_FRONTEND=noninteractive
 export NEEDRESTART_MODE=a
@@ -36,8 +50,9 @@ error() { echo -e "${RED}[ERROR]${NC} $*" >&2; exit 1; }
 LOG_FILE="/var/log/zedproxy-install.log"
 touch "$LOG_FILE"
 chmod 600 "$LOG_FILE"
-# Tee all installer output (stdout + stderr) to log file.
-# NOTE: The log file (root-only, mode 600) will contain admin credentials shown in the final summary.
+# Tee all installer NORMAL output (stdout + stderr) to the log file. Credentials
+# are NEVER written here: secrets are delivered only through log_secret_once()
+# (controlling terminal or a validated secure file), which bypasses this pipe.
 exec > >(tee -a "$LOG_FILE") 2>&1
 echo "=== ZedProxy install started $(date -u '+%Y-%m-%d %H:%M:%S UTC') ===" >> "$LOG_FILE"
 
@@ -66,10 +81,20 @@ _on_exit() {
 _on_err() {
     local exit_code=$?
     local line_no=${BASH_LINENO[0]}
-    local cmd="${BASH_COMMAND}"
-    echo -e "\n${RED}[ERROR] Command failed (exit ${exit_code}) at line ${line_no}:${NC}" >&2
-    echo -e "${RED}[ERROR]   ${cmd}${NC}" >&2
-    echo -e "${RED}[ERROR] See full log: sudo tail -n 120 ${LOG_FILE}${NC}" >&2
+    { set +x; } 2>/dev/null
+    # NEVER print the raw failing command: it may contain a password argument,
+    # an Authorization header, PGPASSWORD, a token or an authenticated URL. Mask
+    # any in-memory secret literals, then apply structural redaction. Falls back
+    # to a stage-only message if the masking helper is unavailable.
+    local safe_cmd
+    if declare -F zp_mask_command >/dev/null 2>&1; then
+        safe_cmd="$(zp_mask_command "${BASH_COMMAND}" "${ADMIN_PASS:-}" "${DB_PASS:-}" "${APP_KEY:-}" 2>/dev/null)"
+    else
+        safe_cmd="(دستور به‌دلایل امنیتی نمایش داده نشد)"
+    fi
+    echo -e "\n${RED}[ERROR] Command failed (exit ${exit_code}) at line ${line_no}.${NC}" >&2
+    echo -e "${RED}[ERROR]   ${safe_cmd}${NC}" >&2
+    echo -e "${RED}[ERROR] برای جزئیات غیرحساس، فایل لاگ را بررسی کنید: sudo tail -n 120 ${LOG_FILE}${NC}" >&2
     # If a re-run failed while the live app was in maintenance mode, bring it
     # back up so the site is not left offline. Uploaded data is never touched.
     if [ "${MAINT_MODE_ON:-false}" = "true" ] && [ -d "${APP_DIR:-}" ]; then
@@ -114,6 +139,56 @@ load_lib() {
 }
 load_lib "$LIB_REL"       || error "Could not load installer helper library (${LIB_REL}). Check network access to GitHub and retry."
 load_lib "$SUPPLY_LIB_REL" || error "Could not load supply-chain helper library (${SUPPLY_LIB_REL}). Check network access to GitHub and retry."
+
+# ─── Secret-safe output channel ───────────────────────────────────────────────
+# Credentials are delivered ONLY through log_secret_once(): to the controlling
+# terminal (/dev/tty) when present, otherwise appended to a validated secure
+# file (ZP_CREDENTIAL_OUTPUT). They never pass through the tee'd $LOG_FILE.
+ZP_TTY=""
+if [ -e /dev/tty ] && { true >/dev/tty; } 2>/dev/null; then
+    ZP_TTY=/dev/tty
+fi
+CREDENTIAL_FILE=""            # set when non-interactive secure-file delivery is used
+SECRET_DELIVERY="none"        # tty | file | none
+
+# log_secret_once MESSAGE — write secret text exactly once, bypassing tee/$LOG_FILE.
+log_secret_once() {
+    local msg="$1"
+    { set +x; } 2>/dev/null
+    if [ -n "$ZP_TTY" ]; then
+        printf '%s\n' "$msg" > "$ZP_TTY"
+    elif [ -n "$CREDENTIAL_FILE" ]; then
+        printf '%s\n' "$msg" >> "$CREDENTIAL_FILE"
+    fi
+    return 0
+}
+
+# ensure_secret_delivery — decide (and prepare) how the generated admin password
+# will reach the operator BEFORE the admin account is created. Aborts safely
+# when neither a TTY nor an explicit secure file is available.
+ensure_secret_delivery() {
+    if [ -n "$ZP_TTY" ]; then
+        SECRET_DELIVERY="tty"
+        return 0
+    fi
+    if [ -n "${ZP_CREDENTIAL_OUTPUT:-}" ]; then
+        local reason force=""
+        reason="$(zp_validate_credential_dest "$ZP_CREDENTIAL_OUTPUT")" \
+            || error "مسیر امن ZP_CREDENTIAL_OUTPUT نامعتبر است (${reason}). یک مسیر مطلق متعلق به root خارج از /tmp و storage انتخاب کنید."
+        if [ -e "$ZP_CREDENTIAL_OUTPUT" ] && [ "${ZP_CREDENTIAL_FORCE:-0}" != "1" ]; then
+            error "فایل خروجی امن از قبل موجود است. برای بازنویسی امن ZP_CREDENTIAL_FORCE=1 را تنظیم کنید."
+        fi
+        [ "${ZP_CREDENTIAL_FORCE:-0}" = "1" ] && force="--force"
+        zp_write_credential_file "$ZP_CREDENTIAL_OUTPUT" \
+            "# ZedProxy bootstrap credentials — این فایل را پس از ذخیرهٔ امن اطلاعات حذف کنید." "$force" \
+            || error "ایجاد فایل خروجی امن اطلاعات ورود ناموفق بود."
+        CREDENTIAL_FILE="$ZP_CREDENTIAL_OUTPUT"
+        SECRET_DELIVERY="file"
+        log "اطلاعات ورود به‌صورت امن در فایل زیر ذخیره می‌شود: ${CREDENTIAL_FILE}"
+        return 0
+    fi
+    error "امکان نمایش امن اطلاعات ورود وجود ندارد.\nبرای نصب غیرتعاملی مسیر امن ZP_CREDENTIAL_OUTPUT را مشخص کنید."
+}
 
 # ─── Fresh vs. safe re-run state ──────────────────────────────────────────────
 REINSTALL_BACKUP_ROOT="/var/backups/zedproxy/reinstall"
@@ -550,10 +625,10 @@ _prompt_admin_password() {
 
     if [[ -z "$INPUT_PASS" ]]; then
         ADMIN_PASS=$(openssl rand -base64 32 | tr -dc 'A-Za-z0-9!@#$%^&*' | head -c 24)
-        ok "Admin password: (generated — shown in final summary)"
+        ok "Admin password: (تولید شد — فقط از مسیر امن نمایش داده می‌شود)"
     else
         ADMIN_PASS="$INPUT_PASS"
-        ok "Admin password: (provided — shown in final summary)"
+        ok "Admin password: (دریافت شد — فقط از مسیر امن نمایش داده می‌شود)"
     fi
 }
 
@@ -670,7 +745,7 @@ echo -e "  Domain:      ${YELLOW}${DOMAIN}${NC}"
 if [ "$IS_EXISTING" != "true" ]; then
     echo -e "  Admin email: ${YELLOW}${ADMIN_EMAIL}${NC}"
     echo -e "  Admin user:  ${YELLOW}${ADMIN_NAME}${NC}"
-    echo -e "  Password:    ${YELLOW}(configured — shown in final summary)${NC}"
+    echo -e "  Password:    ${YELLOW}(تنظیم شد — فقط از مسیر امن نمایش داده می‌شود)${NC}"
 else
     echo -e "  Admin:       ${YELLOW}preserved (no changes)${NC}"
 fi
@@ -1373,16 +1448,23 @@ if [ "$IS_EXISTING" = "true" ]; then
     # Re-run: never auto-create a second admin and never reset the existing
     # password. Only touch the admin when the operator explicitly opted in.
     if [ "$RESET_ADMIN_PASSWORD" = "true" ]; then
+        # A new password will be shown → make sure we can deliver it securely
+        # BEFORE we change anything.
+        ensure_secret_delivery
         log "بازنشانی رمز عبور مدیر بنا به درخواست..."
+        # Password is passed via env var (never argv → never visible in ps).
         ZEDPROXY_ADMIN_PASS="$ADMIN_PASS" php artisan zedproxy:create-admin \
             --email="$ADMIN_EMAIL" \
             --username="$ADMIN_NAME" \
             || fail_reinstall "بازنشانی رمز عبور مدیر ناموفق بود."
-        ok "رمز عبور مدیر بازنشانی شد: ${ADMIN_NAME} <${ADMIN_EMAIL}>"
+        ok "رمز عبور مدیر بازنشانی شد: ${ADMIN_NAME} <${ADMIN_EMAIL}> (رمز فقط از مسیر امن نمایش داده می‌شود)"
     else
-        ok "مدیر فعلی بدون تغییر حفظ شد (رمز عبور دست‌نخورده)."
+        ok "رمز عبور مدیر فعلی بدون تغییر حفظ شد."
     fi
 else
+    # Fresh install always delivers a generated/entered password → require a
+    # secure channel (TTY or ZP_CREDENTIAL_OUTPUT) or abort before creating it.
+    ensure_secret_delivery
     log "Creating admin user (username: ${ADMIN_NAME}, email: ${ADMIN_EMAIL})..."
     ZEDPROXY_ADMIN_PASS="$ADMIN_PASS" php artisan zedproxy:create-admin \
         --email="$ADMIN_EMAIL" \
@@ -1554,7 +1636,15 @@ exec bash "${APP_DIR}/scripts/deploy/deploy-status.sh" "\$@"
 STATUSSCRIPT
 chmod +x /usr/local/bin/zedproxy-deploy-status
 
-ok "Shortcuts installed: zedproxy-update, zedproxy-rollback, zedproxy-deploy-status"
+# zedproxy-sanitize-install-log removes plaintext credentials that older
+# installer versions may have written into /var/log/zedproxy-install.log.
+cat > /usr/local/bin/zedproxy-sanitize-install-log <<SANITIZESCRIPT
+#!/usr/bin/env bash
+exec sudo bash "${APP_DIR}/scripts/zedproxy-sanitize-install-log.sh" "\$@"
+SANITIZESCRIPT
+chmod +x /usr/local/bin/zedproxy-sanitize-install-log
+
+ok "Shortcuts installed: zedproxy-update, zedproxy-rollback, zedproxy-deploy-status, zedproxy-sanitize-install-log"
 
 # ─── Laravel scheduler cron (the ONE supported scheduling method) ─────────────
 # A single every-minute `schedule:run` drives every scheduled task defined in
@@ -1590,6 +1680,27 @@ ${SCHED_LOG} {
 }
 LOGROTATE
 ok "Log rotation configured for ${SCHED_LOG}"
+
+# Log rotation for the installer log. It is root-only (mode 600) and must stay
+# that way after rotation: rotated + compressed copies are created root:root 600
+# so an old install log can never become world-readable. It never contains
+# credentials (see the credential-safe logging design), but is kept private as
+# defence in depth.
+cat > /etc/logrotate.d/zedproxy-install <<'LOGROTATE'
+/var/log/zedproxy-install.log {
+    monthly
+    rotate 6
+    compress
+    delaycompress
+    missingok
+    notifempty
+    su root root
+    create 0600 root root
+}
+LOGROTATE
+chmod 600 "$LOG_FILE" 2>/dev/null || true
+chown root:root "$LOG_FILE" 2>/dev/null || true
+ok "Log rotation configured for ${LOG_FILE} (root-only, mode 600)"
 
 # Retire the legacy backup cron — backups are now controlled solely by the
 # Laravel scheduler (zedproxy:backup --scheduled), so they run from ONE system.
@@ -1691,9 +1802,16 @@ if [ "$HEALTH_OK" = "true" ]; then
         if [ "$RESET_ADMIN_PASSWORD" = "true" ]; then
             echo ""
             echo -e "  Admin username:    ${YELLOW}${ADMIN_NAME}${NC}"
-            echo -e "  Admin password:    ${YELLOW}${ADMIN_PASS}${NC}  ${RED}(newly set — save it)${NC}"
+            echo -e "  Admin password:    ${GREEN}تنظیم شد — فقط از مسیر امن نمایش داده شد${NC}"
+            # Deliver the NEW password once, off-log.
+            log_secret_once ""
+            log_secret_once "════════════════════════════════════════════"
+            log_secret_once "رمز مدیر فقط یک بار نمایش داده می‌شود و در فایل لاگ ذخیره نخواهد شد."
+            log_secret_once "  Admin username: ${ADMIN_NAME}"
+            log_secret_once "  Admin password: ${ADMIN_PASS}"
+            log_secret_once "════════════════════════════════════════════"
         else
-            echo -e "  Admin account:     ${GREEN}preserved (password unchanged)${NC}"
+            echo -e "  Admin account:     ${GREEN}رمز عبور مدیر فعلی بدون تغییر حفظ شد.${NC}"
         fi
         echo ""
         echo -e "  Backups (this run):"
@@ -1701,21 +1819,41 @@ if [ "$HEALTH_OK" = "true" ]; then
         [ -n "$DB_BACKUP_PATH" ]  && echo -e "    database:        ${BLUE}${DB_BACKUP_PATH}${NC}"
         [ -n "$PRE_UPDATE_COMMIT" ] && echo -e "    previous commit: ${BLUE}${PRE_UPDATE_COMMIT}${NC}"
         echo ""
+        echo -e "  Installed commit:  ${BLUE}$(zsc_git_resolve "$APP_DIR" HEAD 2>/dev/null || echo unknown)${NC}"
         echo -e "  Install log:       ${BLUE}${LOG_FILE}${NC}"
     else
         echo -e "  Admin login URL:   ${YELLOW}${APP_URL}/zed-admin/login${NC}"
         echo -e "  Admin username:    ${YELLOW}${ADMIN_NAME}${NC}"
         echo -e "  Admin email:       ${YELLOW}${ADMIN_EMAIL}${NC}"
-        echo -e "  Admin password:    ${YELLOW}${ADMIN_PASS}${NC}"
+        echo -e "  Admin password:    ${GREEN}فقط از مسیر امن نمایش داده شد (در لاگ ذخیره نشد)${NC}"
         echo ""
         echo -e "  DB name:           ${YELLOW}${DB_NAME}${NC}"
         echo -e "  DB user:           ${YELLOW}${DB_USER}${NC}"
-        echo -e "  DB password:       ${YELLOW}${DB_PASS}${NC}"
+        echo -e "  DB password:       ${GREEN}اطلاعات اتصال دیتابیس به‌صورت امن در فایل .env ذخیره شد.${NC}"
+        echo -e "                     ${GREEN}رمز دیتابیس در خروجی و لاگ نمایش داده نمی‌شود.${NC}"
         echo ""
+        echo -e "  Installed commit:  ${BLUE}$(zsc_git_resolve "$APP_DIR" HEAD 2>/dev/null || echo unknown)${NC}"
         echo -e "  Install log:       ${BLUE}${LOG_FILE}${NC}"
-        echo -e "  ${RED}IMPORTANT: Save the passwords above. They will not be shown again.${NC}"
-        echo -e "  ${YELLOW}NOTE: The install log (${LOG_FILE}) also contains these credentials.${NC}"
+        # ── Deliver the admin password exactly once, OFF the logging pipeline. ──
+        log_secret_once ""
+        log_secret_once "════════════════════════════════════════════"
+        log_secret_once "رمز مدیر فقط یک بار نمایش داده می‌شود و در فایل لاگ ذخیره نخواهد شد."
+        log_secret_once "  Admin login: ${APP_URL}/zed-admin/login"
+        log_secret_once "  Admin username: ${ADMIN_NAME}"
+        log_secret_once "  Admin email:    ${ADMIN_EMAIL}"
+        log_secret_once "  Admin password: ${ADMIN_PASS}"
+        log_secret_once "════════════════════════════════════════════"
+        if [ "$SECRET_DELIVERY" = "file" ]; then
+            echo ""
+            echo -e "  ${YELLOW}نصب به‌صورت غیرتعاملی اجرا شده است.${NC}"
+            echo -e "  ${YELLOW}اطلاعات ورود فقط در فایل امن مشخص‌شده ذخیره شد: ${CREDENTIAL_FILE}${NC}"
+            echo -e "  ${YELLOW}پس از ذخیره اطلاعات، فایل را حذف کنید.${NC}"
+        fi
+        echo ""
+        echo -e "  ${GREEN}اطلاعات ورود مدیر فقط از مسیر امن نمایش داده شد و در فایل لاگ ذخیره نشد.${NC}"
     fi
+    # Clear secret shell variables now that delivery is complete.
+    ADMIN_PASS=""; DB_PASS=""; unset ADMIN_PASS DB_PASS 2>/dev/null || true
     echo ""
     echo -e "  To update ZedProxy in the future:"
     echo -e "    ${GREEN}zedproxy-update${NC}  (shortcut installed at /usr/local/bin/zedproxy-update)"

@@ -1,5 +1,7 @@
 <?php
 
+use App\Logging\SanitizeSensitiveData;
+use App\Logging\SensitiveDataProcessor;
 use Monolog\Handler\NullHandler;
 use Monolog\Handler\StreamHandler;
 use Monolog\Handler\SyslogUdpHandler;
@@ -63,6 +65,7 @@ return [
             'path' => storage_path('logs/laravel.log'),
             'level' => env('LOG_LEVEL', 'debug'),
             'replace_placeholders' => true,
+            'tap' => [SanitizeSensitiveData::class],
         ],
 
         'daily' => [
@@ -71,6 +74,7 @@ return [
             'level' => env('LOG_LEVEL', 'debug'),
             'days' => env('LOG_DAILY_DAYS', 14),
             'replace_placeholders' => true,
+            'tap' => [SanitizeSensitiveData::class],
         ],
 
         'slack' => [
@@ -80,6 +84,7 @@ return [
             'emoji' => env('LOG_SLACK_EMOJI', ':boom:'),
             'level' => env('LOG_LEVEL', 'critical'),
             'replace_placeholders' => true,
+            'tap' => [SanitizeSensitiveData::class],
         ],
 
         'papertrail' => [
@@ -102,7 +107,7 @@ return [
                 'stream' => 'php://stderr',
             ],
             'formatter' => env('LOG_STDERR_FORMATTER'),
-            'processors' => [PsrLogMessageProcessor::class],
+            'processors' => [PsrLogMessageProcessor::class, SensitiveDataProcessor::class],
         ],
 
         'syslog' => [
@@ -110,12 +115,14 @@ return [
             'level' => env('LOG_LEVEL', 'debug'),
             'facility' => env('LOG_SYSLOG_FACILITY', LOG_USER),
             'replace_placeholders' => true,
+            'tap' => [SanitizeSensitiveData::class],
         ],
 
         'errorlog' => [
             'driver' => 'errorlog',
             'level' => env('LOG_LEVEL', 'debug'),
             'replace_placeholders' => true,
+            'tap' => [SanitizeSensitiveData::class],
         ],
 
         'null' => [

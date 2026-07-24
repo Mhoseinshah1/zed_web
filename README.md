@@ -156,13 +156,65 @@ The script runs interactively and asks for the following before doing anything:
 
 After all questions are answered, a 3-second countdown lets you cancel with Ctrl+C before anything is installed.
 
-The admin user is created automatically. **Credentials are only shown once at the end of a successful installation.** If installation fails at any step, the admin password is not printed.
+The admin user is created automatically. **The admin password is delivered once, through a secure channel that bypasses the log file** — it is written directly to your terminal (`/dev/tty`) and is **never** written to `/var/log/zedproxy-install.log`, journald, or CI output. If installation fails before the admin user is created, no password is printed. On a safe re-run the installer never re-displays an existing admin password; only a *newly generated* reset password is shown.
 
-All installer output is logged to `/var/log/zedproxy-install.log` (root-only, mode 600). The log includes credentials shown in the final summary. If anything goes wrong, check the log first:
+The database password is **not** displayed. It is stored securely in `.env` only (اطلاعات اتصال دیتابیس به‌صورت امن در فایل `.env` ذخیره می‌شود و در خروجی یا لاگ نمایش داده نمی‌شود).
+
+All installer output is logged to `/var/log/zedproxy-install.log` (root-only, mode 600, root-only rotation via `/etc/logrotate.d/zedproxy-install`). **The log never contains admin/DB passwords, `APP_KEY`, API/Telegram/payment tokens, or `Authorization` headers** — a redaction layer masks any such value as `[REDACTED]`. If anything goes wrong, check the log first:
 
 ```bash
 sudo tail -n 120 /var/log/zedproxy-install.log
 ```
+
+### Non-interactive (unattended) installs
+
+When there is no controlling terminal, the admin password cannot be shown safely on screen, so you must nominate a secure destination file with `ZP_CREDENTIAL_OUTPUT`:
+
+```bash
+sudo ZP_CREDENTIAL_OUTPUT=/root/zedproxy-admin-credentials.txt bash install.sh
+```
+
+Rules enforced for that path (install aborts *before* creating the admin user if any fails):
+
+- must be an **absolute** path and **not** a symlink;
+- parent directory must exist, be a directory, be **owned by root**, and not be group/world-writable;
+- must **not** live under `/tmp`, `/var/tmp`, `/dev/shm`, a web root, application `storage/`, `public/`, `uploads/`, or `shared/`;
+- the file is created atomically with `umask 077`, mode `600`, owner `root:root`, and is **never overwritten** unless you also pass `ZP_CREDENTIAL_FORCE=1`.
+
+The installer prints only the **path**, never the contents. Read it once, record the password in your password manager, then delete it:
+
+```bash
+sudo cat /root/zedproxy-admin-credentials.txt
+sudo shred -u /root/zedproxy-admin-credentials.txt   # best-effort; see limitation below
+```
+
+If no TTY is available **and** `ZP_CREDENTIAL_OUTPUT` is not set, the installer refuses to continue with:
+`امکان نمایش امن اطلاعات ورود وجود ندارد.`
+
+### Sanitizing a log written by an older installer
+
+Installer versions **before** this fix wrote the final summary (including admin/DB passwords) into `/var/log/zedproxy-install.log`. If you upgraded from such a version, scan and clean the old log with the bundled command:
+
+```bash
+sudo zedproxy-sanitize-install-log --scan       # report which secret CATEGORIES are present (never the values)
+sudo zedproxy-sanitize-install-log --redact      # replace every detected secret with [REDACTED] in place
+sudo zedproxy-sanitize-install-log --truncate     # empty the file entirely
+sudo zedproxy-sanitize-install-log --redact --backup   # keep a root-only .bak first
+```
+
+It requires root, refuses symlinks and non-regular files, preserves the file's owner and mode, never prints a detected value, and is idempotent. Target a different file with `--file /path/to/log`.
+
+> **Limitation — secure erasure is not guaranteed.** `--redact`/`--truncate` rewrites *this file only*. On SSD/flash, copy-on-write filesystems (btrfs/ZFS), LVM/filesystem snapshots, or any off-box/rotated/compressed backup, the original bytes may still be recoverable. **After cleaning the log you must rotate the exposed credentials** (see below).
+
+### Credential rotation after exposure
+
+If credentials may have leaked (old log, a screenshot, a shared support ticket, terminal scrollback), rotate them:
+
+1. **Admin password** — sign in and change it, or run `php artisan zedproxy:create-admin` to set a fresh one (shown once via the secure channel).
+2. **Database password** — locate `.env`, choose a new strong password, change it in PostgreSQL (`ALTER ROLE ... WITH PASSWORD ...`), update `DB_PASSWORD` in `.env` atomically, run `php artisan config:clear && php artisan config:cache`, then confirm connectivity with `php artisan migrate:status`. Do this during a maintenance window.
+3. Clean the exposed log with `zedproxy-sanitize-install-log`, and check any **copies** (backups, rotated logs, log shippers, screenshots, support tickets, terminal scrollback). Avoid pasting credentials into screenshots.
+
+> The installer/updater **never** auto-rotates a production database password or `APP_KEY` — rotating `APP_KEY` invalidates all existing encrypted values and sessions and must be a deliberate, planned operation.
 
 **Website URL in the final summary is always accurate:** it shows `http://DOMAIN` when SSL is not active and `https://DOMAIN` only when SSL succeeded — never a false https URL.
 
@@ -274,8 +326,8 @@ Each job publishes a stable check name suitable for branch protection:
 | **Integration Tests (PostgreSQL)** | Real PostgreSQL 16 + Redis 7 services. Runs the financial and concurrency-sensitive suites (provisioning, payment, wallet, commission, renewal/add-ons, discount concurrency, order idempotency incl. the forked real-concurrency test) plus scheduler locking and a real-Redis backup-lock test. |
 | **Code Style** | `composer validate --strict`, optimized autoload generation (`--strict-psr`), `php -l` syntax lint, and `vendor/bin/pint --test`. |
 | **Frontend Build** | `npm ci` (locked) + `npm run build`, and asserts `public/build/manifest.json` exists. |
-| **Shell Tests** | `bash -n` on every script, ShellCheck (errors only), the mocked installer/deploy/**supply-chain** helper tests, the forbidden-pattern scan (`curl\|bash`/`curl\|php`/`npm install` fallback/`composer update`), lock-file + runtime-version-policy + version-drift validation, and deployment version-metadata generation. No real infrastructure is touched. |
-| **Security Audit** | `composer audit` + `npm audit` under **one** allowlist-aware policy (below) shared verbatim with the installer and deploy; gitleaks secret scan, committed-`.env` and private-key detection, and best-effort dependency review on PRs. |
+| **Shell Tests** | `bash -n` on every script, ShellCheck (errors only), the mocked installer/deploy/**supply-chain** helper tests, the **credential-safety tests** (`tests/security/run-tests.sh`: redaction, credential-file validation, secret scan, and a canary-absence assertion), the forbidden-pattern scan (`curl\|bash`/`curl\|php`/`npm install` fallback/`composer update`), lock-file + runtime-version-policy + version-drift validation, and deployment version-metadata generation. No real infrastructure is touched. |
+| **Security Audit** | `composer audit` + `npm audit` under **one** allowlist-aware policy (below) shared verbatim with the installer and deploy; a static audit that rejects unsafe credential logging (echoing password variables, logging raw `$BASH_COMMAND`, credential-bearing `curl` headers, secrets as CLI flags, `set -x` in production paths); gitleaks secret scan, committed-`.env` and private-key detection, and best-effort dependency review on PRs. |
 | **Migration Validation** | Fresh PostgreSQL migrate, `migrate:status` (no pending), idempotent re-run, PostgreSQL partial-index presence, and the duplicate-data guard. |
 
 > **CI architecture note.** There is exactly **one** authoritative implementation of each check. The supply-chain verification that briefly lived in a separate `supply-chain.yml` (PR #63, created before PR #62 merged) has been folded into **Shell Tests** (helper tests, forbidden-pattern scan, lock-file/version checks, metadata generation) and **Security Audit** (the unified audit policy). `supply-chain.yml` was removed to eliminate duplicate jobs; no coverage was lost.

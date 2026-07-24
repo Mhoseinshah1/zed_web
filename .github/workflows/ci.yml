@@ -318,9 +318,11 @@ jobs:
             scripts/deploy/deploy.sh \
             scripts/deploy/rollback.sh \
             scripts/deploy/deploy-status.sh \
+            scripts/zedproxy-sanitize-install-log.sh \
             tests/deploy/run-tests.sh \
             tests/installer/run-tests.sh \
-            tests/supply-chain/run-tests.sh
+            tests/supply-chain/run-tests.sh \
+            tests/security/run-tests.sh
           shellcheck -S error install.sh
 
       - name: Installer helper tests (mocked)
@@ -331,6 +333,21 @@ jobs:
 
       - name: Supply-chain helper tests (25 mocked scenarios)
         run: bash tests/supply-chain/run-tests.sh | tee supply-chain-tests.log
+
+      - name: Credential-safety tests (redaction, scan, canary-absence)
+        run: bash tests/security/run-tests.sh | tee security-tests.log
+
+      - name: Assert no canary secret survived credential-safety run
+        run: |
+          set -euo pipefail
+          # The security suite feeds CANARY secrets through the redaction/scan
+          # helpers. If a complete canary literal reaches the captured log, a
+          # secret leaked through a channel that should have masked it.
+          if grep -REn 'ZP_CANARY_(ADMIN_SECRET|DB_SECRET|TOKEN|APPKEY)_[0-9a-f]{6,}' security-tests.log; then
+            echo '::error::A canary secret survived redaction in the security tests.'
+            exit 1
+          fi
+          echo 'No canary secret leaked into credential-safety output.'
 
       # ── Supply-chain verification (authoritative home; formerly the separate
       #    supply-chain.yml workflow, folded in here to remove duplicate jobs). ──
@@ -392,6 +409,7 @@ jobs:
             installer-tests.log
             deploy-tests.log
             supply-chain-tests.log
+            security-tests.log
           if-no-files-found: ignore
           retention-days: 7
 
@@ -488,6 +506,45 @@ jobs:
             exit 1
           fi
           echo 'No committed private keys detected.'
+
+      - name: Static audit — installer must not leak credentials into logs
+        shell: bash
+        run: |
+          set -uo pipefail
+          fail=0
+          note() { echo "::error::$*"; fail=1; }
+
+          # 1) The tee-to-logfile pipeline must NOT be re-introduced for the
+          #    final summary, and no credential variable may be echoed.
+          if grep -En 'echo.*\$\{?(ADMIN_PASS|DB_PASS|APP_KEY|ZEDPROXY_ADMIN_PASS)\}?' install.sh update.sh; then
+            note 'A credential variable is echoed in an installer script.'
+          fi
+
+          # 2) Raw $BASH_COMMAND must never be logged (ERR trap must mask it).
+          if grep -En 'log[_a-zA-Z]*[^#]*\$\{?BASH_COMMAND\}?' install.sh update.sh; then
+            note 'Raw $BASH_COMMAND is logged (must be masked via zp_mask_command).'
+          fi
+
+          # 3) No credential-bearing Authorization header passed on a curl CLI
+          #    (leaks into ps/argv and shell tracing). Use --config / netrc.
+          if grep -En "curl[^\n]*-H[[:space:]]+['\"]?Authorization:[[:space:]]*(Bearer|Basic)[[:space:]]+\\\$" \
+               install.sh update.sh scripts/*.sh scripts/deploy/*.sh 2>/dev/null; then
+            note 'A curl Authorization header interpolates a secret on the command line.'
+          fi
+
+          # 4) A password/secret must not be passed as a CLI flag value.
+          if grep -En -- '--(password|db-password|secret|token)[= ]+\$\{?[A-Za-z_]' \
+               install.sh update.sh scripts/*.sh scripts/deploy/*.sh 2>/dev/null; then
+            note 'A secret is passed as a command-line flag value (visible in ps/argv).'
+          fi
+
+          # 5) Production installer paths must not enable shell tracing.
+          if grep -En '^\s*set[[:space:]]+-[a-z]*x' install.sh update.sh scripts/*.sh scripts/deploy/*.sh 2>/dev/null; then
+            note 'set -x (shell tracing) present in a production script.'
+          fi
+
+          [ "$fail" -eq 0 ] && echo 'No unsafe credential-logging patterns found.'
+          exit "$fail"
 
       - name: Install gitleaks (pinned)
         run: |

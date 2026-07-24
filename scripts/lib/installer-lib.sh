@@ -225,3 +225,160 @@ zp_git_backup_local_changes() {
     fi
     return 0
 }
+
+# =============================================================================
+# Secret redaction + secure credential delivery (Prompt 14).
+#
+# These are the ONLY sanctioned paths for handling credentials in the installer.
+# Everything here is pure/testable and used by install.sh + the log sanitizer.
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# zp_redact  — filter stdin → stdout, replacing every recognised secret with the
+# fixed token [REDACTED]. Never keeps partial secrets (no first/last chars).
+#
+# Masks: KEY=VALUE credential assignments (APP_KEY, DB_PASSWORD, *_PASS(WORD),
+# *TOKEN, *SECRET, API_KEY, PGPASSWORD, ...), Bearer/Basic Authorization headers,
+# credentials embedded in URLs (user:pass@host, incl. postgres:// / https://),
+# JSON credential fields, and GitHub / Telegram bot-token shapes.
+# -----------------------------------------------------------------------------
+zp_redact() {
+    sed -E \
+        -e 's/([A-Za-z0-9_]*(PASSWORD|PASSWD|PASS|SECRET|TOKEN|APP_KEY|API_?KEY|PGPASSWORD))[[:space:]]*=[[:space:]]*[^[:space:]"'"'"']+/\1=[REDACTED]/gI' \
+        -e 's/(Authorization[[:space:]]*:[[:space:]]*)(Bearer|Basic)[[:space:]]+[A-Za-z0-9._~+\/=-]+/\1\2 [REDACTED]/gI' \
+        -e 's#([A-Za-z][A-Za-z0-9+.-]*://)[^/@[:space:]:]+:[^/@[:space:]]+@#\1[REDACTED]@#g' \
+        -e 's/("?(password|passwd|secret|token|api[_-]?key|api[_-]?token|access[_-]?token|refresh[_-]?token|authorization|signature)"?[[:space:]]*:[[:space:]]*")[^"]*"/\1[REDACTED]"/gI' \
+        -e 's/\b(gh[posur]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{20,})\b/[REDACTED]/g' \
+        -e 's/\b[0-9]{6,}:[A-Za-z0-9_-]{30,}\b/[REDACTED]/g'
+}
+
+# -----------------------------------------------------------------------------
+# zp_redact_str STRING — redact a single string (convenience over zp_redact).
+# -----------------------------------------------------------------------------
+zp_redact_str() {
+    printf '%s' "${1:-}" | zp_redact
+}
+
+# -----------------------------------------------------------------------------
+# zp_mask_command CMD [LITERAL_SECRET...]
+#
+# Produce a log-safe rendering of a failed shell command: first blank out any
+# exact literal secret values still held in memory (admin/db passwords, tokens),
+# then apply zp_redact for structural credential patterns. Used by the ERR trap
+# so a failing command can never echo a secret argument.
+# -----------------------------------------------------------------------------
+zp_mask_command() {
+    local cmd="${1:-}"; shift || true
+    local s
+    for s in "$@"; do
+        [ -n "$s" ] || continue
+        # Replace every occurrence of the literal secret value.
+        cmd="${cmd//"$s"/[REDACTED]}"
+    done
+    printf '%s' "$cmd" | zp_redact
+}
+
+# -----------------------------------------------------------------------------
+# zp_path_is_forbidden_credential_dir PATH
+#
+# Return 0 (forbidden) when PATH lies under a world-exposed or app-shared
+# location that must never hold a plaintext credential file: /tmp, /var/tmp,
+# web roots, application storage, or shared upload dirs.
+# -----------------------------------------------------------------------------
+zp_path_is_forbidden_credential_dir() {
+    local p="${1:-}"
+    case "$p" in
+        /tmp/*|/tmp|/var/tmp/*|/var/tmp|/dev/shm/*|/dev/shm) return 0 ;;
+        /var/www/*|/srv/www/*|/usr/share/nginx/*) return 0 ;;
+        */storage/*|*/storage|*/public/*|*/uploads/*|*/shared/*) return 0 ;;
+    esac
+    return 1
+}
+
+# -----------------------------------------------------------------------------
+# zp_validate_credential_dest PATH
+#
+# Validate a destination for the non-interactive secure credential file. Prints
+# a short machine reason on failure. Rules (all must hold):
+#   - absolute path
+#   - not currently a symlink (anti-symlink-swap)
+#   - parent directory exists, is a directory, owned by root (uid 0)
+#   - parent directory is NOT group/other writable (unless it is sticky, e.g.
+#     never — /tmp is forbidden outright below)
+#   - path is not under a forbidden (tmp / web / storage / upload) location
+# Returns 0 when the destination is safe to create.
+# -----------------------------------------------------------------------------
+zp_validate_credential_dest() {
+    local dest="${1:-}" parent powner pperm
+    case "$dest" in
+        /*) ;;
+        *) printf 'not-absolute'; return 1 ;;
+    esac
+    if [ -L "$dest" ]; then printf 'is-symlink'; return 1; fi
+    if zp_path_is_forbidden_credential_dir "$dest"; then printf 'forbidden-location'; return 1; fi
+    parent="$(dirname "$dest")"
+    [ -d "$parent" ] || { printf 'parent-missing'; return 1; }
+    if [ -L "$parent" ]; then printf 'parent-symlink'; return 1; fi
+    powner="$(stat -c '%u' "$parent" 2>/dev/null || echo -1)"
+    [ "$powner" = "0" ] || { printf 'parent-not-root'; return 1; }
+    pperm="$(stat -c '%a' "$parent" 2>/dev/null || echo 777)"
+    # Reject group- or world-writable parents (last two octal digits & 022).
+    case "$pperm" in
+        *[2367]|*[2367]?) printf 'parent-writable'; return 1 ;;
+    esac
+    return 0
+}
+
+# -----------------------------------------------------------------------------
+# zp_write_credential_file PATH CONTENT [--force]
+#
+# Atomically create a root-only (600) credential file at PATH after validating
+# the destination. Never overwrites an existing file unless --force is given.
+# The CONTENT is written via a private temp file (umask 077) then renamed.
+# Prints nothing sensitive; returns 0 on success, non-zero + reason otherwise.
+# -----------------------------------------------------------------------------
+zp_write_credential_file() {
+    local dest="${1:-}" content="${2:-}" force="${3:-}" reason tmp
+    reason="$(zp_validate_credential_dest "$dest")" || { printf '%s' "$reason"; return 1; }
+    if [ -e "$dest" ] && [ "$force" != "--force" ]; then printf 'exists'; return 1; fi
+    tmp="$(cd "$(dirname "$dest")" && mktemp ".zpcred.XXXXXX" 2>/dev/null)" || { printf 'mktemp-failed'; return 1; }
+    tmp="$(dirname "$dest")/$tmp"
+    ( umask 077; printf '%s\n' "$content" > "$tmp" ) || { rm -f "$tmp"; printf 'write-failed'; return 1; }
+    chmod 600 "$tmp" 2>/dev/null || true
+    chown 0:0 "$tmp" 2>/dev/null || true
+    mv -f "$tmp" "$dest" 2>/dev/null || { rm -f "$tmp"; printf 'rename-failed'; return 1; }
+    return 0
+}
+
+# -----------------------------------------------------------------------------
+# zp_scan_secrets_in_file FILE
+#
+# Print (one per line) the CATEGORY of each secret pattern detected in FILE,
+# WITHOUT ever printing the matched value. Used by the log sanitizer's --scan.
+# Returns 0 when at least one category is found, 1 when the file looks clean.
+# -----------------------------------------------------------------------------
+zp_scan_secrets_in_file() {
+    local file="${1:-}" found=1
+    [ -f "$file" ] || return 2
+    local -a cats=(
+        'app-key|APP_KEY[[:space:]]*=[[:space:]]*base64:'
+        'db-password|(DB_PASSWORD|PGPASSWORD)[[:space:]]*=[[:space:]]*[^[:space:]]'
+        'admin-password|(ADMIN_PASS|ADMIN_PASSWORD|ZEDPROXY_ADMIN_PASS)[[:space:]]*[=:][[:space:]]*[^[:space:]]'
+        'generic-password|[A-Za-z_]*PASS(WORD|WD)?[[:space:]]*[=:][[:space:]]*[^[:space:]]'
+        'token|[A-Za-z_]*TOKEN[[:space:]]*[=:][[:space:]]*[^[:space:]]'
+        'secret|[A-Za-z_]*SECRET[[:space:]]*[=:][[:space:]]*[^[:space:]]'
+        'authorization-header|Authorization[[:space:]]*:[[:space:]]*(Bearer|Basic)[[:space:]]'
+        'credential-url|[A-Za-z][A-Za-z0-9+.-]*://[^/@[:space:]:]+:[^/@[:space:]]+@'
+        'github-token|(gh[posur]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{20,})'
+        'telegram-token|[0-9]{6,}:[A-Za-z0-9_-]{30,}'
+    )
+    local entry label pat
+    for entry in "${cats[@]}"; do
+        label="${entry%%|*}"; pat="${entry#*|}"
+        if grep -Eq "$pat" "$file" 2>/dev/null; then
+            printf '%s\n' "$label"
+            found=0
+        fi
+    done
+    return $found
+}
