@@ -47,6 +47,84 @@ The installer **never blindly adds `ppa:ondrej/php`**. Before any `apt update`, 
 
 If the native installer cannot satisfy the PHP version requirement on your specific Ubuntu release, use Docker-based deployment. Docker support is planned for a future release. See the [What's next](#whats-next) section.
 
+## Supply-chain security
+
+The installer (`install.sh`), updater (`update.sh`) and the atomic deploy scripts install their toolchain and dependencies through verified, reproducible steps. No step ever pipes a downloaded script into a shell (`curl … | bash` / `curl … | php`). The pure, testable helpers live in **`scripts/lib/supply-chain-lib.sh`** and are covered by **`tests/supply-chain/run-tests.sh`** (25 mocked scenarios; no root, no network, no real package managers).
+
+### Supported runtime versions (single source of truth)
+
+Declared once in `scripts/lib/supply-chain-lib.sh`:
+
+| Component | Supported |
+| --- | --- |
+| Ubuntu | 22.04, 24.04, 26.04 |
+| PHP | 8.2 – 8.4 |
+| PostgreSQL | 14 – 17 |
+| Redis | 6 – 7 |
+| Composer | 2.2 – 2.x |
+| Node.js | 22 (major) |
+| npm | 10 – 11 |
+
+The installer **rejects an unsupported runtime** and stops. To proceed anyway (at your own risk) set `ZP_ALLOW_UNSUPPORTED=1`; it is never enabled automatically.
+
+### Composer installer verification
+
+`install.sh` follows the official Composer procedure: it downloads the installer to a private `mktemp` file, fetches the official **SHA-384** signature from `https://composer.github.io/installer.sig`, computes the local hash, and compares them with a constant-time-style check **before executing anything**. On mismatch it aborts with `اعتبار فایل نصب Composer تأیید نشد. عملیات متوقف شد.` and deletes the installer (success or failure). Composer is installed into `/usr/local/bin` and its version verified.
+
+### Node.js repository verification
+
+The NodeSource setup script is **never** piped into `bash`. Instead the installer installs HTTPS/GPG tooling, downloads the official signing key, verifies a real public key was imported, stores it in a dedicated keyring under `/usr/share/keyrings/nodesource.gpg`, configures the apt source with `signed-by=` pinned to the supported major, runs `apt-get update`, installs Node, and verifies `node`/`npm`. On any key/repository failure it aborts with `اعتبار مخزن Node.js تأیید نشد. نصب متوقف شد.`
+
+### Lock-file policy
+
+Production installs are reproducible. Both `composer.lock` and `package-lock.json` **must** be present; the installer runs `composer validate --strict` (lock must match `composer.json`), then `composer install --no-dev --prefer-dist --optimize-autoloader` and `npm ci`. It **never** runs `composer update` or `npm install`, and there is **no fallback** from `npm ci` to `npm install` — a lock mismatch is a hard failure. `--ignore-platform-reqs` is never used.
+
+### Vulnerability audit policy
+
+`composer audit` and `npm audit` run during install and in CI:
+
+- **critical** → always fails the install/CI.
+- **high** → fails **unless** an unexpired allowlist entry covers it.
+- **moderate / low** → reported, non-blocking.
+- Audit failures are never swallowed with `|| true`.
+
+**Advisory exception process** — add a line to **`.zedproxy/audit-allowlist`**:
+
+```
+package|advisory|reason|expiry(YYYY-MM-DD)|owner
+```
+
+Each entry must name one package + one advisory, a real justification, an ISO expiry date (the entry is ignored on/after that date — malformed/missing dates count as expired), and an owner. No blanket or wildcard entries.
+
+### Exact release pinning & deployed-commit verification
+
+Install from an explicit **tag**, **commit**, or **branch** with `ZP_REF=<tag|sha|branch>`; the installer records the **resolved full commit SHA** (never just a branch name) plus the ref, any exact tag, a build timestamp, and the PHP/Composer/Node/npm versions to `storage/app/release-metadata.json`. The atomic deploy writes the same fields into each release's `RELEASE_MANIFEST.json`. Verify what is live:
+
+```bash
+cat /var/www/zedproxy/storage/app/release-metadata.json          # single-dir install
+cat /var/www/zedproxy/current/RELEASE_MANIFEST.json              # release-based deploy
+git -C /var/www/zedproxy rev-parse HEAD                          # resolved commit
+```
+
+Private-repository authentication behaviour is unchanged by any of the above.
+
+### Package source restrictions & privilege model
+
+Composer uses its default trusted repositories and npm the default registry (no arbitrary registries from untrusted environment variables; TLS verification is never disabled; no integrity-disabling flags). Root is used only for apt, filesystem ownership, and service configuration; application files are never made world-writable and shared storage/cache ownership is preserved.
+
+### Safe upgrade process
+
+Re-running `install.sh` on an existing install preserves `.env`, `APP_KEY`, uploads and the database (a DB backup is taken before migrations). The atomic deploy (`scripts/deploy/deploy.sh`) builds a new release in isolation, runs lock-file + `composer validate` + audit gates, and only switches the `current` symlink after a successful build + smoke test; a failed build never touches the live release.
+
+### Troubleshooting verification failures
+
+- **`اعتبار فایل نصب Composer تأیید نشد`** — the SHA-384 signature did not match (network tampering, a stale mirror, or an outage of `composer.github.io`). Re-run; if it persists, verify outbound HTTPS to `getcomposer.org` / `composer.github.io`.
+- **`اعتبار مخزن Node.js تأیید نشد`** — the NodeSource key could not be downloaded or imported. Check HTTPS access to `deb.nodesource.com` and that `gnupg` is installed.
+- **`composer validate` failed / lock mismatch** — `composer.lock` is out of date; regenerate it in development (`composer update`) and commit — **never** on a production server.
+- **`npm ci` failed** — `package-lock.json` does not match `package.json`; regenerate and commit it in development.
+- **Unsupported runtime** — install a supported version, or set `ZP_ALLOW_UNSUPPORTED=1` to override deliberately.
+- **Audit blocked the install** — resolve the advisory (upgrade the dependency) or add a justified, expiring entry to `.zedproxy/audit-allowlist`.
+
 ## One-command installation
 
 Download and run (works on all Ubuntu/VPS environments):

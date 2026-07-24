@@ -1,0 +1,34 @@
+# gitleaks configuration for the ZedProxy secret-scanning CI jobs.
+#
+# Uses the upstream default rule set and adds a conservative allowlist so
+# documentation, example env files, compiled front-end assets, and test
+# fixtures do not produce false positives. Application code (app/, config/,
+# routes/, database/migrations/) and the installer/deploy scripts are always
+# scanned. Runs with `--redact`, so any match is reported without the value.
+
+title = "ZedProxy gitleaks config"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Non-secret placeholders, docs, examples, and generated assets"
+
+paths = [
+  '''\.env\.example$''',
+  '''(^|/)README\.md$''',
+  '''\.md$''',
+  '''(^|/)public/build/''',        # Vite-compiled, hashed assets
+  '''(^|/)tests/''',               # test fixtures use fake credentials
+  '''(^|/)database/factories/''',  # factory-generated fake data
+  '''(^|/)database/seeders/''',    # seed placeholders
+  '''(^|/)\.zedproxy/''',          # audit-allowlist template (no secrets)
+]
+
+# Documented placeholder tokens that intentionally live in the repo.
+regexes = [
+  '''GENERATED_SECURE_PASSWORD''',
+  '''your[-_](secret|token|key|password)''',
+  '''changeit''',
+  '''example\.com''',
+]

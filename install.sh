@@ -46,6 +46,10 @@ APP_NAME="ZedProxy"
 GITHUB_OWNER="mhoseinshah1"
 REPO_NAME="zed_web"
 BRANCH="main"
+# Optional explicit ref to pin the install to: a tag, a full/short commit SHA,
+# or a branch. Empty → track BRANCH. The resolved commit SHA is always recorded
+# (never just the branch name). Private-repo auth behaviour is unchanged.
+INSTALL_REF="${ZP_REF:-}"
 APP_DIR="${APP_DIR:-/var/www/zedproxy}"
 REPO_URL="https://github.com/${GITHUB_OWNER}/${REPO_NAME}.git"
 
@@ -83,26 +87,33 @@ trap '_on_err' ERR
 # present, otherwise download it from the repo.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || echo /tmp)"
 LIB_REL="scripts/lib/installer-lib.sh"
+SUPPLY_LIB_REL="scripts/lib/supply-chain-lib.sh"
 RAW_BASE="https://raw.githubusercontent.com/${GITHUB_OWNER}/${REPO_NAME}/${BRANCH}"
 
-load_installer_lib() {
-    local candidate tmp_lib
-    for candidate in "${SCRIPT_DIR}/${LIB_REL}" "${APP_DIR}/${LIB_REL}"; do
+# load_lib REL — source scripts/lib/<REL> from a local checkout when present,
+# otherwise download it over HTTPS (bounded timeout) into a temp file. The temp
+# file is created with mktemp and removed after sourcing.
+load_lib() {
+    local rel="$1" candidate tmp_lib
+    for candidate in "${SCRIPT_DIR}/${rel}" "${APP_DIR}/${rel}"; do
         if [ -f "$candidate" ]; then
             # shellcheck source=/dev/null
             source "$candidate"
             return 0
         fi
     done
-    tmp_lib=$(mktemp)
-    if curl -fsSL --max-time 20 "${RAW_BASE}/${LIB_REL}" -o "$tmp_lib" 2>/dev/null && [ -s "$tmp_lib" ]; then
+    tmp_lib=$(mktemp) || return 1
+    if curl -fsSL --proto '=https' --tlsv1.2 --max-time 20 --retry 2 "${RAW_BASE}/${rel}" -o "$tmp_lib" 2>/dev/null && [ -s "$tmp_lib" ]; then
         # shellcheck source=/dev/null
         source "$tmp_lib"
+        rm -f "$tmp_lib"
         return 0
     fi
-    error "Could not load installer helper library (${LIB_REL}). Check network access to GitHub and retry."
+    rm -f "$tmp_lib"
+    return 1
 }
-load_installer_lib
+load_lib "$LIB_REL"       || error "Could not load installer helper library (${LIB_REL}). Check network access to GitHub and retry."
+load_lib "$SUPPLY_LIB_REL" || error "Could not load supply-chain helper library (${SUPPLY_LIB_REL}). Check network access to GitHub and retry."
 
 # ─── Fresh vs. safe re-run state ──────────────────────────────────────────────
 REINSTALL_BACKUP_ROOT="/var/backups/zedproxy/reinstall"
@@ -175,6 +186,15 @@ detect_os() {
 
     if [ "$OS_ID" != "ubuntu" ]; then
         error "This installer currently supports Ubuntu only.\nDetected: $OS_PRETTY"
+    fi
+
+    # Runtime version policy (single source of truth: supply-chain-lib.sh).
+    if ! zsc_check_ubuntu "$OS_VERSION_ID"; then
+        if [ "${ZP_ALLOW_UNSUPPORTED:-0}" = "1" ]; then
+            warn "Ubuntu ${OS_VERSION_ID} در فهرست پشتیبانی‌شده (${ZSC_SUPPORTED_UBUNTU}) نیست — override فعال است."
+        else
+            error "Ubuntu ${OS_VERSION_ID} پشتیبانی نمی‌شود. نسخه‌های مجاز: ${ZSC_SUPPORTED_UBUNTU}.\nبرای ادامه با مسئولیت خود، ZP_ALLOW_UNSUPPORTED=1 را تنظیم کنید."
+        fi
     fi
 
     ok "Detected OS: $OS_PRETTY (codename: ${OS_CODENAME:-unknown})"
@@ -726,23 +746,187 @@ PHP_FPM_SERVICE="php${PHP_VERSION}-fpm"
 
 ok "PHP version: $(php -v | head -1)"
 
-# ─── Composer ────────────────────────────────────────────────────────────────
-log "Installing Composer..."
+# ─── Composer (verified installer, no `curl | php`) ──────────────────────────
+install_composer_verified() {
+    log "Installing Composer (verified)..."
+
+    # Download the installer + the official SHA-384 signature to private temp
+    # files (umask 077), verify BEFORE executing, then always clean up.
+    local tmpdir installer sig expected
+    tmpdir="$(mktemp -d)" || error "mktemp failed for Composer install."
+    chmod 700 "$tmpdir"
+    installer="${tmpdir}/composer-setup.php"
+    sig="${tmpdir}/installer.sig"
+    # shellcheck disable=SC2064
+    trap "rm -rf '$tmpdir'" RETURN
+
+    ( umask 077
+      curl --fail --location --show-error --silent --proto '=https' --tlsv1.2 \
+           --max-time 60 --retry 3 --retry-delay 2 \
+           "$ZSC_COMPOSER_INSTALLER_URL" -o "$installer" ) \
+        || error "دانلود نصب‌کنندهٔ Composer ناموفق بود. عملیات متوقف شد."
+
+    ( umask 077
+      curl --fail --location --show-error --silent --proto '=https' --tlsv1.2 \
+           --max-time 30 --retry 3 --retry-delay 2 \
+           "$ZSC_COMPOSER_SIG_URL" -o "$sig" ) \
+        || error "$ZSC_MSG_COMPOSER_BAD"
+
+    expected="$(tr -d '[:space:]' < "$sig")"
+    if ! zsc_verify_composer_installer "$installer" "$expected"; then
+        # Never print the installer contents; only report the failure.
+        error "$ZSC_MSG_COMPOSER_BAD"
+    fi
+    ok "امضای SHA-384 نصب‌کنندهٔ Composer تأیید شد."
+
+    # Verified — safe to execute. Install into a controlled path.
+    php "$installer" --quiet --install-dir=/usr/local/bin --filename=composer \
+        || error "$ZSC_MSG_COMPOSER_BAD"
+    trap - RETURN
+    rm -rf "$tmpdir"
+
+    command -v composer >/dev/null 2>&1 || error "Composer executable not found after install."
+}
+
 if ! command -v composer &>/dev/null; then
-    curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer
+    install_composer_verified
+fi
+
+# Verify the installed Composer and enforce the supported version range.
+COMPOSER_VERSION="$(composer --version --no-ansi 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1)"
+if [ -n "$COMPOSER_VERSION" ] && ! zsc_check_composer "$COMPOSER_VERSION"; then
+    if [ "${ZP_ALLOW_UNSUPPORTED:-0}" = "1" ]; then
+        warn "Composer ${COMPOSER_VERSION} خارج از بازهٔ پشتیبانی‌شده (${ZSC_COMPOSER_MIN}–${ZSC_COMPOSER_MAX}) است — override فعال است."
+    else
+        error "Composer ${COMPOSER_VERSION} پشتیبانی نمی‌شود (بازهٔ مجاز: ${ZSC_COMPOSER_MIN}–${ZSC_COMPOSER_MAX}). برای ادامه ZP_ALLOW_UNSUPPORTED=1 تنظیم کنید."
+    fi
 fi
 ok "Composer: $(composer --version --no-ansi)"
 
-# ─── Node.js ─────────────────────────────────────────────────────────────────
-log "Installing Node.js $NODE_VERSION..."
-if ! command -v node &>/dev/null || [[ $(node --version | cut -d'v' -f2 | cut -d'.' -f1) -lt $NODE_VERSION ]]; then
-    curl -fsSL "https://deb.nodesource.com/setup_${NODE_VERSION}.x" | bash -
+# ─── Node.js (verified NodeSource repo, no `curl | bash`) ────────────────────
+install_node_verified() {
+    log "Installing Node.js ${NODE_VERSION} (verified repository)..."
+
+    # Tooling required to fetch + verify the signing key.
     apt-get install -y -qq \
         -o Dpkg::Options::="--force-confdef" \
         -o Dpkg::Options::="--force-confold" \
-        nodejs
+        ca-certificates curl gnupg apt-transport-https
+
+    local tmpkey
+    tmpkey="$(mktemp)" || error "mktemp failed for Node key."
+    # shellcheck disable=SC2064
+    trap "rm -f '$tmpkey'" RETURN
+
+    ( umask 077
+      curl --fail --location --show-error --silent --proto '=https' --tlsv1.2 \
+           --max-time 30 --retry 3 --retry-delay 2 \
+           "$ZSC_NODE_KEY_URL" -o "$tmpkey" ) \
+        || error "$ZSC_MSG_NODE_BAD"
+
+    # Dearmor into a dedicated keyring and verify a real public key was imported.
+    install -d -m 0755 /usr/share/keyrings
+    rm -f "$ZSC_NODE_KEYRING"
+    gpg --dearmor -o "$ZSC_NODE_KEYRING" < "$tmpkey" 2>/dev/null \
+        || error "$ZSC_MSG_NODE_BAD"
+    chmod 0644 "$ZSC_NODE_KEYRING"
+
+    if ! zsc_gpg_key_valid "$ZSC_NODE_KEYRING"; then
+        rm -f "$ZSC_NODE_KEYRING"
+        error "$ZSC_MSG_NODE_BAD"
+    fi
+    ok "کلید امضای مخزن Node.js تأیید و ذخیره شد."
+
+    # Configure the apt source pinned to the supported major, signed-by keyring.
+    printf 'deb [signed-by=%s] https://deb.nodesource.com/node_%s.x nodistro main\n' \
+        "$ZSC_NODE_KEYRING" "$NODE_VERSION" > /etc/apt/sources.list.d/nodesource.list
+    chmod 0644 /etc/apt/sources.list.d/nodesource.list
+
+    trap - RETURN
+    rm -f "$tmpkey"
+
+    safe_apt_update || error "$ZSC_MSG_NODE_BAD"
+    apt-get install -y -qq \
+        -o Dpkg::Options::="--force-confdef" \
+        -o Dpkg::Options::="--force-confold" \
+        nodejs \
+        || error "نصب Node.js از مخزن تأییدشده ناموفق بود."
+}
+
+if ! command -v node &>/dev/null || [[ $(node --version | cut -d'v' -f2 | cut -d'.' -f1) -lt $NODE_VERSION ]]; then
+    install_node_verified
 fi
-ok "Node.js: $(node --version), npm: $(npm --version)"
+
+# Verify Node + npm and enforce the supported versions.
+NODE_INSTALLED="$(node --version 2>/dev/null || echo unknown)"
+NPM_INSTALLED="$(npm --version 2>/dev/null || echo unknown)"
+if ! zsc_check_node_major "$NODE_INSTALLED"; then
+    if [ "${ZP_ALLOW_UNSUPPORTED:-0}" = "1" ]; then
+        warn "Node.js ${NODE_INSTALLED} خارج از نسخهٔ پشتیبانی‌شده (major ${ZSC_NODE_MAJOR}) است — override فعال است."
+    else
+        error "Node.js ${NODE_INSTALLED} پشتیبانی نمی‌شود (major مجاز: ${ZSC_NODE_MAJOR}). برای ادامه ZP_ALLOW_UNSUPPORTED=1 تنظیم کنید."
+    fi
+fi
+ok "Node.js: ${NODE_INSTALLED}, npm: ${NPM_INSTALLED}"
+
+# ─── Dependency vulnerability audit (policy in supply-chain-lib.sh) ───────────
+# Policy: critical → fail; high → fail unless an unexpired allowlist entry
+# exists; moderate/low → report and continue. Audit output is masked so no
+# path/credential leaks, and audit failures are NEVER swallowed with `|| true`.
+AUDIT_ALLOWLIST="${AUDIT_ALLOWLIST:-${APP_DIR}/.zedproxy/audit-allowlist}"
+
+run_supply_chain_audit() {
+    log "Running dependency vulnerability audit..."
+    local today findings=0 fails=0 tmp
+    today="$(date -u +%Y-%m-%d)"
+    tmp="$(mktemp)" || return 0
+    # shellcheck disable=SC2064
+    trap "rm -f '$tmp'" RETURN
+
+    # Composer advisories → "package<TAB>advisory<TAB>severity" lines.
+    composer audit --format=json --no-interaction 2>/dev/null \
+        | php -r '$d=json_decode(stream_get_contents(STDIN),true)?:[]; foreach(($d["advisories"]??[]) as $p=>$as){foreach($as as $a){printf("%s\t%s\t%s\n",$p,$a["advisoryId"]??($a["cve"]??"unknown"),strtolower($a["severity"]??"unknown"));}}' \
+        >> "$tmp" 2>/dev/null || true
+
+    # npm advisories → same shape (severity from each vulnerability entry).
+    npm audit --json 2>/dev/null \
+        | php -r '$d=json_decode(stream_get_contents(STDIN),true)?:[]; foreach(($d["vulnerabilities"]??[]) as $n=>$v){$sev=strtolower($v["severity"]??"unknown"); $id="npm"; if(!empty($v["via"])&&is_array($v["via"])){foreach($v["via"] as $via){if(is_array($via)){$id=(string)($via["url"]??$via["source"]??"npm");break;}}} printf("%s\t%s\t%s\n",$n,$id,$sev);}' \
+        >> "$tmp" 2>/dev/null || true
+
+    local pkg adv sev allowed decision
+    while IFS=$'\t' read -r pkg adv sev; do
+        [ -n "$pkg" ] || continue
+        findings=$((findings + 1))
+        allowed=0
+        if zsc_allowlist_entry_active "$AUDIT_ALLOWLIST" "$pkg" "$adv" "$today"; then
+            allowed=1
+        fi
+        decision="$(zsc_audit_decision "$sev" "$allowed")"
+        case "$decision" in
+            fail)
+                warn "[audit:FAIL] $(printf '%s advisory=%s severity=%s' "$pkg" "$adv" "$sev" | zsc_mask_secrets)"
+                fails=$((fails + 1)) ;;
+            report)
+                if [ "$allowed" = "1" ]; then
+                    log "[audit:allowlisted] $(printf '%s advisory=%s severity=%s' "$pkg" "$adv" "$sev" | zsc_mask_secrets)"
+                else
+                    warn "[audit:report] $(printf '%s advisory=%s severity=%s' "$pkg" "$adv" "$sev" | zsc_mask_secrets)"
+                fi ;;
+        esac
+    done < "$tmp"
+
+    trap - RETURN
+    rm -f "$tmp"
+
+    if [ "$fails" -gt 0 ]; then
+        error "ممیزی امنیتی وابستگی‌ها ${fails} مورد بحرانی/بالای رفع‌نشده یافت. نصب متوقف شد. برای استثنای موقت، ورودی معتبر با تاریخ انقضا در ${AUDIT_ALLOWLIST} اضافه کنید."
+    fi
+    if [ "$findings" -eq 0 ]; then
+        ok "ممیزی امنیتی: هیچ آسیب‌پذیری شناخته‌شده‌ای یافت نشد."
+    else
+        ok "ممیزی امنیتی کامل شد (${findings} مورد؛ بدون آسیب‌پذیری بحرانی/بالای مسدودکننده)."
+    fi
+}
 
 # ─── PostgreSQL ──────────────────────────────────────────────────────────────
 log "Installing PostgreSQL..."
@@ -909,6 +1093,44 @@ prepare_project_directory() {
             ok "Repository cloned to ${APP_DIR}"
         fi
     fi
+
+    # Optional explicit pin (tag / commit / branch). Only for fresh installs —
+    # re-runs preserve the operator's deployed code and return earlier above.
+    if [ -n "$INSTALL_REF" ] && [ -d "${APP_DIR}/.git" ]; then
+        log "Pinning install to explicit ref: ${INSTALL_REF}"
+        git -C "$APP_DIR" fetch --tags --quiet origin "$INSTALL_REF" 2>/dev/null \
+            || git -C "$APP_DIR" fetch --tags --quiet origin 2>/dev/null || true
+        git -C "$APP_DIR" checkout --quiet --detach "$INSTALL_REF" 2>/dev/null \
+            || error "ref موردنظر برای نصب (${INSTALL_REF}) قابل‌بازیابی نبود. نصب متوقف شد."
+        ok "Checked out ${INSTALL_REF}"
+    fi
+}
+
+# ─── Release / commit metadata (records the RESOLVED SHA, never just a branch) ─
+record_install_metadata() {
+    local sha tag rid meta
+    sha="$(zsc_git_resolve "$APP_DIR" HEAD 2>/dev/null || echo unknown)"
+    tag="$(zsc_git_tag_for "$APP_DIR" "$sha" 2>/dev/null || true)"
+    rid="$(date -u +%Y%m%d%H%M%S)-$(printf '%s' "$sha" | tr -cd '0-9a-fA-F' | cut -c1-12)"
+    meta="${APP_DIR}/storage/app/release-metadata.json"
+    mkdir -p "$(dirname "$meta")" 2>/dev/null || true
+    ( umask 077
+      cat > "$meta" <<JSON
+{
+  "release_id": "${rid}",
+  "commit": "${sha}",
+  "ref": "${INSTALL_REF:-${BRANCH}}",
+  "tag": "${tag}",
+  "build_timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+  "php_version": "$(zsc_tool_version php)",
+  "composer_version": "$(zsc_tool_version composer)",
+  "node_version": "$(zsc_tool_version node)",
+  "npm_version": "$(zsc_tool_version npm)"
+}
+JSON
+    )
+    chmod 640 "$meta" 2>/dev/null || true
+    log "Release metadata recorded: commit ${sha}${tag:+ (tag ${tag})} → ${meta}"
 }
 
 # ─── Verify the Laravel project structure is present ─────────────────────────
@@ -946,6 +1168,7 @@ verify_laravel_project() {
 
 prepare_project_directory
 verify_laravel_project
+record_install_metadata
 
 cd "$APP_DIR"
 
@@ -1056,11 +1279,25 @@ fi
 
 ok "PHP-FPM configured (${PHP_FPM_SERVICE})"
 
-# ─── Composer install ────────────────────────────────────────────────────────
-log "Installing PHP dependencies..."
+# ─── Lock-file enforcement ────────────────────────────────────────────────────
+# Production installs are reproducible: both lock files MUST be present and the
+# committed composer.lock MUST match composer.json. Never composer update /
+# npm install here.
+_missing_lock="$(zsc_require_lockfiles "$APP_DIR" || true)"
+if [ -n "$_missing_lock" ]; then
+    error "فایل قفل وابستگی‌ها یافت نشد: ${_missing_lock}. نصب تولیدی به composer.lock و package-lock.json نیاز دارد."
+fi
+ok "فایل‌های قفل موجودند (composer.lock و package-lock.json)."
 
+# ─── Composer install ────────────────────────────────────────────────────────
+log "Validating composer.json / composer.lock..."
+composer validate --strict --no-check-publish --no-interaction \
+    || error "composer validate ناموفق بود — composer.lock با composer.json هماهنگ نیست. نصب متوقف شد."
+
+log "Installing PHP dependencies..."
 # Run without --quiet so that any failure prints the real Composer error.
 # COMPOSER_ALLOW_SUPERUSER is exported at the top of this script.
+# No --ignore-platform-reqs, no update: the locked, verified graph is installed.
 composer install \
     --no-dev \
     --prefer-dist \
@@ -1071,13 +1308,18 @@ composer install \
 ok "Composer dependencies installed"
 
 # ─── Node / build ────────────────────────────────────────────────────────────
-log "Installing Node.js dependencies..."
-npm ci
+# npm ci enforces package-lock.json and fails on any mismatch. There is NO
+# fallback to `npm install` — a lock mismatch is a hard failure by design.
+log "Installing Node.js dependencies (npm ci — locked)..."
+npm ci || error "npm ci ناموفق بود (عدم تطابق package-lock.json یا خطای یکپارچگی). نصب متوقف شد؛ هیچ fallback به npm install انجام نمی‌شود."
 
 log "Building frontend assets..."
-npm run build
+npm run build || error "npm run build failed — see the output above."
 
 ok "Frontend assets built"
+
+# ─── Dependency vulnerability audit ───────────────────────────────────────────
+run_supply_chain_audit
 
 # ─── Laravel setup ───────────────────────────────────────────────────────────
 if [ "$IS_EXISTING" = "true" ]; then
