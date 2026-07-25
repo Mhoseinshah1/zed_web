@@ -151,4 +151,66 @@ class WoodmartTemplateTest extends TestCase
         $this->assertStringNotContainsString('bg-slate-', $html);
         $this->assertStringNotContainsString('text-gray-', $html);
     }
+
+    // ── Navigation (fixed links, active states, mobile menu) ─────────────────
+
+    public function test_navigation_contains_all_fixed_links_with_correct_urls(): void
+    {
+        $this->activateWoodmart();
+        $html = $this->get(route('home'))->assertSuccessful()->getContent();
+
+        foreach (['خانه', 'آموزش‌ها', 'وضعیت سرویس‌ها', 'درباره ما', 'قوانین', 'پشتیبانی', 'همه محصولات'] as $label) {
+            $this->assertStringContainsString($label, $html);
+        }
+        foreach ([route('home'), route('tutorials'), route('status'), url('/about'), url('/terms'), route('contact')] as $url) {
+            $this->assertStringContainsString('href="'.$url.'"', $html);
+        }
+        // No separate plain "محصولات" text link — the orange button covers it.
+        $this->assertStringNotContainsString('>محصولات</a>', $html);
+    }
+
+    public function test_navigation_marks_the_current_page_active(): void
+    {
+        $this->activateWoodmart();
+
+        // On the status page the status link carries is-on; the home link does not.
+        $html = $this->get(route('status'))->assertSuccessful()->getContent();
+        $this->assertMatchesRegularExpression(
+            '#href="'.preg_quote(route('status'), '#').'"\s+class="[^"]*is-on#u', $html
+        );
+        $this->assertDoesNotMatchRegularExpression(
+            '#href="'.preg_quote(route('home'), '#').'"\s+class="[^"]*is-on#u', $html
+        );
+
+        // tutorials* also covers a tutorial detail page.
+        $html = $this->get(route('tutorials'))->assertSuccessful()->getContent();
+        $this->assertMatchesRegularExpression(
+            '#href="'.preg_quote(route('tutorials'), '#').'"\s+class="[^"]*is-on#u', $html
+        );
+    }
+
+    public function test_mobile_menu_is_accessible_and_ids_are_unique(): void
+    {
+        $this->activateWoodmart();
+        $html = $this->get(route('home'))->assertSuccessful()->getContent();
+
+        $this->assertStringContainsString('aria-controls="wm-menu"', $html);
+        $this->assertStringContainsString('aria-expanded="false"', $html);
+        $this->assertSame(1, substr_count($html, 'id="wm-menu"'), 'duplicate wm-menu id');
+        $this->assertSame(1, substr_count($html, 'id="wm-menu-btn"'), 'duplicate wm-menu-btn id');
+    }
+
+    public function test_mobile_categories_collapse_into_a_native_details_group(): void
+    {
+        $this->activateWoodmart();
+        $cat = PlanCategory::create(['title' => 'دسته-ناوبری-تست', 'is_active' => true, 'sort_order' => 1]);
+        Plan::factory()->create(['name' => 'پلن-ناوبری', 'category_id' => $cat->id, 'is_active' => true]);
+
+        $html = $this->get(route('home'))->assertSuccessful()->getContent();
+        $this->assertStringContainsString('دسته‌بندی محصولات', $html);
+        $this->assertStringContainsString('<details', $html);
+        $this->assertStringContainsString('دسته-ناوبری-تست', $html);
+        // Category link appears in BOTH the desktop bar and the mobile group.
+        $this->assertGreaterThanOrEqual(2, substr_count($html, 'دسته-ناوبری-تست'));
+    }
 }

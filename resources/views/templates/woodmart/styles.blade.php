@@ -40,4 +40,14 @@
     [data-template="woodmart"] .wm-navlink:hover,
     [data-template="woodmart"] .wm-navlink.is-on { color: var(--wm-accent); background: var(--wm-accent-soft); }
     [data-template="woodmart"] .wm-globe         { background: radial-gradient(circle at 35% 30%, var(--wm-accent-soft), transparent 60%); border-color: var(--wm-accent); color: var(--wm-accent); }
+
+    /* Category-bar overflow: labels stay on one line; when the width genuinely
+       runs out the bar scrolls horizontally with the scrollbar visually hidden
+       (scrolling itself stays fully enabled). */
+    [data-template="woodmart"] .wm-navscroll { scrollbar-width: none; -ms-overflow-style: none; }
+    [data-template="woodmart"] .wm-navscroll::-webkit-scrollbar { display: none; }
+
+    /* Mobile category group (native <details> — no JS dependency). */
+    [data-template="woodmart"] .wm-mnav-caret { transition: transform .2s; }
+    [data-template="woodmart"] details[open] > summary .wm-mnav-caret { transform: rotate(180deg); }
 </style>
