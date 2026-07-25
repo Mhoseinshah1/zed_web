@@ -274,6 +274,18 @@ jobs:
           test -f public/build/manifest.json \
             || { echo '::error::Vite build did not produce public/build/manifest.json'; exit 1; }
 
+      - name: Verify self-hosted fonts in the build manifest
+        run: |
+          set -euo pipefail
+          for w in Regular Medium SemiBold Bold ExtraBold Black; do
+            grep -q "Vazirmatn-33.0.3-${w}.woff2" public/build/manifest.json \
+              || { echo "::error::built manifest is missing Vazirmatn ${w}"; exit 1; }
+            f="$(python3 -c "import json;m=json.load(open('public/build/manifest.json'));print(m['resources/fonts/vazirmatn/Vazirmatn-33.0.3-${w}.woff2']['file'])")"
+            test -f "public/build/${f}" \
+              || { echo "::error::manifest references a missing font file: ${f}"; exit 1; }
+          done
+          echo 'All six self-hosted Vazirmatn weights are built and referenced.'
+
       - name: Upload build logs on failure
         if: failure()
         uses: actions/upload-artifact@v4

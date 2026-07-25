@@ -102,6 +102,12 @@ class FontDeliveryTest extends TestCase
 
     public function test_built_css_references_local_font_assets_that_exist(): void
     {
+        // The PHP CI job runs without compiled assets; the Frontend Build job
+        // asserts the manifest's font entries authoritatively after building.
+        if (! is_file(public_path('build/manifest.json'))) {
+            $this->markTestSkipped('no Vite build present (verified by the Frontend Build job)');
+        }
+
         $manifest = json_decode(file_get_contents(public_path('build/manifest.json')), true);
         $this->assertIsArray($manifest);
 
