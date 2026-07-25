@@ -528,6 +528,22 @@ setup_ssl() {
         sed -i "s|^APP_URL=.*|APP_URL=https://${DOMAIN}|" "${APP_DIR}/.env"
         ok "APP_URL updated to https://${DOMAIN}"
 
+        # Verified www reconciliation AFTER certbot modified the config: the
+        # managed www redirect must exist and the 443 www block must match the
+        # NEW certificate's ACTUAL coverage (SAN-checked against the file the
+        # live config references) before installation reports success.
+        WWW_BAK="$(mktemp "${NGINX_CONF}.zpd-www.XXXXXX")" && cp -a "$NGINX_CONF" "$WWW_BAK" || WWW_BAK=""
+        if [ -n "$WWW_BAK" ] \
+            && ZPD_WWW_APEX="$DOMAIN" zpd_nginx_rewrite_www "$NGINX_CONF" \
+            && nginx -t >/dev/null 2>&1; then
+            rm -f "$WWW_BAK"
+            systemctl reload nginx >/dev/null 2>&1 || true
+            ok "www.${DOMAIN} → ${DOMAIN} redirect reconciled against the new certificate."
+        else
+            if [ -n "$WWW_BAK" ]; then cp -a "$WWW_BAK" "$NGINX_CONF"; rm -f "$WWW_BAK"; fi
+            warn "www redirect reconciliation was skipped (config restored) — it will be retried on the next deploy."
+        fi
+
         # Rebuild all caches with new APP_URL (route/view caches may embed URLs)
         cd "$APP_DIR"
         php artisan optimize:clear

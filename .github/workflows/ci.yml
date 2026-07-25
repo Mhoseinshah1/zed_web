@@ -278,13 +278,15 @@ jobs:
         run: |
           set -euo pipefail
           for w in Regular Medium SemiBold Bold ExtraBold Black; do
-            grep -q "Vazirmatn-33.0.3-${w}.woff2" public/build/manifest.json \
-              || { echo "::error::built manifest is missing Vazirmatn ${w}"; exit 1; }
-            f="$(python3 -c "import json;m=json.load(open('public/build/manifest.json'));print(m['resources/fonts/vazirmatn/Vazirmatn-33.0.3-${w}.woff2']['file'])")"
-            test -f "public/build/${f}" \
-              || { echo "::error::manifest references a missing font file: ${f}"; exit 1; }
+            for sub in arabic latin; do
+              grep -q "Vazirmatn-33.0.3-${w}-${sub}.woff2" public/build/manifest.json \
+                || { echo "::error::built manifest is missing Vazirmatn ${w} (${sub} subset)"; exit 1; }
+              f="$(python3 -c "import json;m=json.load(open('public/build/manifest.json'));print(m['resources/fonts/vazirmatn/Vazirmatn-33.0.3-${w}-${sub}.woff2']['file'])")"
+              test -f "public/build/${f}" \
+                || { echo "::error::manifest references a missing font file: ${f}"; exit 1; }
+            done
           done
-          echo 'All six self-hosted Vazirmatn weights are built and referenced.'
+          echo 'All twelve self-hosted Vazirmatn subset files are built and referenced.'
 
       - name: Upload build logs on failure
         if: failure()
@@ -334,6 +336,7 @@ jobs:
             scripts/deploy/repair.sh \
             scripts/deploy/install-command-wrappers.sh \
             scripts/zedproxy-sanitize-install-log.sh \
+            scripts/build-vazirmatn-subsets.sh \
             tests/deploy/run-tests.sh \
             tests/installer/run-tests.sh \
             tests/supply-chain/run-tests.sh \
@@ -811,8 +814,19 @@ jobs:
             'canonical host does not redirect' \
             'second gzip run is byte-identical' \
             'custom gzip config untouched' \
-            'redirect-only block has no gzip'; do
-            grep -F "ok   - " "$log" | grep -qF "$line" \
+            'redirect-only block has no gzip' \
+            'coverage loss makes the 443 www block drift' \
+            'rewrite adds the 443 www block after coverage appears' \
+            'backup creation failure fails the cutover' \
+            'config NOT mutated without a verified backup' \
+            'restored from the FRESH backup, not the stale artifact' \
+            'restore preserved mode and ownership' \
+            'no pre-cutover backup left after success' \
+            'HTTPS block segment restored' \
+            'min length restored exactly once' \
+            'two-block gzip second run byte-identical'; do
+            # single pipeline-free grep: -q + a pipe can SIGPIPE under pipefail
+            grep -qF "ok   - ${line}" "$log" \
               || { echo "::error::SEO-hardening behavioral test did not pass: ${line}"; exit 1; }
           done
           # ── Static invariants.
@@ -839,8 +853,10 @@ jobs:
             echo '::error::Google Fonts URLs found in production views.'; exit 1
           fi
           for w in Regular Medium SemiBold Bold ExtraBold Black; do
-            test -f "resources/fonts/vazirmatn/Vazirmatn-33.0.3-${w}.woff2" \
-              || { echo "::error::missing vendored Vazirmatn weight: ${w}"; exit 1; }
+            for sub in arabic latin; do
+              test -f "resources/fonts/vazirmatn/Vazirmatn-33.0.3-${w}-${sub}.woff2" \
+                || { echo "::error::missing vendored Vazirmatn subset: ${w}-${sub}"; exit 1; }
+            done
           done
           if ls resources/fonts/vazirmatn/ | grep -q 'Light'; then
             echo '::error::unused Light/ExtraLight font weight is vendored.'; exit 1

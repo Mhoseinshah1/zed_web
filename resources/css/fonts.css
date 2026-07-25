@@ -1,54 +1,109 @@
 /*
- * Self-hosted Vazirmatn v33.0.3 (official upstream WOFF2, OFL-licensed — see
- * resources/fonts/vazirmatn/). The ONLY font definitions for the public site
- * and the user panel; no page may request fonts.googleapis.com/gstatic.com.
+ * Self-hosted Vazirmatn v33.0.3 — official upstream WOFF2 subset with
+ * pyftsubset (fonttools 4.63.0; see scripts/build-vazirmatn-subsets.sh and
+ * resources/fonts/vazirmatn/README.md for the exact reproducible commands and
+ * checksums). OFL-licensed; the ONLY font definitions for the public site and
+ * the user panel — no page may request fonts.googleapis.com/gstatic.com.
  *
- * Weights 400–900 only: weight 300 is unused across all views and is not
- * shipped. Full-range files (no unicode-range): the official distribution has
- * no Latin-only subset, and fabricating ranges against full-range files would
- * corrupt fallback behavior.
+ * Two NON-OVERLAPPING unicode-range subsets per weight: a Latin-only page
+ * never downloads the Arabic glyphs and vice versa. Weights 400-900 only:
+ * weight 300 is unused across all views and is not shipped.
  */
 @font-face {
     font-family: 'Vazirmatn';
     font-style: normal;
     font-weight: 400;
     font-display: swap;
-    src: url('../fonts/vazirmatn/Vazirmatn-33.0.3-Regular.woff2') format('woff2');
+    src: url('../fonts/vazirmatn/Vazirmatn-33.0.3-Regular-arabic.woff2') format('woff2');
+    unicode-range: U+0600-06FF, U+0750-077F, U+08A0-08FF, U+200C-200F, U+FB50-FDFF, U+FE70-FEFF;
+}
+@font-face {
+    font-family: 'Vazirmatn';
+    font-style: normal;
+    font-weight: 400;
+    font-display: swap;
+    src: url('../fonts/vazirmatn/Vazirmatn-33.0.3-Regular-latin.woff2') format('woff2');
+    unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+2010-2027, U+2030-205F, U+20AC, U+2122, U+FFFD;
 }
 @font-face {
     font-family: 'Vazirmatn';
     font-style: normal;
     font-weight: 500;
     font-display: swap;
-    src: url('../fonts/vazirmatn/Vazirmatn-33.0.3-Medium.woff2') format('woff2');
+    src: url('../fonts/vazirmatn/Vazirmatn-33.0.3-Medium-arabic.woff2') format('woff2');
+    unicode-range: U+0600-06FF, U+0750-077F, U+08A0-08FF, U+200C-200F, U+FB50-FDFF, U+FE70-FEFF;
+}
+@font-face {
+    font-family: 'Vazirmatn';
+    font-style: normal;
+    font-weight: 500;
+    font-display: swap;
+    src: url('../fonts/vazirmatn/Vazirmatn-33.0.3-Medium-latin.woff2') format('woff2');
+    unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+2010-2027, U+2030-205F, U+20AC, U+2122, U+FFFD;
 }
 @font-face {
     font-family: 'Vazirmatn';
     font-style: normal;
     font-weight: 600;
     font-display: swap;
-    src: url('../fonts/vazirmatn/Vazirmatn-33.0.3-SemiBold.woff2') format('woff2');
+    src: url('../fonts/vazirmatn/Vazirmatn-33.0.3-SemiBold-arabic.woff2') format('woff2');
+    unicode-range: U+0600-06FF, U+0750-077F, U+08A0-08FF, U+200C-200F, U+FB50-FDFF, U+FE70-FEFF;
+}
+@font-face {
+    font-family: 'Vazirmatn';
+    font-style: normal;
+    font-weight: 600;
+    font-display: swap;
+    src: url('../fonts/vazirmatn/Vazirmatn-33.0.3-SemiBold-latin.woff2') format('woff2');
+    unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+2010-2027, U+2030-205F, U+20AC, U+2122, U+FFFD;
 }
 @font-face {
     font-family: 'Vazirmatn';
     font-style: normal;
     font-weight: 700;
     font-display: swap;
-    src: url('../fonts/vazirmatn/Vazirmatn-33.0.3-Bold.woff2') format('woff2');
+    src: url('../fonts/vazirmatn/Vazirmatn-33.0.3-Bold-arabic.woff2') format('woff2');
+    unicode-range: U+0600-06FF, U+0750-077F, U+08A0-08FF, U+200C-200F, U+FB50-FDFF, U+FE70-FEFF;
+}
+@font-face {
+    font-family: 'Vazirmatn';
+    font-style: normal;
+    font-weight: 700;
+    font-display: swap;
+    src: url('../fonts/vazirmatn/Vazirmatn-33.0.3-Bold-latin.woff2') format('woff2');
+    unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+2010-2027, U+2030-205F, U+20AC, U+2122, U+FFFD;
 }
 @font-face {
     font-family: 'Vazirmatn';
     font-style: normal;
     font-weight: 800;
     font-display: swap;
-    src: url('../fonts/vazirmatn/Vazirmatn-33.0.3-ExtraBold.woff2') format('woff2');
+    src: url('../fonts/vazirmatn/Vazirmatn-33.0.3-ExtraBold-arabic.woff2') format('woff2');
+    unicode-range: U+0600-06FF, U+0750-077F, U+08A0-08FF, U+200C-200F, U+FB50-FDFF, U+FE70-FEFF;
+}
+@font-face {
+    font-family: 'Vazirmatn';
+    font-style: normal;
+    font-weight: 800;
+    font-display: swap;
+    src: url('../fonts/vazirmatn/Vazirmatn-33.0.3-ExtraBold-latin.woff2') format('woff2');
+    unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+2010-2027, U+2030-205F, U+20AC, U+2122, U+FFFD;
 }
 @font-face {
     font-family: 'Vazirmatn';
     font-style: normal;
     font-weight: 900;
     font-display: swap;
-    src: url('../fonts/vazirmatn/Vazirmatn-33.0.3-Black.woff2') format('woff2');
+    src: url('../fonts/vazirmatn/Vazirmatn-33.0.3-Black-arabic.woff2') format('woff2');
+    unicode-range: U+0600-06FF, U+0750-077F, U+08A0-08FF, U+200C-200F, U+FB50-FDFF, U+FE70-FEFF;
+}
+@font-face {
+    font-family: 'Vazirmatn';
+    font-style: normal;
+    font-weight: 900;
+    font-display: swap;
+    src: url('../fonts/vazirmatn/Vazirmatn-33.0.3-Black-latin.woff2') format('woff2');
+    unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+2010-2027, U+2030-205F, U+20AC, U+2122, U+FFFD;
 }
 
 /* The single body font rule (replaces the former per-layout inline styles);

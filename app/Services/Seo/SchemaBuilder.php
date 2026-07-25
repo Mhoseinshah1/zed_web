@@ -173,9 +173,11 @@ class SchemaBuilder
         // card anchor emitted ONLY on /plans (plans.slug is DB-unique). No
         // /plans/{slug} detail route exists, and this PR does not add one.
         $plansUrl = $this->seo->absoluteUrl('/plans');
-        // Product image fallback = the validated default OG image; omitted
-        // entirely when unset (never an empty string, never a fake image).
-        $image = $this->seo->absoluteUrl(SeoSettings::defaultOgImage());
+        // Product image fallback = the STRICTLY validated default OG image
+        // (local CMS path resolving to the canonical host, or absolute HTTPS);
+        // omitted entirely when unset or invalid (never an empty string, never
+        // an unvalidated value, never a fake image).
+        $image = $this->seo->safeImageUrl(SeoSettings::defaultOgImage());
         // Optional, operator-configured and validated; absent by default.
         $validUntil = SeoSettings::offerPriceValidUntil();
 

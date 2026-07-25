@@ -880,36 +880,71 @@ dep_stop_workers() {
 
 # dep_cutover_nginx BASE — backup, rewrite root → current/public, verify, and
 # `nginx -t`; restore the previous config and fail on any error.
-# dep_restore_precutover_nginx CONF — restore the pre-cutover backup (content +
-# mode + ownership via cp -a) and VERIFY the restoration byte-for-byte. The
-# original failure context is reported by the caller; this only restores.
+# dep_backup_nginx_conf CONF — create a FRESH, UNIQUE, same-directory backup of
+# CONF and VERIFY it (content byte-identical, mode + ownership preserved,
+# file exists) before printing its path. Never reuses an artifact from an
+# earlier run. Any step failing removes the partial backup and fails.
+dep_backup_nginx_conf() {
+    local conf="$1" bak
+    bak="$(mktemp "$(dirname "$conf")/.zpd-precutover.XXXXXX")" || return 1
+    cp -a "$conf" "$bak" || { rm -f "$bak"; return 1; }
+    [ -f "$bak" ] || return 1
+    cmp -s "$conf" "$bak" || { rm -f "$bak"; return 1; }
+    [ "$(stat -c '%a %u:%g' "$conf")" = "$(stat -c '%a %u:%g' "$bak")" ] || { rm -f "$bak"; return 1; }
+    printf '%s' "$bak"
+}
+
+# dep_restore_precutover_nginx CONF BAK — restore the verified pre-cutover
+# backup and VERIFY the restoration (content byte-for-byte + mode/ownership).
+# The ORIGINAL failure context is reported by the caller before this runs;
+# restore failures are reported here and are never silently swallowed.
 dep_restore_precutover_nginx() {
-    local conf="$1"
-    cp -a "${conf}.zpd-precutover" "$conf" 2>/dev/null \
-        || { dep_err "nginx restore FAILED: ${conf}.zpd-precutover could not be copied back"; return 1; }
-    cmp -s "${conf}.zpd-precutover" "$conf" \
-        || { dep_err "nginx restore VERIFICATION failed: restored file differs from the backup"; return 1; }
+    local conf="$1" bak="$2"
+    cp -a "$bak" "$conf" \
+        || { dep_err "nginx restore FAILED: ${bak} could not be copied back — MANUAL INTERVENTION REQUIRED"; return 1; }
+    cmp -s "$bak" "$conf" \
+        || { dep_err "nginx restore VERIFICATION failed (content differs from the backup at ${bak})"; return 1; }
+    [ "$(stat -c '%a %u:%g' "$bak")" = "$(stat -c '%a %u:%g' "$conf")" ] \
+        || { dep_err "nginx restore VERIFICATION failed (mode/ownership differ from the backup at ${bak})"; return 1; }
     return 0
 }
 
 dep_cutover_nginx() {
-    local base="$1" conf; conf="$(zpd_nginx_conf_path)"
+    local base="$1" conf bak; conf="$(zpd_nginx_conf_path)"
     [ -f "$conf" ] || { dep_err "nginx config missing: ${conf}"; return 1; }
-    cp -a "$conf" "${conf}.zpd-precutover" 2>/dev/null || true
-    zpd_nginx_rewrite_root "$conf" "$base" || { dep_err "$(zpd_msg_nginx_restored)"; dep_restore_precutover_nginx "$conf" || true; return 1; }
-    # robots.txt must reach Laravel (dynamic RobotsController) — same
-    # precutover-backup + nginx -t + verified-restore-on-failure flow as root.
-    zpd_nginx_rewrite_robots "$conf" || { dep_err "$(zpd_msg_nginx_restored)"; dep_restore_precutover_nginx "$conf" || true; return 1; }
-    # www→apex canonical host routing (ACME-exempt, SAN-gated 443) and the
-    # managed gzip segment share the same transactional flow.
-    zpd_nginx_rewrite_www "$conf"   || { dep_err "$(zpd_msg_nginx_restored)"; dep_restore_precutover_nginx "$conf" || true; return 1; }
-    zpd_nginx_rewrite_gzip "$conf"  || { dep_err "$(zpd_msg_nginx_restored)"; dep_restore_precutover_nginx "$conf" || true; return 1; }
-    if ! zpd_nginx_root_ok "$conf" "$base" || ! zpd_nginx_robots_ok "$conf" \
-        || ! zpd_nginx_www_ok "$conf" || ! zpd_nginx_gzip_ok "$conf" || ! dep_validate_nginx; then
-        dep_err "$(zpd_msg_nginx_restored)"
-        dep_restore_precutover_nginx "$conf" || true
+    # Stale artifacts from the legacy fixed-name era are never reused.
+    rm -f "${conf}.zpd-precutover" 2>/dev/null || true
+    # FAIL-CLOSED: no mutator may run before a fresh backup exists and verifies.
+    if ! bak="$(dep_backup_nginx_conf "$conf")" || [ ! -f "$bak" ]; then
+        dep_err "nginx cutover: could not create a verified pre-cutover backup — refusing to modify the config"
         return 1
     fi
+    # _fail MSG — report the ORIGINAL failure, then restore (restore failures
+    # are reported separately by the restore helper, never masked).
+    _dep_nginx_cutover_fail() {
+        dep_err "$1"
+        if ! dep_restore_precutover_nginx "$conf" "$bak"; then
+            dep_err "nginx cutover: pre-cutover backup preserved at ${bak}"
+            return 1
+        fi
+        rm -f "$bak"
+        return 1
+    }
+    zpd_nginx_rewrite_root "$conf" "$base" || { _dep_nginx_cutover_fail "$(zpd_msg_nginx_restored)"; return 1; }
+    # robots.txt must reach Laravel (dynamic RobotsController) — same verified
+    # backup + nginx -t + verified-restore-on-failure flow as the root.
+    zpd_nginx_rewrite_robots "$conf" || { _dep_nginx_cutover_fail "$(zpd_msg_nginx_restored)"; return 1; }
+    # www→apex canonical host routing (ACME-exempt, SAN-gated 443) and the
+    # managed gzip segment share the same transactional flow.
+    zpd_nginx_rewrite_www "$conf"   || { _dep_nginx_cutover_fail "$(zpd_msg_nginx_restored)"; return 1; }
+    zpd_nginx_rewrite_gzip "$conf"  || { _dep_nginx_cutover_fail "$(zpd_msg_nginx_restored)"; return 1; }
+    if ! zpd_nginx_root_ok "$conf" "$base" || ! zpd_nginx_robots_ok "$conf" \
+        || ! zpd_nginx_www_ok "$conf" || ! zpd_nginx_gzip_ok "$conf" || ! dep_validate_nginx; then
+        _dep_nginx_cutover_fail "$(zpd_msg_nginx_restored)"
+        return 1
+    fi
+    # Successful transaction: no temporary backup artifact stays behind.
+    rm -f "$bak"
     return 0
 }
 

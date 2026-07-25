@@ -99,6 +99,40 @@ class PlanSchemaTest extends TestCase
         $this->assertArrayNotHasKey('image', $product, 'image must be OMITTED, never an empty string');
     }
 
+    public function test_product_image_input_is_strictly_validated(): void
+    {
+        $this->makePlan();
+
+        // Valid absolute HTTPS URL passes.
+        SeoSettings::set('seo_default_og_image', 'https://cdn.example.com/og.png');
+        $product = $this->itemList($this->get('/plans')->getContent())['itemListElement'][0]['item'];
+        $this->assertSame('https://cdn.example.com/og.png', $product['image']);
+
+        // Valid local CMS path resolves to the canonical host.
+        SeoSettings::set('seo_default_og_image', '/storage/cms/og.png');
+        $product = $this->itemList($this->get('/plans')->getContent())['itemListElement'][0]['item'];
+        $this->assertStringStartsWith('http', $product['image']);
+        $this->assertStringEndsWith('/storage/cms/og.png', $product['image']);
+
+        // Everything else is OMITTED: http-in-production, dangerous schemes,
+        // malformed URLs, and whitespace/control payloads.
+        $this->app->detectEnvironment(fn () => 'production');
+        $bad = [
+            'http://insecure.example.com/og.png',
+            'javascript:alert(1)',
+            'data:image/png;base64,AAAA',
+            'file:///etc/passwd',
+            'https://',
+            'https://cdn.example.com/o g.png',
+            "https://cdn.example.com/\x01og.png",
+        ];
+        foreach ($bad as $value) {
+            SeoSettings::set('seo_default_og_image', $value);
+            $product = $this->itemList($this->get('/plans')->getContent())['itemListElement'][0]['item'];
+            $this->assertArrayNotHasKey('image', $product, "'{$value}' must be omitted");
+        }
+    }
+
     public function test_price_valid_until_renders_only_when_configured_and_valid(): void
     {
         $this->makePlan();

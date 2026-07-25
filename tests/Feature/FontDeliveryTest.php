@@ -56,21 +56,63 @@ class FontDeliveryTest extends TestCase
         $css = $this->fontsCss();
 
         foreach ([400, 500, 600, 700, 800, 900] as $weight) {
-            $this->assertSame(1, substr_count($css, "font-weight: {$weight};"), "weight {$weight} must exist exactly once");
+            // one Arabic/Persian face + one Latin face per weight
+            $this->assertSame(2, substr_count($css, "font-weight: {$weight};"), "weight {$weight} must have exactly two subset faces");
         }
         $this->assertStringNotContainsString('font-weight: 300', $css);
-        $this->assertSame(6, substr_count($css, '@font-face'));
+        $this->assertSame(12, substr_count($css, '@font-face'));
 
         $files = glob(resource_path('fonts/vazirmatn/*.woff2'));
-        $this->assertCount(6, $files);
+        $this->assertCount(12, $files);
+        $this->assertCount(6, array_filter($files, fn ($f) => str_contains($f, '-arabic.woff2')));
+        $this->assertCount(6, array_filter($files, fn ($f) => str_contains($f, '-latin.woff2')));
         foreach ($files as $f) {
             $this->assertStringNotContainsString('Light', basename($f), 'no Light/ExtraLight weight may ship');
         }
     }
 
+    public function test_unicode_ranges_are_present_and_non_overlapping(): void
+    {
+        $css = $this->fontsCss();
+        $this->assertSame(12, substr_count($css, 'unicode-range:'), 'every face must declare a unicode-range');
+
+        // Expand both range sets and prove they never intersect.
+        preg_match('/-arabic\.woff2[^;]*;\s*unicode-range:\s*([^;]+);/s', $css, $ar);
+        preg_match('/-latin\.woff2[^;]*;\s*unicode-range:\s*([^;]+);/s', $css, $la);
+        $expand = function (string $spec): array {
+            $points = [];
+            foreach (array_map('trim', explode(',', $spec)) as $part) {
+                $part = strtoupper(str_replace('U+', '', $part));
+                [$a, $b] = array_pad(explode('-', $part), 2, null);
+                $from = hexdec($a);
+                $to = $b === null ? $from : hexdec($b);
+                $points[] = [$from, $to];
+            }
+
+            return $points;
+        };
+        $arabic = $expand($ar[1]);
+        $latin = $expand($la[1]);
+        foreach ($arabic as [$a1, $a2]) {
+            foreach ($latin as [$l1, $l2]) {
+                $this->assertTrue($a2 < $l1 || $l2 < $a1, sprintf('ranges overlap: %X-%X vs %X-%X', $a1, $a2, $l1, $l2));
+            }
+        }
+        // The Arabic set must cover Persian letters, Persian digits, and ZWNJ.
+        foreach ([0x0645, 0x06CC, 0x067E, 0x06AF, 0x0686, 0x0698, 0x06F0, 0x06F9, 0x200C] as $cp) {
+            $covered = false;
+            foreach ($arabic as [$a1, $a2]) {
+                if ($cp >= $a1 && $cp <= $a2) {
+                    $covered = true;
+                }
+            }
+            $this->assertTrue($covered, sprintf('U+%04X must be in the Arabic subset ranges', $cp));
+        }
+    }
+
     public function test_every_face_swaps_and_the_license_ships_beside_the_fonts(): void
     {
-        $this->assertSame(6, substr_count($this->fontsCss(), 'font-display: swap;'), 'every face must use font-display: swap');
+        $this->assertSame(12, substr_count($this->fontsCss(), 'font-display: swap;'), 'every face must use font-display: swap');
         $this->assertFileExists(resource_path('fonts/vazirmatn/OFL.txt'));
         $this->assertStringContainsString('SIL OPEN FONT LICENSE', strtoupper(file_get_contents(resource_path('fonts/vazirmatn/OFL.txt'))));
     }
@@ -89,13 +131,14 @@ class FontDeliveryTest extends TestCase
             }
         }
 
-        // withoutVite() blanks the hrefs in rendered HTML, so the weight
+        // withoutVite() blanks the hrefs in rendered HTML, so the weight/subset
         // selection is asserted against the single shared partial itself.
         $partial = file_get_contents(resource_path('views/partials/font-preloads.blade.php'));
-        $this->assertStringContainsString('Regular.woff2', $partial);
-        $this->assertStringContainsString('-Bold.woff2', $partial);
+        $this->assertStringContainsString('Regular-arabic.woff2', $partial);
+        $this->assertStringContainsString('Bold-arabic.woff2', $partial);
+        $this->assertStringNotContainsString('latin.woff2', $partial, 'the Latin subset must never be preloaded');
         foreach (['Medium', 'SemiBold', 'ExtraBold', 'Black', 'Light'] as $not) {
-            $this->assertStringNotContainsString($not.'.woff2', $partial, "{$not} must not be preloaded");
+            $this->assertStringNotContainsString($not.'-arabic.woff2', $partial, "{$not} must not be preloaded");
         }
         $this->assertSame(2, substr_count($partial, 'rel="preload"'));
     }
@@ -118,6 +161,6 @@ class FontDeliveryTest extends TestCase
                 $this->assertFileExists(public_path('build/'.$entry['file']));
             }
         }
-        $this->assertSame(6, $found, 'all six woff2 files must be in the Vite manifest');
+        $this->assertSame(12, $found, 'all twelve subset woff2 files must be in the Vite manifest');
     }
 }

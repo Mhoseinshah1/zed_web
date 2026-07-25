@@ -195,6 +195,7 @@ grep_has  'ZPD-WWW-REDIRECT-BEGIN'                      "$INSTALL_SH" "managed w
 grep_has  'location \^~ /\.well-known/acme-challenge/'  "$INSTALL_SH" "www block serves ACME challenges before the redirect"
 grep_has  'return 301 https://\$\{DOMAIN\}\\\$request_uri;' "$INSTALL_SH" "www 301 targets the literal apex with the URI preserved"
 grep_none 'return 301 https://\$host'                   "$INSTALL_SH" "www redirect never uses \$host"
+grep_has  'ZPD_WWW_APEX="\$DOMAIN" zpd_nginx_rewrite_www' "$INSTALL_SH" "install.sh reconciles www against the NEW certificate after certbot"
 
 # 21e. Managed gzip: text assets compressed, no text/html (implicit), no
 #      already-compressed formats.
