@@ -7,7 +7,7 @@
             <div class="md:col-span-2">
                 <div class="flex items-center gap-2.5 font-extrabold text-lg text-white">
                     @if($flogo = cms_image('footer_logo', cms_image('logo')))
-                        <img src="{{ $flogo }}" alt="{{ site_setting('site_name', 'ZedProxy') }}" class="h-7 w-auto" style="min-height:1.75rem">
+                        @include('partials.site-logo', ['src' => $flogo, 'class' => 'h-7 w-auto', 'style' => 'min-height:1.75rem'])
                     @else
                         <span class="w-8 h-8 rounded-lg zed-gradient-bg flex items-center justify-center">
                             <svg class="w-4 h-4 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 2 4 6v6c0 5 3.4 7.7 8 10 4.6-2.3 8-5 8-10V6l-8-4z"/></svg>

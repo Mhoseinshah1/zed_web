@@ -17,7 +17,10 @@
                 <a href="{{ route('tutorials.show', $tutorial->slug) }}"
                    class="zed-card zed-hover-lift block p-6 group">
                     @if($img = cms_asset_url($tutorial->image))
-                        <img src="{{ $img }}" alt="{{ $tutorial->title }}" class="h-32 w-full object-cover rounded-xl mb-4">
+                        {{-- Below-the-fold listing thumbnails: fixed h-32 box
+                             already reserves space (no CLS). --}}
+                        <img src="{{ $img }}" alt="{{ $tutorial->title }}" class="h-32 w-full object-cover rounded-xl mb-4"
+                             loading="lazy" decoding="async">
                     @endif
                     <span class="inline-block text-[11px] px-2 py-0.5 rounded-full bg-indigo-600/15 text-indigo-300 mb-3">
                         {{ $platforms[$tutorial->platform] ?? $tutorial->platform }}

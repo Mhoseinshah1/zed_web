@@ -58,7 +58,7 @@
             {{-- Logo --}}
             <a href="{{ route('home') }}" class="flex items-center gap-2.5 font-black text-xl text-content shrink-0">
                 @if($logo = cms_image('logo'))
-                    <img src="{{ $logo }}" alt="{{ site_setting('site_name', 'ZedProxy') }}" class="h-9 w-auto" style="min-height:2.25rem">
+                    @include('partials.site-logo', ['src' => $logo, 'class' => 'h-9 w-auto', 'style' => 'min-height:2.25rem', 'eager' => true])
                 @else
                     <span class="wm-logo-badge w-9 h-9 rounded-[10px] flex items-center justify-center text-white">
                         <svg class="w-[19px] h-[19px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 2 4 6v6c0 5 3.4 7.7 8 10 4.6-2.3 8-5 8-10V6l-8-4z"/></svg>

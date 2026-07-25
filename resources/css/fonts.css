@@ -1,0 +1,60 @@
+/*
+ * Self-hosted Vazirmatn v33.0.3 (official upstream WOFF2, OFL-licensed — see
+ * resources/fonts/vazirmatn/). The ONLY font definitions for the public site
+ * and the user panel; no page may request fonts.googleapis.com/gstatic.com.
+ *
+ * Weights 400–900 only: weight 300 is unused across all views and is not
+ * shipped. Full-range files (no unicode-range): the official distribution has
+ * no Latin-only subset, and fabricating ranges against full-range files would
+ * corrupt fallback behavior.
+ */
+@font-face {
+    font-family: 'Vazirmatn';
+    font-style: normal;
+    font-weight: 400;
+    font-display: swap;
+    src: url('../fonts/vazirmatn/Vazirmatn-33.0.3-Regular.woff2') format('woff2');
+}
+@font-face {
+    font-family: 'Vazirmatn';
+    font-style: normal;
+    font-weight: 500;
+    font-display: swap;
+    src: url('../fonts/vazirmatn/Vazirmatn-33.0.3-Medium.woff2') format('woff2');
+}
+@font-face {
+    font-family: 'Vazirmatn';
+    font-style: normal;
+    font-weight: 600;
+    font-display: swap;
+    src: url('../fonts/vazirmatn/Vazirmatn-33.0.3-SemiBold.woff2') format('woff2');
+}
+@font-face {
+    font-family: 'Vazirmatn';
+    font-style: normal;
+    font-weight: 700;
+    font-display: swap;
+    src: url('../fonts/vazirmatn/Vazirmatn-33.0.3-Bold.woff2') format('woff2');
+}
+@font-face {
+    font-family: 'Vazirmatn';
+    font-style: normal;
+    font-weight: 800;
+    font-display: swap;
+    src: url('../fonts/vazirmatn/Vazirmatn-33.0.3-ExtraBold.woff2') format('woff2');
+}
+@font-face {
+    font-family: 'Vazirmatn';
+    font-style: normal;
+    font-weight: 900;
+    font-display: swap;
+    src: url('../fonts/vazirmatn/Vazirmatn-33.0.3-Black.woff2') format('woff2');
+}
+
+/* The single body font rule (replaces the former per-layout inline styles);
+   --font-sans from the Tailwind @theme block stays the source of truth. */
+@layer base {
+    body {
+        font-family: var(--font-sans);
+    }
+}
