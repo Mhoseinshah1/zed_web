@@ -35,7 +35,9 @@ echo "[$(date)] Starting backup: $FILENAME"
 # Bounded: a wedged database connection must not leave the backup job hanging
 # forever (a real dump of this DB takes minutes, not hours — override with
 # ZPD_BACKUP_TIMEOUT for very large databases).
-timeout "${ZPD_BACKUP_TIMEOUT:-3600}s" env PGPASSWORD="$DB_PASSWORD" pg_dump \
+# PGPASSWORD travels via the environment (prefix assignment), never as an argv
+# word under timeout/env where /proc/*/cmdline would expose it while the dump runs.
+PGPASSWORD="$DB_PASSWORD" timeout "${ZPD_BACKUP_TIMEOUT:-3600}s" pg_dump \
     -h "$DB_HOST" \
     -p "$DB_PORT" \
     -U "$DB_USERNAME" \

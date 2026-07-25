@@ -117,6 +117,12 @@ esac
 EOF
 cat > "${MOCKBIN}/pg_dump" <<'EOF'
 #!/usr/bin/env bash
+# MOCK_PGDUMP_REQUIRE_ENVPASS=1 → behave like real pg_dump on a
+# password-protected DB: fail unless PGPASSWORD arrived via the ENVIRONMENT.
+if [ "${MOCK_PGDUMP_REQUIRE_ENVPASS:-0}" = "1" ] && [ -z "${PGPASSWORD:-}" ]; then
+  echo "fe_sendauth: no password supplied" >&2
+  exit 1
+fi
 out=""; while [ $# -gt 0 ]; do [ "$1" = "-f" ] && { out="$2"; shift; }; shift; done
 if [ "${MOCK_PGDUMP_HANG:-0}" = "1" ]; then
   # Writes a PARTIAL dump, then hangs — the bounded runner must kill it and the
@@ -130,9 +136,22 @@ exit ${MOCK_PGDUMP_RC:-0}
 EOF
 cat > "${MOCKBIN}/systemctl" <<'EOF'
 #!/usr/bin/env bash
+# Per-unit-type states: *.timer queries answer MOCK_TIMER_*, everything else
+# answers MOCK_SVC_* (falling back to MOCK_TIMER_*), so a stopped .service with
+# an enabled companion .timer can be modelled.
 case "${1:-}" in
-  is-enabled) echo "${MOCK_TIMER_ENABLED:-enabled}"; exit 0 ;;
-  is-active)  echo "${MOCK_TIMER_ACTIVE:-active}";  exit 0 ;;
+  is-enabled)
+    case "${2:-}" in
+      *.timer) echo "${MOCK_TIMER_ENABLED:-enabled}" ;;
+      *)       echo "${MOCK_SVC_ENABLED:-${MOCK_TIMER_ENABLED:-enabled}}" ;;
+    esac
+    exit 0 ;;
+  is-active)
+    case "${2:-}" in
+      *.timer) echo "${MOCK_TIMER_ACTIVE:-active}" ;;
+      *)       echo "${MOCK_SVC_ACTIVE:-${MOCK_TIMER_ACTIVE:-active}}" ;;
+    esac
+    exit 0 ;;
 esac
 exit ${MOCK_SYSTEMCTL_RC:-0}
 EOF
@@ -1981,6 +2000,58 @@ printf '[program:zp-sched]\ncommand=php %s/current/artisan schedule:run\nautosta
 rm -f "$ZPD_SCHED_CRON"
 ( MOCK_SUP_STATUS='zp-sched   RUNNING   pid 7, uptime 0:01:00' dep_reconcile_scheduler "$BASE" >/dev/null 2>&1 ); \
   assert_rc 1 "$?" "the SAME stanza while RUNNING blocks"
+rm -rf "$BASE"
+
+echo "-- Codex round 2 (secret hygiene, legacy-snapshot validation, timer pairs, scoped restore) --"
+
+# Y1. PGPASSWORD reaches pg_dump via the ENVIRONMENT (never as an argv word
+#     under timeout/env, where /proc/*/cmdline would expose it).
+new_base
+( MOCK_PGDUMP_REQUIRE_ENVPASS=1 dep_backup_database "${BASE}/backups/x/db.dump" "${BASE}/shared/.env" >/dev/null 2>&1 ); \
+  assert_rc 0 "$?" "pg_dump receives PGPASSWORD through the environment"
+assert_false bash -c "grep -RqE 'env[[:space:]]+PGPASSWORD=' '$REPO_ROOT/scripts' '$REPO_ROOT/install.sh' '$REPO_ROOT/update.sh'"
+rm -rf "$BASE"
+
+# Y2. An OLD-FORMAT legacy marker (no verified map) or a snapshot with a
+#     missing artifact is NOT a valid rollback path; a fresh capture is.
+new_base; make_legacy_base; setup_legacy_service_configs
+mkdir -p "${BASE}/shared/deploy"
+zpd_write_manifest "${BASE}/shared/deploy/legacy-rollback.json" "legacy_base=${BASE}"   # old format: marker only
+assert_true zpd_has_legacy_rollback
+assert_false zpd_legacy_rollback_valid
+zpd_save_legacy_rollback "$BASE" "$ZPD_NGINX_CONF" "$ZPD_SUPERVISOR_CONF" "$ZPD_SCHED_CRON"
+assert_true zpd_legacy_rollback_valid
+rm -f "${BASE}/shared/deploy/nginx.legacy"                                              # artifact lost
+assert_false zpd_legacy_rollback_valid
+rm -rf "$BASE"
+
+# Y3. A stopped .service whose COMPANION .timer is enabled/active is a LIVE
+#     duplicate (blocks); with the timer also inactive it is a leftover.
+new_base; sha="$(mk_release_git 20260101000000-aaaaaaaaaaaa)"; zpd_switch_current 20260101000000-aaaaaaaaaaaa
+setup_atomic_service_configs; rm -f "$ZPD_SCHED_CRON"
+printf '[Service]\nExecStart=/usr/bin/php %s/current/artisan schedule:run\n' "$BASE" > "${BASE}/systemd/zp-sched.service"
+( MOCK_SVC_ENABLED=static MOCK_SVC_ACTIVE=inactive MOCK_TIMER_ENABLED=enabled MOCK_TIMER_ACTIVE=active \
+    dep_reconcile_scheduler "$BASE" >/dev/null 2>&1 ); \
+  assert_rc 1 "$?" "stopped service with an ACTIVE companion timer blocks reconciliation"
+rm -f "$ZPD_SCHED_CRON"
+( MOCK_SVC_ENABLED=static MOCK_SVC_ACTIVE=inactive MOCK_TIMER_ENABLED=disabled MOCK_TIMER_ACTIVE=inactive \
+    dep_reconcile_scheduler "$BASE" >/dev/null 2>&1 ); \
+  assert_rc 0 "$?" "stopped service with an inactive companion timer is a leftover"
+rm -rf "$BASE"
+
+# Y4. Component-scoped restores stay in their lane: a wrappers-only restore
+#     touches neither Nginx config nor Supervisor; an nginx-only restore never
+#     restarts workers.
+new_base; sha="$(mk_release_git 20260101000000-aaaaaaaaaaaa)"; zpd_switch_current 20260101000000-aaaaaaaaaaaa
+setup_atomic_service_configs; zpw_install_wrappers >/dev/null 2>&1
+snap="$(dep_snapshot_operational_config lane-test)"
+printf 'BROKEN-NGINX\n' > "$ZPD_NGINX_CONF"
+( MOCK_SUP_RESTART_RC=1 dep_restore_operational_snapshot "$snap" wrappers >/dev/null 2>&1 ); \
+  assert_rc 0 "$?" "wrappers-only restore succeeds without touching services"
+assert_eq "$(cat "$ZPD_NGINX_CONF")" "BROKEN-NGINX" "wrappers-only restore did not rewrite nginx"
+( MOCK_SUP_RESTART_RC=1 dep_restore_operational_snapshot "$snap" nginx >/dev/null 2>&1 ); \
+  assert_rc 0 "$?" "nginx-only restore never restarts workers"
+assert_true zpd_nginx_root_ok "$ZPD_NGINX_CONF" "$BASE"
 rm -rf "$BASE"
 
 rm -rf "$MOCKBIN"

@@ -343,13 +343,15 @@ zrp_apply() {
     local failed_step="$ZRP_FAILED_STEP" restore_result="success" restore_scope=""
     echo "repair failed at step: ${failed_step} — restoring the pre-repair snapshot" >&2
     # Restore ONLY the components this repair was allowed to touch: a
-    # scheduler-only repair must not rewrite or reload Nginx/Supervisor, and a
-    # metadata-only repair must not touch live services at all.
-    if [ "$ZRP_C_NGINX" = "1" ] || [ "$ZRP_C_SUPER" = "1" ] || [ "$ZRP_C_WRAP" = "1" ] || [ "$ZRP_C_HV" = "1" ]; then
-        restore_scope="all"
-    elif [ "$ZRP_C_SCHED" = "1" ]; then
-        restore_scope="scheduler"
-    fi
+    # wrapper-only failure must not rewrite Nginx/Supervisor or restart
+    # workers, a scheduler-only repair must not reload unrelated services,
+    # and a metadata-only repair must not touch live services at all.
+    [ "$ZRP_C_NGINX" = "1" ] && restore_scope="$restore_scope nginx"
+    [ "$ZRP_C_SUPER" = "1" ] && restore_scope="$restore_scope supervisor"
+    [ "$ZRP_C_SCHED" = "1" ] && restore_scope="$restore_scope scheduler"
+    [ "$ZRP_C_WRAP"  = "1" ] && restore_scope="$restore_scope wrappers"
+    [ "$ZRP_C_HV"    = "1" ] && restore_scope="$restore_scope hv"
+    restore_scope="${restore_scope# }"
     if [ -n "$restore_scope" ]; then
         dep_restore_operational_snapshot "$snap" "$restore_scope" || restore_result="failed"
     fi

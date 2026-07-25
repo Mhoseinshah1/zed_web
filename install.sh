@@ -1060,7 +1060,7 @@ if [ "$IS_EXISTING" = "true" ]; then
     # Re-run: DO NOT create/drop the database or rotate the role password.
     # Only verify that the stored credentials still connect before continuing.
     log "Verifying existing database connection (no changes made)..."
-    if timeout 15s env PGPASSWORD="$DB_PASS" psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -tAc 'SELECT 1' </dev/null >/dev/null 2>&1; then
+    if PGPASSWORD="$DB_PASS" timeout 15s psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -tAc 'SELECT 1' </dev/null >/dev/null 2>&1; then
         ok "اتصال به دیتابیس موجود ('${DB_NAME}') برقرار است."
     else
         error "اتصال به دیتابیس با اطلاعات موجود در .env ناموفق بود. نصب متوقف شد؛ هیچ تغییری اعمال نشد.\n  دیتابیس: ${DB_NAME} — کاربر: ${DB_USER} — میزبان: ${DB_HOST}:${DB_PORT}"

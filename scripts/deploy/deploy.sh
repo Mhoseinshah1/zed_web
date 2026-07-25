@@ -257,8 +257,11 @@ dep_backup_database() {
 
     # Bounded: a wedged database connection cannot hang the deploy. On ANY
     # failure (incl. timeout) the INCOMPLETE dump file is removed — a partial
-    # dump must never be mistaken for a usable backup.
-    if ! dep_run_bounded "$ZPD_BACKUP_TIMEOUT" "backup: pg_dump"             env PGPASSWORD="$pass" "$ZPD_PG_DUMP" -h "$host" -p "$port" -U "$user" -d "$db" -Fc -f "$out"; then
+    # dump must never be mistaken for a usable backup. PGPASSWORD is injected
+    # via the ENVIRONMENT (shell prefix assignment), never as an argv word
+    # under timeout/env where /proc/*/cmdline would expose it.
+    if ! PGPASSWORD="$pass" dep_run_bounded "$ZPD_BACKUP_TIMEOUT" "backup: pg_dump" \
+            "$ZPD_PG_DUMP" -h "$host" -p "$port" -U "$user" -d "$db" -Fc -f "$out"; then
         rm -f "$out" 2>/dev/null || true
         return 1
     fi
@@ -730,8 +733,9 @@ dep_check_pg() {
     host="$(_dep_env_get "$env_file" DB_HOST)"; host="${host:-127.0.0.1}"
     port="$(_dep_env_get "$env_file" DB_PORT)"; port="${port:-5432}"
     [ -n "$db" ] && [ -n "$user" ] || return 1
-    # Bounded: a stalled PostgreSQL client must not hang readiness or the doctor.
-    timeout "${ZPD_DB_PROBE_TIMEOUT:-15}s" env PGPASSWORD="$pass" \
+    # Bounded: a stalled PostgreSQL client must not hang readiness or the
+    # doctor. PGPASSWORD travels via the environment, never in argv.
+    PGPASSWORD="$pass" timeout "${ZPD_DB_PROBE_TIMEOUT:-15}s" \
         "$ZPD_PSQL" -h "$host" -p "$port" -U "$user" -d "$db" -tAc 'SELECT 1' </dev/null >/dev/null 2>&1
 }
 
@@ -923,14 +927,16 @@ dep_snapshot_operational_config() {
 dep_restore_operational_snapshot() {
     local dir="$1" scope="${2:-all}" rc=0
     [ -d "$dir" ] || { dep_err "restore: snapshot ${dir} missing"; return 1; }
-    local f dest managed
-    if [ "$scope" = "scheduler" ]; then
-        # Component-scoped restore: a scheduler-only failure must not rewrite
-        # or reload unrelated Nginx/Supervisor configuration.
-        managed="$(zpd_scheduler_cron_path)"
-    else
-        managed="$(zpd_nginx_conf_path) $(zpd_local_health_conf_path) $(zpd_supervisor_conf_path) $(zpd_scheduler_cron_path)"
-    fi
+    # SCOPE is a space-separated component list (nginx, supervisor, scheduler,
+    # wrappers, hv) or `all`. Only the selected components are restored and
+    # only their services reloaded — a wrappers-only or scheduler-only failure
+    # must never rewrite unrelated configs or restart unrelated live services.
+    [ "$scope" = "all" ] && scope="nginx supervisor scheduler wrappers hv"
+    local f dest managed=""
+    case " $scope " in *" nginx "*)      managed="$managed $(zpd_nginx_conf_path)" ;; esac
+    case " $scope " in *" hv "*)         managed="$managed $(zpd_local_health_conf_path)" ;; esac
+    case " $scope " in *" supervisor "*) managed="$managed $(zpd_supervisor_conf_path)" ;; esac
+    case " $scope " in *" scheduler "*)  managed="$managed $(zpd_scheduler_cron_path)" ;; esac
     for dest in $managed; do
         f="${dir}/$(basename "$dest").snap"
         if [ -f "$f" ]; then
@@ -947,14 +953,18 @@ dep_restore_operational_snapshot() {
             [ -e "$dest" ] && { dep_err "restore: ${dest} still exists (was created by the failed transaction)"; rc=1; }
         fi
     done
-    if [ "$scope" = "all" ] && declare -F zpw_restore_wrappers >/dev/null 2>&1 && [ -d "${dir}/wrappers" ]; then
-        zpw_restore_wrappers "${dir}/wrappers" || { dep_err "restore: wrapper restore failed"; rc=1; }
-    fi
+    case " $scope " in *" wrappers "*)
+        if declare -F zpw_restore_wrappers >/dev/null 2>&1 && [ -d "${dir}/wrappers" ]; then
+            zpw_restore_wrappers "${dir}/wrappers" || { dep_err "restore: wrapper restore failed"; rc=1; }
+        fi
+        ;;
+    esac
     # Restore every scheduler SOURCE the transaction may have modified —
     # content, mode, and ownership exactly (verified against the snapshot);
     # files that did not exist before the transaction are removed. This is what
     # puts a stripped /etc/crontab entry back when a later step fails.
     local map="${dir}/sched-sources/sources.map" idx path mode owner existed
+    case " $scope " in *" scheduler "*) ;; *) map=/dev/null ;; esac
     if [ -f "$map" ]; then
         while IFS=$'\t' read -r idx path mode owner existed; do
             [ -n "$path" ] || continue
@@ -979,19 +989,27 @@ dep_restore_operational_snapshot() {
             fi
         done < "$map"
     fi
-    if [ "$scope" = "all" ]; then
+    # Reload ONLY the services whose configuration was in scope.
+    case " $scope " in *" nginx "*|*" hv "*)
         dep_validate_nginx || { dep_err "restore: nginx -t failed on restored config"; rc=1; }
         dep_reload_nginx   || { dep_err "restore: nginx reload failed"; rc=1; }
+        ;;
+    esac
+    case " $scope " in *" supervisor "*)
         dep_svc "$ZPD_SUPERVISORCTL" reread >/dev/null 2>&1 || { dep_err "restore: supervisor reread failed"; rc=1; }
         dep_svc "$ZPD_SUPERVISORCTL" update >/dev/null 2>&1 || { dep_err "restore: supervisor update failed"; rc=1; }
         dep_restart_workers || { dep_err "restore: worker restart failed"; rc=1; }
         dep_supervisor_group_running || { dep_err "restore: worker group not RUNNING after restore"; rc=1; }
-    fi
+        ;;
+    esac
     # Bounded functional scheduler verification of the RESTORED state.
-    if [ -L "$(zpd_current_link)" ]; then
-        dep_verify_scheduler "$(zpd_current_link)" \
-            || { dep_err "restore: schedule:list failed on the restored state"; rc=1; }
-    fi
+    case " $scope " in *" scheduler "*)
+        if [ -L "$(zpd_current_link)" ]; then
+            dep_verify_scheduler "$(zpd_current_link)" \
+                || { dep_err "restore: schedule:list failed on the restored state"; rc=1; }
+        fi
+        ;;
+    esac
     return "$rc"
 }
 
@@ -1165,13 +1183,23 @@ _dep_supervisor_program_active() {
     dep_svc "$ZPD_SUPERVISORCTL" status "$prog" 2>/dev/null | grep -qE 'RUNNING|STARTING'
 }
 
+# _dep_systemd_state_is_active "en/ac" — is a recorded enabled/active state pair
+# active? Running/activating now, or enabled (will start at boot).
+_dep_systemd_state_is_active() {
+    local en="${1%%/*}" ac="${1##*/}"
+    [ "$ac" = "active" ] || [ "$ac" = "activating" ] || [ "$en" = "enabled" ]
+}
+
 # dep_scheduler_filter_active — stdin: scan lines from dep_scheduler_scan_noncron;
 # stdout: only the ACTIVE subset. A systemd source is active when its unit is
-# running/activating or enabled (will start at boot). A Supervisor program is
-# active unless it is autostart=false AND not currently running. Everything
-# else is an INACTIVE leftover: a cleanup candidate, not a live duplicate.
+# running/activating or enabled — or, for a `.service` (the standard
+# foo.timer→foo.service arrangement puts `schedule:run` only in the service,
+# which reports static/inactive between invocations), when its COMPANION
+# `.timer` is enabled/active. A Supervisor program is active unless it is
+# autostart=false AND not currently running. Everything else is an INACTIVE
+# leftover: a cleanup candidate, not a live duplicate.
 dep_scheduler_filter_active() {
-    local line state en ac
+    local line state f unit
     while IFS= read -r line; do
         [ -n "$line" ] || continue
         case "$line" in
@@ -1180,10 +1208,24 @@ dep_scheduler_filter_active() {
                 ;;
             SYSTEMD\ *)
                 state="${line##*\(}"; state="${state%\)}"
-                en="${state%%/*}"; ac="${state##*/}"
-                if [ "$ac" = "active" ] || [ "$ac" = "activating" ] || [ "$en" = "enabled" ]; then
+                if _dep_systemd_state_is_active "$state"; then
                     printf '%s\n' "$line"
+                    continue
                 fi
+                # Inactive-looking .service: check the companion .timer that
+                # would trigger it.
+                f="${line#SYSTEMD }"; f="${f% \(*}"
+                unit="$(basename "$f")"
+                case "$f" in
+                    *.d/*.conf) unit="$(basename "$(dirname "$f")")"; unit="${unit%.d}" ;;
+                esac
+                case "$unit" in
+                    *.service)
+                        if _dep_systemd_state_is_active "$(_dep_systemd_unit_state "${unit%.service}.timer")"; then
+                            printf '%s\n' "$line"
+                        fi
+                        ;;
+                esac
                 ;;
         esac
     done
@@ -1998,8 +2040,10 @@ dep_main() {
     # fall back on). MANDATORY: capture is verified (content, existence, mode,
     # ownership) and a failure ABORTS here — before maintenance, migrations,
     # the symlink switch, or any service cutover. A first cutover never starts
-    # without a complete rollback path.
-    if [ "$legacy" = "1" ] && ! zpd_has_legacy_rollback; then
+    # without a complete rollback path. An OLD-FORMAT or incomplete snapshot
+    # (marker without the verified map, or missing artifacts) is re-captured —
+    # a stale marker alone is never trusted as a rollback path.
+    if [ "$legacy" = "1" ] && ! zpd_legacy_rollback_valid; then
         if ! zpd_save_legacy_rollback "$base" \
             "$(zpd_nginx_conf_path)" "$(zpd_supervisor_conf_path)" "$(zpd_scheduler_cron_path)"; then
             dep_fail "legacy_snapshot" "legacy_snapshot_failed" \

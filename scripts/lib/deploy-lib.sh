@@ -710,6 +710,28 @@ zpd_save_legacy_rollback() {
 # zpd_has_legacy_rollback — return 0 if a saved legacy snapshot exists.
 zpd_has_legacy_rollback() { [ -f "$(zpd_legacy_marker_file)" ]; }
 
+# zpd_legacy_rollback_valid — 0 only when the saved legacy snapshot is COMPLETE
+# and usable: the marker exists, the verified map format is present, and every
+# artifact the map records as existing is a non-empty readable snapshot copy.
+# Old-format markers (written by earlier updaters WITHOUT the verified map —
+# possibly even when individual copies failed) are NOT valid: the caller must
+# re-capture before relying on the snapshot as a first-cutover rollback path.
+zpd_legacy_rollback_valid() {
+    local marker dir map name path mode owner existed
+    marker="$(zpd_legacy_marker_file)"
+    [ -f "$marker" ] || return 1
+    dir="$(dirname "$marker")"
+    map="${dir}/legacy-files.map"
+    [ -f "$map" ] || return 1
+    while IFS=$'\t' read -r name path mode owner existed; do
+        [ -n "$name" ] || continue
+        if [ "$existed" = "1" ]; then
+            [ -s "${dir}/${name}.legacy" ] && [ -r "${dir}/${name}.legacy" ] || return 1
+        fi
+    done < "$map"
+    return 0
+}
+
 # zpd_restore_legacy_rollback — restore the snapshotted nginx/supervisor/cron
 # files (used when the first cutover fails). Returns 0 on success.
 # zpd_restore_legacy_rollback — EXACT, FAIL-CLOSED restore of the pre-cutover
