@@ -46,8 +46,11 @@ return [
             'username' => env('MAIL_USERNAME'),
             'password' => env('MAIL_PASSWORD'),
             // Bounded connection/response timeout so a hung SMTP server can
-            // never freeze a queue worker for its full job timeout (1-120s).
-            'timeout' => min(120, max(1, (int) env('MAIL_TIMEOUT', 10))),
+            // never freeze a queue worker. Capped at 20s — safely BELOW
+            // SendEmailOtpJob::$timeout (30s), so the transport always gives
+            // up before the worker kills the job mid-conversation (which
+            // could duplicate an already-accepted OTP email on retry).
+            'timeout' => min(20, max(1, (int) env('MAIL_TIMEOUT', 10))),
             'local_domain' => env('MAIL_EHLO_DOMAIN', parse_url((string) env('APP_URL', 'http://localhost'), PHP_URL_HOST)),
         ],
 

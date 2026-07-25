@@ -12,15 +12,18 @@ use App\Services\Email\EmailVerificationService;
 use App\Services\Referrals\ReferralService;
 use App\Services\Telegram\TelegramAdminNotifier;
 use App\Support\MailFailure;
+use Aws\Ses\SesClient;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\RateLimiter;
 use Livewire\Livewire;
+use Symfony\Component\Mailer\Bridge\Postmark\Transport\PostmarkTransportFactory;
 use Tests\TestCase;
 
 /**
@@ -38,6 +41,9 @@ class EmailVerificationHardeningTest extends TestCase
         parent::setUp();
         SiteSetting::set('email_verification_enabled', 'true');
         SiteSetting::set('email_verification_required_on_register', 'true');
+        // Required mode demands a successful transport-test proof for the
+        // CURRENT config (see EmailMailTestProofTest for the proof suite).
+        app(EmailVerificationService::class)->recordSuccessfulMailTest();
     }
 
     private function registrationPayload(array $overrides = []): array
@@ -418,21 +424,35 @@ class EmailVerificationHardeningTest extends TestCase
 
         // The repo's services.php defaults the SES region to us-east-1, so a
         // region alone must NOT count as configured — explicit keys required.
+        // AND each API transport requires its runtime package: credentials
+        // without the installed bridge still cannot construct a transport.
         config(['mail.default' => 'ses', 'services.ses.key' => '', 'services.ses.secret' => '']);
         $this->assertFalse($svc->isMailConfigured(), 'SES without credentials (default region alone)');
         config(['services.ses.key' => 'AKIATEST', 'services.ses.secret' => 'ses-test-secret']);
-        $this->assertTrue($svc->isMailConfigured(), 'SES with key+secret+region');
+        $this->assertSame(
+            class_exists(SesClient::class),
+            $svc->isMailConfigured(),
+            'SES with credentials is usable ONLY when aws/aws-sdk-php is installed',
+        );
 
         // services.postmark.key is what config/services.php actually exposes.
         config(['mail.default' => 'postmark', 'services.postmark.key' => '']);
         $this->assertFalse($svc->isMailConfigured(), 'Postmark without a key');
         config(['services.postmark.key' => 'pm-test-key']);
-        $this->assertTrue($svc->isMailConfigured(), 'Postmark with a key');
+        $this->assertSame(
+            class_exists(PostmarkTransportFactory::class),
+            $svc->isMailConfigured(),
+            'Postmark with a key is usable ONLY when the Symfony bridge is installed',
+        );
 
         config(['mail.default' => 'resend', 'services.resend.key' => '']);
         $this->assertFalse($svc->isMailConfigured(), 'Resend without a key');
         config(['services.resend.key' => 're-test-key']);
-        $this->assertTrue($svc->isMailConfigured(), 'Resend with a key');
+        $this->assertSame(
+            class_exists(\Resend::class),
+            $svc->isMailConfigured(),
+            'Resend with a key is usable ONLY when resend/resend-php is installed',
+        );
     }
 
     public function test_failover_with_log_member_is_rejected_in_production(): void
@@ -533,6 +553,217 @@ class EmailVerificationHardeningTest extends TestCase
         $job->handle();
         Mail::assertSentCount(1);
         $this->assertSame(EmailVerificationCode::SEND_STATUS_SENT, $record->fresh()->send_status);
+    }
+
+    // ── Locked-user authority during issuance ────────────────────────────────
+
+    public function test_request_code_uses_the_locked_row_not_the_stale_caller_model(): void
+    {
+        Queue::fake();
+        $user = $this->unverifiedUser(['email' => 'stale.old@example.com']);
+        $stale = User::find($user->id);
+
+        // Another request commits an address change BEFORE the lock is taken.
+        $user->forceFill(['email' => 'fresh.new@example.com'])->save();
+
+        $result = app(EmailVerificationService::class)->requestCode($stale);
+
+        $this->assertSame('queued', $result['status']);
+        // No record and no job may target the corrected-away address.
+        $this->assertSame(0, EmailVerificationCode::where('email', 'stale.old@example.com')->count());
+        $record = EmailVerificationCode::where('email', 'fresh.new@example.com')->first();
+        $this->assertNotNull($record, 'the CURRENT email receives the record');
+        Queue::assertPushed(SendEmailOtpJob::class, function (SendEmailOtpJob $job) {
+            $email = (new \ReflectionProperty($job, 'email'))->getValue($job);
+
+            return $email === 'fresh.new@example.com';
+        });
+    }
+
+    public function test_request_code_for_a_deleted_user_returns_an_honest_error(): void
+    {
+        Queue::fake();
+        $user = $this->unverifiedUser();
+        $stale = User::find($user->id);
+        $user->delete();
+
+        $result = app(EmailVerificationService::class)->requestCode($stale);
+
+        $this->assertSame('error', $result['status']);
+        $this->assertSame(0, EmailVerificationCode::count());
+        Queue::assertNothingPushed();
+    }
+
+    public function test_skipped_and_failed_records_block_neither_resend_nor_the_daily_cap(): void
+    {
+        SiteSetting::set('email_otp_daily_cap', 2);
+        $user = $this->unverifiedUser();
+        $svc = app(EmailVerificationService::class);
+
+        foreach ([EmailVerificationCode::SEND_STATUS_FAILED, EmailVerificationCode::SEND_STATUS_SKIPPED] as $i => $status) {
+            EmailVerificationCode::create([
+                'user_id' => $user->id, 'email' => $user->email,
+                'code_hash' => Hash::make('00000'.$i),
+                'expires_at' => now()->addMinutes(10), 'attempts' => 0,
+                'send_status' => $status,
+            ]);
+        }
+
+        // Terminal obsolete records never attempted a real delivery: an
+        // immediate retry is allowed and the daily allowance is untouched.
+        $this->assertTrue($svc->canResend($user));
+        $this->assertFalse($svc->reachedDailyCap($user));
+        Mail::fake();
+        $this->assertSame('queued', $svc->requestCode($user)['status']);
+    }
+
+    // ── Bounded per-user locking ─────────────────────────────────────────────
+
+    public function test_lock_contention_returns_a_bounded_controlled_busy_response(): void
+    {
+        Queue::fake();
+        $user = $this->unverifiedUser();
+        $lock = Cache::lock(
+            EmailVerificationService::userLockKey($user->id), 60
+        );
+        $this->assertTrue($lock->get(), 'test precondition: hold the per-user lock');
+
+        try {
+            $started = microtime(true);
+            $result = app(EmailVerificationService::class)->requestCode($user);
+            $elapsed = microtime(true) - $started;
+
+            // Controlled Persian retry message, no partial writes, BOUNDED wait.
+            $this->assertSame('busy', $result['status']);
+            $this->assertSame(EmailVerificationService::BUSY_MESSAGE, $result['message']);
+            $this->assertSame(0, EmailVerificationCode::count());
+            Queue::assertNothingPushed();
+            $this->assertLessThan(
+                EmailVerificationService::LOCK_WAIT_SECONDS + 5,
+                $elapsed,
+                'the lock wait must be strictly bounded',
+            );
+
+            // verify() and changeAddressTo() fail closed the same way.
+            $verify = app(EmailVerificationService::class)->verify($user, '123456');
+            $this->assertSame('busy', $verify['status']);
+
+            $before = $user->email;
+            $this->assertFalse(app(EmailVerificationService::class)->changeAddressTo($user, 'other@example.com'));
+            $this->assertSame($before, $user->fresh()->email, 'no partial change on lock failure');
+        } finally {
+            $lock->release();
+        }
+    }
+
+    // ── Concurrent registration email collisions ─────────────────────────────
+
+    public function test_db_level_email_collision_during_registration_becomes_a_validation_error(): void
+    {
+        Queue::fake();
+        $telegram = $this->mock(TelegramAdminNotifier::class);
+        $telegram->shouldNotReceive('event');
+
+        // Simulate the TOCTOU race deterministically: a competing registration
+        // commits the same normalized address AFTER this request's validation
+        // passed but BEFORE its insert — injected via a creating hook so the
+        // DB unique index (the final authority) fires inside the transaction.
+        $fired = false;
+        User::creating(function () use (&$fired) {
+            if (! $fired) {
+                $fired = true;
+                DB::table('users')->insert([
+                    'name' => 'racer', 'username' => 'race_winner', 'account_id' => '999903',
+                    'email' => 'raced@example.com', 'password' => Hash::make('irrelevant1'),
+                    'created_at' => now(), 'updated_at' => now(),
+                ]);
+            }
+        });
+
+        $response = $this->from('/register')
+            ->post('/register', $this->registrationPayload(['email' => 'raced@example.com']));
+
+        // A clean validation error — never an HTTP 500, never constraint text.
+        $response->assertRedirect('/register');
+        $response->assertSessionHasErrors('email');
+        $this->assertGuest();
+        // The losing transaction rolled back completely: no partial user, no
+        // OTP record, no queued job, no Telegram notification.
+        $this->assertSame(0, EmailVerificationCode::count());
+        Queue::assertNothingPushed();
+    }
+
+    public function test_unrelated_unique_violations_are_not_masked_as_email_errors(): void
+    {
+        // A username collision (not email) must stay a real error, not become
+        // an email validation message.
+        User::factory()->create(['username' => 'collide_user']);
+
+        $fired = false;
+        User::creating(function (User $u) use (&$fired) {
+            if (! $fired) {
+                $fired = true;
+                // Force a USERNAME collision at insert time.
+                $u->username = 'collide_user';
+            }
+        });
+
+        $response = $this->post('/register', $this->registrationPayload(['email' => 'unrelated@example.com']));
+
+        $this->assertSame(500, $response->getStatusCode());
+        $this->assertFalse(session()->has('errors'));
+    }
+
+    // ── Admin test-email independent buckets ─────────────────────────────────
+
+    public function test_admin_user_bucket_follows_the_admin_across_ips(): void
+    {
+        Mail::fake();
+        $admin = $this->admin();
+
+        // Exhaust the per-admin bucket directly (as if from other IPs).
+        foreach (range(1, 3) as $i) {
+            RateLimiter::hit('ets:u:'.$admin->getAuthIdentifier(), 600);
+        }
+
+        Livewire::actingAs($admin)
+            ->test(EmailSettingsPage::class)
+            ->callAction('testEmail', ['test_email' => 'probe@example.com']);
+
+        Mail::assertNothingSent();
+    }
+
+    public function test_ip_bucket_caps_admins_cycling_accounts_from_one_machine(): void
+    {
+        Mail::fake();
+
+        // Exhaust the per-IP bucket for the test client IP.
+        foreach (range(1, 3) as $i) {
+            RateLimiter::hit('ets:ip:127.0.0.1', 600);
+        }
+
+        Livewire::actingAs($this->admin())
+            ->test(EmailSettingsPage::class)
+            ->callAction('testEmail', ['test_email' => 'probe@example.com']);
+
+        Mail::assertNothingSent();
+    }
+
+    public function test_fresh_admin_and_ip_remain_unaffected_by_other_buckets(): void
+    {
+        Mail::fake();
+        $blocked = $this->admin();
+        foreach (range(1, 3) as $i) {
+            RateLimiter::hit('ets:u:'.$blocked->getAuthIdentifier(), 600);
+        }
+
+        // A DIFFERENT admin (fresh user bucket) on a clean IP bucket sends fine.
+        RateLimiter::clear('ets:ip:127.0.0.1');
+        Livewire::actingAs($this->admin())
+            ->test(EmailSettingsPage::class)
+            ->callAction('testEmail', ['test_email' => 'probe@example.com']);
+
+        Mail::assertSent(TestEmailMail::class, 1);
     }
 
     // ── Item 10: registration transaction ────────────────────────────────────

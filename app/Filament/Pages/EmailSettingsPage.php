@@ -76,6 +76,18 @@ class EmailSettingsPage extends Page implements HasActions, HasForms
         return app(EmailVerificationService::class)->isMailConfigured();
     }
 
+    /** Last successful transport test, or null. Never exposes secrets. */
+    public function lastMailTestAt(): ?string
+    {
+        return app(EmailVerificationService::class)->mailTestVerifiedAt()?->format('Y-m-d H:i');
+    }
+
+    /** Whether a valid transport-test proof exists for the CURRENT config. */
+    public function mailTestVerified(): bool
+    {
+        return app(EmailVerificationService::class)->hasVerifiedMailTest();
+    }
+
     public function form(Form $form): Form
     {
         return $form
@@ -129,6 +141,19 @@ class EmailSettingsPage extends Page implements HasActions, HasForms
             return;
         }
 
+        // ── Proof guard: a configuration can LOOK usable (host/port present)
+        //    while no SMTP server answers there. Required mode additionally
+        //    demands a recent SUCCESSFUL test through the CURRENT
+        //    configuration (fingerprint-matched), so admins can never lock
+        //    new users behind an unproven transport.
+        if ($requireOnRegister && ! $this->mailTestVerified()) {
+            Notification::make()
+                ->title('برای اجباری کردن تایید ایمیل، ابتدا باید یک «ارسال ایمیل تست» موفق با همین پیکربندی انجام شود.')
+                ->danger()->send();
+
+            return;
+        }
+
         SiteSetting::set('email_verification_enabled', ! empty($data['email_verification_enabled']) ? 'true' : 'false');
         SiteSetting::set('email_verification_required_on_register', $requireOnRegister ? 'true' : 'false');
         SiteSetting::set('email_otp_ttl_minutes', (int) ($data['email_otp_ttl_minutes'] ?? EmailVerificationService::CODE_TTL_MINUTES));
@@ -153,14 +178,25 @@ class EmailSettingsPage extends Page implements HasActions, HasForms
                     ->placeholder('you@example.com'),
             ])
             ->action(function (array $data) {
-                // Rate-limited: 3 test emails per 10 minutes per admin+IP.
-                $key = 'email-test-send:'.(auth()->id() ?? 'guest').'|'.(string) request()->ip();
-                if (! RateLimiter::attempt($key, 3, fn () => null, 600)) {
-                    Notification::make()
-                        ->title('تعداد ایمیل‌های تست بیش از حد مجاز است. چند دقیقه دیگر تلاش کنید.')
-                        ->danger()->send();
+                // ONE shared policy with the routes: consume the named
+                // `email-test-send` limiter's own limits — an independent
+                // per-admin bucket (followed across IPs) AND an independent
+                // per-IP bucket (followed across admin accounts). No
+                // duplicated thresholds, no combined user|IP pair bucket.
+                $limits = (array) app(\Illuminate\Cache\RateLimiter::class)
+                    ->limiter('email-test-send')(request());
 
-                    return;
+                foreach ($limits as $limit) {
+                    if (RateLimiter::tooManyAttempts($limit->key, $limit->maxAttempts)) {
+                        Notification::make()
+                            ->title('تعداد ایمیل‌های تست بیش از حد مجاز است. چند دقیقه دیگر تلاش کنید.')
+                            ->danger()->send();
+
+                        return;
+                    }
+                }
+                foreach ($limits as $limit) {
+                    RateLimiter::hit($limit->key, $limit->decaySeconds);
                 }
 
                 // A test through log/array (or a failover chain containing
@@ -180,6 +216,12 @@ class EmailSettingsPage extends Page implements HasActions, HasForms
                     // verdict. Never includes secrets.
                     Mail::to((string) $data['test_email'])
                         ->send(new TestEmailMail);
+
+                    // The transport accepted the message: record the NON-SECRET
+                    // proof (config fingerprint + timestamp) that required
+                    // mode's save-guard and runtime enforcement depend on.
+                    app(EmailVerificationService::class)->recordSuccessfulMailTest();
+
                     // HONEST wording: the transport ACCEPTED the message —
                     // inbox delivery can never be confirmed from here.
                     Notification::make()

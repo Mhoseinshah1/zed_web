@@ -4,6 +4,7 @@ namespace App\Jobs;
 
 use App\Mail\EmailOtpMail;
 use App\Models\EmailVerificationCode;
+use App\Services\Email\EmailVerificationService;
 use App\Support\MailFailure;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldBeEncrypted;
@@ -11,8 +12,10 @@ use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Mail;
+use RuntimeException;
 use Throwable;
 
 /**
@@ -21,14 +24,18 @@ use Throwable;
  * - ShouldBeEncrypted: the payload carries the plaintext code, so it is
  *   encrypted at rest in Redis (the database only ever holds the hash).
  * - afterCommit: never dispatched before the surrounding transaction commits.
- * - RACE-SAFE claiming: before any network I/O the job atomically claims its
- *   record (queued → sending) in a short transaction, verifying it is still
- *   the newest active code for a still-unverified user whose address still
- *   matches. The SMTP conversation happens with NO database transaction open;
- *   the terminal `sent` state is written only if the job still owns the claim.
- *   States move monotonically: queued → sending → sent, queued/sending →
- *   failed, queued → skipped.
- * - Never logs or stores the message body, the OTP, or raw transport errors.
+ * - RACE-SAFE claiming: the job first takes the SAME per-user distributed
+ *   lock used by issuance/verification/address changes and holds it through
+ *   claim → transport send → finalize, so an address change can never commit
+ *   while an already-validated send is in flight. Inside the lock, a short DB
+ *   transaction atomically claims the record (queued → sending) after
+ *   re-validating it is still the newest active code for a still-unverified
+ *   user whose address still matches; the SMTP conversation itself runs with
+ *   NO database transaction open. States move monotonically:
+ *   queued → sending → sent, queued/sending → failed, queued → skipped.
+ * - Transport exceptions are re-thrown SANITIZED (category + scrubbed text,
+ *   no chained original), so the framework's failed_jobs.exception column can
+ *   never store raw SMTP credentials either.
  */
 class SendEmailOtpJob implements ShouldBeEncrypted, ShouldQueue
 {
@@ -40,6 +47,12 @@ class SendEmailOtpJob implements ShouldBeEncrypted, ShouldQueue
     public array $backoff = [10, 30, 60];
 
     public int $timeout = 30;
+
+    /**
+     * The per-user lock is held through the whole transport conversation, so
+     * its TTL must exceed the job timeout (abandoned locks still expire).
+     */
+    private const LOCK_TTL_SECONDS = 45;
 
     public function __construct(
         private readonly int $codeId,
@@ -53,22 +66,56 @@ class SendEmailOtpJob implements ShouldBeEncrypted, ShouldQueue
 
     public function handle(): void
     {
-        if (! $this->claim()) {
+        $userId = EmailVerificationCode::whereKey($this->codeId)->value('user_id');
+        if ($userId === null) {
             return;
         }
 
-        // The transport conversation runs OUTSIDE any DB transaction — a slow
-        // SMTP server must never pin row locks or a connection-level snapshot.
-        Mail::to($this->email)->send(new EmailOtpMail($this->code, $this->ttlMinutes));
+        // Same lock, same ordering as the service (cache lock → user row →
+        // code rows). Contention (e.g. an address change in progress) releases
+        // the job back to the queue instead of waiting unboundedly.
+        try {
+            $lock = Cache::lock(EmailVerificationService::userLockKey((int) $userId), self::LOCK_TTL_SECONDS);
+            $lock->block(EmailVerificationService::LOCK_WAIT_SECONDS);
+        } catch (Throwable) {
+            // Contention (LockTimeoutException) or cache outage: retry soon
+            // instead of waiting unboundedly or sending unserialized.
+            $this->release(10);
 
-        // Terminal state only if this job still owns the claim: a competing
-        // writer that skipped/failed the record in the meantime wins.
-        EmailVerificationCode::whereKey($this->codeId)
-            ->where('send_status', EmailVerificationCode::SEND_STATUS_SENDING)
-            ->update([
-                'send_status' => EmailVerificationCode::SEND_STATUS_SENT,
-                'send_error' => null,
-            ]);
+            return;
+        }
+
+        try {
+            if (! $this->claim()) {
+                return;
+            }
+
+            // The transport conversation runs OUTSIDE any DB transaction — a
+            // slow SMTP server must never pin row locks — but INSIDE the
+            // per-user lock, so no address change can interleave mid-send.
+            try {
+                Mail::to($this->email)->send(new EmailOtpMail($this->code, $this->ttlMinutes));
+            } catch (Throwable $e) {
+                // Re-throw SANITIZED and UNCHAINED: the framework persists the
+                // thrown exception into failed_jobs.exception verbatim, and
+                // raw transport text can echo SMTP credentials.
+                throw new RuntimeException(MailFailure::summarize('delivery failed', $e));
+            }
+
+            // Terminal state only if this job still owns the claim.
+            EmailVerificationCode::whereKey($this->codeId)
+                ->where('send_status', EmailVerificationCode::SEND_STATUS_SENDING)
+                ->update([
+                    'send_status' => EmailVerificationCode::SEND_STATUS_SENT,
+                    'send_error' => null,
+                ]);
+        } finally {
+            try {
+                $lock->release();
+            } catch (Throwable) {
+                // TTL expiry is the backstop for a failed release.
+            }
+        }
     }
 
     /**
@@ -130,8 +177,13 @@ class SendEmailOtpJob implements ShouldBeEncrypted, ShouldQueue
     public function failed(Throwable $e): void
     {
         // Record the failure WITHOUT the message body, the code, or raw
-        // transport text (which can echo SMTP credentials) — only a sanitized
-        // category + bounded redacted diagnostic. Terminal states stay final.
+        // transport text (which can echo SMTP credentials). handle() already
+        // re-throws sanitized summaries — store those verbatim; anything else
+        // is summarized (category + scrubbed bounded diagnostic) here.
+        $safe = str_starts_with($e->getMessage(), 'delivery failed:')
+            ? mb_substr($e->getMessage(), 0, MailFailure::MAX_LENGTH)
+            : MailFailure::summarize('delivery failed', $e);
+
         EmailVerificationCode::whereKey($this->codeId)
             ->whereIn('send_status', [
                 EmailVerificationCode::SEND_STATUS_QUEUED,
@@ -139,7 +191,7 @@ class SendEmailOtpJob implements ShouldBeEncrypted, ShouldQueue
             ])
             ->update([
                 'send_status' => EmailVerificationCode::SEND_STATUS_FAILED,
-                'send_error' => MailFailure::summarize('delivery failed', $e),
+                'send_error' => $safe,
             ]);
     }
 }

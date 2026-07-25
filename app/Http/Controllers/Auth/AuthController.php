@@ -11,7 +11,9 @@ use App\Services\Referrals\ReferralService;
 use App\Services\Referrals\ReferralSettings;
 use App\Services\Seo\SeoManager;
 use App\Services\Telegram\TelegramAdminNotifier;
+use App\Support\EmailUniqueViolationProbe;
 use App\Support\PhoneNumber;
+use Illuminate\Database\QueryException;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Cookie;
@@ -21,6 +23,7 @@ use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rules\Password;
+use Illuminate\Validation\ValidationException;
 
 class AuthController extends Controller
 {
@@ -166,21 +169,37 @@ class AuthController extends Controller
         // half-registered users with lost referrals. Side effects (Telegram,
         // OTP dispatch, login) run strictly AFTER the commit, so a rollback
         // produces no notification and no queued email.
-        $user = DB::transaction(function () use ($validated, $normalized, $referralCode) {
-            $user = User::create([
-                'name' => $validated['name'],
-                'username' => $validated['username'],
-                'email' => $validated['email'],
-                'phone' => $validated['phone'],
-                'normalized_phone' => $normalized,
-                'password' => Hash::make($validated['password']),
-            ]);
+        try {
+            $user = DB::transaction(function () use ($validated, $normalized, $referralCode) {
+                $user = User::create([
+                    'name' => $validated['name'],
+                    'username' => $validated['username'],
+                    'email' => $validated['email'],
+                    'phone' => $validated['phone'],
+                    'normalized_phone' => $normalized,
+                    'password' => Hash::make($validated['password']),
+                ]);
 
-            // Attach the referrer from ?ref= / session / cookie (mode-aware, safe).
-            app(ReferralService::class)->attachReferrer($user, $referralCode);
+                // Attach the referrer from ?ref= / session / cookie (mode-aware, safe).
+                app(ReferralService::class)->attachReferrer($user, $referralCode);
 
-            return $user;
-        });
+                return $user;
+            });
+        } catch (QueryException $e) {
+            // TOCTOU race: two registrations can both pass the pre-validation
+            // and collide on the DB's email uniqueness (the final authority).
+            // Only EMAIL unique violations become a normal validation error —
+            // anything else (username/account_id/referral/…) stays a real
+            // exception. The losing transaction rolled back completely: no
+            // user, no referral, no Telegram, no OTP, no job.
+            if (EmailUniqueViolationProbe::isEmailUniqueViolation($e)) {
+                throw ValidationException::withMessages([
+                    'email' => 'این ایمیل قبلاً ثبت شده است.',
+                ]);
+            }
+
+            throw $e;
+        }
 
         Cookie::queue(Cookie::forget('referral_code'));
 

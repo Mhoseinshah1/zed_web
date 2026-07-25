@@ -32,6 +32,10 @@ class EmailVerificationTest extends TestCase
         parent::setUp();
         SiteSetting::set('email_verification_enabled', 'true');
         SiteSetting::set('email_verification_required_on_register', 'true');
+        // Required mode demands a successful transport-test proof for the
+        // CURRENT config; tests that mutate the mail config drift the
+        // fingerprint and (intentionally) degrade required → optional.
+        app(EmailVerificationService::class)->recordSuccessfulMailTest();
     }
 
     private function registrationPayload(array $overrides = []): array

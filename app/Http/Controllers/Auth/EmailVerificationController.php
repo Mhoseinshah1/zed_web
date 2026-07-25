@@ -7,7 +7,6 @@ use App\Models\User;
 use App\Services\Email\EmailVerificationService;
 use App\Services\Phone\PhoneVerificationService;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\DB;
 
 /**
  * The email-OTP verification flow: notice page (never sends on GET), code
@@ -138,20 +137,15 @@ class EmailVerificationController extends Controller
             return back()->withErrors(['email' => 'این همان آدرس ایمیل فعلی شماست.']);
         }
 
-        // Changing the address restarts verification from zero. The user row
-        // lock serializes this against a concurrently-submitted OTP for the
-        // OLD address (EmailVerificationService::verify takes the same lock):
-        // whichever commits first, a code issued to the old mailbox can never
-        // mark the new, unproven address verified.
-        DB::transaction(function () use ($user, $email) {
-            User::whereKey($user->id)->lockForUpdate()->first();
-
-            $this->verification->invalidateCodes($user);
-            $user->forceFill([
-                'email' => $email,
-                'email_verified_at' => null,
-            ])->save();
-        });
+        // Changing the address restarts verification from zero. The service
+        // serializes this under the SAME bounded per-user lock as issuance,
+        // verification and in-flight delivery — a code issued to the old
+        // mailbox can never mark the new, unproven address verified, and a
+        // job mid-SMTP-send blocks this briefly. On contention NOTHING
+        // changes and the user simply retries.
+        if (! $this->verification->changeAddressTo($user, $email)) {
+            return back()->withErrors(['email' => EmailVerificationService::BUSY_MESSAGE]);
+        }
 
         $result = $this->verification->requestCode($user, [
             'ip' => $request->ip(),
