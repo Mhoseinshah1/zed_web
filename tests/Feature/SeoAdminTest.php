@@ -84,4 +84,30 @@ class SeoAdminTest extends TestCase
         $this->assertSame('زدپروکسی', SeoSettings::siteName());
         $this->assertSame('شرکت زدپروکسی', SeoSettings::get('seo_org_name'));
     }
+
+    public function test_invalid_analytics_id_is_rejected_by_the_form(): void
+    {
+        Livewire::actingAs($this->admin())
+            ->test(SeoSettingsPage::class)
+            ->fillForm(['seo_google_analytics_id' => 'not-a-ga-id'])
+            ->call('save')
+            ->assertHasFormErrors(['seo_google_analytics_id']);
+    }
+
+    public function test_saving_a_new_analytics_id_renders_immediately(): void
+    {
+        // Warm the 3600s settings cache with the empty value first.
+        $this->get('/')->assertOk();
+
+        Livewire::actingAs($this->admin())
+            ->test(SeoSettingsPage::class)
+            ->fillForm(['seo_google_analytics_id' => 'G-NEWID1234'])
+            ->call('save')
+            ->assertHasNoFormErrors();
+
+        // No manual flush here — SeoSettingsPage::save() must bust the cache
+        // itself so the new ID appears on the very next request.
+        $html = $this->get('/')->assertOk()->getContent();
+        $this->assertStringContainsString('gtag/js?id=G-NEWID1234', $html);
+    }
 }

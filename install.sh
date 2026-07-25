@@ -1658,7 +1658,15 @@ server {
     }
 
     location = /favicon.ico { access_log off; log_not_found off; }
-    location = /robots.txt  { access_log off; log_not_found off; }
+    # robots.txt is served DYNAMICALLY by Laravel (RobotsController): keep the
+    # quiet logging but fall through to the front controller. error_page 404
+    # would NOT rescue a missing static file here (it preserves the 404 status,
+    # which crawlers treat as "no robots.txt").
+    location = /robots.txt {
+        access_log off;
+        log_not_found off;
+        try_files \$uri /index.php?\$query_string;
+    }
 
     error_page 404 /index.php;
 

@@ -805,6 +805,142 @@ assert_false zpd_scheduler_cron_ok "$ZPD_SCHED_CRON" "$BASE"
 rm -rf "$BASE"
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Dynamic robots.txt nginx reconciliation (predicate + mutator)
+# ─────────────────────────────────────────────────────────────────────────────
+echo "-- nginx robots.txt reconciliation --"
+
+# RB1. DECISIVE legacy fixture: an already-installed server whose robots block
+#      has NO try_files (static-only quiet 404), plus certbot-managed SSL that
+#      the mutator must never touch.
+new_base
+cat > "$ZPD_NGINX_CONF" <<EOF
+server {
+    listen 80;
+    server_name example.com;
+    root ${BASE}/current/public;
+
+    location / {
+        try_files \$uri \$uri/ /index.php?\$query_string;
+    }
+
+    location = /favicon.ico { access_log off; log_not_found off; }
+    location = /robots.txt  { access_log off; log_not_found off; }
+
+    error_page 404 /index.php;
+}
+server {
+    listen 443 ssl; # managed by Certbot
+    server_name example.com;
+    root ${BASE}/current/public;
+    ssl_certificate /etc/letsencrypt/live/example.com/fullchain.pem; # managed by Certbot
+    ssl_certificate_key /etc/letsencrypt/live/example.com/privkey.pem; # managed by Certbot
+    include /etc/letsencrypt/options-ssl-nginx.conf; # managed by Certbot
+
+    location = /robots.txt  { access_log off; log_not_found off; }
+    location / {
+        try_files \$uri \$uri/ /index.php?\$query_string;
+    }
+}
+EOF
+ssl_before="$(grep 'Certbot\|ssl_certificate\|listen 443' "$ZPD_NGINX_CONF")"
+assert_false zpd_nginx_robots_ok "$ZPD_NGINX_CONF"
+assert_true  zpd_nginx_rewrite_robots "$ZPD_NGINX_CONF"
+assert_true  zpd_nginx_robots_ok "$ZPD_NGINX_CONF"
+assert_eq "$(grep 'Certbot\|ssl_certificate\|listen 443' "$ZPD_NGINX_CONF")" "$ssl_before" "certbot SSL lines byte-identical after repair"
+assert_eq "$(grep -c 'location = /robots.txt' "$ZPD_NGINX_CONF")" "2" "both server blocks keep exactly one robots location each"
+assert_true dep_validate_nginx
+# Idempotent: a second run must not change a single byte.
+robots_fixed="$(cat "$ZPD_NGINX_CONF")"
+assert_true zpd_nginx_rewrite_robots "$ZPD_NGINX_CONF"
+assert_eq "$(cat "$ZPD_NGINX_CONF")" "$robots_fixed" "second rewrite run is byte-identical (idempotent)"
+rm -rf "$BASE"
+
+# RB2. Robots location ABSENT → a fresh block is inserted after the favicon
+#      location; already-correct configs are untouched.
+new_base
+cat > "$ZPD_NGINX_CONF" <<EOF
+server {
+    listen 80;
+    root ${BASE}/current/public;
+    location = /favicon.ico { access_log off; log_not_found off; }
+    location / { try_files \$uri \$uri/ /index.php?\$query_string; }
+}
+EOF
+assert_false zpd_nginx_robots_ok "$ZPD_NGINX_CONF"
+assert_true  zpd_nginx_rewrite_robots "$ZPD_NGINX_CONF"
+assert_true  zpd_nginx_robots_ok "$ZPD_NGINX_CONF"
+assert_eq "$(grep -c 'location = /robots.txt' "$ZPD_NGINX_CONF")" "1" "exactly one robots location inserted"
+assert_true bash -c "grep -A1 'favicon.ico' '$ZPD_NGINX_CONF' | grep -q 'robots.txt'"
+robots_fixed="$(cat "$ZPD_NGINX_CONF")"
+assert_true zpd_nginx_rewrite_robots "$ZPD_NGINX_CONF"
+assert_eq "$(cat "$ZPD_NGINX_CONF")" "$robots_fixed" "insertion is idempotent (no duplicate block)"
+rm -rf "$BASE"
+
+# RB3. Minimal config (no favicon anchor — the deploy-suite fixture shape):
+#      the block is inserted after the root directive so reconcile still works.
+new_base; setup_atomic_service_configs
+assert_false zpd_nginx_robots_ok "$ZPD_NGINX_CONF"
+assert_true  zpd_nginx_rewrite_robots "$ZPD_NGINX_CONF"
+assert_true  zpd_nginx_robots_ok "$ZPD_NGINX_CONF"
+assert_true  zpd_nginx_root_ok "$ZPD_NGINX_CONF" "$BASE"   # root untouched
+rm -rf "$BASE"
+
+# RB4. A MULTI-LINE robots block lacking try_files is patched in place
+#      (fallback appended inside the block, not a duplicate block).
+new_base
+cat > "$ZPD_NGINX_CONF" <<EOF
+server {
+    listen 80;
+    root ${BASE}/current/public;
+    location = /robots.txt {
+        access_log off;
+        log_not_found off;
+    }
+}
+EOF
+assert_false zpd_nginx_robots_ok "$ZPD_NGINX_CONF"
+assert_true  zpd_nginx_rewrite_robots "$ZPD_NGINX_CONF"
+assert_true  zpd_nginx_robots_ok "$ZPD_NGINX_CONF"
+assert_eq "$(grep -c 'location = /robots.txt' "$ZPD_NGINX_CONF")" "1" "multi-line block patched, not duplicated"
+assert_eq "$(grep -c 'try_files' "$ZPD_NGINX_CONF")" "1" "exactly one fallback added"
+rm -rf "$BASE"
+
+# RB5. dep_reconcile_nginx repairs a config whose ROOT is already correct but
+#      whose robots block still 404s — and is a no-op once both are correct.
+new_base
+printf 'server {\n  listen 80;\n  root %s/current/public;\n  location = /robots.txt  { access_log off; log_not_found off; }\n}\n' "$BASE" > "$ZPD_NGINX_CONF"
+assert_true  zpd_nginx_root_ok "$ZPD_NGINX_CONF" "$BASE"
+assert_false zpd_nginx_robots_ok "$ZPD_NGINX_CONF"
+( dep_reconcile_nginx "$BASE" >/dev/null 2>&1 ); assert_rc 0 "$?" "reconcile repairs the robots-only drift"
+assert_true zpd_nginx_robots_ok "$ZPD_NGINX_CONF"
+assert_true zpd_nginx_root_ok "$ZPD_NGINX_CONF" "$BASE"
+robots_fixed="$(cat "$ZPD_NGINX_CONF")"
+( dep_reconcile_nginx "$BASE" >/dev/null 2>&1 ); assert_rc 0 "$?" "reconcile is a no-op when already correct"
+assert_eq "$(cat "$ZPD_NGINX_CONF")" "$robots_fixed" "no-op reconcile changed nothing"
+rm -rf "$BASE"
+
+# RB6. A failed nginx -t after the robots rewrite restores the previous config.
+new_base
+printf 'server {\n  listen 80;\n  root %s/current/public;\n  location = /robots.txt  { access_log off; log_not_found off; }\n}\n' "$BASE" > "$ZPD_NGINX_CONF"
+nginx_before="$(cat "$ZPD_NGINX_CONF")"
+( MOCK_NGINX_RC=1 dep_cutover_nginx "$BASE" >/dev/null 2>&1 ); assert_rc 1 "$?" "nginx -t failure fails the robots cutover"
+assert_eq "$(cat "$ZPD_NGINX_CONF")" "$nginx_before" "config restored after failed validation"
+rm -rf "$BASE"
+
+# RB7. repair --scan reports the robots drift (read-only), --apply --nginx fixes it.
+new_base; sha="$(mk_release_git 20260101000000-aaaaaaaaaaaa)"; zpd_switch_current 20260101000000-aaaaaaaaaaaa
+setup_atomic_service_configs
+printf 'server {\n  listen 80;\n  root %s/current/public;\n  location = /robots.txt  { access_log off; log_not_found off; }\n}\n' "$BASE" > "$ZPD_NGINX_CONF"
+out="$(zrp_main --scan 2>&1)" || true
+printf '%s' "$out" | grep -q 'robots.txt location lacks the Laravel fallback' && ok "scan reports the robots drift" || bad "scan missed the robots drift"
+assert_false zpd_nginx_robots_ok "$ZPD_NGINX_CONF"     # scan is read-only
+( MOCK_HTTP_CODE=200 zrp_main --apply --nginx >/dev/null 2>&1 ); assert_rc 0 "$?" "--apply --nginx repairs the robots block"
+assert_true zpd_nginx_robots_ok "$ZPD_NGINX_CONF"
+out="$(zrp_main --scan 2>&1)" || true
+printf '%s' "$out" | grep -q 'robots.txt location reaches Laravel' && ok "scan reports robots ok after repair" || bad "scan does not report robots ok"
+rm -rf "$BASE"
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Full legacy → atomic first cutover (retained success + failure paths)
 # ─────────────────────────────────────────────────────────────────────────────
 echo "-- legacy first cutover --"

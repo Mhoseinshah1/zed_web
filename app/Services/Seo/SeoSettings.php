@@ -125,6 +125,19 @@ class SeoSettings
         return self::get('seo_default_og_image');
     }
 
+    /**
+     * The Google Analytics 4 measurement ID — SAFE accessor: the stored value
+     * is trimmed, uppercased, and strictly validated against the GA4 format.
+     * Anything else (HTML, JavaScript, quotes, URLs, legacy UA-* ids, empty)
+     * yields '' so callers can never print an unvalidated value.
+     */
+    public static function googleAnalyticsId(): string
+    {
+        $id = strtoupper(trim(self::get('seo_google_analytics_id')));
+
+        return preg_match('/^G-[A-Z0-9]{4,20}$/', $id) === 1 ? $id : '';
+    }
+
     public static function locale(): string
     {
         return self::get('seo_default_locale', 'fa-IR');

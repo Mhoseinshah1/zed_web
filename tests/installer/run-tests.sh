@@ -174,6 +174,13 @@ grep_has 'prepare_shared_and_link'                 "$INSTALL_SH" "install.sh lin
 grep_has  'root \$\{ACTIVE_APP_DIR\}/public;' "$INSTALL_SH" "nginx root uses ACTIVE_APP_DIR/public"
 grep_none 'root \$\{APP_DIR\}/public;'        "$INSTALL_SH" "nginx root no longer hardcodes APP_DIR/public"
 
+# 21b. robots.txt is served DYNAMICALLY by Laravel: the generated nginx block
+#      must fall through to the front controller, and the old static-only
+#      quiet-404 form must be gone (it made /robots.txt 404 in production).
+grep_has  'location = /robots\.txt \{'                       "$INSTALL_SH" "nginx has an exact-match robots.txt location"
+grep_has  'try_files \\\$uri /index\.php\?\\\$query_string;' "$INSTALL_SH" "robots.txt location falls through to Laravel (dynamic robots)"
+grep_none 'location = /robots\.txt.*access_log.*\}'          "$INSTALL_SH" "no static-only single-line robots.txt block remains"
+
 # 22. Supervisor worker uses current/artisan.
 grep_has  'command=php \$\{ACTIVE_APP_DIR\}/artisan queue:work' "$INSTALL_SH" "supervisor worker uses ACTIVE_APP_DIR/artisan"
 grep_none 'command=php \$\{APP_DIR\}/artisan queue:work'        "$INSTALL_SH" "supervisor worker no longer hardcodes APP_DIR/artisan"

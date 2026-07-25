@@ -872,7 +872,10 @@ dep_cutover_nginx() {
     [ -f "$conf" ] || { dep_err "nginx config missing: ${conf}"; return 1; }
     cp -a "$conf" "${conf}.zpd-precutover" 2>/dev/null || true
     zpd_nginx_rewrite_root "$conf" "$base" || { dep_err "$(zpd_msg_nginx_restored)"; cp -a "${conf}.zpd-precutover" "$conf" 2>/dev/null || true; return 1; }
-    if ! zpd_nginx_root_ok "$conf" "$base" || ! dep_validate_nginx; then
+    # robots.txt must reach Laravel (dynamic RobotsController) — same
+    # precutover-backup + nginx -t + restore-on-failure flow as the root.
+    zpd_nginx_rewrite_robots "$conf" || { dep_err "$(zpd_msg_nginx_restored)"; cp -a "${conf}.zpd-precutover" "$conf" 2>/dev/null || true; return 1; }
+    if ! zpd_nginx_root_ok "$conf" "$base" || ! zpd_nginx_robots_ok "$conf" || ! dep_validate_nginx; then
         dep_err "$(zpd_msg_nginx_restored)"
         cp -a "${conf}.zpd-precutover" "$conf" 2>/dev/null || true
         return 1
@@ -1274,8 +1277,8 @@ dep_restore_operational_snapshot() {
 # and `nginx -t`-validated with restore-on-failure (dep_cutover_nginx).
 dep_reconcile_nginx() {
     local base="$1" conf; conf="$(zpd_nginx_conf_path)"
-    if [ -f "$conf" ] && zpd_nginx_root_ok "$conf" "$base"; then return 0; fi
-    dep_log "Reconciling Nginx root → current/public…"
+    if [ -f "$conf" ] && zpd_nginx_root_ok "$conf" "$base" && zpd_nginx_robots_ok "$conf"; then return 0; fi
+    dep_log "Reconciling Nginx (root → current/public, dynamic robots.txt)…"
     dep_cutover_nginx "$base"
 }
 
