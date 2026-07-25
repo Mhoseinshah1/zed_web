@@ -88,6 +88,7 @@ zpd_mask_secrets() {
     sed -E \
         -e 's/(PGPASSWORD)=[^[:space:]]*/\1=***/g' \
         -e 's/(APP_KEY|DB_PASSWORD|REDIS_PASSWORD|MAIL_PASSWORD)=[^[:space:]]*/\1=***/gI' \
+        -e 's/("(password|passwd|pass|secret|token|api[_-]?key|apikey|auth|access[_-]?token|refresh[_-]?token|client[_-]?secret)"[[:space:]]*:[[:space:]]*")[^"]*/\1***/gI' \
         -e 's/((password|passwd|pass|secret|token|api[_-]?key|auth)[[:space:]]*[=:][[:space:]]*)[^[:space:]"'"'"']+/\1***/gI' \
         -e 's#(://)[^/@[:space:]:]+:[^/@[:space:]]+@#\1***:***@#g'
 }
@@ -258,7 +259,10 @@ zpd_resolve_sha() {
     local repo="$1" ref="$2" errfile="${3:-/dev/null}"
     [ -n "$repo" ] && [ -n "$ref" ] || return 1
     local out rc
-    out="$("${ZPD_GIT:-git}" ls-remote "$repo" "$ref" "${ref}^{}" 2>"$errfile")"; rc=$?
+    # Network operation — bounded so a wedged remote can never hang the deploy.
+    out="$(timeout -k "${ZPD_KILL_GRACE:-10}" "${ZPD_GIT_NET_TIMEOUT:-60}s" \
+            env GIT_TERMINAL_PROMPT=0 \
+            "${ZPD_GIT:-git}" ls-remote "$repo" "$ref" "${ref}^{}" </dev/null 2>"$errfile")"; rc=$?
     if [ "$rc" -ne 0 ]; then
         # Remote unreachable/denied. Only a full SHA can still be deployed.
         printf '%s' "$ref" | grep -Eq '^[0-9a-f]{40}$' && { printf '%s' "$ref"; return 0; }
@@ -289,15 +293,21 @@ zpd_resolve_sha() {
 zpd_git_clone_ref() {
     local repo="$1" ref="$2" dest="$3" err="${4:-/dev/null}"
     local git="${ZPD_GIT:-git}"
+    # Cloning legitimately takes time on a slow link, but must never wait
+    # FOREVER (a stalled transfer would freeze the deploy). Non-interactive:
+    # never prompts for credentials, stdin from /dev/null.
+    local net_to="${ZPD_GIT_CLONE_TIMEOUT:-900}"
     [ -n "$repo" ] && [ -n "$ref" ] && [ -n "$dest" ] || return 1
     rm -rf "$dest" 2>/dev/null || true
-    if ! "$git" clone "$repo" "$dest" >>"$err" 2>&1; then
+    if ! timeout -k "${ZPD_KILL_GRACE:-10}" "${net_to}s" env GIT_TERMINAL_PROMPT=0 \
+            "$git" clone "$repo" "$dest" </dev/null >>"$err" 2>&1; then
         rm -rf "$dest" 2>/dev/null || true
         return 1
     fi
     # Ensure tags are present (annotated + lightweight) for tag refs.
-    "$git" -C "$dest" fetch --tags --force --quiet origin >>"$err" 2>&1 || true
-    if ! "$git" -C "$dest" checkout --quiet --detach "$ref" >>"$err" 2>&1; then
+    timeout -k "${ZPD_KILL_GRACE:-10}" "${ZPD_GIT_NET_TIMEOUT:-60}s" env GIT_TERMINAL_PROMPT=0 \
+        "$git" -C "$dest" fetch --tags --force --quiet origin </dev/null >>"$err" 2>&1 || true
+    if ! "$git" -C "$dest" checkout --quiet --detach "$ref" </dev/null >>"$err" 2>&1; then
         rm -rf "$dest" 2>/dev/null || true
         return 1
     fi
@@ -413,12 +423,15 @@ zpd_local_health_port()      { printf '%s' "${ZPD_LOCAL_HEALTH_PORT:-18080}"; }
 zpd_local_health_url()       { printf 'http://127.0.0.1:%s' "$(zpd_local_health_port)"; }
 
 # -----------------------------------------------------------------------------
-# zpd_local_health_conf_content BASE FPM_SOCK — the complete loopback-only vhost.
-# Serves <BASE>/current/public through index.php via the given PHP-FPM socket.
-# Binds ONLY to 127.0.0.1/[::1]; never to a public interface.
+# zpd_local_health_conf_content BASE FPM_SOCK [ROOT] — the complete
+# loopback-only vhost. Serves ROOT (default <BASE>/current/public) through
+# index.php via the given PHP-FPM socket. The ROOT override exists for the
+# first-cutover LEGACY rollback: after `current` is removed the loopback health
+# target must serve the legacy webroot (<BASE>/public), never a dangling
+# current/public. Binds ONLY to 127.0.0.1/[::1]; never to a public interface.
 # -----------------------------------------------------------------------------
 zpd_local_health_conf_content() {
-    local base="$1" sock="$2" port; port="$(zpd_local_health_port)"
+    local base="$1" sock="$2" root="${3:-${1}/current/public}" port; port="$(zpd_local_health_port)"
     cat <<CONF
 # ZedProxy INTERNAL loopback health vhost (managed). Loopback ONLY — never public.
 # Used by the atomic deployer to validate a release without Cloudflare/public TLS.
@@ -426,7 +439,7 @@ server {
     listen 127.0.0.1:${port};
     listen [::1]:${port};
     server_name _;
-    root ${base}/current/public;
+    root ${root};
     index index.php;
     access_log off;
     add_header X-Robots-Tag "noindex, nofollow, noarchive" always;
@@ -455,10 +468,10 @@ CONF
 #     never be exposed on an external interface.
 # -----------------------------------------------------------------------------
 zpd_local_health_conf_ok() {
-    local conf="$1" base="$2" port="${3:-$(zpd_local_health_port)}"
+    local conf="$1" base="$2" port="${3:-$(zpd_local_health_port)}" root="${4:-${2}/current/public}"
     [ -f "$conf" ] || return 1
     grep -Eq "listen[[:space:]]+127\.0\.0\.1:${port}\b" "$conf" || return 1
-    grep -Eq "root[[:space:]]+${base}/current/public;" "$conf" || return 1
+    grep -Eq "root[[:space:]]+${root};" "$conf" || return 1
     # Reject any `listen` directive that is NOT loopback (position-independent, so
     # a one-line `server { listen 0.0.0.0:PORT; }` is still caught).
     if grep -oE 'listen[[:space:]]+[^;]+' "$conf" | grep -vqE '127\.0\.0\.1:|\[::1\]:'; then
@@ -532,6 +545,118 @@ zpd_scheduler_cron_ok() {
     return 0
 }
 
+# ── Scheduler discovery (all cron sources, not only the canonical file) ──────
+#
+# The scheduler may have been configured by an older installer in /etc/crontab,
+# another /etc/cron.d file, or a user's spool crontab. Reconciliation must find
+# EVERY `artisan schedule:run` invocation so exactly one canonical source
+# survives — two sources running the same jobs simultaneously is never allowed.
+
+zpd_cron_d_dir()     { printf '%s' "${ZPD_CRON_D_DIR:-/etc/cron.d}"; }
+zpd_etc_crontab()    { printf '%s' "${ZPD_ETC_CRONTAB:-/etc/crontab}"; }
+zpd_cron_spool_dir() { printf '%s' "${ZPD_CRON_SPOOL_DIR:-/var/spool/cron/crontabs}"; }
+# Non-cron scheduler homes (read-only discovery; never modified automatically):
+zpd_systemd_unit_dir()     { printf '%s' "${ZPD_SYSTEMD_UNIT_DIR:-/etc/systemd/system}"; }
+# ALL effective systemd unit trees (admin, runtime, and vendor). Override with a
+# colon-separated ZPD_SYSTEMD_UNIT_DIRS for tests. One dir per line.
+zpd_systemd_unit_dirs() {
+    if [ -n "${ZPD_SYSTEMD_UNIT_DIRS:-}" ]; then
+        printf '%s' "$ZPD_SYSTEMD_UNIT_DIRS" | tr ':' '\n'
+        printf '\n'
+        return 0
+    fi
+    printf '%s\n' \
+        "$(zpd_systemd_unit_dir)" \
+        "/run/systemd/system" \
+        "/usr/local/lib/systemd/system" \
+        "/usr/lib/systemd/system" \
+        "/lib/systemd/system"
+}
+zpd_supervisor_scan_dir()  { printf '%s' "${ZPD_SUPERVISOR_SCAN_DIR:-$(dirname "$(zpd_supervisor_conf_path)")}"; }
+# The main supervisord config (its [include] globs define the EFFECTIVE program
+# set — never assume a single conf.d directory).
+zpd_supervisord_conf()     { printf '%s' "${ZPD_SUPERVISORD_CONF:-/etc/supervisor/supervisord.conf}"; }
+
+# -----------------------------------------------------------------------------
+# zpd_scheduler_sources — print every readable file that may carry cron entries:
+# the canonical managed file, every other file in cron.d, /etc/crontab, and all
+# user spool crontabs. One absolute path per line.
+# -----------------------------------------------------------------------------
+zpd_scheduler_sources() {
+    local f
+    [ -f "$(zpd_scheduler_cron_path)" ] && printf '%s\n' "$(zpd_scheduler_cron_path)"
+    if [ -d "$(zpd_cron_d_dir)" ]; then
+        for f in "$(zpd_cron_d_dir)"/*; do
+            [ -f "$f" ] || continue
+            [ "$f" = "$(zpd_scheduler_cron_path)" ] && continue
+            # cron itself IGNORES /etc/cron.d entries whose basename contains a
+            # dot (run-parts rule) — so backups like *.zpd-precutover are not
+            # active sources and must not be scanned as such.
+            case "$(basename "$f")" in *.*) continue ;; esac
+            printf '%s\n' "$f"
+        done
+    fi
+    [ -f "$(zpd_etc_crontab)" ] && printf '%s\n' "$(zpd_etc_crontab)"
+    if [ -d "$(zpd_cron_spool_dir)" ]; then
+        for f in "$(zpd_cron_spool_dir)"/*; do
+            [ -f "$f" ] && printf '%s\n' "$f"
+        done
+    fi
+    return 0
+}
+
+# -----------------------------------------------------------------------------
+# zpd_scheduler_lines FILE — print every non-comment line of FILE containing an
+# `artisan schedule:run` invocation (any Laravel scheduler entry).
+# -----------------------------------------------------------------------------
+zpd_scheduler_lines() {
+    local file="$1"
+    [ -f "$file" ] || return 0
+    grep -E 'artisan[[:space:]]+schedule:run' "$file" 2>/dev/null \
+        | grep -vE '^[[:space:]]*#' || true
+}
+
+# -----------------------------------------------------------------------------
+# zpd_scheduler_ours_re BASE — the ERE matching OUR scheduler invocations: the
+# EXECUTED artisan path must live under BASE (legacy base/artisan,
+# current/artisan, or an individual releases/<id>/artisan), OR the installer's
+# own relative form `cd <base> && php artisan schedule:run` (where the artisan
+# actually executed resolves under BASE). Shared by classification AND removal
+# so the two can never disagree. A foreign app's schedule:run that merely
+# mentions BASE elsewhere on the line (e.g. `cd <base> && php /other/artisan
+# schedule:run`) is NOT ours — the relative alternative requires the literal
+# relative `php artisan` immediately after the cd into BASE.
+# -----------------------------------------------------------------------------
+zpd_scheduler_ours_re() {
+    local esc
+    esc="$(printf '%s' "$1" | sed 's/[][\.*^$(){}?+|]/\\&/g')"
+    printf '(%s(/current|/releases/[^[:space:]]*)?/artisan[[:space:]]+schedule:run|cd[[:space:]]+%s(/current)?/?[[:space:]]*&&[[:space:]]*php[[:space:]]+artisan[[:space:]]+schedule:run)' "$esc" "$esc"
+}
+
+# zpd_scheduler_line_is_ours LINE BASE — 0 when LINE executes the ZedProxy
+# application's scheduler (artisan path under BASE).
+zpd_scheduler_line_is_ours() {
+    local line="$1" base="$2"
+    printf '%s' "$line" | grep -qE "$(zpd_scheduler_ours_re "$base")"
+}
+
+# ── Per-deployment operational snapshots ─────────────────────────────────────
+#
+# Every activation snapshots the effective operational configuration under a
+# release-scoped directory, so a failed activation can restore EXACTLY the
+# pre-deployment state — repeated deployments never clobber each other's
+# backups (unlike the old static `.zpd-precutover` names).
+
+zpd_snapshots_dir() { printf '%s/deploy/snapshots' "$(zpd_shared_dir)"; }
+
+# ── Manifest schema ──────────────────────────────────────────────────────────
+#
+# Version 2 introduces adopted/failed finalization fields. A manifest carrying
+# manifest_schema_version >= 2 with result=success/activating is MODERN and must
+# always satisfy strict SHA verification; result=adopted marks a historical
+# release backfilled from observed facts (compat verification applies).
+zpd_manifest_schema_version() { printf '2'; }
+
 # ── First-cutover (legacy → first release) rollback bookkeeping ──────────────
 #
 # On the very first legacy→release migration there is no previous release id.
@@ -540,37 +665,189 @@ zpd_scheduler_cron_ok() {
 
 zpd_legacy_marker_file() { printf '%s/shared/deploy/legacy-rollback.json' "$(zpd_base)"; }
 
-# zpd_save_legacy_rollback BASE NGINX_CONF SUPERVISOR_CONF SCHED_CRON — snapshot
-# the pre-cutover config files so first-cutover rollback can restore them.
+# Fresh per-attempt snapshots live under a dedicated directory; a pointer file
+# names the COMMITTED snapshot for the current attempt. Old global snapshots
+# (the pre-pointer layout above) are never used automatically — the doctor may
+# list them for manual recovery.
+zpd_legacy_snapshots_dir()   { printf '%s/shared/deploy/legacy-snapshots' "$(zpd_base)"; }
+zpd_legacy_pointer_file()    { printf '%s/current.ptr' "$(zpd_legacy_snapshots_dir)"; }
+zpd_legacy_snapshot_schema() { printf '2'; }
+
+# zpd_save_legacy_rollback BASE NGINX_CONF SUPERVISOR_CONF SCHED_CRON [ID]
+#
+# FRESH, IMMUTABLE, PER-ATTEMPT snapshot of the pre-cutover configuration.
+# Every first-cutover attempt captures its OWN release-scoped snapshot — a
+# complete-looking snapshot from an earlier attempt is never reused (it may no
+# longer match the current pre-cutover state). The capture is transactional:
+#   1. everything is written into a TEMPORARY directory (<id>.tmp)
+#   2. every source (nginx, supervisor, scheduler, local-health vhost,
+#      deploy.env — plus the wrapper set when the wrapper library is loaded)
+#      is copied, cmp-verified, SHA-256-fingerprinted, and recorded in the map
+#      with its mode/ownership/existence
+#   3. marker.json records snapshot_schema_version and snapshot_complete=false
+#   4. every artifact + metadata record is re-verified
+#   5. marker.json is rewritten with snapshot_complete=true and the directory
+#      is ATOMICALLY renamed to its final name; only then is the pointer file
+#      atomically updated to name this snapshot
+# Only a pointer to a committed (snapshot_complete=true, current-schema)
+# snapshot permits maintenance/migration to start. Returns non-zero on ANY
+# capture failure.
 zpd_save_legacy_rollback() {
-    local base="$1" nginx="$2" super="$3" cron="$4"
-    local dir; dir="$(dirname "$(zpd_legacy_marker_file)")"
-    mkdir -p "$dir" 2>/dev/null || return 1
-    [ -f "$nginx" ] && cp -a "$nginx" "${dir}/nginx.legacy" 2>/dev/null || true
-    [ -f "$super" ] && cp -a "$super" "${dir}/supervisor.legacy" 2>/dev/null || true
-    [ -f "$cron" ]  && cp -a "$cron"  "${dir}/scheduler.legacy" 2>/dev/null || true
-    zpd_write_manifest "$(zpd_legacy_marker_file)" \
+    local base="$1" nginx="$2" super="$3" cron="$4" id="${5:-}"
+    local snaps tmp final map lh envf ptr ptmp
+    [ -n "$id" ] || id="$(date -u +%Y%m%d%H%M%S).$$"
+    snaps="$(zpd_legacy_snapshots_dir)"
+    tmp="${snaps}/${id}.tmp"
+    final="${snaps}/${id}"
+    lh="$(zpd_local_health_conf_path)"
+    envf="$(zpd_deploy_env_file)"
+    mkdir -p "$snaps" 2>/dev/null || return 1
+    chmod 700 "$snaps" 2>/dev/null || true
+    rm -rf "$tmp" 2>/dev/null || return 1
+    [ -e "$final" ] && return 1                    # ids are per-attempt unique
+    mkdir -p "$tmp" 2>/dev/null || return 1
+    map="${tmp}/legacy-files.map"
+    : > "$map" || return 1
+    chmod 600 "$map" 2>/dev/null || true
+    # name TAB path TAB mode TAB uid:gid TAB existed TAB sha256
+    local name src snap sha
+    for name in nginx supervisor scheduler localhealth deployenv; do
+        case "$name" in
+            nginx)       src="$nginx" ;;
+            supervisor)  src="$super" ;;
+            scheduler)   src="$cron" ;;
+            localhealth) src="$lh" ;;
+            deployenv)   src="$envf" ;;
+        esac
+        snap="${tmp}/${name}.legacy"
+        if [ -f "$src" ]; then
+            cp -a "$src" "$snap" 2>/dev/null || return 1
+            cmp -s "$src" "$snap"            || return 1
+            sha="$(sha256sum "$snap" 2>/dev/null | awk '{print $1}')"
+            [ -n "$sha" ] || return 1
+            printf '%s\t%s\t%s\t%s\t1\t%s\n' "$name" "$src" \
+                "$(stat -c '%a' "$src" 2>/dev/null)" "$(stat -c '%u:%g' "$src" 2>/dev/null)" "$sha" >> "$map" || return 1
+        else
+            printf '%s\t%s\t\t\t0\t-\n' "$name" "$src" >> "$map" || return 1
+        fi
+    done
+    # Wrapper commands + bootstrap library — REQUIRED verified capture.
+    if declare -F zpw_backup_wrappers >/dev/null 2>&1; then
+        zpw_backup_wrappers "${tmp}/wrappers" >/dev/null 2>&1 || return 1
+    fi
+    zpd_write_manifest "${tmp}/marker.json" \
         "legacy_base=${base}" "nginx_conf=${nginx}" "supervisor_conf=${super}" \
-        "scheduler_cron=${cron}" "created_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        "scheduler_cron=${cron}" "local_health_conf=${lh}" "deploy_env=${envf}" \
+        "snapshot_schema_version=$(zpd_legacy_snapshot_schema)" \
+        "snapshot_complete=false" \
+        "created_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" || return 1
+    # Re-verify EVERY recorded artifact before committing.
+    _zpd_legacy_map_verified "$tmp" || return 1
+    zpd_write_manifest "${tmp}/marker.json" \
+        "legacy_base=${base}" "nginx_conf=${nginx}" "supervisor_conf=${super}" \
+        "scheduler_cron=${cron}" "local_health_conf=${lh}" "deploy_env=${envf}" \
+        "snapshot_schema_version=$(zpd_legacy_snapshot_schema)" \
+        "snapshot_complete=true" \
+        "created_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" || return 1
+    mv -T "$tmp" "$final" 2>/dev/null || return 1   # atomic commit
+    # Atomic pointer update — the pointer only ever names a COMMITTED snapshot.
+    ptr="$(zpd_legacy_pointer_file)"
+    ptmp="${ptr}.tmp"
+    printf '%s\n' "$final" > "$ptmp" || return 1
+    chmod 600 "$ptmp" 2>/dev/null || true
+    mv -f "$ptmp" "$ptr" || return 1
+    return 0
 }
 
-# zpd_has_legacy_rollback — return 0 if a saved legacy snapshot exists.
-zpd_has_legacy_rollback() { [ -f "$(zpd_legacy_marker_file)" ]; }
+# _zpd_legacy_map_verified DIR — every map record must be present (all five
+# managed names) and every existing artifact must be readable, non-empty, and
+# match its recorded SHA-256. Used both before commit and before restore.
+_zpd_legacy_map_verified() {
+    local dir="$1" map name path mode owner existed sha have
+    local seen_nginx=0 seen_super=0 seen_sched=0 seen_lh=0 seen_env=0
+    map="${dir}/legacy-files.map"
+    [ -f "$map" ] || return 1
+    while IFS=$'\t' read -r name path mode owner existed sha; do
+        [ -n "$name" ] || continue
+        if [ "$existed" = "1" ]; then
+            [ -s "${dir}/${name}.legacy" ] && [ -r "${dir}/${name}.legacy" ] || return 1
+            have="$(sha256sum "${dir}/${name}.legacy" 2>/dev/null | awk '{print $1}')"
+            [ -n "$have" ] && [ "$have" = "$sha" ] || return 1
+        fi
+        case "$name" in
+            nginx)       seen_nginx=1 ;;
+            supervisor)  seen_super=1 ;;
+            scheduler)   seen_sched=1 ;;
+            localhealth) seen_lh=1 ;;
+            deployenv)   seen_env=1 ;;
+        esac
+    done < "$map"
+    [ "$seen_nginx" = "1" ] && [ "$seen_super" = "1" ] && [ "$seen_sched" = "1" ] \
+        && [ "$seen_lh" = "1" ] && [ "$seen_env" = "1" ]
+}
 
-# zpd_restore_legacy_rollback — restore the snapshotted nginx/supervisor/cron
-# files (used when the first cutover fails). Returns 0 on success.
-zpd_restore_legacy_rollback() {
-    local marker; marker="$(zpd_legacy_marker_file)"
+# zpd_legacy_snapshot_dir — print the COMMITTED snapshot directory the pointer
+# names, or nothing when no committed snapshot exists.
+zpd_legacy_snapshot_dir() {
+    local ptr dir
+    ptr="$(zpd_legacy_pointer_file)"
+    [ -f "$ptr" ] || return 1
+    dir="$(cat "$ptr" 2>/dev/null)"
+    [ -n "$dir" ] && [ -d "$dir" ] || return 1
+    printf '%s' "$dir"
+}
+
+# zpd_has_legacy_rollback — a committed per-attempt snapshot exists. Old-layout
+# global markers (legacy-rollback.json) do NOT count — they are listed by the
+# doctor for manual recovery only, never used as an automatic rollback path.
+zpd_has_legacy_rollback() { zpd_legacy_snapshot_dir >/dev/null 2>&1; }
+
+# zpd_legacy_rollback_valid — the pointed-to snapshot is COMMITTED
+# (snapshot_complete=true), carries the CURRENT snapshot schema version, has a
+# record for every managed source, and every artifact matches its recorded
+# SHA-256. An interrupted (.tmp / snapshot_complete=false), truncated,
+# old-schema, or old-layout snapshot is NEVER valid.
+zpd_legacy_rollback_valid() {
+    local dir marker
+    dir="$(zpd_legacy_snapshot_dir)" || return 1
+    marker="${dir}/marker.json"
     [ -f "$marker" ] || return 1
-    local dir nginx super cron
-    dir="$(dirname "$marker")"
-    nginx="$(zpd_manifest_get "$marker" nginx_conf)"
-    super="$(zpd_manifest_get "$marker" supervisor_conf)"
-    cron="$(zpd_manifest_get "$marker" scheduler_cron)"
-    [ -f "${dir}/nginx.legacy" ] && [ -n "$nginx" ] && cp -a "${dir}/nginx.legacy" "$nginx" 2>/dev/null || true
-    [ -f "${dir}/supervisor.legacy" ] && [ -n "$super" ] && cp -a "${dir}/supervisor.legacy" "$super" 2>/dev/null || true
-    [ -f "${dir}/scheduler.legacy" ] && [ -n "$cron" ] && cp -a "${dir}/scheduler.legacy" "$cron" 2>/dev/null || true
-    return 0
+    [ "$(zpd_manifest_get "$marker" snapshot_complete 2>/dev/null)" = "true" ] || return 1
+    [ "$(zpd_manifest_get "$marker" snapshot_schema_version 2>/dev/null)" = "$(zpd_legacy_snapshot_schema)" ] || return 1
+    _zpd_legacy_map_verified "$dir"
+}
+
+# zpd_restore_legacy_rollback — EXACT, FAIL-CLOSED restore of the pre-cutover
+# state from THIS ATTEMPT's committed snapshot. The snapshot must validate
+# (committed, current schema, complete, SHA-verified) — an old-layout or
+# interrupted snapshot is refused, never silently applied. Every
+# copy/remove/chmod/chown error accumulates into the return code; restored
+# content is cmp-verified; files that did not exist before the cutover are
+# removed (verified absent); the wrapper set is restored fail-closed.
+zpd_restore_legacy_rollback() {
+    local dir map rc=0
+    dir="$(zpd_legacy_snapshot_dir)" || return 1
+    zpd_legacy_rollback_valid       || return 1
+    map="${dir}/legacy-files.map"
+    local name path mode owner existed sha snap
+    while IFS=$'\t' read -r name path mode owner existed sha; do
+        [ -n "$name" ] && [ -n "$path" ] || continue
+        snap="${dir}/${name}.legacy"
+        if [ "$existed" = "1" ]; then
+            if ! cp "$snap" "$path" 2>/dev/null || ! cmp -s "$snap" "$path"; then
+                rc=1; continue
+            fi
+            [ -n "$mode" ]  && { chmod "$mode" "$path" 2>/dev/null || rc=1; }
+            [ -n "$owner" ] && { chown "$owner" "$path" 2>/dev/null || rc=1; }
+        else
+            rm -f "$path" 2>/dev/null || rc=1
+            [ -e "$path" ] && rc=1     # the cutover-created file must be GONE
+        fi
+    done < "$map"
+    if declare -F zpw_restore_wrappers >/dev/null 2>&1 && [ -d "${dir}/wrappers" ]; then
+        zpw_restore_wrappers "${dir}/wrappers" || rc=1
+    fi
+    return "$rc"
 }
 
 # ── JSON manifest / state (no secrets) ──────────────────────────────────────
@@ -615,6 +892,27 @@ zpd_write_manifest() {
 
     chmod 600 "$tmp" 2>/dev/null || true
     mv -f "$tmp" "$file" 2>/dev/null || { rm -f "$tmp"; return 1; }
+}
+
+# -----------------------------------------------------------------------------
+# zpd_print_manifest key=value... — serialize the SAME masked/escaped flat JSON
+# directly to the CURRENT stdout. Used for machine-readable output (doctor
+# --json, deploy-status --json): zpd_write_manifest must never be pointed at
+# /dev/stdout, because its atomic temp-file rename would replace the
+# /dev/stdout symlink (and chmod 600 it) when running as root.
+# -----------------------------------------------------------------------------
+zpd_print_manifest() {
+    printf '{\n'
+    local first=1 pair key val
+    for pair in "$@"; do
+        key="${pair%%=*}"
+        val="${pair#*=}"
+        val="$(printf '%s' "$val" | zpd_mask_secrets)"
+        [ "$first" -eq 1 ] || printf ',\n'
+        first=0
+        printf '  "%s": "%s"' "$(zpd_json_escape "$key")" "$(zpd_json_escape "$val")"
+    done
+    printf '\n}\n'
 }
 
 # -----------------------------------------------------------------------------
@@ -895,3 +1193,7 @@ zpd_msg_update_ref_bad()   { printf 'نسخه درخواستی به‌روزرس
 zpd_msg_migrate_none()     { printf 'هیچ مهاجرت جدیدی اجرا نشد و دیتابیس تغییری نکرد.'; }
 zpd_msg_migrate_applied()  { printf 'مهاجرت‌های جدید اجرا شده‌اند؛ در صورت بروز ناسازگاری، نسخه پشتیبان دیتابیس را بررسی کنید.'; }
 zpd_msg_up_failed()        { printf 'خروج از حالت تعمیر و نگهداری ناموفق بود؛ نسخه جدید فعال نشد.'; }
+zpd_msg_sched_conflict()   { printf 'چند زمان‌بندی متداخل برای Laravel شناسایی شد. برای جلوگیری از اجرای تکراری، عملیات متوقف شد.'; }
+zpd_msg_adopted()          { printf 'اطلاعات نسخه فعال قدیمی با موفقیت شناسایی و برای سیستم انتشار جدید ثبت شد.'; }
+zpd_msg_repair_done()      { printf 'تنظیمات انتشار بررسی و ناسازگاری‌های قابل اصلاح با موفقیت ترمیم شدند.'; }
+zpd_msg_doctor_bundle()    { printf 'گزارش عیب‌یابی بدون اطلاعات حساس ایجاد شد:'; }

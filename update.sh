@@ -77,7 +77,9 @@ _err="${BOOTSTRAP}/git.log"
 # Supports branch / lightweight tag / annotated tag (peeled) / full 40-hex SHA.
 resolve_sha() {
     local out sha
-    out="$("$GIT" ls-remote "$repo" "$REF" "${REF}^{}" 2>>"$_err")" || {
+    # Bounded + non-interactive: a wedged remote can never hang the updater.
+    out="$(timeout "${ZPD_GIT_NET_TIMEOUT:-60}s" env GIT_TERMINAL_PROMPT=0 \
+            "$GIT" ls-remote "$repo" "$REF" "${REF}^{}" </dev/null 2>>"$_err")" || {
         printf '%s' "$REF" | grep -Eq '^[0-9a-f]{40}$' && { printf '%s' "$REF"; return 0; }
         return 1
     }
@@ -99,14 +101,16 @@ fi
 
 # ── Fetch the exact updater source into the protected temp dir ────────────────
 log "Fetching updater source (${REF} → ${RESOLVED_SHA:0:12})…"
-if ! "$GIT" clone "$repo" "${BOOTSTRAP}/src" >>"$_err" 2>&1; then
+if ! timeout "${ZPD_GIT_CLONE_TIMEOUT:-900}s" env GIT_TERMINAL_PROMPT=0 \
+        "$GIT" clone "$repo" "${BOOTSTRAP}/src" </dev/null >>"$_err" 2>&1; then
     err "دریافت کد به‌روزرسان از GitHub ناموفق بود."
     redact < "$_err" >&2 || true
     exit 1
 fi
 # Tags may be needed for a tag ref. A fetch failure here is not fatal on its own,
 # but the checkout below is STRICT.
-"$GIT" -C "${BOOTSTRAP}/src" fetch --tags --force --quiet origin >>"$_err" 2>&1 || true
+timeout "${ZPD_GIT_NET_TIMEOUT:-60}s" env GIT_TERMINAL_PROMPT=0 \
+    "$GIT" -C "${BOOTSTRAP}/src" fetch --tags --force --quiet origin </dev/null >>"$_err" 2>&1 || true
 
 # STRICT checkout — a missing/invalid ref must stop immediately (no `|| true`).
 if ! "$GIT" -C "${BOOTSTRAP}/src" checkout --quiet --detach "$REF" >>"$_err" 2>&1; then

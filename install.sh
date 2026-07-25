@@ -1060,7 +1060,7 @@ if [ "$IS_EXISTING" = "true" ]; then
     # Re-run: DO NOT create/drop the database or rotate the role password.
     # Only verify that the stored credentials still connect before continuing.
     log "Verifying existing database connection (no changes made)..."
-    if PGPASSWORD="$DB_PASS" psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -tAc 'SELECT 1' >/dev/null 2>&1; then
+    if PGPASSWORD="$DB_PASS" timeout 15s psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -tAc 'SELECT 1' </dev/null >/dev/null 2>&1; then
         ok "اتصال به دیتابیس موجود ('${DB_NAME}') برقرار است."
     else
         error "اتصال به دیتابیس با اطلاعات موجود در .env ناموفق بود. نصب متوقف شد؛ هیچ تغییری اعمال نشد.\n  دیتابیس: ${DB_NAME} — کاربر: ${DB_USER} — میزبان: ${DB_HOST}:${DB_PORT}"
@@ -1100,7 +1100,7 @@ sed -i 's/^bind .*/bind 127.0.0.1/' /etc/redis/redis.conf
 systemctl enable redis-server
 systemctl start redis-server
 
-redis-cli ping | grep -q PONG || error "Redis did not respond to PING"
+timeout 15s redis-cli ping </dev/null | grep -q PONG || error "Redis did not respond to PING"
 ok "Redis is running"
 
 # ─── Nginx ───────────────────────────────────────────────────────────────────
@@ -1208,9 +1208,11 @@ prepare_project_directory() {
     rm -rf "$pending" 2>/dev/null || true
 
     log "Cloning ${REPO_URL} (ref: ${ref}) into a new release…"
-    git clone "$REPO_URL" "$pending" \
+    timeout "${ZPD_GIT_CLONE_TIMEOUT:-900}s" env GIT_TERMINAL_PROMPT=0 \
+        git clone "$REPO_URL" "$pending" </dev/null \
         || { rm -rf "$pending"; error "دریافت کد پروژه از GitHub ناموفق بود. نصب متوقف شد."; }
-    git -C "$pending" fetch --tags --force --quiet origin 2>/dev/null || true
+    timeout "${ZPD_GIT_NET_TIMEOUT:-60}s" env GIT_TERMINAL_PROMPT=0 \
+        git -C "$pending" fetch --tags --force --quiet origin </dev/null 2>/dev/null || true
     git -C "$pending" checkout --quiet --detach "$ref" 2>/dev/null \
         || { rm -rf "$pending"; error "ref موردنظر برای نصب (${ref}) قابل‌بازیابی نبود. نصب متوقف شد."; }
 
