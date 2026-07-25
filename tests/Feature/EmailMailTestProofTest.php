@@ -102,6 +102,30 @@ class EmailMailTestProofTest extends TestCase
         $this->assertFalse($this->svc()->hasVerifiedMailTest());
     }
 
+    public function test_composite_topology_changes_invalidate_the_proof(): void
+    {
+        config([
+            'mail.default' => 'combo',
+            'mail.mailers.combo' => ['transport' => 'failover', 'mailers' => ['smtp_a', 'smtp_b']],
+            'mail.mailers.smtp_a' => ['transport' => 'smtp', 'host' => 'a.example.com', 'port' => 587],
+            'mail.mailers.smtp_b' => ['transport' => 'smtp', 'host' => 'b.example.com', 'port' => 587],
+        ]);
+        $this->svc()->recordSuccessfulMailTest();
+        $this->assertTrue($this->svc()->hasVerifiedMailTest());
+
+        // Same leaves, different ROUTING POLICY: the flattened leaf map is
+        // identical, so only the topology component can catch this.
+        config(['mail.mailers.combo.transport' => 'roundrobin']);
+        $this->assertFalse($this->svc()->hasVerifiedMailTest(), 'failover→roundrobin invalidates the proof');
+
+        config(['mail.mailers.combo.transport' => 'failover']);
+        $this->assertTrue($this->svc()->hasVerifiedMailTest(), 'restoring the tested policy restores the proof');
+
+        // Same leaves, different child ORDER (primary swapped).
+        config(['mail.mailers.combo.mailers' => ['smtp_b', 'smtp_a']]);
+        $this->assertFalse($this->svc()->hasVerifiedMailTest(), 'child reorder invalidates the proof');
+    }
+
     public function test_every_operational_config_change_invalidates_the_proof(): void
     {
         config([

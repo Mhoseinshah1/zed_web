@@ -140,6 +140,12 @@ class EmailVerificationService
         $input = [
             'default' => $default,
             'graph' => $transports,
+            // The EXACT composite structure — node types (failover vs
+            // roundrobin), nesting, and child ORDER. The flattened leaf map
+            // above is order-insensitive, so without this a re-wired routing
+            // policy (failover→roundrobin, reordered/renested children) would
+            // keep accepting a proof that never exercised the new policy.
+            'topology' => $this->mailerTopology($default),
             'from_address' => (string) config('mail.from.address'),
             'from_name' => (string) config('mail.from.name'),
             'mailers' => [],
@@ -362,6 +368,43 @@ class EmailVerificationService
         }
 
         return [$mailer => $transport];
+    }
+
+    /**
+     * The ORDER- and NESTING-preserving structure of a mailer graph, for the
+     * fingerprint only: composite nodes keep their exact type (failover vs
+     * roundrobin) and child sequence; leaves keep mailer name + transport.
+     * Invalid graphs collapse to a marker (isMailConfigured rejects them
+     * independently). Purely non-secret.
+     *
+     * @param  array<int,string>  $visited
+     * @return array<string,mixed>
+     */
+    private function mailerTopology(string $mailer, array $visited = []): array
+    {
+        if ($mailer === '' || in_array($mailer, $visited, true)) {
+            return ['invalid' => $mailer];
+        }
+        $visited[] = $mailer;
+
+        $conf = config("mail.mailers.{$mailer}");
+        $transport = is_array($conf) ? (string) ($conf['transport'] ?? '') : '';
+        if ($transport === '') {
+            return ['invalid' => $mailer];
+        }
+
+        if (in_array($transport, ['failover', 'roundrobin'], true)) {
+            return [
+                'type' => $transport,
+                'name' => $mailer,
+                'children' => array_map(
+                    fn ($child) => $this->mailerTopology((string) $child, $visited),
+                    array_values(array_filter((array) ($conf['mailers'] ?? []))),
+                ),
+            ];
+        }
+
+        return ['mailer' => $mailer, 'transport' => $transport];
     }
 
     /**
