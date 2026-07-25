@@ -158,7 +158,12 @@ class EmailLockTimeoutPgTest extends TestCase
         $blocker->select('select id from email_verification_codes where id = ? for update', [$record->id]);
 
         $started = microtime(true);
-        (new SendEmailOtpJob($record->id, $user->id, (string) $user->email, '123456', 10))->handle();
+        try {
+            (new SendEmailOtpJob($record->id, $user->id, (string) $user->email, '123456', 10))->handle();
+            $this->fail('without a queue context, contention must surface');
+        } catch (\RuntimeException) {
+            // A real worker would be released for a delayed retry instead.
+        }
         $elapsed = microtime(true) - $started;
 
         Mail::assertNothingSent();

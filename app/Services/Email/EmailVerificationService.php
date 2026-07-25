@@ -119,6 +119,9 @@ class EmailVerificationService
                     'port' => (int) config("mail.mailers.{$mailerName}.port"),
                     'scheme' => (string) config("mail.mailers.{$mailerName}.scheme"),
                     'encryption' => (string) config("mail.mailers.{$mailerName}.encryption"),
+                    // The EHLO identity affects deliverability: servers can
+                    // reject a changed local_domain (defaults from APP_URL).
+                    'local_domain' => (string) config("mail.mailers.{$mailerName}.local_domain"),
                     'has_username' => (string) config("mail.mailers.{$mailerName}.username") !== '',
                 ],
                 'sendmail' => [

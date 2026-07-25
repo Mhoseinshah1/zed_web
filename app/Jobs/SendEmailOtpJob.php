@@ -91,7 +91,7 @@ class SendEmailOtpJob implements ShouldBeEncrypted, ShouldQueue
         } catch (Throwable) {
             // Contention (LockTimeoutException) or cache outage: retry soon
             // instead of waiting unboundedly or sending unserialized.
-            $this->release(10);
+            $this->releaseForRetry(10);
 
             return;
         }
@@ -103,7 +103,7 @@ class SendEmailOtpJob implements ShouldBeEncrypted, ShouldQueue
                 // Bounded row-lock timeout: pure contention, NOT a delivery
                 // failure — release for a retry with backoff, change nothing.
                 if (DatabaseLockTimeout::isLockTimeout($e)) {
-                    $this->release(10);
+                    $this->releaseForRetry(10);
 
                     return;
                 }
@@ -151,6 +151,26 @@ class SendEmailOtpJob implements ShouldBeEncrypted, ShouldQueue
                 // TTL expiry is the backstop for a failed release.
             }
         }
+    }
+
+    /**
+     * Release this job back to the queue for a delayed retry — or, when no
+     * queue context exists to release into (the sync driver executes exactly
+     * once; direct invocation has no job at all), surface the contention as a
+     * FAILURE: a silent return would let dispatch() report success while the
+     * record stays `queued` forever and no email is ever sent. The message is
+     * static (no exception text, no secrets) and carries the `delivery
+     * failed:` prefix so failed() stores it verbatim.
+     */
+    private function releaseForRetry(int $delaySeconds): void
+    {
+        if ($this->job !== null) {
+            $this->release($delaySeconds);
+
+            return;
+        }
+
+        throw new RuntimeException('delivery failed: lock_contention (no retry available on the current queue driver)');
     }
 
     /**

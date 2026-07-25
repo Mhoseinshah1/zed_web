@@ -76,7 +76,12 @@ class EmailJobLockOrderPgTest extends TestCase
         $blocker->update('update users set name = ? where id = ?', ['External Edit', $user->id]);
 
         $started = microtime(true);
-        (new SendEmailOtpJob($record->id, $user->id, (string) $user->email, '123456', 10))->handle();
+        try {
+            (new SendEmailOtpJob($record->id, $user->id, (string) $user->email, '123456', 10))->handle();
+            $this->fail('without a queue context, contention must surface');
+        } catch (\RuntimeException) {
+            // A real worker would be released for a delayed retry instead.
+        }
         $elapsed = microtime(true) - $started;
 
         // Bounded wait, no send, no partial state, retry-friendly outcome.

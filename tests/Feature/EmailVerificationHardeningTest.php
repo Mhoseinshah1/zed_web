@@ -1204,12 +1204,19 @@ class EmailVerificationHardeningTest extends TestCase
         $this->assertTrue($lock->get());
         try {
             (new SendEmailOtpJob($record->id, $user->id, (string) $user->email, '123456', 10))->handle();
+            $this->fail('without a queue context, contention must SURFACE — a silent return would fake success');
+        } catch (\RuntimeException $e) {
+            // Static, secret-free message; a real worker (with a queue
+            // context) releases for retry instead of throwing.
+            $this->assertStringContainsString('lock_contention', $e->getMessage());
+            $this->assertStringNotContainsString('SQLSTATE', $e->getMessage());
         } finally {
             $lock->release();
         }
 
         Mail::assertNothingSent();
-        // Contention is NOT a delivery failure: still queued for the retry.
+        // The claim never ran: the record is untouched for the retry/failed()
+        // accounting of whichever driver executed the job.
         $this->assertSame(EmailVerificationCode::SEND_STATUS_QUEUED, $record->fresh()->send_status);
     }
 

@@ -119,6 +119,7 @@ class EmailMailTestProofTest extends TestCase
             ['mail.mailers.smtp.host' => 'other.example.com'],
             ['mail.mailers.smtp.port' => 465],
             ['mail.mailers.smtp.scheme' => 'smtps'],
+            ['mail.mailers.smtp.local_domain' => 'new-ehlo.example.com'],
             ['mail.from.address' => 'other-from@example.com'],
         ];
 
