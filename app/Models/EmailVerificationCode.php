@@ -28,6 +28,9 @@ class EmailVerificationCode extends Model
 
     public const SEND_STATUS_QUEUED = 'queued';
 
+    /** A worker has atomically claimed the record and is talking to the transport. */
+    public const SEND_STATUS_SENDING = 'sending';
+
     public const SEND_STATUS_SENT = 'sent';
 
     public const SEND_STATUS_FAILED = 'failed';

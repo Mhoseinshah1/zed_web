@@ -288,6 +288,11 @@
                     {{ session('error') }}
                 </div>
             @endif
+            @if(session('warning'))
+                <div class="mb-6 bg-amber-500/10 border border-amber-500/30 rounded-lg p-4 text-sm text-amber-300">
+                    {{ session('warning') }}
+                </div>
+            @endif
             @yield('content')
         </main>
     </div>

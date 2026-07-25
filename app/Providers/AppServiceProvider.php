@@ -39,5 +39,18 @@ class AppServiceProvider extends ServiceProvider
         RateLimiter::for('purchase-submit', fn (Request $request) => Limit::perMinute(12)->by(
             $request->user()?->getAuthIdentifier() ?: $request->ip()
         ));
+
+        // Email-verification endpoints: keyed by BOTH the authenticated user
+        // id AND the client IP, so neither a distributed attack on one account
+        // nor one machine cycling accounts can bypass the limit.
+        $emailVerificationKey = function (Request $request): string {
+            $userId = (string) ($request->user()?->getAuthIdentifier() ?? 'guest');
+
+            return $userId.'|'.(string) $request->ip();
+        };
+        RateLimiter::for('email-verification-verify', fn (Request $request) => Limit::perMinute(10)->by('evv:'.$emailVerificationKey($request)));
+        RateLimiter::for('email-verification-resend', fn (Request $request) => Limit::perMinutes(10, 5)->by('evr:'.$emailVerificationKey($request)));
+        RateLimiter::for('email-verification-change', fn (Request $request) => Limit::perMinutes(10, 5)->by('evc:'.$emailVerificationKey($request)));
+        RateLimiter::for('email-test-send', fn (Request $request) => Limit::perMinutes(10, 3)->by('ets:'.$emailVerificationKey($request)));
     }
 }

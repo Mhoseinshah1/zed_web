@@ -7,6 +7,7 @@ use App\Models\User;
 use App\Services\Email\EmailVerificationService;
 use App\Services\Phone\PhoneVerificationService;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 
 /**
  * The email-OTP verification flow: notice page (never sends on GET), code
@@ -34,6 +35,9 @@ class EmailVerificationController extends Controller
             // client countdown past what the server actually enforces.
             'cooldownSeconds' => $this->verification->resendCooldownRemaining($user),
             'ttlMinutes' => $this->verification->ttlMinutes(),
+            // OPTIONAL mode shows a "skip for now" path to the dashboard;
+            // required mode never does.
+            'isRequired' => $this->verification->isRequiredOnRegister(),
         ]);
     }
 
@@ -134,12 +138,20 @@ class EmailVerificationController extends Controller
             return back()->withErrors(['email' => 'این همان آدرس ایمیل فعلی شماست.']);
         }
 
-        // Changing the address restarts verification from zero.
-        $this->verification->invalidateCodes($user);
-        $user->forceFill([
-            'email' => $email,
-            'email_verified_at' => null,
-        ])->save();
+        // Changing the address restarts verification from zero. The user row
+        // lock serializes this against a concurrently-submitted OTP for the
+        // OLD address (EmailVerificationService::verify takes the same lock):
+        // whichever commits first, a code issued to the old mailbox can never
+        // mark the new, unproven address verified.
+        DB::transaction(function () use ($user, $email) {
+            User::whereKey($user->id)->lockForUpdate()->first();
+
+            $this->verification->invalidateCodes($user);
+            $user->forceFill([
+                'email' => $email,
+                'email_verified_at' => null,
+            ])->save();
+        });
 
         $result = $this->verification->requestCode($user, [
             'ip' => $request->ip(),

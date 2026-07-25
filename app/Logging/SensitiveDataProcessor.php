@@ -57,6 +57,17 @@ class SensitiveDataProcessor implements ProcessorInterface
         'telegram_token',
     ];
 
+    /**
+     * Scrub a free-text string outside the logging pipeline (e.g. before
+     * persisting a delivery error to the database). Same pattern set as the
+     * log processor — credentials, tokens, DSNs and Authorization headers are
+     * masked.
+     */
+    public static function scrub(string $value): string
+    {
+        return (new self)->maskString($value);
+    }
+
     public function __invoke(LogRecord $record): LogRecord
     {
         $message = $this->maskString($record->message);
@@ -128,6 +139,9 @@ class SensitiveDataProcessor implements ProcessorInterface
             '#([A-Za-z][A-Za-z0-9+.-]*://)[^/@\s:]+:[^/@\s]+@#' => '$1'.self::REDACTED.'@',
             // JSON "field": "value" pairs for credential-ish keys.
             '/("?(?:password|passwd|secret|token|api[_-]?key|api[_-]?token|access[_-]?token|refresh[_-]?token|authorization|signature)"?[[:space:]]*:[[:space:]]*")[^"]*"/i' => '$1'.self::REDACTED.'"',
+            // Quoted credentials in prose, e.g. SMTP transport errors like
+            // `authentication failed: username "x" / password "y"`.
+            '/\b(username|user|login|password|passwd)\b[[:space:]]*[:=]?[[:space:]]*["\'][^"\']*["\']/i' => '$1 '.self::REDACTED,
             // GitHub tokens.
             '/\b(?:gh[posur]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{20,})\b/' => self::REDACTED,
             // Telegram bot token: <digits>:<35+ chars>.

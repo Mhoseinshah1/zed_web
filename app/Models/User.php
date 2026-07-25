@@ -99,6 +99,13 @@ class User extends Authenticatable implements FilamentUser
                     ? PhoneNumber::normalize($user->phone)
                     : null;
             }
+
+            // Safety net: EVERY writer (registration, admin edits, imports,
+            // commands, future code) stores the canonical lowercase address —
+            // the DB's lower(email) unique index assumes it.
+            if ($user->isDirty('email') && is_string($user->email)) {
+                $user->email = strtolower(trim($user->email));
+            }
         });
     }
 

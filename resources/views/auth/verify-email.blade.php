@@ -84,6 +84,17 @@
                 </form>
             </details>
 
+            @unless($isRequired)
+                {{-- OPTIONAL verification: the user may continue and verify
+                     later from the profile page. Never shown in required mode. --}}
+                <div class="mb-4 text-center">
+                    <a href="{{ route('dashboard.index') }}"
+                        class="text-sm text-gray-400 underline transition hover:text-gray-200">
+                        فعلاً بعداً — ادامه به داشبورد
+                    </a>
+                </div>
+            @endunless
+
             <form method="POST" action="{{ route('logout') }}" class="text-center">
                 @csrf
                 <button type="submit" class="text-xs text-gray-500 underline transition hover:text-gray-300">

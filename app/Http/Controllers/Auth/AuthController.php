@@ -15,6 +15,7 @@ use App\Support\PhoneNumber;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Cookie;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\RateLimiter;
@@ -118,10 +119,25 @@ class AuthController extends Controller
 
     public function register(Request $request)
     {
+        // Normalize BEFORE validation: the uniqueness check must run against
+        // the exact value that will be stored, and it must be CASE-INSENSITIVE
+        // — PostgreSQL's plain varchar unique index would otherwise accept
+        // Victim@X alongside victim@x and 500 on the eventual collision.
+        $request->merge([
+            'email' => strtolower(trim((string) $request->input('email'))),
+        ]);
+
         $validated = $request->validate([
             'name' => ['required', 'string', 'max:255'],
             'username' => ['required', 'string', 'max:64', 'unique:users,username', 'regex:/^[a-zA-Z0-9_]+$/'],
-            'email' => ['required', 'email', 'max:255', 'unique:users,email'],
+            'email' => [
+                'required', 'email', 'max:255',
+                function (string $attribute, mixed $value, \Closure $fail) {
+                    if (User::whereRaw('lower(email) = ?', [strtolower(trim((string) $value))])->exists()) {
+                        $fail('این ایمیل قبلاً ثبت شده است.');
+                    }
+                },
+            ],
             'phone' => ['required', 'string', 'max:32'],
             'password' => ['required', 'confirmed', Password::min(8)],
         ], [
@@ -141,23 +157,36 @@ class AuthController extends Controller
             return back()->withErrors(['phone' => 'این شماره موبایل قبلاً ثبت شده است.'])->onlyInput('name', 'username', 'email');
         }
 
-        $user = User::create([
-            'name' => $validated['name'],
-            'username' => $validated['username'],
-            'email' => $validated['email'],
-            'phone' => $validated['phone'],
-            'normalized_phone' => $normalized,
-            'password' => Hash::make($validated['password']),
-        ]);
-
-        // Attach the referrer from ?ref= / session / cookie (mode-aware, safe).
         $referralCode = $request->input('ref')
             ?? $request->session()->pull('referral_code')
             ?? $request->cookie('referral_code');
-        app(ReferralService::class)->attachReferrer($user, $referralCode);
+
+        // ONE transaction for the whole registration write set: the user row
+        // and its referral attachment commit together or not at all — no
+        // half-registered users with lost referrals. Side effects (Telegram,
+        // OTP dispatch, login) run strictly AFTER the commit, so a rollback
+        // produces no notification and no queued email.
+        $user = DB::transaction(function () use ($validated, $normalized, $referralCode) {
+            $user = User::create([
+                'name' => $validated['name'],
+                'username' => $validated['username'],
+                'email' => $validated['email'],
+                'phone' => $validated['phone'],
+                'normalized_phone' => $normalized,
+                'password' => Hash::make($validated['password']),
+            ]);
+
+            // Attach the referrer from ?ref= / session / cookie (mode-aware, safe).
+            app(ReferralService::class)->attachReferrer($user, $referralCode);
+
+            return $user;
+        });
+
         Cookie::queue(Cookie::forget('referral_code'));
 
-        // Admin Telegram — new registration (safe summary only; no credentials).
+        // Admin Telegram — new registration (safe summary only; no
+        // credentials). After commit: a rolled-back registration never
+        // notifies, a committed one notifies exactly once.
         app(TelegramAdminNotifier::class)->event('user_registered', [
             'user' => $user->name ?? $user->username,
             'account' => (string) $user->id,
@@ -182,17 +211,28 @@ class AuthController extends Controller
         $phoneRequired = app(PhoneVerificationService::class)->isRequiredOnRegister();
         if ($emailVerification->isRequiredOnRegister()
             || ($emailVerification->isEnabled() && ! $phoneRequired)) {
-            $result = $emailVerification->requestCode($user, [
-                'ip' => $request->ip(),
-                'user_agent' => substr((string) $request->userAgent(), 0, 255),
-            ]);
+            if ($emailVerification->isMailConfigured()) {
+                $result = $emailVerification->requestCode($user, [
+                    'ip' => $request->ip(),
+                    'user_agent' => substr((string) $request->userAgent(), 0, 255),
+                ]);
 
+                return redirect()
+                    ->route('verification.notice')
+                    ->with(
+                        ($result['email_sent'] ?? false) ? 'success' : 'error',
+                        $result['message'],
+                    );
+            }
+
+            // Enabled but the mailer is UNUSABLE: create no OTP record and
+            // never strand the user on a page whose codes can't arrive —
+            // straight to the dashboard with an honest warning. (A "required"
+            // flag can't reach here: isRequiredOnRegister() already demands a
+            // usable mail configuration.)
             return redirect()
-                ->route('verification.notice')
-                ->with(
-                    ($result['email_sent'] ?? false) ? 'success' : 'error',
-                    $result['message'],
-                );
+                ->route('dashboard.index')
+                ->with('warning', 'ارسال ایمیل تایید در حال حاضر امکان‌پذیر نیست. می‌توانید بعداً از صفحه پروفایل، ایمیل خود را تایید کنید.');
         }
 
         // When OTP verification is mandatory at registration, send the code and

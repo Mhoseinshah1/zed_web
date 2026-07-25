@@ -6,6 +6,7 @@ use App\Jobs\SendEmailOtpJob;
 use App\Models\EmailVerificationCode;
 use App\Models\SiteSetting;
 use App\Models\User;
+use App\Support\MailFailure;
 use Illuminate\Auth\Events\Verified;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
@@ -61,8 +62,11 @@ class EmailVerificationService
      */
     public function isMailConfigured(): bool
     {
+        // null = the mailer graph itself is invalid (undefined name — e.g. the
+        // classic `smpt` typo — a cycle, or an empty composite). Conservative:
+        // an invalid graph is NEVER "configured".
         $transports = $this->effectiveTransports((string) config('mail.default'));
-        if ($transports === []) {
+        if ($transports === null || $transports === []) {
             return false;
         }
 
@@ -75,10 +79,10 @@ class EmailVerificationService
             return false;
         }
 
-        if (in_array('smtp', $transports, true)) {
-            $host = (string) config('mail.mailers.smtp.host');
-            $port = (int) config('mail.mailers.smtp.port');
-            if ($host === '' || $port <= 0) {
+        // EVERY effective transport must look usable — a failover chain is
+        // only as deliverable as its members.
+        foreach ($transports as $mailerName => $transport) {
+            if (! $this->transportLooksUsable((string) $mailerName, $transport)) {
                 return false;
             }
         }
@@ -87,28 +91,78 @@ class EmailVerificationService
     }
 
     /**
-     * Expand a mailer name into its effective transport list, unwrapping
-     * failover/roundrobin composites one level of nesting at a time.
+     * Expand a mailer name into its effective transports (mailer-name ⇒
+     * transport), unwrapping failover/roundrobin composites recursively with
+     * CYCLE detection via the visited set.
      *
-     * @return array<int,string>
+     * Returns null when the graph is invalid: undefined mailer name, a
+     * composite that references itself (directly or indirectly), an empty
+     * composite, or a member without a transport. Callers must treat null as
+     * NOT configured — Laravel's mail manager would reject it at send time.
+     *
+     * @param  array<int,string>  $visited
+     * @return array<string,string>|null
      */
-    private function effectiveTransports(string $mailer, int $depth = 0): array
+    private function effectiveTransports(string $mailer, array $visited = []): ?array
     {
-        if ($mailer === '' || $depth > 3) {
-            return [];
+        if ($mailer === '' || in_array($mailer, $visited, true)) {
+            return null;
         }
-        $conf = (array) config("mail.mailers.{$mailer}", []);
-        $transport = (string) ($conf['transport'] ?? $mailer);
+        $visited[] = $mailer;
+
+        $conf = config("mail.mailers.{$mailer}");
+        if (! is_array($conf)) {
+            return null;
+        }
+
+        $transport = (string) ($conf['transport'] ?? '');
+        if ($transport === '') {
+            return null;
+        }
+
         if (in_array($transport, ['failover', 'roundrobin'], true)) {
+            $children = array_values(array_filter((array) ($conf['mailers'] ?? [])));
+            if ($children === []) {
+                return null;
+            }
             $out = [];
-            foreach ((array) ($conf['mailers'] ?? []) as $child) {
-                $out = array_merge($out, $this->effectiveTransports((string) $child, $depth + 1));
+            foreach ($children as $child) {
+                $childTransports = $this->effectiveTransports((string) $child, $visited);
+                if ($childTransports === null) {
+                    return null;
+                }
+                $out += $childTransports;
             }
 
-            return array_values(array_unique($out));
+            return $out;
         }
 
-        return [$transport];
+        return [$mailer => $transport];
+    }
+
+    /**
+     * Per-transport plausibility check WITHOUT exposing any credential values:
+     * only presence/shape is inspected, nothing is returned or logged.
+     * Unknown transports fail conservatively.
+     */
+    private function transportLooksUsable(string $mailerName, string $transport): bool
+    {
+        return match ($transport) {
+            // Non-delivery transports: rejected in production by the caller;
+            // in dev/test they are intentionally accepted.
+            'log', 'array' => true,
+            'smtp' => (string) config("mail.mailers.{$mailerName}.host") !== ''
+                && (int) config("mail.mailers.{$mailerName}.port") > 0,
+            'sendmail' => (string) config("mail.mailers.{$mailerName}.path", '/usr/sbin/sendmail -bs') !== '',
+            // SES credentials may come from the AWS SDK default chain (env,
+            // instance profile) — require at least an explicit region.
+            'ses', 'ses-v2' => (string) config('services.ses.region') !== '',
+            'postmark' => (string) config('services.postmark.token') !== '',
+            'resend' => (string) config('services.resend.key') !== '',
+            'mailgun' => (string) config('services.mailgun.secret') !== ''
+                && (string) config('services.mailgun.domain') !== '',
+            default => false,
+        };
     }
 
     public function ttlMinutes(): int
@@ -162,6 +216,9 @@ class EmailVerificationService
             $q->where('user_id', $user->id)->orWhere('email', $user->email);
         })
             ->where('created_at', '>=', now()->subDay())
+            // Dispatch-failed records never queued an email — counting them
+            // would let a transient queue outage burn the daily budget.
+            ->where('send_status', '!=', EmailVerificationCode::SEND_STATUS_FAILED)
             ->count() >= $this->dailyCap();
     }
 
@@ -234,15 +291,22 @@ class EmailVerificationService
             SendEmailOtpJob::dispatch($record->id, $user->email, $code, $this->ttlMinutes());
         } catch (Throwable $e) {
             // NEVER pretend the code was sent when the dispatch itself failed.
-            $record->update([
+            // The record is consumed (used_at) so this never-queued attempt
+            // doesn't hold the resend cooldown against an immediate retry, and
+            // the stored error is a SANITIZED category — raw transport/queue
+            // exception text can echo credentials.
+            $record->forceFill([
                 'send_status' => EmailVerificationCode::SEND_STATUS_FAILED,
-                'send_error' => mb_substr('queue dispatch failed: '.$e->getMessage(), 0, 500),
-            ]);
+                'send_error' => MailFailure::summarize('queue dispatch failed', $e),
+                'used_at' => now(),
+            ])->save();
 
             return ['status' => 'error', 'message' => 'ارسال ایمیل با خطا مواجه شد. لطفاً دوباره تلاش کنید.', 'email_sent' => false];
         }
 
-        return ['status' => 'queued', 'message' => 'کد تایید به ایمیل شما ارسال شد.', 'email_sent' => true];
+        // HONEST wording: the code is QUEUED for delivery — nothing has been
+        // handed to a mail transport yet, so we never claim it was "sent".
+        return ['status' => 'queued', 'message' => 'کد تایید در صف ارسال قرار گرفت.', 'email_sent' => true];
     }
 
     // ── Verify ───────────────────────────────────────────────────────────────
@@ -254,13 +318,21 @@ class EmailVerificationService
      */
     public function verify(User $user, string $code): array
     {
-        // ATOMIC consumption: the row is locked for the whole check, the
-        // attempt counter increments under the lock, and success claims the
-        // code with a conditional update — two concurrent requests can never
-        // both consume one single-use code or overshoot maxAttempts().
+        // ATOMIC consumption: the USER row is locked first (serializing this
+        // path against changeAddress(), which takes the same lock), then the
+        // code row; the attempt counter increments under the lock, success
+        // claims the code with a conditional update, and email_verified_at is
+        // written in the SAME transaction — so a racing address change can
+        // never end with the new, unproven address marked verified by a code
+        // issued to the old one.
         $outcome = DB::transaction(function () use ($user, $code) {
-            $record = EmailVerificationCode::where('user_id', $user->id)
-                ->where('email', $user->email)
+            $lockedUser = User::whereKey($user->id)->lockForUpdate()->first();
+            if ($lockedUser === null) {
+                return ['status' => 'error', 'message' => 'کد تایید یافت نشد. یک کد جدید درخواست کنید.'];
+            }
+
+            $record = EmailVerificationCode::where('user_id', $lockedUser->id)
+                ->where('email', $lockedUser->email)
                 ->whereNull('used_at')
                 ->latest('id')
                 ->lockForUpdate()
@@ -291,15 +363,25 @@ class EmailVerificationService
             if ($claimed !== 1) {
                 return ['status' => 'error', 'message' => 'کد تایید یافت نشد. یک کد جدید درخواست کنید.'];
             }
-            $this->invalidateCodes($user);
+            $this->invalidateCodes($lockedUser);
 
-            return ['status' => 'verified', 'message' => 'ایمیل شما با موفقیت تایید شد.'];
+            $newlyVerified = false;
+            if ($lockedUser->email_verified_at === null) {
+                $lockedUser->forceFill(['email_verified_at' => now()])->save();
+                $newlyVerified = true;
+            }
+
+            return [
+                'status' => 'verified',
+                'message' => 'ایمیل شما با موفقیت تایید شد.',
+                'newly_verified' => $newlyVerified,
+            ];
         });
 
-        if ($outcome['status'] === 'verified' && $user->refresh()->email_verified_at === null) {
-            $user->forceFill(['email_verified_at' => now()])->save();
-            event(new Verified($user));
+        if (($outcome['newly_verified'] ?? false) === true) {
+            event(new Verified($user->refresh()));
         }
+        unset($outcome['newly_verified']);
 
         return $outcome;
     }

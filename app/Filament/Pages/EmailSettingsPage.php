@@ -2,9 +2,10 @@
 
 namespace App\Filament\Pages;
 
-use App\Mail\EmailOtpMail;
+use App\Mail\TestEmailMail;
 use App\Models\SiteSetting;
 use App\Services\Email\EmailVerificationService;
+use App\Support\MailFailure;
 use Filament\Actions\Action;
 use Filament\Actions\Concerns\InteractsWithActions;
 use Filament\Actions\Contracts\HasActions;
@@ -14,6 +15,7 @@ use Filament\Forms\Contracts\HasForms;
 use Filament\Forms\Form;
 use Filament\Notifications\Notification;
 use Filament\Pages\Page;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\RateLimiter;
 
@@ -151,8 +153,8 @@ class EmailSettingsPage extends Page implements HasActions, HasForms
                     ->placeholder('you@example.com'),
             ])
             ->action(function (array $data) {
-                // Rate-limited: 3 test emails per 10 minutes per admin.
-                $key = 'email-settings-test:'.(auth()->id() ?? 'guest');
+                // Rate-limited: 3 test emails per 10 minutes per admin+IP.
+                $key = 'email-test-send:'.(auth()->id() ?? 'guest').'|'.(string) request()->ip();
                 if (! RateLimiter::attempt($key, 3, fn () => null, 600)) {
                     Notification::make()
                         ->title('تعداد ایمیل‌های تست بیش از حد مجاز است. چند دقیقه دیگر تلاش کنید.')
@@ -161,15 +163,35 @@ class EmailSettingsPage extends Page implements HasActions, HasForms
                     return;
                 }
 
-                try {
-                    // Harmless test message, sent synchronously so the result
-                    // is the TRUE transport outcome. Never includes secrets.
-                    Mail::to((string) $data['test_email'])
-                        ->send(new EmailOtpMail('000000', 1));
-                    Notification::make()->title('ایمیل تست با موفقیت ارسال شد.')->success()->send();
-                } catch (\Throwable $e) {
+                // A test through log/array (or a failover chain containing
+                // them, or an undefined mailer) would "succeed" without any
+                // real delivery — refuse instead of reporting a false pass.
+                if (! $this->mailLooksConfigured()) {
                     Notification::make()
-                        ->title('ارسال ایمیل تست ناموفق بود: '.$e->getMessage())
+                        ->title('پیکربندی ایمیل قابل استفاده نیست — ارسال تست انجام نشد. mailer فعلی: '.$this->mailerName())
+                        ->danger()->send();
+
+                    return;
+                }
+
+                try {
+                    // Dedicated harmless test message (never a fake OTP), sent
+                    // synchronously so the result is the transport's own
+                    // verdict. Never includes secrets.
+                    Mail::to((string) $data['test_email'])
+                        ->send(new TestEmailMail);
+                    // HONEST wording: the transport ACCEPTED the message —
+                    // inbox delivery can never be confirmed from here.
+                    Notification::make()
+                        ->title('سرور ایمیل پیام تست را پذیرفت. رسیدن به صندوق ورودی را در مقصد بررسی کنید.')
+                        ->success()->send();
+                } catch (\Throwable $e) {
+                    // NEVER show or log raw transport text (it can echo SMTP
+                    // credentials) — only the sanitized category.
+                    $safe = MailFailure::summarize('test email failed', $e);
+                    Log::warning('Admin test email failed', ['error' => $safe]);
+                    Notification::make()
+                        ->title('ارسال ایمیل تست ناموفق بود ('.MailFailure::categorize($e).'). جزئیات در لاگ سرور ثبت شد.')
                         ->danger()->send();
                 }
             });

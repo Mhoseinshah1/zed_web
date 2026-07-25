@@ -96,13 +96,13 @@ Route::middleware(['noindex', 'auth'])->group(function () {
     Route::get('/email/verify', [EmailVerificationController::class, 'notice'])
         ->name('verification.notice');
     Route::post('/email/verify', [EmailVerificationController::class, 'verify'])
-        ->middleware('throttle:10,1')
+        ->middleware('throttle:email-verification-verify')
         ->name('verification.verify');
     Route::post('/email/verification/resend', [EmailVerificationController::class, 'resend'])
-        ->middleware('throttle:5,10')
+        ->middleware('throttle:email-verification-resend')
         ->name('verification.resend');
     Route::patch('/email/verification/change-address', [EmailVerificationController::class, 'changeAddress'])
-        ->middleware('throttle:5,10')
+        ->middleware('throttle:email-verification-change')
         ->name('verification.change');
 });
 
