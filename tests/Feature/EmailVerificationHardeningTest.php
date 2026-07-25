@@ -1372,14 +1372,38 @@ class EmailVerificationHardeningTest extends TestCase
         $this->assertNotNull($user->fresh()->email_verified_at);
         $this->assertNotNull($pending->fresh()->used_at, 'explicit verification invalidates pending codes');
 
-        // require_verification: timestamp cleared.
+        // require_verification: timestamp cleared AND the obligation marker
+        // imposed — the action must actually enforce, not just advertise.
         $svc->applyAdminUpdate($user, ['email_verification_action' => 'require_verification']);
-        $this->assertNull($user->fresh()->email_verified_at);
+        $fresh = $user->fresh();
+        $this->assertNull($fresh->email_verified_at);
+        $this->assertTrue((bool) $fresh->email_verification_required_at_registration);
 
         // A raw email_verified_at value in the payload is stripped, never
         // mass-assigned.
         $svc->applyAdminUpdate($user, ['email_verified_at' => now()->subYear(), 'email_verification_action' => 'keep']);
         $this->assertNull($user->fresh()->email_verified_at, 'no silent DateTimePicker-style assignment survives');
+    }
+
+    public function test_admin_require_verification_actually_enforces_for_unobligated_accounts(): void
+    {
+        // An account created OUTSIDE required mode (marker false) that the
+        // middleware would normally bypass forever.
+        $user = User::factory()->create(['email' => 'exempt.user@example.com', 'email_verified_at' => null]);
+        $this->assertFalse((bool) $user->email_verification_required_at_registration);
+        $this->actingAs($user)->get('/dashboard')->assertOk();
+
+        app(EmailVerificationService::class)->applyAdminUpdate($user, [
+            'email_verification_action' => 'require_verification',
+        ]);
+
+        // The admin's explicit demand imposes the per-user obligation: with
+        // global enforcement active (setUp), the dashboard is now gated.
+        $fresh = $user->fresh();
+        $this->assertTrue((bool) $fresh->email_verification_required_at_registration);
+        auth()->logout();
+        $this->app['auth']->forgetGuards();
+        $this->actingAs($fresh)->get('/dashboard')->assertRedirect(route('verification.notice'));
     }
 
     public function test_changing_the_email_demands_an_explicit_verification_policy(): void

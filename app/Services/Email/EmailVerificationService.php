@@ -862,7 +862,16 @@ class EmailVerificationService
                     $lockedUser->forceFill(['email_verified_at' => now()]);
                 } elseif ($action === 'require_verification') {
                     $this->invalidateCodes($lockedUser);
-                    $lockedUser->forceFill(['email_verified_at' => null]);
+                    // The admin EXPLICITLY imposes the obligation: without the
+                    // per-user marker, EnsureEmailIsVerified would bypass an
+                    // account registered before/outside required mode and the
+                    // action would only advertise enforcement. (Enforcement
+                    // still also demands the global fail-safe policy —
+                    // enabled + required + proven transport.)
+                    $lockedUser->forceFill([
+                        'email_verified_at' => null,
+                        'email_verification_required_at_registration' => true,
+                    ]);
                 }
 
                 $lockedUser->fill($data);
