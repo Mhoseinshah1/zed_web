@@ -6,6 +6,7 @@ use App\Filament\Pages\EmailSettingsPage;
 use App\Filament\Resources\UserResource\Pages\EditUser;
 use App\Jobs\SendEmailOtpJob;
 use App\Models\EmailVerificationCode;
+use App\Models\PhoneVerificationCode;
 use App\Models\Plan;
 use App\Models\SiteSetting;
 use App\Models\User;
@@ -474,6 +475,130 @@ class EmailVerificationTest extends TestCase
             filter_var(SiteSetting::get('email_verification_required_on_register', false), FILTER_VALIDATE_BOOLEAN),
             'required flag must be refused while mail is unconfigured',
         );
+    }
+
+    // ── Codex review regressions ─────────────────────────────────────────────
+
+    public function test_failover_mailer_containing_log_is_unconfigured_in_production(): void
+    {
+        config(['mail.default' => 'failover']);   // repo default: smtp → log
+        $this->app->detectEnvironment(fn () => 'production');
+
+        $svc = app(EmailVerificationService::class);
+        $this->assertFalse($svc->isMailConfigured(), 'a log fallback silently discards OTPs');
+        $this->assertFalse($svc->isRequiredOnRegister());
+    }
+
+    public function test_request_code_refused_while_feature_disabled(): void
+    {
+        SiteSetting::set('email_verification_enabled', 'false');
+        Queue::fake();
+        $user = $this->unverifiedUser();
+
+        $result = app(EmailVerificationService::class)->requestCode($user);
+
+        $this->assertSame('error', $result['status']);
+        $this->assertSame(0, EmailVerificationCode::count());
+        Queue::assertNothingPushed();
+
+        // The resend endpoint honors the switch too.
+        $this->actingAs($user)->from('/email/verify')->post('/email/verification/resend');
+        $this->assertSame(0, EmailVerificationCode::count());
+    }
+
+    public function test_delivered_email_is_recorded_sent_not_stuck_queued(): void
+    {
+        // Sync queue: the job runs before requestCode() returns — its terminal
+        // `sent` state must survive (queued is written BEFORE dispatch).
+        Mail::fake();
+        $user = $this->unverifiedUser();
+
+        app(EmailVerificationService::class)->requestCode($user);
+
+        $this->assertSame(
+            EmailVerificationCode::SEND_STATUS_SENT,
+            EmailVerificationCode::first()->send_status,
+        );
+    }
+
+    public function test_stale_queued_job_is_skipped_never_sending_an_obsolete_code(): void
+    {
+        Mail::fake();
+        $user = $this->unverifiedUser(['email' => 'first@example.com']);
+        Queue::fake();   // capture, don't run
+        app(EmailVerificationService::class)->requestCode($user);
+        $record = EmailVerificationCode::first();
+
+        // The user corrects their address while the job waits in the queue.
+        $user->forceFill(['email' => 'second@example.com'])->save();
+        app(EmailVerificationService::class)->invalidateCodes($user);
+
+        (new SendEmailOtpJob($record->id, 'first@example.com', '123456', 10))->handle();
+
+        Mail::assertNothingSent();
+        $this->assertSame(EmailVerificationCode::SEND_STATUS_SKIPPED, $record->fresh()->send_status);
+    }
+
+    public function test_notice_page_shows_remaining_cooldown_not_the_full_window(): void
+    {
+        Mail::fake();
+        $user = $this->unverifiedUser();
+        app(EmailVerificationService::class)->requestCode($user);
+
+        $this->travel(45)->seconds();
+
+        $remaining = app(EmailVerificationService::class)->resendCooldownRemaining($user);
+        $this->assertGreaterThan(0, $remaining);
+        $this->assertLessThanOrEqual(15, $remaining, 'must be the REMAINING seconds, not the full 60');
+
+        $this->travel(20)->seconds();
+        $this->assertSame(0, app(EmailVerificationService::class)->resendCooldownRemaining($user));
+    }
+
+    public function test_optional_email_with_required_phone_preserves_the_phone_flow(): void
+    {
+        SiteSetting::set('email_verification_required_on_register', 'false');   // optional
+        SiteSetting::set('sms_enabled', 'true');
+        SiteSetting::set('sms_provider', 'kavenegar');
+        SiteSetting::set('phone_verification_enabled', 'true');
+        SiteSetting::set('phone_verification_required_on_register', 'true');
+        SmsService::storeApiKey('test-key-123');
+        Mail::fake();
+
+        $response = $this->post('/register', $this->registrationPayload(['email' => 'optemail@example.com']));
+
+        // The MANDATORY phone step wins: phone OTP sent, profile-complete next.
+        $response->assertRedirect(route('dashboard.profile.complete'));
+        $user = User::where('email', 'optemail@example.com')->first();
+        $this->assertSame(1, PhoneVerificationCode::where('user_id', $user->id)->count());
+    }
+
+    public function test_phone_otp_is_sent_after_the_required_email_step(): void
+    {
+        SiteSetting::set('sms_enabled', 'true');
+        SiteSetting::set('sms_provider', 'kavenegar');
+        SiteSetting::set('phone_verification_enabled', 'true');
+        SiteSetting::set('phone_verification_required_on_register', 'true');
+        SmsService::storeApiKey('test-key-123');
+
+        $user = $this->unverifiedUser(['phone_verified_at' => null]);
+        [, $code] = $this->issueCode($user);
+
+        $this->actingAs($user)->post('/email/verify', ['code' => $code])
+            ->assertRedirect(route('dashboard.profile.complete'));
+
+        // The deferred REQUIRED phone flow continues: its OTP exists now.
+        $this->assertSame(1, PhoneVerificationCode::where('user_id', $user->id)->count());
+    }
+
+    public function test_email_change_uniqueness_is_case_insensitive(): void
+    {
+        User::factory()->create(['email' => 'Victim@EXAMPLE.COM']);
+        $user = $this->unverifiedUser(['password' => Hash::make('secret-pass-1')]);
+
+        $this->actingAs($user)->from('/email/verify')->patch('/email/verification/change-address', [
+            'email' => 'victim@example.com', 'password' => 'secret-pass-1',
+        ])->assertSessionHasErrors('email');
     }
 
     public function test_intended_destination_preserved_after_verification(): void

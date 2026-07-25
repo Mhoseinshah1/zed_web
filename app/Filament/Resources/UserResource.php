@@ -16,6 +16,7 @@ use Filament\Notifications\Notification;
 use Filament\Resources\Resource;
 use Filament\Tables;
 use Filament\Tables\Table;
+use Illuminate\Database\Eloquent\Model;
 
 class UserResource extends Resource
 {
@@ -61,6 +62,17 @@ class UserResource extends Resource
                     ->email()
                     ->required()
                     ->unique(ignoreRecord: true)
+                    // Case-INSENSITIVE uniqueness (PostgreSQL's varchar unique
+                    // index is case-sensitive; the stored value is lowercased
+                    // on save, so Victim@X must collide with victim@x here).
+                    ->rule(fn (?Model $record) => function (string $attribute, mixed $value, \Closure $fail) use ($record) {
+                        $exists = User::whereRaw('lower(email) = ?', [strtolower(trim((string) $value))])
+                            ->when($record, fn ($q) => $q->whereKeyNot($record->getKey()))
+                            ->exists();
+                        if ($exists) {
+                            $fail('این ایمیل قبلاً ثبت شده است.');
+                        }
+                    })
                     ->maxLength(255),
                 Forms\Components\Toggle::make('email_change_mark_verified')
                     ->label('ایمیل جدید تاییدشده در نظر گرفته شود')

@@ -3,10 +3,10 @@
 namespace App\Http\Controllers\Auth;
 
 use App\Http\Controllers\Controller;
+use App\Models\User;
 use App\Services\Email\EmailVerificationService;
 use App\Services\Phone\PhoneVerificationService;
 use Illuminate\Http\Request;
-use Illuminate\Validation\Rule;
 
 /**
  * The email-OTP verification flow: notice page (never sends on GET), code
@@ -30,7 +30,9 @@ class EmailVerificationController extends Controller
 
         return view('auth.verify-email', [
             'maskedEmail' => $this->maskEmail((string) $user->email),
-            'cooldownSeconds' => $this->verification->canResend($user) ? 0 : $this->verification->resendCooldownSeconds(),
+            // The REMAINING seconds only — refreshing must never restart the
+            // client countdown past what the server actually enforces.
+            'cooldownSeconds' => $this->verification->resendCooldownRemaining($user),
             'ttlMinutes' => $this->verification->ttlMinutes(),
         ]);
     }
@@ -58,8 +60,15 @@ class EmailVerificationController extends Controller
         }
 
         // Onboarding order: email → phone/profile completion → dashboard.
+        // The phone-required flow CONTINUES here: its OTP is sent now (the
+        // registration handler deferred it while the email step ran).
         $phone = app(PhoneVerificationService::class);
         if ($phone->isRequiredOnRegister() && ! $user->refresh()->hasVerifiedPhone()) {
+            $phone->requestCode($user, [
+                'ip' => $request->ip(),
+                'user_agent' => substr((string) $request->userAgent(), 0, 255),
+            ]);
+
             return redirect()->route('dashboard.profile.complete')
                 ->with('success', $result['message']);
         }
@@ -95,15 +104,27 @@ class EmailVerificationController extends Controller
     {
         $user = $request->user();
 
+        // Normalize BEFORE validation so uniqueness is checked against the
+        // value that will be stored (and case-insensitively — PostgreSQL's
+        // varchar unique index would otherwise let Victim@X and victim@x
+        // coexist as two accounts for one mailbox).
+        $request->merge(['email' => strtolower(trim((string) $request->input('email')))]);
+
         $validated = $request->validate([
             'password' => ['required', 'current_password'],
             'email' => [
                 'required', 'string', 'email', 'max:255',
-                Rule::unique('users', 'email')->ignore($user->id),
+                function (string $attribute, mixed $value, \Closure $fail) use ($user) {
+                    $exists = User::whereRaw('lower(email) = ?', [strtolower(trim((string) $value))])
+                        ->whereKeyNot($user->id)
+                        ->exists();
+                    if ($exists) {
+                        $fail('این ایمیل قبلاً ثبت شده است.');
+                    }
+                },
             ],
         ], [
             'password.current_password' => 'رمز عبور فعلی اشتباه است.',
-            'email.unique' => 'این ایمیل قبلاً ثبت شده است.',
             'email.email' => 'آدرس ایمیل معتبر نیست.',
         ]);
 

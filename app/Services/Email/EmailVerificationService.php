@@ -7,6 +7,7 @@ use App\Models\EmailVerificationCode;
 use App\Models\SiteSetting;
 use App\Models\User;
 use Illuminate\Auth\Events\Verified;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Throwable;
 
@@ -53,11 +54,19 @@ class EmailVerificationService
      * Whether outbound mail looks genuinely deliverable. In production the
      * `log` and `array` mailers are NOT configuration — they silently discard
      * mail, so treating them as configured would strand unverified users.
+     * COMPOSITE mailers (failover/roundrobin) are expanded: the repository's
+     * default `failover` chains smtp → log, and a log fallback would report a
+     * "successful" send without delivering the OTP — so any composite that
+     * contains a non-delivery transport is rejected in production too.
      */
     public function isMailConfigured(): bool
     {
-        $mailer = (string) config('mail.default');
-        if (app()->environment('production') && in_array($mailer, ['log', 'array'], true)) {
+        $transports = $this->effectiveTransports((string) config('mail.default'));
+        if ($transports === []) {
+            return false;
+        }
+
+        if (app()->environment('production') && array_intersect($transports, ['log', 'array']) !== []) {
             return false;
         }
 
@@ -66,7 +75,7 @@ class EmailVerificationService
             return false;
         }
 
-        if ($mailer === 'smtp') {
+        if (in_array('smtp', $transports, true)) {
             $host = (string) config('mail.mailers.smtp.host');
             $port = (int) config('mail.mailers.smtp.port');
             if ($host === '' || $port <= 0) {
@@ -75,6 +84,31 @@ class EmailVerificationService
         }
 
         return true;
+    }
+
+    /**
+     * Expand a mailer name into its effective transport list, unwrapping
+     * failover/roundrobin composites one level of nesting at a time.
+     *
+     * @return array<int,string>
+     */
+    private function effectiveTransports(string $mailer, int $depth = 0): array
+    {
+        if ($mailer === '' || $depth > 3) {
+            return [];
+        }
+        $conf = (array) config("mail.mailers.{$mailer}", []);
+        $transport = (string) ($conf['transport'] ?? $mailer);
+        if (in_array($transport, ['failover', 'roundrobin'], true)) {
+            $out = [];
+            foreach ((array) ($conf['mailers'] ?? []) as $child) {
+                $out = array_merge($out, $this->effectiveTransports((string) $child, $depth + 1));
+            }
+
+            return array_values(array_unique($out));
+        }
+
+        return [$transport];
     }
 
     public function ttlMinutes(): int
@@ -102,11 +136,24 @@ class EmailVerificationService
 
     public function canResend(User $user): bool
     {
-        return ! EmailVerificationCode::where('user_id', $user->id)
+        return $this->resendCooldownRemaining($user) === 0;
+    }
+
+    /** Seconds until the user may request another code (0 = allowed now). */
+    public function resendCooldownRemaining(User $user): int
+    {
+        $latest = EmailVerificationCode::where('user_id', $user->id)
             ->where('email', $user->email)
             ->whereNull('used_at')
-            ->where('created_at', '>=', now()->subSeconds($this->resendCooldownSeconds()))
-            ->exists();
+            ->latest('id')
+            ->first();
+        if ($latest === null) {
+            return 0;
+        }
+        $availableAt = $latest->created_at->addSeconds($this->resendCooldownSeconds());
+        $remaining = now()->diffInSeconds($availableAt, false);
+
+        return $remaining > 0 ? (int) ceil($remaining) : 0;
     }
 
     public function reachedDailyCap(User $user): bool
@@ -132,39 +179,59 @@ class EmailVerificationService
      */
     public function requestCode(User $user, array $meta = []): array
     {
+        // The administrator's disable switch is authoritative even for direct
+        // POSTs to the resend endpoint — no records, no mail while disabled.
+        if (! $this->isEnabled()) {
+            return ['status' => 'error', 'message' => 'تایید ایمیل در حال حاضر غیرفعال است.', 'email_sent' => false];
+        }
+
         if (! $this->isMailConfigured()) {
             return ['status' => 'error', 'message' => 'ارسال ایمیل در حال حاضر پیکربندی نشده است. لطفاً بعداً تلاش کنید یا با پشتیبانی تماس بگیرید.', 'email_sent' => false];
         }
 
-        if (! $this->canResend($user)) {
-            return ['status' => 'rate_limited', 'message' => 'برای ارسال مجدد کد کمی صبر کنید.', 'email_sent' => false];
+        // Serialize issuance per user: the resend/daily-cap gates, the
+        // invalidation, and the insert all run while holding the user row
+        // lock, so two concurrent requests cannot both pass the gates.
+        [$record, $code, $limited] = DB::transaction(function () use ($user, $meta) {
+            User::whereKey($user->id)->lockForUpdate()->first();
+
+            if (! $this->canResend($user)) {
+                return [null, null, 'برای ارسال مجدد کد کمی صبر کنید.'];
+            }
+            if ($this->reachedDailyCap($user)) {
+                return [null, null, 'تعداد درخواست کد تایید در شبانه‌روز به حداکثر رسیده است. لطفاً فردا دوباره تلاش کنید.'];
+            }
+
+            // Single active code: invalidate every previous unused code first.
+            $this->invalidateCodes($user);
+
+            $code = (string) random_int(100000, 999999);
+
+            // Recorded as QUEUED up front: the sync driver (and a fast Redis
+            // worker) can run the job before this method resumes, and the
+            // job's terminal `sent` state must never be overwritten.
+            $record = EmailVerificationCode::create([
+                'user_id' => $user->id,
+                'email' => $user->email,
+                'code_hash' => Hash::make($code),
+                'expires_at' => now()->addMinutes($this->ttlMinutes()),
+                'attempts' => 0,
+                'send_status' => EmailVerificationCode::SEND_STATUS_QUEUED,
+                'ip_address' => $meta['ip'] ?? null,
+                'user_agent' => $meta['user_agent'] ?? null,
+            ]);
+
+            return [$record, $code, null];
+        });
+
+        if ($limited !== null) {
+            return ['status' => 'rate_limited', 'message' => $limited, 'email_sent' => false];
         }
-
-        if ($this->reachedDailyCap($user)) {
-            return ['status' => 'rate_limited', 'message' => 'تعداد درخواست کد تایید در شبانه‌روز به حداکثر رسیده است. لطفاً فردا دوباره تلاش کنید.', 'email_sent' => false];
-        }
-
-        // Single active code: invalidate every previous unused code first.
-        $this->invalidateCodes($user);
-
-        $code = (string) random_int(100000, 999999);
-
-        $record = EmailVerificationCode::create([
-            'user_id' => $user->id,
-            'email' => $user->email,
-            'code_hash' => Hash::make($code),
-            'expires_at' => now()->addMinutes($this->ttlMinutes()),
-            'attempts' => 0,
-            'send_status' => EmailVerificationCode::SEND_STATUS_PENDING,
-            'ip_address' => $meta['ip'] ?? null,
-            'user_agent' => $meta['user_agent'] ?? null,
-        ]);
 
         try {
             // afterCommit inside the job: it is dispatched only after the
             // surrounding database transaction (if any) commits.
             SendEmailOtpJob::dispatch($record->id, $user->email, $code, $this->ttlMinutes());
-            $record->update(['send_status' => EmailVerificationCode::SEND_STATUS_QUEUED]);
         } catch (Throwable $e) {
             // NEVER pretend the code was sent when the dispatch itself failed.
             $record->update([
@@ -187,40 +254,54 @@ class EmailVerificationService
      */
     public function verify(User $user, string $code): array
     {
-        $record = EmailVerificationCode::where('user_id', $user->id)
-            ->where('email', $user->email)
-            ->whereNull('used_at')
-            ->latest('id')
-            ->first();
+        // ATOMIC consumption: the row is locked for the whole check, the
+        // attempt counter increments under the lock, and success claims the
+        // code with a conditional update — two concurrent requests can never
+        // both consume one single-use code or overshoot maxAttempts().
+        $outcome = DB::transaction(function () use ($user, $code) {
+            $record = EmailVerificationCode::where('user_id', $user->id)
+                ->where('email', $user->email)
+                ->whereNull('used_at')
+                ->latest('id')
+                ->lockForUpdate()
+                ->first();
 
-        if (! $record) {
-            return ['status' => 'error', 'message' => 'کد تایید یافت نشد. یک کد جدید درخواست کنید.'];
-        }
+            if (! $record) {
+                return ['status' => 'error', 'message' => 'کد تایید یافت نشد. یک کد جدید درخواست کنید.'];
+            }
 
-        if ($record->isExpired()) {
-            return ['status' => 'expired', 'message' => 'کد تایید منقضی شده است. یک کد جدید درخواست کنید.'];
-        }
+            if ($record->isExpired()) {
+                return ['status' => 'expired', 'message' => 'کد تایید منقضی شده است. یک کد جدید درخواست کنید.'];
+            }
 
-        if ($record->attempts >= $this->maxAttempts()) {
-            return ['status' => 'too_many_attempts', 'message' => 'تعداد تلاش‌ها بیش از حد مجاز است. یک کد جدید درخواست کنید.'];
-        }
+            if ($record->attempts >= $this->maxAttempts()) {
+                return ['status' => 'too_many_attempts', 'message' => 'تعداد تلاش‌ها بیش از حد مجاز است. یک کد جدید درخواست کنید.'];
+            }
 
-        $record->increment('attempts');
+            $record->increment('attempts');
 
-        if (! Hash::check($code, $record->code_hash)) {
-            return ['status' => 'invalid', 'message' => 'کد تایید اشتباه است.'];
-        }
+            if (! Hash::check($code, $record->code_hash)) {
+                return ['status' => 'invalid', 'message' => 'کد تایید اشتباه است.'];
+            }
 
-        // Success: single-use — consume this code AND invalidate the rest.
-        $record->update(['used_at' => now()]);
-        $this->invalidateCodes($user);
+            // Claim the single-use code: only one request can flip used_at.
+            $claimed = EmailVerificationCode::whereKey($record->id)
+                ->whereNull('used_at')
+                ->update(['used_at' => now()]);
+            if ($claimed !== 1) {
+                return ['status' => 'error', 'message' => 'کد تایید یافت نشد. یک کد جدید درخواست کنید.'];
+            }
+            $this->invalidateCodes($user);
 
-        if ($user->email_verified_at === null) {
+            return ['status' => 'verified', 'message' => 'ایمیل شما با موفقیت تایید شد.'];
+        });
+
+        if ($outcome['status'] === 'verified' && $user->refresh()->email_verified_at === null) {
             $user->forceFill(['email_verified_at' => now()])->save();
             event(new Verified($user));
         }
 
-        return ['status' => 'verified', 'message' => 'ایمیل شما با موفقیت تایید شد.'];
+        return $outcome;
     }
 
     /** Mark every unused code for this user as consumed. */

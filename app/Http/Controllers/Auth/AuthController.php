@@ -171,8 +171,17 @@ class AuthController extends Controller
         // commits (afterCommit) and the message is HONEST about the outcome.
         // When the feature is disabled this block is skipped entirely — no
         // code, no records, unchanged legacy behavior.
+        //
+        // A REQUIRED phone step is never abandoned: when email verification is
+        // merely OPTIONAL while phone verification is required, the mandatory
+        // phone flow below runs exactly as before (email verification stays
+        // available from the profile). When email verification is REQUIRED,
+        // the phone OTP is sent right after the email step succeeds (see
+        // EmailVerificationController::verify).
         $emailVerification = app(EmailVerificationService::class);
-        if ($emailVerification->isEnabled()) {
+        $phoneRequired = app(PhoneVerificationService::class)->isRequiredOnRegister();
+        if ($emailVerification->isRequiredOnRegister()
+            || ($emailVerification->isEnabled() && ! $phoneRequired)) {
             $result = $emailVerification->requestCode($user, [
                 'ip' => $request->ip(),
                 'user_agent' => substr((string) $request->userAgent(), 0, 255),

@@ -46,6 +46,26 @@ class SendEmailOtpJob implements ShouldBeEncrypted, ShouldQueue
 
     public function handle(): void
     {
+        // A queue backlog can outlive the code: skip OBSOLETE jobs whose
+        // record was consumed/invalidated, expired, or whose address no longer
+        // matches the user's current email (e.g. corrected after a typo) —
+        // never email a stale OTP, especially not to a corrected-away address.
+        $record = EmailVerificationCode::with('user')->find($this->codeId);
+        if (
+            $record === null
+            || $record->used_at !== null
+            || $record->expires_at->isPast()
+            || strcasecmp($record->email, $this->email) !== 0
+            || $record->user === null
+            || strcasecmp((string) $record->user->email, $this->email) !== 0
+        ) {
+            EmailVerificationCode::whereKey($this->codeId)->update([
+                'send_status' => EmailVerificationCode::SEND_STATUS_SKIPPED,
+            ]);
+
+            return;
+        }
+
         Mail::to($this->email)->send(new EmailOtpMail($this->code, $this->ttlMinutes));
 
         EmailVerificationCode::whereKey($this->codeId)->update([
