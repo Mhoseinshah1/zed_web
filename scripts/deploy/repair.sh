@@ -80,11 +80,18 @@ zrp_scan_scheduler() {
 }
 
 zrp_scan_nginx() {
-    local base="$(zpd_base)"
+    local base="$(zpd_base)" issues=0
     if zpd_nginx_root_ok "$(zpd_nginx_conf_path)" "$base"; then
-        echo "  ok   nginx root serves current/public"; return 0
+        echo "  ok   nginx root serves current/public"
+    else
+        echo "  FIX  nginx root is not on current/public"; issues=$((issues + 1))
     fi
-    echo "  FIX  nginx root is not on current/public"; return 1
+    if zpd_nginx_robots_ok "$(zpd_nginx_conf_path)"; then
+        echo "  ok   nginx robots.txt location reaches Laravel"
+    else
+        echo "  FIX  nginx robots.txt location lacks the Laravel fallback (dynamic robots.txt would 404)"; issues=$((issues + 1))
+    fi
+    return "$issues"
 }
 
 zrp_scan_supervisor() {

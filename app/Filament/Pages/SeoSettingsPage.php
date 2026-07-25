@@ -93,7 +93,9 @@ class SeoSettingsPage extends Page implements HasForms
             Forms\Components\Section::make('تایید موتور جستجو و آنالیتیکس')->collapsed()->schema([
                 Forms\Components\TextInput::make('seo_google_verification')->label('کد تایید گوگل')->maxLength(120),
                 Forms\Components\TextInput::make('seo_bing_verification')->label('کد تایید Bing')->maxLength(120),
-                Forms\Components\TextInput::make('seo_google_analytics_id')->label('شناسه Google Analytics')->placeholder('G-XXXXXXX')->maxLength(40),
+                Forms\Components\TextInput::make('seo_google_analytics_id')->label('شناسه Google Analytics')->placeholder('G-XXXXXXX')->maxLength(40)
+                    ->regex('/^G-[A-Z0-9]{4,20}$/')
+                    ->validationMessages(['regex' => 'شناسه باید به شکل G-XXXXXXXXXX باشد (حروف بزرگ و ارقام).']),
             ])->columns(3),
         ])->statePath('data');
     }

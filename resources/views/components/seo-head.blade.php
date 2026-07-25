@@ -68,6 +68,23 @@
 <meta name="msvalidate.01" content="{{ $bing }}">
 @endif
 
+{{-- Google Analytics (GA4) — rendered ONLY from the validated accessor
+     (SeoSettings::googleAnalyticsId(): trim + uppercase + strict G- format;
+     invalid/empty → ''), and ONLY on indexable responses: $seo->index is the
+     ALREADY-RESOLVED SeoData verdict, so forced-noindex prefixes and the
+     noindex SeoPage records (login/register) suppress Analytics with no
+     second path list. layouts.panel has no <x-seo-head />, so private
+     dashboard pages never reach this block at all. Emitted at most once. --}}
+@if($seo->index && ($gaId = SeoSettings::googleAnalyticsId()) !== '')
+<script async src="https://www.googletagmanager.com/gtag/js?id={{ $gaId }}"></script>
+<script>
+    window.dataLayer = window.dataLayer || [];
+    function gtag(){dataLayer.push(arguments);}
+    gtag('js', new Date());
+    gtag('config', '{{ $gaId }}');
+</script>
+@endif
+
 {{-- JSON-LD structured data — safe encoding; </script> can never break out. --}}
 @foreach($seo->schemas as $schema)
 <script type="application/ld+json">{!! json_encode($schema, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) !!}</script>

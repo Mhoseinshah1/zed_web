@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Http\Controllers\RobotsController;
 use App\Models\Faq;
 use App\Models\Page;
 use App\Models\Plan;
@@ -10,6 +11,7 @@ use App\Models\Tutorial;
 use App\Models\User;
 use App\Services\Seo\SeoManager;
 use App\Services\Seo\SeoSettings;
+use Database\Seeders\DefaultPagesSeeder;
 use Database\Seeders\SeoPageSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Cache;
@@ -182,7 +184,10 @@ class SeoTest extends TestCase
     public function test_production_robots_txt(): void
     {
         $this->app->detectEnvironment(fn () => 'production');
-        $body = $this->get('/robots.txt')->assertOk()->getContent();
+        $response = $this->get('/robots.txt');
+        $response->assertStatus(200);
+        $response->assertHeader('Content-Type', 'text/plain; charset=UTF-8');
+        $body = $response->getContent();
         $this->assertStringContainsString('User-agent: *', $body);
         $this->assertStringContainsString('Disallow: /dashboard/', $body);
         $this->assertStringContainsString('Disallow: /zed-admin/', $body);
@@ -337,5 +342,99 @@ class SeoTest extends TestCase
         $this->assertTrue(SeoManager::isForcedNoindexPath('payments/centralpay/callback'));
         $this->assertFalse(SeoManager::isForcedNoindexPath('plans'));
         $this->assertFalse(SeoManager::isForcedNoindexPath(''));
+    }
+
+    // ── Production-correctness fixes ─────────────────────────────────────────
+
+    public function test_no_static_robots_txt_file_exists(): void
+    {
+        // A static file would shadow the dynamic RobotsController through
+        // nginx try_files — Laravel must be the only robots.txt source.
+        $this->assertFileDoesNotExist(public_path('robots.txt'));
+        $this->assertFileDoesNotExist(base_path('public/robots.txt'));
+    }
+
+    public function test_robots_route_resolves_to_the_dynamic_controller(): void
+    {
+        $route = app('router')->getRoutes()->getByName('robots');
+        $this->assertNotNull($route);
+        $this->assertSame(RobotsController::class, $route->getActionName());
+    }
+
+    public function test_pretty_aliases_redirect_permanently_to_active_pages(): void
+    {
+        (new DefaultPagesSeeder)->run();
+
+        foreach (['terms', 'privacy', 'about'] as $slug) {
+            $response = $this->get('/'.$slug);
+            $response->assertStatus(301);                                     // exact 301, never 302
+            $this->assertStringContainsString('/pages/'.$slug, $response->headers->get('Location'));
+
+            // The 301 destination must be a live, active page (a permanent
+            // redirect at a dead page would be cached forever by crawlers)…
+            $page = $this->get('/pages/'.$slug);
+            $page->assertStatus(200);
+            // …whose canonical points at the canonical /pages/{slug} URL.
+            $this->assertStringContainsString(
+                '<link rel="canonical" href="'.url('/pages/'.$slug).'"',
+                $page->getContent()
+            );
+        }
+    }
+
+    // ── Google Analytics rendering ───────────────────────────────────────────
+
+    public function test_ga_absent_when_id_empty(): void
+    {
+        $html = $this->get('/')->assertOk()->getContent();
+        $this->assertStringNotContainsString('googletagmanager.com/gtag', $html);
+    }
+
+    public function test_ga_rendered_exactly_once_for_valid_id(): void
+    {
+        SeoSettings::set('seo_google_analytics_id', 'G-AB12CD34EF');
+        $html = $this->get('/')->assertOk()->getContent();
+        $this->assertSame(1, substr_count($html, 'googletagmanager.com/gtag/js?id=G-AB12CD34EF'));
+        $this->assertSame(1, substr_count($html, "gtag('config', 'G-AB12CD34EF')"));
+    }
+
+    public function test_ga_accessor_normalizes_and_validates(): void
+    {
+        SeoSettings::set('seo_google_analytics_id', '  g-ab12cd34ef  ');
+        $this->assertSame('G-AB12CD34EF', SeoSettings::googleAnalyticsId());
+
+        foreach (['UA-12345-6', 'G-abc', 'G-', 'https://evil.example/x', 'G-AAAA BBBB', 'G-AAAAAAAAAAAAAAAAAAAAAAAAA'] as $bad) {
+            SeoSettings::set('seo_google_analytics_id', $bad);
+            $this->assertSame('', SeoSettings::googleAnalyticsId(), "accepted: {$bad}");
+        }
+    }
+
+    public function test_ga_absent_for_malformed_id(): void
+    {
+        SeoSettings::set('seo_google_analytics_id', 'UA-1234-5');
+        $html = $this->get('/')->assertOk()->getContent();
+        $this->assertStringNotContainsString('googletagmanager.com/gtag', $html);
+    }
+
+    public function test_ga_injection_payload_never_reaches_output(): void
+    {
+        SeoSettings::set('seo_google_analytics_id', '"><script>alert(1)</script>');
+        $html = $this->get('/')->assertOk()->getContent();
+        $this->assertStringNotContainsString('alert(1)', $html);
+        $this->assertStringNotContainsString('googletagmanager.com/gtag', $html);
+    }
+
+    public function test_ga_absent_on_login_and_register_even_when_configured(): void
+    {
+        // login/register extend layouts.app (they DO include <x-seo-head />)
+        // and are noindex via their SeoPage records — the resolved
+        // $seo->index=false must suppress Analytics with no extra path list.
+        SeoSettings::set('seo_google_analytics_id', 'G-AB12CD34EF');
+        foreach (['/login', '/register'] as $path) {
+            $html = $this->get($path)->assertOk()->getContent();
+            $this->assertStringNotContainsString('googletagmanager.com/gtag', $html, "GA leaked on {$path}");
+        }
+        // …while an ordinary public page still renders it.
+        $this->assertStringContainsString('googletagmanager.com/gtag', $this->get('/')->getContent());
     }
 }

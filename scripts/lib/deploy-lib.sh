@@ -381,6 +381,92 @@ zpd_nginx_root_ok() {
 }
 
 # -----------------------------------------------------------------------------
+# zpd_nginx_robots_ok CONF
+#
+# Return 0 iff the config contains a `location = /robots.txt` block AND every
+# such block carries the Laravel front-controller fallback (try_files …
+# /index.php). robots.txt is DYNAMIC (RobotsController) and no static file
+# exists — a static-only block would terminate `/robots.txt` with a hard 404,
+# which crawlers treat as "no robots.txt" (every Disallow + the Sitemap line
+# silently ignored). error_page 404 does NOT rescue this: without `=` nginx
+# keeps the 404 status and only takes the body from Laravel.
+# -----------------------------------------------------------------------------
+zpd_nginx_robots_ok() {
+    local conf="$1"
+    [ -f "$conf" ] || return 1
+    grep -q 'location = /robots.txt' "$conf" || return 1
+    awk '
+        /location = \/robots\.txt/ { inb = 1; ok = 0; depth = 0 }
+        inb {
+            if ($0 ~ /try_files[^;]*\/index\.php/) ok = 1
+            depth += gsub(/{/, "{")
+            depth -= gsub(/}/, "}")
+            if (depth <= 0 && $0 ~ /}/) { if (!ok) bad = 1; inb = 0 }
+        }
+        END { exit (bad ? 1 : 0) }
+    ' "$conf"
+}
+
+# -----------------------------------------------------------------------------
+# zpd_nginx_rewrite_robots CONF
+#
+# Idempotent mutator for the robots.txt location (companion of
+# zpd_nginx_rewrite_root). Handles three states:
+#   a) block present WITHOUT try_files → patch the fallback into the block
+#   b) block absent entirely           → insert it after the favicon block
+#      (fallback anchor: the first `root …;` line when no favicon block exists)
+#   c) block already correct           → no-op, return 0
+# Only the robots.txt location is ever touched — certbot-managed
+# ssl_certificate / listen 443 lines are never modified. Safe to re-run: a
+# second invocation on a repaired file is a byte-identical no-op.
+# -----------------------------------------------------------------------------
+zpd_nginx_rewrite_robots() {
+    local conf="$1" tmp
+    [ -f "$conf" ] || return 1
+    zpd_nginx_robots_ok "$conf" && return 0
+    tmp="$(mktemp)" || return 1
+    if grep -q 'location = /robots.txt' "$conf"; then
+        # a) patch every robots block that lacks the fallback (single-line
+        #    legacy form and multi-line form both handled).
+        awk '
+            /location = \/robots\.txt/ && $0 !~ /try_files/ {
+                if ($0 ~ /}/) {
+                    sub(/}[^}]*$/, "try_files $uri /index.php?$query_string; }")
+                    print; next
+                }
+                inb = 1; print; next
+            }
+            inb && /try_files/ { seen = 1 }
+            inb && /}/ {
+                if (!seen) print "        try_files $uri /index.php?$query_string;"
+                inb = 0; seen = 0; print; next
+            }
+            { print }
+        ' "$conf" > "$tmp" || { rm -f "$tmp"; return 1; }
+    else
+        # b) insert a fresh block after the favicon location (or, when absent,
+        #    after the first `root …;` line so minimal configs still work).
+        local anchor='location = \/favicon\.ico'
+        grep -q 'location = /favicon.ico' "$conf" || anchor='^[[:space:]]*root[[:space:]]'
+        awk -v anchor="$anchor" '
+            { print }
+            !done && $0 ~ anchor {
+                print "    location = /robots.txt {"
+                print "        access_log off;"
+                print "        log_not_found off;"
+                print "        try_files $uri /index.php?$query_string;"
+                print "    }"
+                done = 1
+            }
+        ' "$conf" > "$tmp" || { rm -f "$tmp"; return 1; }
+    fi
+    chmod --reference="$conf" "$tmp" 2>/dev/null || true
+    chown --reference="$conf" "$tmp" 2>/dev/null || true
+    mv -f "$tmp" "$conf" || { rm -f "$tmp"; return 1; }
+    zpd_nginx_robots_ok "$conf"
+}
+
+# -----------------------------------------------------------------------------
 # zpd_supervisor_rewrite CONF BASE
 #
 # Point the worker at `<BASE>/current/artisan` and its log at shared storage,
