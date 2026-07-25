@@ -42,10 +42,17 @@ MOCKBIN="$(mktemp -d)"
 cat > "${MOCKBIN}/composer" <<'EOF'
 #!/usr/bin/env bash
 # Build steps exit MOCK_COMPOSER_RC; the informational --version probe emits a
-# realistic banner so dep_probe_version can extract a token.
+# realistic banner so dep_probe_version can extract a token. With
+# MOCK_COMPOSER_REQUIRE_SUPERUSER=1 it behaves like real Composer running as
+# root: it fails unless COMPOSER_ALLOW_SUPERUSER=1 is set in its environment
+# (proving the deployer's composer-root policy is deterministic).
 case "$*" in
   *--version*) echo "Composer version 2.8.1 2024-10-01 12:00:00"; exit 0 ;;
 esac
+if [ "${MOCK_COMPOSER_REQUIRE_SUPERUSER:-0}" = "1" ] && [ "${COMPOSER_ALLOW_SUPERUSER:-0}" != "1" ]; then
+  echo "Composer plugins have been disabled for safety in this non-interactive session." >&2
+  exit 1
+fi
 exit ${MOCK_COMPOSER_RC:-0}
 EOF
 cat > "${MOCKBIN}/npm" <<'EOF'
@@ -73,6 +80,8 @@ EOF
 #   schedule:list    → MOCK_SCHEDULE_RC
 cat > "${MOCKBIN}/php" <<'EOF'
 #!/usr/bin/env bash
+# Optional invocation log (used to prove repair NEVER runs migrations).
+[ -n "${MOCK_LOG:-}" ] && printf '%s\n' "$*" >> "$MOCK_LOG" 2>/dev/null
 if [ "${1:-}" = "-r" ]; then echo "${MOCK_PHP_VERSION:-8.3.7}"; exit 0; fi
 if [ "${1:-}" = "-v" ]; then echo "PHP ${MOCK_PHP_VERSION:-8.3.7} (cli)"; exit 0; fi
 case "$*" in
@@ -114,11 +123,13 @@ exit ${MOCK_SYSTEMCTL_RC:-0}
 EOF
 cat > "${MOCKBIN}/nginx" <<'EOF'
 #!/usr/bin/env bash
+[ "${MOCK_NGINX_HANG:-0}" = "1" ] && sleep 60
 [ "${1:-}" = "-t" ] && exit ${MOCK_NGINX_RC:-0}
 exit 0
 EOF
 cat > "${MOCKBIN}/supervisorctl" <<'EOF'
 #!/usr/bin/env bash
+[ "${MOCK_SUP_HANG:-0}" = "1" ] && sleep 60
 case "${1:-}" in
   reread)  exit ${MOCK_SUP_REREAD_RC:-0} ;;
   update)  exit ${MOCK_SUP_UPDATE_RC:-0} ;;
@@ -174,6 +185,10 @@ export ZPD_HEALTH_URL="http://localhost"
 export ZPD_ALLOW_LOCAL_REPO=1
 export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
 
+# Keep doctor sub-checks fast in the suite (each is bounded anyway).
+export ZDR_TIMEOUT=3
+export ZPD_DOCTOR_TIMEOUT=30
+
 # shellcheck disable=SC1090
 source "$LIB"
 # shellcheck disable=SC1090
@@ -182,6 +197,12 @@ source "$WRAPPERS"
 source "$DEPLOY"
 # shellcheck disable=SC1090
 source "$ROLLBACK"
+# shellcheck disable=SC1090
+source "${REPO_ROOT}/scripts/deploy/doctor.sh"
+# shellcheck disable=SC1090
+source "${REPO_ROOT}/scripts/deploy/repair.sh"
+# shellcheck disable=SC1090
+source "${REPO_ROOT}/scripts/deploy/deploy-status.sh"
 
 # ── Build a real "remote" bare repo (main + tags + the deploy/updater files) ──
 mk_source_repo() {
@@ -199,6 +220,8 @@ mk_source_repo() {
     : > "$work/scripts/deploy/deploy.sh"
     : > "$work/scripts/deploy/rollback.sh"
     : > "$work/scripts/deploy/deploy-status.sh"
+    : > "$work/scripts/deploy/doctor.sh"
+    : > "$work/scripts/deploy/repair.sh"
     : > "$work/scripts/zedproxy-sanitize-install-log.sh"
     git -C "$work" add -A >/dev/null; git -C "$work" commit -q -m "c1" >/dev/null
     git -C "$work" tag v1.0.0
@@ -222,15 +245,21 @@ new_base() {
     export ZPD_BACKUP_DIR="${BASE}/backups"
     export ZPD_NGINX_CONF="${BASE}/nginx.conf"
     export ZPD_SUPERVISOR_CONF="${BASE}/worker.conf"
-    export ZPD_SCHED_CRON="${BASE}/scheduler.cron"
+    # Scheduler discovery scans realistic cron sources — ALL under the temp base.
+    export ZPD_CRON_D_DIR="${BASE}/cron.d"
+    export ZPD_ETC_CRONTAB="${BASE}/etc-crontab"
+    export ZPD_CRON_SPOOL_DIR="${BASE}/cron-spool"
+    export ZPD_SCHED_CRON="${BASE}/cron.d/zedproxy-scheduler"
     export ZPD_SCHED_LOG="${BASE}/scheduler.log"
     export ZPD_WRAPPER_BIN="${BASE}/wbin"
     export ZPD_WRAPPER_LIB="${BASE}/wlib"
+    export ZPD_DEPLOY_ENV="${BASE}/deploy.env"
     # Loopback health vhost written to a writable temp path (never /etc in tests).
     export ZPD_LOCAL_HEALTH_CONF="${BASE}/local-health.conf"
     export ZPD_FPM_SOCK="${BASE}/php-fpm.sock"
     mkdir -p "${BASE}/releases" "${BASE}/shared/storage/app/public" \
-             "${BASE}/shared/storage/framework" "${BASE}/wbin" "${BASE}/wlib"
+             "${BASE}/shared/storage/framework" "${BASE}/wbin" "${BASE}/wlib" \
+             "${BASE}/cron.d" "${BASE}/cron-spool" "${BASE}/logs"
     printf 'APP_KEY=base64:AAAABBBBCCCCDDDDEEEEFFFFGGGGHHHHIIIIJJJJKKK=\nDB_DATABASE=zed\nDB_USERNAME=zed\nDB_PASSWORD=secret\nREDIS_HOST=127.0.0.1\nREDIS_PORT=6379\nREDIS_PASSWORD=null\n' > "${BASE}/shared/.env"
 }
 
@@ -267,6 +296,7 @@ mk_release_git() {
     : > "$rd/update.sh"
     : > "$rd/scripts/deploy/rollback.sh"; : > "$rd/scripts/deploy/deploy-status.sh"
     : > "$rd/scripts/deploy/deploy.sh"
+    : > "$rd/scripts/deploy/doctor.sh"; : > "$rd/scripts/deploy/repair.sh"
     git -C "$rd" init -q -b main
     git -C "$rd" add -A >/dev/null; git -C "$rd" commit -q -m "$id" >/dev/null
     sha="$(git -C "$rd" rev-parse HEAD)"
@@ -804,6 +834,399 @@ zpd_write_manifest "${BASE}/m.json" "note=connect postgres://u:supersecret@db:54
 assert_false bash -c "grep -q supersecret '${BASE}/m.json'"
 assert_false bash -c "grep -q topsecret '${BASE}/m.json'"
 rm -rf "$BASE"
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Prompt 18 — self-healing reconciliation, adoption, state repair, diagnostics
+# ═════════════════════════════════════════════════════════════════════════════
+
+# mk_historical_release ID — a REAL healthy release (git repo, Laravel files,
+# shared links) WITHOUT any manifest — exactly what a pre-manifest install left.
+mk_historical_release() {
+    local id="$1"
+    local rd="${BASE}/releases/${id}"
+    mkdir -p "$rd/public/build" "$rd/scripts/deploy"
+    : > "$rd/artisan"; : > "$rd/public/index.php"
+    printf '{"resources/js/app.js":{"file":"assets/app.js"}}\n' > "$rd/public/build/manifest.json"
+    : > "$rd/update.sh"
+    : > "$rd/scripts/deploy/rollback.sh"; : > "$rd/scripts/deploy/deploy-status.sh"
+    : > "$rd/scripts/deploy/doctor.sh";   : > "$rd/scripts/deploy/repair.sh"
+    git -C "$rd" init -q -b main
+    git -C "$rd" add -A >/dev/null; git -C "$rd" commit -q -m "$id" >/dev/null
+    zpd_link_shared "$rd" "${BASE}/shared" >/dev/null 2>&1 || true
+    git -C "$rd" rev-parse HEAD
+}
+
+echo "-- scheduler discovery + reconciliation --"
+
+# S1. Atomic layout with a MISSING scheduler cron → repaired.
+new_base; sha="$(mk_release_git 20260101000000-aaaaaaaaaaaa)"; zpd_switch_current 20260101000000-aaaaaaaaaaaa
+setup_atomic_service_configs; rm -f "$ZPD_SCHED_CRON"
+assert_true dep_reconcile_scheduler "$BASE"
+assert_true zpd_scheduler_cron_ok "$ZPD_SCHED_CRON" "$BASE"
+rm -rf "$BASE"
+
+# S2. Atomic layout with a LEGACY scheduler path → repaired to current/.
+new_base; sha="$(mk_release_git 20260101000000-aaaaaaaaaaaa)"; zpd_switch_current 20260101000000-aaaaaaaaaaaa
+setup_atomic_service_configs
+printf '* * * * * www-data php %s/artisan schedule:run\n' "$BASE" > "$ZPD_SCHED_CRON"
+assert_true dep_reconcile_scheduler "$BASE"
+assert_true zpd_scheduler_cron_ok "$ZPD_SCHED_CRON" "$BASE"
+assert_false bash -c "grep -qE 'php ${BASE}/artisan schedule:run' '$ZPD_SCHED_CRON'"
+rm -rf "$BASE"
+
+# S3. DUPLICATE entries in the canonical file → single canonical entry.
+new_base; sha="$(mk_release_git 20260101000000-aaaaaaaaaaaa)"; zpd_switch_current 20260101000000-aaaaaaaaaaaa
+setup_atomic_service_configs
+{ zpd_scheduler_cron_content "$BASE"; zpd_scheduler_cron_content "$BASE"; } > "$ZPD_SCHED_CRON"
+assert_true dep_reconcile_scheduler "$BASE"
+assert_eq "$(grep -c 'schedule:run' "$ZPD_SCHED_CRON")" "1" "duplicate scheduler entries collapsed to one"
+rm -rf "$BASE"
+
+# S4. Scheduler configured in ANOTHER cron.d file → removed there, canonical created.
+new_base; sha="$(mk_release_git 20260101000000-aaaaaaaaaaaa)"; zpd_switch_current 20260101000000-aaaaaaaaaaaa
+setup_atomic_service_configs; rm -f "$ZPD_SCHED_CRON"
+printf '* * * * * www-data php %s/current/artisan schedule:run\n' "$BASE" > "${ZPD_CRON_D_DIR}/oldfile"
+assert_true dep_reconcile_scheduler "$BASE"
+assert_true zpd_scheduler_cron_ok "$ZPD_SCHED_CRON" "$BASE"
+assert_false bash -c "grep -q 'schedule:run' '${ZPD_CRON_D_DIR}/oldfile' 2>/dev/null"
+rm -rf "$BASE"
+
+# S5. Scheduler in /etc/crontab (root system crontab) → OUR line removed,
+#     unrelated cron jobs preserved line-by-line.
+new_base; sha="$(mk_release_git 20260101000000-aaaaaaaaaaaa)"; zpd_switch_current 20260101000000-aaaaaaaaaaaa
+setup_atomic_service_configs; rm -f "$ZPD_SCHED_CRON"
+printf '* * * * * root php %s/artisan schedule:run\n17 * * * * root cd / && run-parts /etc/cron.hourly\n' "$BASE" > "$ZPD_ETC_CRONTAB"
+assert_true dep_reconcile_scheduler "$BASE"
+assert_false bash -c "grep -q 'schedule:run' '$ZPD_ETC_CRONTAB'"
+assert_true bash -c "grep -q 'run-parts' '$ZPD_ETC_CRONTAB'"   # unrelated job preserved
+assert_true zpd_scheduler_cron_ok "$ZPD_SCHED_CRON" "$BASE"
+rm -rf "$BASE"
+
+# S6. CONFLICTING unmanaged entry (user spool crontab) → clear failure, nothing deleted.
+new_base; sha="$(mk_release_git 20260101000000-aaaaaaaaaaaa)"; zpd_switch_current 20260101000000-aaaaaaaaaaaa
+setup_atomic_service_configs
+printf '* * * * * php %s/current/artisan schedule:run\n' "$BASE" > "${ZPD_CRON_SPOOL_DIR}/root"
+out="$(dep_reconcile_scheduler "$BASE" 2>&1)"; rc=$?
+assert_rc 1 "$rc" "conflicting user-crontab scheduler entry aborts reconciliation"
+printf '%s' "$out" | grep -q "$(zpd_msg_sched_conflict)" && ok "conflict abort shows the Persian diagnostic" || bad "missing conflict diagnostic"
+assert_true test -s "${ZPD_CRON_SPOOL_DIR}/root"   # user content NOT deleted
+rm -rf "$BASE"
+
+echo "-- self-healing during a NORMAL (non-legacy) update --"
+
+# S7-S10 + idempotency: an atomic install with a missing scheduler cron, legacy
+# supervisor config, legacy nginx root, and an OLD broken wrapper self-heals on
+# a normal dep_main run (operational reconciliation is NOT gated on legacy=1).
+new_base; mk_source_repo
+sha0="$(mk_release_git 20260101000000-aaaaaaaaaaaa)"; zpd_switch_current 20260101000000-aaaaaaaaaaaa
+printf 'server {\n  listen 80;\n  root %s/public;\n}\n' "$BASE" > "$ZPD_NGINX_CONF"          # legacy nginx root
+printf '[program:zedproxy-worker]\ncommand=php %s/artisan queue:work\n' "$BASE" > "$ZPD_SUPERVISOR_CONF"  # legacy supervisor
+rm -f "$ZPD_SCHED_CRON"                                                                     # missing scheduler
+printf '#!/usr/bin/env bash\nexec sudo bash "%s/scripts/deploy/deploy.sh" "$@"\n' "$BASE" > "${ZPD_WRAPPER_BIN}/zedproxy-update"  # old wrapper
+chmod +x "${ZPD_WRAPPER_BIN}/zedproxy-update"
+export ZPD_REPO_URL="$SRC_BARE" ZPD_REF=main
+( MOCK_HTTP_CODE=200 dep_main >/dev/null 2>&1 ); rc=$?
+assert_rc 0 "$rc" "normal update self-heals a partially migrated install"
+assert_true zpd_scheduler_cron_ok "$ZPD_SCHED_CRON" "$BASE"                # S7 scheduler repaired
+assert_true zpd_supervisor_ok "$ZPD_SUPERVISOR_CONF" "$BASE"               # S8 supervisor repaired
+assert_true zpd_nginx_root_ok "$ZPD_NGINX_CONF" "$BASE"                    # S9 nginx repaired
+assert_true bash -c "grep -q 'zpd_resolve_script update.sh' '${ZPD_WRAPPER_BIN}/zedproxy-update'"  # S10 wrappers
+assert_true test -x "${ZPD_WRAPPER_BIN}/zedproxy-doctor"
+assert_true test -x "${ZPD_WRAPPER_BIN}/zedproxy-deploy-repair"
+# S11. Idempotent: a second reconcile leaves the (already canonical) files as-is.
+cron_before="$(cat "$ZPD_SCHED_CRON")"; sup_before="$(cat "$ZPD_SUPERVISOR_CONF")"
+assert_true dep_reconcile_operational "$BASE" idem-check
+assert_eq "$(cat "$ZPD_SCHED_CRON")" "$cron_before" "scheduler reconcile is idempotent"
+assert_eq "$(cat "$ZPD_SUPERVISOR_CONF")" "$sup_before" "supervisor reconcile is idempotent"
+unset ZPD_REPO_URL ZPD_REF; rm -rf "$BASE" "$(dirname "$SRC_BARE")"
+
+# S12. FAILED reconciliation restores the per-release operational snapshot.
+# BOTH nginx and supervisor start legacy; the supervisor repair's reread fails
+# → the already-repaired nginx must be restored to its pre-deploy content.
+new_base; sha="$(mk_release_git 20260101000000-aaaaaaaaaaaa)"; zpd_switch_current 20260101000000-aaaaaaaaaaaa
+setup_atomic_service_configs
+printf 'server {\n  listen 80;\n  root %s/public;\n}\n' "$BASE" > "$ZPD_NGINX_CONF"                       # legacy nginx
+printf '[program:zedproxy-worker]\ncommand=php %s/artisan queue:work\n' "$BASE" > "$ZPD_SUPERVISOR_CONF"  # legacy supervisor
+nginx_before="$(cat "$ZPD_NGINX_CONF")"; sup_before="$(cat "$ZPD_SUPERVISOR_CONF")"
+( MOCK_SUP_REREAD_RC=1 dep_reconcile_operational "$BASE" 20260101000000-aaaaaaaaaaaa >/dev/null 2>&1 ); rc=$?
+assert_rc 1 "$rc" "reconciliation failure (supervisor reread) fails"
+assert_eq "$(cat "$ZPD_NGINX_CONF")" "$nginx_before" "failed reconcile restored the nginx snapshot"
+assert_eq "$(cat "$ZPD_SUPERVISOR_CONF")" "$sup_before" "failed reconcile restored the supervisor snapshot"
+rm -rf "$BASE"
+
+echo "-- historical release adoption + rollback compatibility --"
+
+# A13. Historical active release WITHOUT a manifest → adopted from observed facts.
+new_base
+hsha="$(mk_historical_release 20260724200918-829baf51f244)"; zpd_switch_current 20260724200918-829baf51f244
+assert_eq "$(dep_release_verify_mode 20260724200918-829baf51f244)" "historical" "pre-manifest release detected as historical"
+dep_adopt_current_release >/dev/null 2>&1
+man="${BASE}/releases/20260724200918-829baf51f244/RELEASE_MANIFEST.json"
+assert_eq "$(zpd_manifest_get "$man" result)" "adopted" "adopted manifest written"
+assert_eq "$(zpd_manifest_get "$man" git_sha)" "$hsha" "adoption records the OBSERVED git HEAD (never invented)"
+assert_eq "$(zpd_manifest_get "$man" migration_status)" "unknown" "adoption records migration_status=unknown"
+assert_true bash -c "[ -n \"$(zpd_manifest_get "$man" manifest_schema_version)\" ]"
+# A15b. A valid modern manifest is NEVER overwritten by adoption.
+zpd_write_manifest "$man" "release_id=20260724200918-829baf51f244" "git_sha=${hsha}" "result=success" "manifest_schema_version=2"
+dep_adopt_current_release >/dev/null 2>&1
+assert_eq "$(zpd_manifest_get "$man" result)" "success" "modern manifest not overwritten by adoption"
+rm -rf "$BASE"
+
+# A14. INCOMPLETE manifest (no sha, no schema) → adoption backfills it.
+new_base
+hsha="$(mk_historical_release 20260724200918-829baf51f244)"; zpd_switch_current 20260724200918-829baf51f244
+zpd_write_manifest "${BASE}/releases/20260724200918-829baf51f244/RELEASE_MANIFEST.json" \
+    "release_id=20260724200918-829baf51f244" "result="
+dep_adopt_current_release >/dev/null 2>&1
+assert_eq "$(zpd_manifest_get "${BASE}/releases/20260724200918-829baf51f244/RELEASE_MANIFEST.json" result)" "adopted" "incomplete manifest backfilled via adoption"
+rm -rf "$BASE"
+
+# A16. INVALID MODERN manifest still fails strict verification (never weakened).
+new_base
+sha="$(mk_release_git 20260101000000-aaaaaaaaaaaa)"; zpd_switch_current 20260101000000-aaaaaaaaaaaa
+setup_atomic_service_configs; zpw_install_wrappers >/dev/null 2>&1
+zpd_write_manifest "${BASE}/releases/20260101000000-aaaaaaaaaaaa/RELEASE_MANIFEST.json" \
+    "release_id=20260101000000-aaaaaaaaaaaa" "git_sha=0000000000000000000000000000000000000000" \
+    "result=success" "manifest_schema_version=2"
+( MOCK_HTTP_CODE=200 dep_verify_internal_release "$BASE" 20260101000000-aaaaaaaaaaaa "" >/dev/null 2>&1 ); \
+  assert_rc 1 "$?" "modern manifest with a wrong SHA still FAILS (strict)"
+# A16b. A modern-schema manifest with a MISSING SHA is also strict → fails.
+zpd_write_manifest "${BASE}/releases/20260101000000-aaaaaaaaaaaa/RELEASE_MANIFEST.json" \
+    "release_id=20260101000000-aaaaaaaaaaaa" "result=success" "manifest_schema_version=2"
+assert_eq "$(dep_release_verify_mode 20260101000000-aaaaaaaaaaaa)" "strict" "modern manifest without SHA stays strict"
+rm -rf "$BASE"
+
+# A17/A18. Rollback to an ADOPTED historical release works; a missing old
+# manifest alone never fails the rollback.
+new_base
+hsha="$(mk_historical_release 20260724200918-829baf51f244)"; zpd_switch_current 20260724200918-829baf51f244
+dep_adopt_current_release >/dev/null 2>&1
+nsha="$(mk_release_git 20260102000000-bbbbbbbbbbbb)"; zpd_switch_current 20260102000000-bbbbbbbbbbbb
+setup_atomic_service_configs; zpw_install_wrappers >/dev/null 2>&1
+( MOCK_HTTP_CODE=200 dep_rollback_code 20260724200918-829baf51f244 php8.3-fpm >/dev/null 2>&1 ); \
+  assert_rc 0 "$?" "rollback to the ADOPTED historical release passes full verification"
+assert_eq "$(zpd_current_release)" "20260724200918-829baf51f244" "adopted release is active after rollback"
+rm -rf "$BASE"
+
+new_base
+hsha="$(mk_historical_release 20260724200918-829baf51f244)"; zpd_switch_current 20260724200918-829baf51f244
+nsha="$(mk_release_git 20260102000000-bbbbbbbbbbbb)"; zpd_switch_current 20260102000000-bbbbbbbbbbbb
+setup_atomic_service_configs; zpw_install_wrappers >/dev/null 2>&1
+# NO adoption ran — the historical release has NO manifest at all.
+( MOCK_HTTP_CODE=200 dep_rollback_code 20260724200918-829baf51f244 php8.3-fpm >/dev/null 2>&1 ); \
+  assert_rc 0 "$?" "rollback does not fail solely because an old manifest is absent"
+rm -rf "$BASE"
+
+echo "-- state-file repair + status fallback --"
+
+# ST19/20/21. Missing state file → created; inconsistent state → repaired.
+new_base
+sha="$(mk_release_git 20260101000000-aaaaaaaaaaaa)"; zpd_switch_current 20260101000000-aaaaaaaaaaaa
+rm -f "$ZPD_STATE_FILE"
+assert_true dep_reconcile_state
+assert_eq "$(zpd_manifest_get "$ZPD_STATE_FILE" active_release)" "20260101000000-aaaaaaaaaaaa" "missing state file rebuilt from current symlink"
+zpd_write_manifest "$ZPD_STATE_FILE" "active_release=20269999999999-attempted" "result=success"
+assert_true dep_reconcile_state
+assert_eq "$(zpd_manifest_get "$ZPD_STATE_FILE" active_release)" "20260101000000-aaaaaaaaaaaa" "stale state repaired to the current symlink (never the attempted release)"
+assert_eq "$(zpd_manifest_get "$ZPD_STATE_FILE" git_sha)" "$sha" "state records the real SHA"
+rm -rf "$BASE"
+
+# ST22. deploy-status falls back to OBSERVED git facts for a manifest-less release.
+new_base
+hsha="$(mk_historical_release 20260724200918-829baf51f244)"; zpd_switch_current 20260724200918-829baf51f244
+out="$(ds_report)"
+printf '%s' "$out" | grep -q "$hsha" && ok "status shows the observed git SHA" || bad "status missing observed SHA"
+printf '%s' "$out" | grep -q "(observed" && ok "status marks the SHA as observed" || bad "status does not mark observed source"
+printf '%s' "$out" | grep -q "recovered" && ok "status reports result=recovered (not silently unknown)" || bad "status missing recovered result"
+printf '%s' "$out" | grep -qi "WARNING" && ok "status warns about incomplete historical metadata" || bad "status missing historical warning"
+rm -rf "$BASE"
+
+echo "-- failed-release finalization --"
+
+# F23/F24/F25. A failed activation ALWAYS finalizes the attempted release — and
+# a rollback whose switch succeeded but whose readiness failed is recorded so.
+new_base; mk_source_repo
+psha="$(mk_release_git 20260101000000-aaaaaaaaaaaa)"; zpd_switch_current 20260101000000-aaaaaaaaaaaa
+setup_atomic_service_configs; zpw_install_wrappers >/dev/null 2>&1
+export ZPD_REPO_URL="$SRC_BARE" ZPD_REF=main
+# HTTP fails for the NEW release AND stays failed → rollback readiness fails too.
+( MOCK_HTTP_CODE=500 dep_main >/dev/null 2>&1 ); rc=$?
+assert_rc 1 "$rc" "deploy with permanently failing HTTP fails"
+attempted="$(ls "$BASE/releases" | grep -E '\.failed$' | head -1)"
+assert_true test -n "$attempted"
+fman="${BASE}/releases/${attempted}/RELEASE_MANIFEST.json"
+assert_eq "$(zpd_manifest_get "$fman" result)" "failed" "attempted release finalized result=failed"
+assert_true bash -c "[ -n \"$(zpd_manifest_get "$fman" failure_stage)\" ]"
+assert_eq "$(zpd_manifest_get "$fman" rollback_switch)" "success" "rollback SWITCH recorded as success"
+assert_eq "$(zpd_manifest_get "$fman" rollback_readiness)" "failed" "rollback READINESS recorded separately as failed"
+assert_eq "$(zpd_manifest_get "$fman" active_release_after_failure)" "20260101000000-aaaaaaaaaaaa" "active-after-failure recorded"
+# F25: no release (failed or otherwise) remains 'activating'.
+n_act=0
+for m in "$BASE"/releases/*/RELEASE_MANIFEST.json; do
+    [ -f "$m" ] || continue
+    [ "$(zpd_manifest_get "$m" result)" = "activating" ] && n_act=$((n_act + 1))
+done
+assert_eq "$n_act" "0" "no release remains marked 'activating' after a failure"
+# F45: the failure path released the deploy lock.
+zpd_run_locked "$ZPD_LOCK_FILE" -- true; assert_rc 0 "$?" "deploy lock free after the failed deployment"
+# F38: an automatic redacted diagnostic bundle was produced.
+bundle="$(ls "$BASE"/logs/diagnostics/zedproxy-diagnostic-*.tar.gz 2>/dev/null | head -1)"
+assert_true test -n "$bundle"
+assert_eq "$(stat -c '%a' "$bundle")" "600" "automatic failure bundle is mode 600"
+unset ZPD_REPO_URL ZPD_REF; rm -rf "$BASE" "$(dirname "$SRC_BARE")"
+
+# F47/F48. Multiple consecutive failed deployments remain recoverable, and a
+# later good deployment succeeds normally.
+new_base; mk_source_repo
+psha="$(mk_release_git 20260101000000-aaaaaaaaaaaa)"; zpd_switch_current 20260101000000-aaaaaaaaaaaa
+setup_atomic_service_configs; zpw_install_wrappers >/dev/null 2>&1
+export ZPD_REPO_URL="$SRC_BARE" ZPD_REF=main
+( MOCK_HTTP_CODE=500 dep_main >/dev/null 2>&1 ); assert_rc 1 "$?" "failed deploy #1"
+assert_eq "$(zpd_current_release)" "20260101000000-aaaaaaaaaaaa" "previous release still active after failure #1"
+sleep 1
+( MOCK_HTTP_CODE=500 dep_main >/dev/null 2>&1 ); assert_rc 1 "$?" "failed deploy #2"
+assert_eq "$(zpd_current_release)" "20260101000000-aaaaaaaaaaaa" "previous release still active after failure #2"
+sleep 1
+( MOCK_HTTP_CODE=200 dep_main >/dev/null 2>&1 ); assert_rc 0 "$?" "deployment after consecutive failures succeeds"
+assert_false bash -c "[ \"$(zpd_current_release)\" = '20260101000000-aaaaaaaaaaaa' ]"
+unset ZPD_REPO_URL ZPD_REF; rm -rf "$BASE" "$(dirname "$SRC_BARE")"
+
+echo "-- repair command --"
+
+# R26. --scan is READ-ONLY.
+new_base; sha="$(mk_release_git 20260101000000-aaaaaaaaaaaa)"; zpd_switch_current 20260101000000-aaaaaaaaaaaa
+setup_atomic_service_configs; rm -f "$ZPD_SCHED_CRON"     # broken scheduler
+before_tree="$(find "$BASE" -type f | sort | md5sum)"
+out="$(zrp_main --scan 2>&1)"; rc=$?
+assert_rc 0 "$rc" "repair --scan exits 0"
+printf '%s' "$out" | grep -q 'FIX' && ok "scan reports the repairable scheduler" || bad "scan missed the broken scheduler"
+assert_eq "$(find "$BASE" -type f | sort | md5sum)" "$before_tree" "repair --scan changed NOTHING (read-only)"
+# R27/R28/R29. --apply repairs, backs up, and never touches .env/DB/APP_KEY.
+env_before="$(md5sum "${BASE}/shared/.env")"
+MOCK_LOG="${BASE}/php-invocations.log"
+( export MOCK_LOG; MOCK_HTTP_CODE=200 zrp_main --apply >/dev/null 2>&1 ); rc=$?
+assert_rc 0 "$rc" "repair --apply succeeds"
+assert_true zpd_scheduler_cron_ok "$ZPD_SCHED_CRON" "$BASE"
+assert_eq "$(md5sum "${BASE}/shared/.env")" "$env_before" "repair preserved .env (and its APP_KEY) byte-for-byte"
+assert_true bash -c "grep -q 'APP_KEY=base64:AAAABBBB' '${BASE}/shared/.env'"
+assert_false bash -c "grep -q 'artisan migrate' '$MOCK_LOG'"   # repair NEVER runs migrations
+assert_true bash -c "ls -d ${BASE}/shared/deploy/snapshots/repair-* >/dev/null 2>&1"   # backup taken
+rm -rf "$BASE"
+
+echo "-- doctor command --"
+
+# D30-33. Doctor detects scheduler mismatch, manifest mismatch, stale state, lock.
+new_base; sha="$(mk_release_git 20260101000000-aaaaaaaaaaaa)"; zpd_switch_current 20260101000000-aaaaaaaaaaaa
+setup_atomic_service_configs; zpw_install_wrappers >/dev/null 2>&1
+rm -f "$ZPD_SCHED_CRON"
+zpd_write_manifest "${BASE}/releases/20260101000000-aaaaaaaaaaaa/RELEASE_MANIFEST.json" \
+    "release_id=20260101000000-aaaaaaaaaaaa" "git_sha=1111111111111111111111111111111111111111" "result=success"
+zpd_write_manifest "$ZPD_STATE_FILE" "active_release=some-other-release" "result=success"
+out="$(MOCK_HTTP_CODE=200 zdr_main 2>&1)" || true
+printf '%s' "$out" | grep -Eq 'scheduler_cron\s+fail' && ok "doctor detects the scheduler mismatch" || bad "doctor missed scheduler mismatch"
+printf '%s' "$out" | grep -Eq 'active_manifest\s+fail' && ok "doctor detects the manifest/HEAD mismatch" || bad "doctor missed manifest mismatch"
+printf '%s' "$out" | grep -Eq 'state_file\s+fail' && ok "doctor detects the stale state file" || bad "doctor missed stale state"
+# D33: a held deploy lock is reported.
+( exec 9>"$ZPD_LOCK_FILE"; flock 9; sleep 2 ) & holder=$!
+sleep 0.3
+out="$(MOCK_HTTP_CODE=200 zdr_main 2>&1)" || true
+printf '%s' "$out" | grep -Eq 'deploy_lock\s+warn\s+held' && ok "doctor detects the held deployment lock" || bad "doctor missed the held lock"
+kill "$holder" 2>/dev/null; wait "$holder" 2>/dev/null
+# Doctor default mode is READ-ONLY.
+before_tree="$(find "$BASE" -type f | sort | md5sum)"
+MOCK_HTTP_CODE=200 zdr_main >/dev/null 2>&1 || true
+assert_eq "$(find "$BASE" -type f | sort | md5sum)" "$before_tree" "doctor default mode changed NOTHING (read-only)"
+rm -rf "$BASE"
+
+# D34-37. Bundle: mode 600, no canary secrets, no .env, no cookies.
+new_base; sha="$(mk_release_git 20260101000000-aaaaaaaaaaaa)"; zpd_switch_current 20260101000000-aaaaaaaaaaaa
+setup_atomic_service_configs; zpw_install_wrappers >/dev/null 2>&1
+printf 'APP_KEY=base64:ZP_CANARY_APPKEY_deadbeef01=\nDB_PASSWORD=ZP_CANARY_DB_SECRET_deadbeef02\n' > "${BASE}/shared/.env"
+printf '[x] deploy log line PGPASSWORD=ZP_CANARY_DB_SECRET_deadbeef02 done\nSet-Cookie: zedproxy-session=abc\n' > "${BASE}/logs/deploy.log"
+bundle="$(MOCK_HTTP_CODE=200 zdr_main --bundle 2>/dev/null | tail -1)"
+assert_true test -f "$bundle"
+assert_eq "$(stat -c '%a' "$bundle")" "600" "diagnostic bundle is mode 600"
+exdir="$(mktemp -d)"; tar -xzf "$bundle" -C "$exdir" 2>/dev/null
+assert_false bash -c "grep -Rq 'ZP_CANARY_DB_SECRET_deadbeef02' '$exdir'"   # canary redacted
+assert_false bash -c "find '$exdir' -name '.env*' | grep -q ."               # no .env file
+assert_false bash -c "grep -Rq 'zedproxy-session=abc' '$exdir'"              # no raw cookies
+rm -rf "$exdir" "$BASE"
+
+echo "-- bounded smoke + service timeouts + composer policy --"
+
+# T39/T40. dep_smoke is BOUNDED — a hanging zedproxy:health times out fast.
+t0=$SECONDS
+new_base; rd="${BASE}/releases/r"; mkdir -p "$rd"
+( MOCK_HEALTH_MODE=hang ZPD_HEALTH_CLI_TIMEOUT=1 dep_smoke "$rd" >/dev/null 2>&1 ); rc=$?
+elapsed=$((SECONDS - t0))
+assert_rc 1 "$rc" "hanging smoke health fails (timeout) before activation"
+assert_true test "$elapsed" -lt 10
+( MOCK_HEALTH_MODE=fail dep_smoke "$rd" >/dev/null 2>&1 ); assert_rc 1 "$?" "smoke failure is NOT discarded"
+( dep_smoke "$rd" >/dev/null 2>&1 ); assert_rc 0 "$?" "healthy smoke passes"
+rm -rf "$BASE"
+
+# T41. Hanging supervisorctl is bounded by ZPD_SVC_TIMEOUT.
+t0=$SECONDS
+( MOCK_SUP_HANG=1 ZPD_SVC_TIMEOUT=1 dep_restart_workers >/dev/null 2>&1 ); rc=$?
+elapsed=$((SECONDS - t0))
+assert_rc 124 "$rc" "hanging supervisorctl times out"
+assert_true test "$elapsed" -lt 10
+
+# T42. Hanging nginx -t is bounded.
+t0=$SECONDS
+( MOCK_NGINX_HANG=1 ZPD_SVC_TIMEOUT=1 dep_validate_nginx >/dev/null 2>&1 ); rc=$?
+elapsed=$((SECONDS - t0))
+assert_rc 124 "$rc" "hanging nginx -t times out"
+assert_true test "$elapsed" -lt 10
+
+# T43. Composer root behavior is DETERMINISTIC: the build subprocess sets
+# COMPOSER_ALLOW_SUPERUSER=1, so a root-sensitive composer works identically.
+new_base; rel="${BASE}/releases/rel"; mkdir -p "$rel"
+: > "$rel/composer.lock"; : > "$rel/package-lock.json"
+( MOCK_COMPOSER_REQUIRE_SUPERUSER=1 dep_build "$rel" >/dev/null 2>&1 ); \
+  assert_rc 0 "$?" "composer superuser policy is set inside the build subprocess"
+rm -rf "$BASE"
+
+echo "-- production reproduction fixture --"
+
+# The EXACT production state: current → healthy historical release with no
+# manifest and no state metadata; a stale attempted release stuck 'activating';
+# the canonical scheduler cron missing with a legacy /etc/crontab entry. One
+# normal update must adopt, reconcile, finalize, deploy, and stay rollbackable.
+new_base; mk_source_repo
+hsha="$(mk_historical_release 20260724200918-829baf51f244)"
+zpd_switch_current 20260724200918-829baf51f244
+setup_atomic_service_configs
+rm -f "$ZPD_SCHED_CRON" "$ZPD_STATE_FILE"
+printf '* * * * * root php %s/artisan schedule:run\n' "$BASE" > "$ZPD_ETC_CRONTAB"   # legacy scheduler source
+mkdir -p "${BASE}/releases/20260725053735-4be1d78f39df"
+zpd_write_manifest "${BASE}/releases/20260725053735-4be1d78f39df/RELEASE_MANIFEST.json" \
+    "release_id=20260725053735-4be1d78f39df" "result=activating"
+export ZPD_REPO_URL="$SRC_BARE" ZPD_REF=main
+( MOCK_HTTP_CODE=200 dep_main >/dev/null 2>&1 ); rc=$?
+assert_rc 0 "$rc" "PRODUCTION FIXTURE: repaired updater deploys successfully"
+newrel="$(zpd_current_release)"
+assert_false bash -c "[ '$newrel' = '20260724200918-829baf51f244' ]"
+# 1. historical release adopted
+assert_eq "$(zpd_manifest_get "${BASE}/releases/20260724200918-829baf51f244/RELEASE_MANIFEST.json" result)" "adopted" "historical active release was adopted"
+# 2. scheduler reconciled (canonical file, legacy source cleaned)
+assert_true zpd_scheduler_cron_ok "$ZPD_SCHED_CRON" "$BASE"
+assert_false bash -c "grep -q 'schedule:run' '$ZPD_ETC_CRONTAB'"
+# 3. accurate state metadata
+assert_eq "$(zpd_manifest_get "$ZPD_STATE_FILE" active_release)" "$newrel" "state file records the new active release"
+assert_eq "$(zpd_manifest_get "$ZPD_STATE_FILE" result)" "success" "state records success"
+# 9. new release marked successful
+assert_eq "$(zpd_manifest_get "${BASE}/releases/${newrel}/RELEASE_MANIFEST.json" result)" "success" "new release manifest is success"
+# 10. no stale activating release remains
+assert_eq "$(zpd_manifest_get "${BASE}/releases/20260725053735-4be1d78f39df/RELEASE_MANIFEST.json" result)" "failed" "stale attempted release finalized as failed"
+# status no longer shows all-unknown
+out="$(ds_report)"
+printf '%s' "$out" | grep -q 'Git SHA:          <unknown>' && bad "status still shows SHA unknown" || ok "status shows a real SHA"
+# 11. verified rollback to the ADOPTED previous release
+( MOCK_HTTP_CODE=200 dep_rollback_code 20260724200918-829baf51f244 php8.3-fpm >/dev/null 2>&1 ); \
+  assert_rc 0 "$?" "PRODUCTION FIXTURE: verified rollback to the adopted release works"
+assert_eq "$(zpd_current_release)" "20260724200918-829baf51f244" "adopted release active after rollback"
+unset ZPD_REPO_URL ZPD_REF; rm -rf "$BASE" "$(dirname "$SRC_BARE")"
 
 rm -rf "$MOCKBIN"
 echo ""

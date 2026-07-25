@@ -1132,6 +1132,17 @@ Upcoming sections (in future development phases):
 
 The `update.sh` script performs a safe, zero-data-loss update of a running ZedProxy installation.
 
+Every update is **self-healing**: operational configuration (Scheduler cron,
+Supervisor worker, Nginx root, command wrappers, loopback health vhost) is
+snapshotted and reconciled to the canonical atomic layout on every activation —
+a partially migrated server repairs itself on the next normal update, and a
+healthy pre-manifest release is *adopted* so status/rollback keep working. Two
+operator commands support this: `zedproxy-doctor` (comprehensive read-only,
+redacted diagnostics; `--bundle` writes a root-only archive) and
+`zedproxy-deploy-repair` (`--scan` read-only; `--apply` repairs with backups —
+never migrations, `.env`, credentials, or `APP_KEY`). See
+`docs/deployment.md` for the full architecture.
+
 ### One-command update
 
 ```bash

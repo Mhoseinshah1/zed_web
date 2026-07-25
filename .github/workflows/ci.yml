@@ -318,6 +318,8 @@ jobs:
             scripts/deploy/deploy.sh \
             scripts/deploy/rollback.sh \
             scripts/deploy/deploy-status.sh \
+            scripts/deploy/doctor.sh \
+            scripts/deploy/repair.sh \
             scripts/deploy/install-command-wrappers.sh \
             scripts/zedproxy-sanitize-install-log.sh \
             tests/deploy/run-tests.sh \
@@ -465,6 +467,68 @@ jobs:
           grep -Eq 'timeout[[:space:]]+"?\$\{ZPD_HEALTH_CLI_TIMEOUT' "$dep" \
             || { echo '::error::zedproxy:health CLI probe is not bounded by a timeout.'; exit 1; }
           echo 'Maintenance-readiness + bounded-probe invariants hold.'
+
+      - name: Assert self-healing + diagnostics invariants (Prompt 18)
+        run: |
+          set -euo pipefail
+          dep=scripts/deploy/deploy.sh
+          # ── Operational reconciliation runs on EVERY activation — never gated
+          # on legacy=1. The reconcile entry point must exist and its call site
+          # inside dep_activate must not be legacy-conditional.
+          for fn in dep_reconcile_operational dep_reconcile_scheduler dep_reconcile_supervisor \
+                    dep_reconcile_nginx dep_reconcile_wrappers dep_snapshot_operational_config \
+                    dep_restore_operational_snapshot dep_scheduler_scan; do
+            grep -q "$fn" "$dep" || { echo "::error::deploy.sh missing ${fn} (self-healing reconciliation)."; exit 1; }
+          done
+          if awk '/^dep_activate\(\)/{f=1} f&&/^}/{f=0} f' "$dep" \
+               | grep 'dep_reconcile_operational' | grep -q 'legacy'; then
+            echo '::error::Operational reconciliation is still gated on legacy=1.'
+            exit 1
+          fi
+          awk '/^dep_activate\(\)/{f=1} f&&/^}/{f=0} f' "$dep" | grep -q 'dep_reconcile_operational' \
+            || { echo '::error::dep_activate does not run operational reconciliation.'; exit 1; }
+          # ── No unbounded production smoke: dep_smoke must go through the
+          # bounded CLI-health helper, never a direct artisan health call.
+          if awk '/^dep_smoke\(\)/{f=1} f&&/^}/{f=0} f' "$dep" | grep -q 'zedproxy:health'; then
+            echo '::error::dep_smoke invokes zedproxy:health directly (unbounded).'
+            exit 1
+          fi
+          awk '/^dep_smoke\(\)/{f=1} f&&/^}/{f=0} f' "$dep" | grep -q 'dep_cli_health' \
+            || { echo '::error::dep_smoke does not use the bounded CLI-health helper.'; exit 1; }
+          # ── Every completed failed deployment finalizes its manifest, and the
+          # rollback switch/readiness outcomes are recorded separately.
+          grep -q 'dep_finalize_failed_release' "$dep" \
+            || { echo '::error::failed-release finalization missing.'; exit 1; }
+          [ "$(grep -c 'dep_finalize_failed_release' "$dep")" -ge 3 ] \
+            || { echo '::error::finalization is not called on every failure path.'; exit 1; }
+          grep -q 'rollback_switch=' "$dep" && grep -q 'rollback_readiness=' "$dep" \
+            || { echo '::error::rollback switch/readiness are not recorded separately.'; exit 1; }
+          grep -q 'dep_reconcile_state' "$dep" \
+            || { echo '::error::central state reconciliation missing.'; exit 1; }
+          # ── Doctor: exists, wrapped, read-only by default, and its bundle can
+          # never include .env contents (no cat/cp/tar of a .env path).
+          test -f scripts/deploy/doctor.sh || { echo '::error::doctor.sh missing.'; exit 1; }
+          test -f scripts/deploy/repair.sh || { echo '::error::repair.sh missing.'; exit 1; }
+          grep -q 'READ-ONLY' scripts/deploy/doctor.sh \
+            || { echo '::error::doctor.sh does not declare/keep its read-only default.'; exit 1; }
+          grep -q 'zedproxy-doctor' scripts/deploy/install-command-wrappers.sh \
+            && grep -q 'zedproxy-deploy-repair' scripts/deploy/install-command-wrappers.sh \
+            || { echo '::error::doctor/repair wrappers are not installed.'; exit 1; }
+          if grep -En '(cat|cp|tar)[^#]*\.env' scripts/deploy/doctor.sh | grep -v '^\s*#'; then
+            echo '::error::doctor.sh reads or copies a .env file into diagnostics.'
+            exit 1
+          fi
+          # ── Scheduler canonicalization + the production fixture are tested.
+          grep -q 'scheduler discovery + reconciliation' tests/deploy/run-tests.sh \
+            || { echo '::error::scheduler canonicalization tests missing.'; exit 1; }
+          grep -q 'PRODUCTION FIXTURE' tests/deploy/run-tests.sh \
+            || { echo '::error::production reproduction fixture test missing.'; exit 1; }
+          # ── Modern-manifest verification stays strict.
+          grep -q 'manifest SHA != deployed HEAD' "$dep" \
+            || { echo '::error::strict manifest-SHA verification was removed.'; exit 1; }
+          grep -q 'dep_release_verify_mode' "$dep" \
+            || { echo '::error::release verify-mode policy missing.'; exit 1; }
+          echo 'Self-healing + diagnostics invariants hold.'
 
       # ── Supply-chain verification (authoritative home; formerly the separate
       #    supply-chain.yml workflow, folded in here to remove duplicate jobs). ──

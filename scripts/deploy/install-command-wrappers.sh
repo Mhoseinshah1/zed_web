@@ -26,13 +26,15 @@ ZPW_WRAPPERS_LIB_LOADED=1
 zpw_bin_dir() { printf '%s' "${ZPD_WRAPPER_BIN:-/usr/local/bin}"; }
 zpw_lib_dir() { printf '%s' "${ZPD_WRAPPER_LIB:-/usr/local/lib/zedproxy}"; }
 
-# The five managed paths (bootstrap first).
+# The managed paths (bootstrap first).
 zpw_managed_paths() {
     printf '%s\n' \
         "$(zpw_lib_dir)/bootstrap.sh" \
         "$(zpw_bin_dir)/zedproxy-update" \
         "$(zpw_bin_dir)/zedproxy-rollback" \
         "$(zpw_bin_dir)/zedproxy-deploy-status" \
+        "$(zpw_bin_dir)/zedproxy-deploy-repair" \
+        "$(zpw_bin_dir)/zedproxy-doctor" \
         "$(zpw_bin_dir)/zedproxy-sanitize-install-log"
 }
 
@@ -121,6 +123,27 @@ s="\$(zpd_resolve_script scripts/deploy/deploy-status.sh)" \\
 exec bash "\$s" "\$@"
 WRAP
             ;;
+        zedproxy-deploy-repair)
+            cat <<WRAP
+#!/usr/bin/env bash
+# Explicit safe repair of deployment state (--scan is read-only; --apply backs
+# up every modified file; never migrations/.env/APP_KEY/release switches).
+. ${libdir}/bootstrap.sh
+s="\$(zpd_resolve_script scripts/deploy/repair.sh)" \\
+  || { echo "اسکریپت ترمیم استقرار یافت نشد." >&2; exit 1; }
+zpd_exec_root "\$s" "\$@"
+WRAP
+            ;;
+        zedproxy-doctor)
+            cat <<WRAP
+#!/usr/bin/env bash
+# Comprehensive READ-ONLY deployment diagnostics (redacted; --bundle archives).
+. ${libdir}/bootstrap.sh
+s="\$(zpd_resolve_script scripts/deploy/doctor.sh)" \\
+  || { echo "اسکریپت عیب‌یابی یافت نشد." >&2; exit 1; }
+zpd_exec_root "\$s" "\$@"
+WRAP
+            ;;
         zedproxy-sanitize-install-log)
             cat <<WRAP
 #!/usr/bin/env bash
@@ -143,7 +166,8 @@ zpw_install_wrappers() {
     local bin lib name
     bin="$(zpw_bin_dir)"; lib="$(zpw_lib_dir)"
     zpw_bootstrap_content | _zpw_atomic_install "${lib}/bootstrap.sh" 644 || return 1
-    for name in zedproxy-update zedproxy-rollback zedproxy-deploy-status zedproxy-sanitize-install-log; do
+    for name in zedproxy-update zedproxy-rollback zedproxy-deploy-status \
+                zedproxy-deploy-repair zedproxy-doctor zedproxy-sanitize-install-log; do
         zpw_wrapper_content "$name" | _zpw_atomic_install "${bin}/${name}" 755 || return 1
     done
     return 0
@@ -197,7 +221,8 @@ zpw_verify_wrappers() {
     [ -n "$base" ] || return 1
     [ -f "${lib}/bootstrap.sh" ] || return 1
     local name
-    for name in zedproxy-update zedproxy-rollback zedproxy-deploy-status zedproxy-sanitize-install-log; do
+    for name in zedproxy-update zedproxy-rollback zedproxy-deploy-status \
+                zedproxy-deploy-repair zedproxy-doctor zedproxy-sanitize-install-log; do
         [ -x "${bin}/${name}" ] || return 1
         grep -q 'zpd_resolve_script' "${bin}/${name}" || return 1
     done

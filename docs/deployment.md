@@ -88,7 +88,9 @@ authenticated URL are shown as `[REDACTED]`.
 | --- | --- |
 | `zedproxy-update` | Self-bootstrapping atomic update (works from any directory). |
 | `zedproxy-rollback [release-id\|legacy] [--yes]` | Switch `current` back to a previous healthy release (or restore the legacy app on the first cutover). |
-| `zedproxy-deploy-status [--json]` | Show base, active/previous release, `current →` target, repo, ref, deployed SHA, result, migrations, health. |
+| `zedproxy-deploy-status [--json]` | Show base, active/previous release, `current →` target, repo, ref, deployed SHA, result, migrations, health — falls back to **observed** git facts (with a warning) when historical metadata is incomplete. |
+| `zedproxy-doctor [--json\|--bundle\|--deep]` | Comprehensive **read-only** diagnostics (redacted, bounded); `--bundle` writes a root-only 600 archive under `/var/log/zedproxy/diagnostics/`. |
+| `zedproxy-deploy-repair [--scan\|--apply] [--scheduler\|--manifests\|--state]` | Explicit safe repair: `--scan` is read-only; `--apply` backs up every modified file, reconciles Scheduler/Supervisor/Nginx/wrappers/health-vhost/manifests/state, and never touches migrations, `.env`, credentials, `APP_KEY`, or the active release. |
 | `zedproxy-sanitize-install-log [--scan\|--redact\|--truncate]` | Clean an old install log. |
 
 The shortcuts are **stable bootstrap wrappers**: they load `deploy.env`, resolve
@@ -232,6 +234,109 @@ activation** — this is what removes an old, broken `zedproxy-update` that stil
 executed the legacy base deployer with the original `.` repository fallback. On
 a first legacy cutover the previous wrappers are snapshotted and restored if the
 activation fails.
+
+### Self-healing operational reconciliation (every deployment)
+
+The existence of a `current` symlink does **not** mean the operational
+configuration is correct — an earlier failed migration can leave the Scheduler
+cron, Supervisor config, Nginx root, command wrappers, or health vhost
+missing/legacy/stale, and the old flow (which repaired them only on the first
+legacy cutover) then failed readiness on every later update with no way out.
+Every activation now runs a unified reconciliation:
+
+1. **Snapshot** the effective operational config under a release-scoped
+   directory (`shared/deploy/snapshots/<release-id>/`, root-owned, files 600 —
+   repeated deployments never overwrite each other's snapshots).
+2. **Detect + reconcile** each managed component to the canonical atomic
+   layout: Nginx root → `current/public`; Supervisor → `current/artisan`
+   (created if missing, `reread`+`update` required); the Scheduler (below);
+   command wrappers (reinstalled + verified); the loopback health vhost.
+3. **Validate** (`nginx -t`, config validators) and reload the services.
+4. **Verify** the effective state (`dep_verify_operational_config`).
+5. On reconciliation failure the snapshot is **restored** (validated,
+   reloaded, workers restarted) and the activation fails → rollback.
+
+This works identically for legacy, partially migrated, and fully atomic
+installs — a broken intermediate state self-heals on the next normal update.
+
+**Scheduler discovery**: reconciliation scans *every* cron source
+(`/etc/cron.d/*`, `/etc/crontab`, `/var/spool/cron/crontabs/*`) for
+`artisan schedule:run` entries. ZedProxy entries in system files are removed
+(with a backup; unrelated cron jobs are preserved line-by-line) and exactly one
+canonical entry is written atomically to `/etc/cron.d/zedproxy-scheduler`
+(root:root, 644, `www-data`, `current/artisan`), then verified via
+`schedule:list`. A ZedProxy scheduler entry found in a **user spool crontab**
+is unmanaged: reconciliation refuses to edit user content and aborts with
+«چند زمان‌بندی متداخل برای Laravel شناسایی شد. برای جلوگیری از اجرای تکراری، عملیات متوقف شد.»
+Two scheduler sources are never left executing the same jobs simultaneously.
+
+### Historical-release adoption & rollback compatibility
+
+A release deployed before the manifest system exists on disk without a usable
+`RELEASE_MANIFEST.json`, which previously made rollback verification fail with
+"manifest SHA != deployed HEAD" even though the release was healthy. Before
+every deployment the updater now **adopts** the active release when its
+manifest is missing/incomplete: it verifies the directory resolves inside
+`releases/`, the Laravel files and shared `.env`/storage links exist, and the
+app passes bounded CLI health, then writes an `adopted` manifest from
+**observed** facts (git HEAD/ref/origin where available — a SHA is never
+invented; without git metadata `git_sha=unknown` is recorded). Persian log:
+«اطلاعات نسخه فعال قدیمی با موفقیت شناسایی و برای سیستم انتشار جدید ثبت شد.»
+
+Verification policy (`dep_release_verify_mode`):
+
+- **Modern releases** (manifest with a real SHA, or any manifest carrying
+  `manifest_schema_version`) stay **strict**: manifest SHA must equal the
+  deployed git HEAD, and a new activation additionally must match the resolved
+  SHA. A modern manifest with a missing SHA is *never* accepted.
+- **Adopted/historical releases** are verified through the compatibility path
+  (directory, files, links, services, PG/Redis, CLI + HTTP health; an adopted
+  SHA that no longer matches the deployed HEAD still fails). A rollback never
+  fails *solely* because a pre-manifest release has no manifest.
+
+### Failed-release finalization & state repair
+
+Every attempted release is finalized **before the deployer returns, regardless
+of the rollback outcome** — no release can stay `activating` forever. The final
+manifest records `result=failed`, `failure_stage`, `failure_reason_code`,
+`migration_status`, `rollback_target`, `rollback_result`, and — separately —
+`rollback_switch` vs `rollback_readiness` (a symlink that switched back with
+failed readiness is a different state than a switch that never happened), plus
+`active_release_after_failure` and `finished_at`. Stale `activating` releases
+left by older versions are finalized on the next run.
+
+The central state file is reconciled from the `current` symlink (the primary
+fact) plus the active manifest, falling back to observed git metadata; it is
+repaired at the start of every deploy and rewritten after both success and
+failure. `zedproxy-deploy-status` distinguishes
+`success | failed | activating | adopted | recovered | unknown` and warns about
+incomplete historical metadata instead of printing silent `<unknown>` fields.
+
+### Automatic failure diagnostics
+
+On any activation failure the deployer records the failing stage and invariant,
+finalizes the manifest, attempts rollback (recording switch/readiness
+separately), then runs a **bounded** redacted `zedproxy-doctor --bundle` and
+prints the archive path. A diagnostics failure only warns — it never replaces
+the original deployment error.
+
+### Deployment stage model
+
+Every stage transition is logged with UTC timestamp, release id, previous
+release, and stage duration: `preflight → resolve → backup → clone →
+link_shared → build → smoke → metadata → manifest_prepare → maintenance →
+migrate → switch → operational_reconcile → service_reload →
+internal_readiness → bring_up → http_readiness → success` (failures:
+`rollback_switch → rollback_reconcile → rollback_readiness → failed`).
+`ZPD_DEBUG=1` adds redacted diagnostics; debug mode never uses `set -x` around
+credentials or environment loading.
+
+### Composer root policy
+
+The deployer runs as root, so `COMPOSER_ALLOW_SUPERUSER=1` (with
+`COMPOSER_NO_INTERACTION=1`) is exported **only inside the build subshell** —
+never globally — so required Composer plugins/scripts behave identically in CI
+and production instead of being silently disabled.
 
 ### Two-phase readiness (maintenance-safe)
 

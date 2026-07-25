@@ -32,13 +32,16 @@ mkdir -p "$BACKUP_DIR"
 
 echo "[$(date)] Starting backup: $FILENAME"
 
-PGPASSWORD="$DB_PASSWORD" pg_dump \
+# Bounded: a wedged database connection must not leave the backup job hanging
+# forever (a real dump of this DB takes minutes, not hours — override with
+# ZPD_BACKUP_TIMEOUT for very large databases).
+timeout "${ZPD_BACKUP_TIMEOUT:-3600}s" env PGPASSWORD="$DB_PASSWORD" pg_dump \
     -h "$DB_HOST" \
     -p "$DB_PORT" \
     -U "$DB_USERNAME" \
     -Fc \
     -f "$BACKUP_DIR/$FILENAME" \
-    "$DB_DATABASE"
+    "$DB_DATABASE" </dev/null
 
 echo "[$(date)] Backup complete: $BACKUP_DIR/$FILENAME"
 ls -lh "$BACKUP_DIR/$FILENAME"

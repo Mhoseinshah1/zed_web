@@ -258,7 +258,10 @@ zpd_resolve_sha() {
     local repo="$1" ref="$2" errfile="${3:-/dev/null}"
     [ -n "$repo" ] && [ -n "$ref" ] || return 1
     local out rc
-    out="$("${ZPD_GIT:-git}" ls-remote "$repo" "$ref" "${ref}^{}" 2>"$errfile")"; rc=$?
+    # Network operation — bounded so a wedged remote can never hang the deploy.
+    out="$(timeout "${ZPD_GIT_NET_TIMEOUT:-60}s" \
+            env GIT_TERMINAL_PROMPT=0 \
+            "${ZPD_GIT:-git}" ls-remote "$repo" "$ref" "${ref}^{}" </dev/null 2>"$errfile")"; rc=$?
     if [ "$rc" -ne 0 ]; then
         # Remote unreachable/denied. Only a full SHA can still be deployed.
         printf '%s' "$ref" | grep -Eq '^[0-9a-f]{40}$' && { printf '%s' "$ref"; return 0; }
@@ -289,15 +292,21 @@ zpd_resolve_sha() {
 zpd_git_clone_ref() {
     local repo="$1" ref="$2" dest="$3" err="${4:-/dev/null}"
     local git="${ZPD_GIT:-git}"
+    # Cloning legitimately takes time on a slow link, but must never wait
+    # FOREVER (a stalled transfer would freeze the deploy). Non-interactive:
+    # never prompts for credentials, stdin from /dev/null.
+    local net_to="${ZPD_GIT_CLONE_TIMEOUT:-900}"
     [ -n "$repo" ] && [ -n "$ref" ] && [ -n "$dest" ] || return 1
     rm -rf "$dest" 2>/dev/null || true
-    if ! "$git" clone "$repo" "$dest" >>"$err" 2>&1; then
+    if ! timeout "${net_to}s" env GIT_TERMINAL_PROMPT=0 \
+            "$git" clone "$repo" "$dest" </dev/null >>"$err" 2>&1; then
         rm -rf "$dest" 2>/dev/null || true
         return 1
     fi
     # Ensure tags are present (annotated + lightweight) for tag refs.
-    "$git" -C "$dest" fetch --tags --force --quiet origin >>"$err" 2>&1 || true
-    if ! "$git" -C "$dest" checkout --quiet --detach "$ref" >>"$err" 2>&1; then
+    timeout "${ZPD_GIT_NET_TIMEOUT:-60}s" env GIT_TERMINAL_PROMPT=0 \
+        "$git" -C "$dest" fetch --tags --force --quiet origin </dev/null >>"$err" 2>&1 || true
+    if ! "$git" -C "$dest" checkout --quiet --detach "$ref" </dev/null >>"$err" 2>&1; then
         rm -rf "$dest" 2>/dev/null || true
         return 1
     fi
@@ -531,6 +540,80 @@ zpd_scheduler_cron_ok() {
     grep -Eq "php ${base}/artisan schedule:run" "$cron" && return 1
     return 0
 }
+
+# ── Scheduler discovery (all cron sources, not only the canonical file) ──────
+#
+# The scheduler may have been configured by an older installer in /etc/crontab,
+# another /etc/cron.d file, or a user's spool crontab. Reconciliation must find
+# EVERY `artisan schedule:run` invocation so exactly one canonical source
+# survives — two sources running the same jobs simultaneously is never allowed.
+
+zpd_cron_d_dir()     { printf '%s' "${ZPD_CRON_D_DIR:-/etc/cron.d}"; }
+zpd_etc_crontab()    { printf '%s' "${ZPD_ETC_CRONTAB:-/etc/crontab}"; }
+zpd_cron_spool_dir() { printf '%s' "${ZPD_CRON_SPOOL_DIR:-/var/spool/cron/crontabs}"; }
+
+# -----------------------------------------------------------------------------
+# zpd_scheduler_sources — print every readable file that may carry cron entries:
+# the canonical managed file, every other file in cron.d, /etc/crontab, and all
+# user spool crontabs. One absolute path per line.
+# -----------------------------------------------------------------------------
+zpd_scheduler_sources() {
+    local f
+    [ -f "$(zpd_scheduler_cron_path)" ] && printf '%s\n' "$(zpd_scheduler_cron_path)"
+    if [ -d "$(zpd_cron_d_dir)" ]; then
+        for f in "$(zpd_cron_d_dir)"/*; do
+            [ -f "$f" ] || continue
+            [ "$f" = "$(zpd_scheduler_cron_path)" ] && continue
+            printf '%s\n' "$f"
+        done
+    fi
+    [ -f "$(zpd_etc_crontab)" ] && printf '%s\n' "$(zpd_etc_crontab)"
+    if [ -d "$(zpd_cron_spool_dir)" ]; then
+        for f in "$(zpd_cron_spool_dir)"/*; do
+            [ -f "$f" ] && printf '%s\n' "$f"
+        done
+    fi
+    return 0
+}
+
+# -----------------------------------------------------------------------------
+# zpd_scheduler_lines FILE — print every non-comment line of FILE containing an
+# `artisan schedule:run` invocation (any Laravel scheduler entry).
+# -----------------------------------------------------------------------------
+zpd_scheduler_lines() {
+    local file="$1"
+    [ -f "$file" ] || return 0
+    grep -E 'artisan[[:space:]]+schedule:run' "$file" 2>/dev/null \
+        | grep -vE '^[[:space:]]*#' || true
+}
+
+# -----------------------------------------------------------------------------
+# zpd_scheduler_line_is_ours LINE BASE — 0 when LINE invokes the ZedProxy app
+# (any path under BASE: legacy base/artisan, current/artisan, or an individual
+# releases/<id>/artisan). Anything else is an UNRELATED Laravel scheduler.
+# -----------------------------------------------------------------------------
+zpd_scheduler_line_is_ours() {
+    local line="$1" base="$2"
+    printf '%s' "$line" | grep -qF "${base}/" || return 1
+    return 0
+}
+
+# ── Per-deployment operational snapshots ─────────────────────────────────────
+#
+# Every activation snapshots the effective operational configuration under a
+# release-scoped directory, so a failed activation can restore EXACTLY the
+# pre-deployment state — repeated deployments never clobber each other's
+# backups (unlike the old static `.zpd-precutover` names).
+
+zpd_snapshots_dir() { printf '%s/deploy/snapshots' "$(zpd_shared_dir)"; }
+
+# ── Manifest schema ──────────────────────────────────────────────────────────
+#
+# Version 2 introduces adopted/failed finalization fields. A manifest carrying
+# manifest_schema_version >= 2 with result=success/activating is MODERN and must
+# always satisfy strict SHA verification; result=adopted marks a historical
+# release backfilled from observed facts (compat verification applies).
+zpd_manifest_schema_version() { printf '2'; }
 
 # ── First-cutover (legacy → first release) rollback bookkeeping ──────────────
 #
@@ -895,3 +978,7 @@ zpd_msg_update_ref_bad()   { printf 'نسخه درخواستی به‌روزرس
 zpd_msg_migrate_none()     { printf 'هیچ مهاجرت جدیدی اجرا نشد و دیتابیس تغییری نکرد.'; }
 zpd_msg_migrate_applied()  { printf 'مهاجرت‌های جدید اجرا شده‌اند؛ در صورت بروز ناسازگاری، نسخه پشتیبان دیتابیس را بررسی کنید.'; }
 zpd_msg_up_failed()        { printf 'خروج از حالت تعمیر و نگهداری ناموفق بود؛ نسخه جدید فعال نشد.'; }
+zpd_msg_sched_conflict()   { printf 'چند زمان‌بندی متداخل برای Laravel شناسایی شد. برای جلوگیری از اجرای تکراری، عملیات متوقف شد.'; }
+zpd_msg_adopted()          { printf 'اطلاعات نسخه فعال قدیمی با موفقیت شناسایی و برای سیستم انتشار جدید ثبت شد.'; }
+zpd_msg_repair_done()      { printf 'تنظیمات انتشار بررسی و ناسازگاری‌های قابل اصلاح با موفقیت ترمیم شدند.'; }
+zpd_msg_doctor_bundle()    { printf 'گزارش عیب‌یابی بدون اطلاعات حساس ایجاد شد:'; }
