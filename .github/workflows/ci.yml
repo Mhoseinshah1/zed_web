@@ -481,19 +481,19 @@ jobs:
             grep -q "$fn" "$dep" || { echo "::error::deploy.sh missing ${fn} (self-healing reconciliation)."; exit 1; }
           done
           if awk '/^dep_activate\(\)/{f=1} f&&/^}/{f=0} f' "$dep" \
-               | grep 'dep_reconcile_operational' | grep -q 'legacy'; then
+               | grep 'dep_reconcile_operational' | grep 'legacy' >/dev/null; then
             echo '::error::Operational reconciliation is still gated on legacy=1.'
             exit 1
           fi
-          awk '/^dep_activate\(\)/{f=1} f&&/^}/{f=0} f' "$dep" | grep -q 'dep_reconcile_operational' \
+          awk '/^dep_activate\(\)/{f=1} f&&/^}/{f=0} f' "$dep" | grep 'dep_reconcile_operational' >/dev/null \
             || { echo '::error::dep_activate does not run operational reconciliation.'; exit 1; }
           # ── No unbounded production smoke: dep_smoke must go through the
           # bounded CLI-health helper, never a direct artisan health call.
-          if awk '/^dep_smoke\(\)/{f=1} f&&/^}/{f=0} f' "$dep" | grep -q 'zedproxy:health'; then
+          if awk '/^dep_smoke\(\)/{f=1} f&&/^}/{f=0} f' "$dep" | grep 'zedproxy:health' >/dev/null; then
             echo '::error::dep_smoke invokes zedproxy:health directly (unbounded).'
             exit 1
           fi
-          awk '/^dep_smoke\(\)/{f=1} f&&/^}/{f=0} f' "$dep" | grep -q 'dep_cli_health' \
+          awk '/^dep_smoke\(\)/{f=1} f&&/^}/{f=0} f' "$dep" | grep 'dep_cli_health' >/dev/null \
             || { echo '::error::dep_smoke does not use the bounded CLI-health helper.'; exit 1; }
           # ── Every completed failed deployment finalizes its manifest, and the
           # rollback switch/readiness outcomes are recorded separately.
@@ -588,13 +588,13 @@ jobs:
           # ── First-cutover rollback: bounded Supervisor ops, fail-closed, and a
           # legacy loopback health target (never current/public after rm current).
           body="$(awk '/^dep_first_cutover_rollback\(\)/{f=1} f&&/^}/{f=0} f' "$dep")"
-          printf '%s' "$body" | grep -q 'dep_svc "\$ZPD_SUPERVISORCTL"' \
+          printf '%s' "$body" | grep 'dep_svc "\$ZPD_SUPERVISORCTL"' >/dev/null \
             || { echo '::error::first-cutover rollback supervisor ops are not bounded.'; exit 1; }
           printf '%s' "$body" | grep -Eq 'SUPERVISORCTL[^\n]*\|\| *true' \
             && { echo '::error::first-cutover rollback supervisor ops fail open.'; exit 1; }
-          printf '%s' "$body" | grep -q '/public"' \
+          printf '%s' "$body" | grep '/public"' >/dev/null \
             || { echo '::error::legacy rollback lacks a legacy-root health target.'; exit 1; }
-          printf '%s' "$body" | grep -q 'dep_supervisor_group_running' \
+          printf '%s' "$body" | grep 'dep_supervisor_group_running' >/dev/null \
             || { echo '::error::legacy rollback does not require RUNNING workers.'; exit 1; }
           # ── Immutable original-failure context.
           grep -q 'dep_record_failure' "$dep" && grep -q 'original_failure_stage' "$dep" \
@@ -609,7 +609,7 @@ jobs:
             || { echo '::error::systemd discovery paths missing.'; exit 1; }
           # ── Fail-closed snapshot restore.
           awk '/^dep_restore_operational_snapshot\(\)/{f=1} f&&/^}/{f=0} f' "$dep" \
-            | grep -q 'dep_supervisor_group_running' \
+            | grep 'dep_supervisor_group_running' >/dev/null \
             || { echo '::error::snapshot restore does not require RUNNING workers.'; exit 1; }
           # ── Exact repair component flags.
           for flag in -- --nginx --supervisor --scheduler --wrappers --health-vhost --manifests --state --operational; do
