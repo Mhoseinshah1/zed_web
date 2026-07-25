@@ -207,6 +207,24 @@ class SecurityHardeningTest extends TestCase
         $this->assertTrue((bool) User::where('username', 'rootadmin')->first()->is_admin);
     }
 
+    public function test_create_admin_rerun_with_different_email_casing_updates_not_collides(): void
+    {
+        $this->artisan('zedproxy:create-admin', [
+            '--username' => 'caseadmin', '--email' => 'case@example.com',
+            '--password' => 'secret1234',
+        ])->assertExitCode(0);
+
+        // Rerun with DIFFERENT casing and a changed username: must find and
+        // update the same account, never insert into a lower(email) collision.
+        $this->artisan('zedproxy:create-admin', [
+            '--username' => 'caseadmin2', '--email' => '  CASE@Example.COM ',
+            '--password' => 'secret5678',
+        ])->assertExitCode(0);
+
+        $this->assertSame(1, User::whereRaw('lower(email) = ?', ['case@example.com'])->count());
+        $this->assertSame('caseadmin2', User::whereRaw('lower(email) = ?', ['case@example.com'])->first()->username);
+    }
+
     public function test_admin_panel_can_still_toggle_is_admin(): void
     {
         // Explicit usernames — the admin form validates username against

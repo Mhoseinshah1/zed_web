@@ -18,7 +18,11 @@ class CreateAdminCommand extends Command
 
     public function handle(): int
     {
-        $email = $this->option('email');
+        // Same normalization the User model applies on save: without it, a
+        // re-run with different letter casing would miss the case-sensitive
+        // lookup and then collide with the lower(email) unique index instead
+        // of updating the existing admin.
+        $email = strtolower(trim((string) $this->option('email')));
         $username = $this->option('username');
         $name = $this->option('name') ?: $username;
         $password = $this->option('password') ?: env('ZEDPROXY_ADMIN_PASS');
@@ -35,8 +39,10 @@ class CreateAdminCommand extends Command
             return self::FAILURE;
         }
 
-        // Look up by email OR username to avoid duplicate admin records on re-runs
-        $user = User::where('email', $email)->orWhere('username', $username)->first();
+        // Look up by email OR username to avoid duplicate admin records on
+        // re-runs. Case-insensitive on email: rows written before the
+        // normalization invariant may still carry mixed case.
+        $user = User::whereRaw('lower(email) = ?', [$email])->orWhere('username', $username)->first();
 
         $attributes = [
             'username' => $username,

@@ -65,13 +65,25 @@ class SendEmailOtpJob implements ShouldBeEncrypted, ShouldQueue
     /** @var array<int,int> seconds */
     public array $backoff = [10, 30, 60];
 
-    public int $timeout = 30;
+    /**
+     * Sized for the COMPLETE SMTP exchange, not one I/O operation: the
+     * transport timeout (config/mail.php, capped at 20s) bounds each
+     * individual stream read/write, and a full conversation is roughly ten
+     * such blocking steps (connect, greeting, EHLO, STARTTLS+EHLO, AUTH,
+     * MAIL, RCPT, DATA, payload, QUIT). A server that answers slowly-but-
+     * within-bounds on every step must never be killed by the worker
+     * mid-conversation — especially not after remote acceptance, where a
+     * retry would duplicate the OTP email. 10 × 20s + claim/finalize margin.
+     * Every queue driver's retry_after (config/queue.php: 300) MUST stay
+     * above this, or an in-flight job would be handed to a second worker.
+     */
+    public int $timeout = 240;
 
     /**
      * The per-user lock is held through the whole transport conversation, so
      * its TTL must exceed the job timeout (abandoned locks still expire).
      */
-    private const LOCK_TTL_SECONDS = 45;
+    private const LOCK_TTL_SECONDS = 270;
 
     /** This attempt's delivery claim — in memory only, never serialized/logged. */
     private ?string $claimToken = null;
