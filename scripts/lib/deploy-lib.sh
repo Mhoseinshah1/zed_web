@@ -588,14 +588,24 @@ zpd_scheduler_lines() {
 }
 
 # -----------------------------------------------------------------------------
-# zpd_scheduler_line_is_ours LINE BASE — 0 when LINE invokes the ZedProxy app
-# (any path under BASE: legacy base/artisan, current/artisan, or an individual
-# releases/<id>/artisan). Anything else is an UNRELATED Laravel scheduler.
+# zpd_scheduler_ours_re BASE — the ERE matching OUR scheduler invocations: the
+# EXECUTED artisan path must live under BASE (legacy base/artisan,
+# current/artisan, or an individual releases/<id>/artisan). Shared by
+# classification AND removal so the two can never disagree. A foreign app's
+# schedule:run that merely mentions BASE elsewhere on the line (e.g.
+# `cd <base> && php /other/artisan schedule:run`) is NOT ours.
 # -----------------------------------------------------------------------------
+zpd_scheduler_ours_re() {
+    local esc
+    esc="$(printf '%s' "$1" | sed 's/[][\.*^$(){}?+|]/\\&/g')"
+    printf '%s(/current|/releases/[^[:space:]]*)?/artisan[[:space:]]+schedule:run' "$esc"
+}
+
+# zpd_scheduler_line_is_ours LINE BASE — 0 when LINE executes the ZedProxy
+# application's scheduler (artisan path under BASE).
 zpd_scheduler_line_is_ours() {
     local line="$1" base="$2"
-    printf '%s' "$line" | grep -qF "${base}/" || return 1
-    return 0
+    printf '%s' "$line" | grep -qE "$(zpd_scheduler_ours_re "$base")"
 }
 
 # ── Per-deployment operational snapshots ─────────────────────────────────────
@@ -698,6 +708,27 @@ zpd_write_manifest() {
 
     chmod 600 "$tmp" 2>/dev/null || true
     mv -f "$tmp" "$file" 2>/dev/null || { rm -f "$tmp"; return 1; }
+}
+
+# -----------------------------------------------------------------------------
+# zpd_print_manifest key=value... — serialize the SAME masked/escaped flat JSON
+# directly to the CURRENT stdout. Used for machine-readable output (doctor
+# --json, deploy-status --json): zpd_write_manifest must never be pointed at
+# /dev/stdout, because its atomic temp-file rename would replace the
+# /dev/stdout symlink (and chmod 600 it) when running as root.
+# -----------------------------------------------------------------------------
+zpd_print_manifest() {
+    printf '{\n'
+    local first=1 pair key val
+    for pair in "$@"; do
+        key="${pair%%=*}"
+        val="${pair#*=}"
+        val="$(printf '%s' "$val" | zpd_mask_secrets)"
+        [ "$first" -eq 1 ] || printf ',\n'
+        first=0
+        printf '  "%s": "%s"' "$(zpd_json_escape "$key")" "$(zpd_json_escape "$val")"
+    done
+    printf '\n}\n'
 }
 
 # -----------------------------------------------------------------------------

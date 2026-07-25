@@ -90,7 +90,7 @@ authenticated URL are shown as `[REDACTED]`.
 | `zedproxy-rollback [release-id\|legacy] [--yes]` | Switch `current` back to a previous healthy release (or restore the legacy app on the first cutover). |
 | `zedproxy-deploy-status [--json]` | Show base, active/previous release, `current →` target, repo, ref, deployed SHA, result, migrations, health — falls back to **observed** git facts (with a warning) when historical metadata is incomplete. |
 | `zedproxy-doctor [--json\|--bundle\|--deep]` | Comprehensive **read-only** diagnostics (redacted, bounded); `--bundle` writes a root-only 600 archive under `/var/log/zedproxy/diagnostics/`. |
-| `zedproxy-deploy-repair [--scan\|--apply] [--scheduler\|--manifests\|--state]` | Explicit safe repair: `--scan` is read-only; `--apply` backs up every modified file, reconciles Scheduler/Supervisor/Nginx/wrappers/health-vhost/manifests/state, and never touches migrations, `.env`, credentials, `APP_KEY`, or the active release. |
+| `zedproxy-deploy-repair [--scan\|--apply] [--operational\|--scheduler\|--manifests\|--state]` | Explicit safe repair. `--scan` is read-only. `--apply` is **fail-closed and serialized**: it takes the same deployment lock as `zedproxy-update` (busy → refused), snapshots every potentially modified resource (operational config, discovered scheduler sources, wrappers, release manifests, state file), stops on the first required failure, restores the complete snapshot, and exits non-zero — the success message appears only when every requested check (incl. workers RUNNING, `schedule:list`, CLI health, HTTP `/health` + `/health/live`) passed. Component flags are exact: `--scheduler` touches only the scheduler; `--operational` is the full group. Never migrations, `.env`, credentials, `APP_KEY`, or release switches. |
 | `zedproxy-sanitize-install-log [--scan\|--redact\|--truncate]` | Clean an old install log. |
 
 The shortcuts are **stable bootstrap wrappers**: they load `deploy.env`, resolve
@@ -259,14 +259,24 @@ Every activation now runs a unified reconciliation:
 This works identically for legacy, partially migrated, and fully atomic
 installs — a broken intermediate state self-heals on the next normal update.
 
-**Scheduler discovery**: reconciliation scans *every* cron source
-(`/etc/cron.d/*`, `/etc/crontab`, `/var/spool/cron/crontabs/*`) for
-`artisan schedule:run` entries. ZedProxy entries in system files are removed
-(with a backup; unrelated cron jobs are preserved line-by-line) and exactly one
-canonical entry is written atomically to `/etc/cron.d/zedproxy-scheduler`
-(root:root, 644, `www-data`, `current/artisan`), then verified via
-`schedule:list`. A ZedProxy scheduler entry found in a **user spool crontab**
-is unmanaged: reconciliation refuses to edit user content and aborts with
+**Scheduler discovery (transactional)**: reconciliation scans *every* cron
+source (`/etc/cron.d/*`, `/etc/crontab`, `/var/spool/cron/crontabs/*`) for
+`artisan schedule:run` entries, classifying a line as ZedProxy's only when the
+**executed artisan path lives under the base** (a foreign app's scheduler that
+merely mentions the base path is left alone). Before any modification, every
+file that may change is discovered, deduplicated, and captured in the
+per-deployment snapshot with its exact content, mode, ownership, and existence
+state (`sched-sources/sources.map`) — sources are modified only after the
+complete snapshot succeeds, each file is processed exactly once even with
+multiple matching lines, and **any later reconciliation or activation failure
+restores every modified source precisely** (files newly created by the failed
+transaction are removed). No unmanaged side backups are used. ZedProxy entries
+in system files are removed (unrelated cron jobs preserved line-by-line) and
+exactly one canonical entry is written atomically to
+`/etc/cron.d/zedproxy-scheduler` (root:root, 644, `www-data`,
+`current/artisan`), then verified via `schedule:list`. A ZedProxy scheduler
+entry found in a **user spool crontab** is unmanaged: reconciliation refuses to
+edit user content and aborts with
 «چند زمان‌بندی متداخل برای Laravel شناسایی شد. برای جلوگیری از اجرای تکراری، عملیات متوقف شد.»
 Two scheduler sources are never left executing the same jobs simultaneously.
 

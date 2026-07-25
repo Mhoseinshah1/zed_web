@@ -430,6 +430,22 @@ dep_check_release_files() {
     return 0
 }
 
+# dep_check_shared_links DIR — .env, storage, and public/storage must be
+# SYMLINKS resolving into the shared tree. A release with a private regular
+# .env or local storage would run with stale credentials, a different APP_KEY,
+# or non-shared uploads — it must never be adopted or activated via the
+# compatibility path.
+dep_check_shared_links() {
+    local d="$1" shared; shared="$(zpd_shared_dir)"
+    [ -L "${d}/.env" ] || return 1
+    [ "$(readlink -f "${d}/.env" 2>/dev/null)" = "$(readlink -f "${shared}/.env" 2>/dev/null)" ] || return 1
+    [ -L "${d}/storage" ] || return 1
+    [ "$(readlink -f "${d}/storage" 2>/dev/null)" = "$(readlink -f "${shared}/storage" 2>/dev/null)" ] || return 1
+    [ -L "${d}/public/storage" ] || return 1
+    [ "$(readlink -f "${d}/public/storage" 2>/dev/null)" = "$(readlink -f "${shared}/storage/app/public" 2>/dev/null)" ] || return 1
+    return 0
+}
+
 # ── Local loopback health vhost management (install + repair) ─────────────────
 
 # dep_fpm_socket — the PHP-FPM socket path (derived from the running PHP version;
@@ -524,6 +540,10 @@ dep_verify_internal_release() {
             ;;
         adopted|historical)
             dep_warn "internal: ${id} verified via ${mode} compatibility path (pre-manifest release)"
+            # The compat path must never activate a release whose .env/storage
+            # are not links into shared (stale credentials / different APP_KEY).
+            dep_check_shared_links "$cur" \
+                || { dep_err "internal: ${id} .env/storage are not links into shared/"; return 1; }
             # An ADOPTED manifest records the OBSERVED HEAD at adoption time —
             # if git data exists now and disagrees, the release was tampered
             # with after adoption → fail. A pre-manifest release with no
@@ -600,7 +620,9 @@ dep_check_pg() {
     host="$(_dep_env_get "$env_file" DB_HOST)"; host="${host:-127.0.0.1}"
     port="$(_dep_env_get "$env_file" DB_PORT)"; port="${port:-5432}"
     [ -n "$db" ] && [ -n "$user" ] || return 1
-    PGPASSWORD="$pass" "$ZPD_PSQL" -h "$host" -p "$port" -U "$user" -d "$db" -tAc 'SELECT 1' >/dev/null 2>&1
+    # Bounded: a stalled PostgreSQL client must not hang readiness or the doctor.
+    timeout "${ZPD_DB_PROBE_TIMEOUT:-15}s" env PGPASSWORD="$pass" \
+        "$ZPD_PSQL" -h "$host" -p "$port" -U "$user" -d "$db" -tAc 'SELECT 1' </dev/null >/dev/null 2>&1
 }
 
 # dep_check_redis ENV_FILE — Redis connectivity via `redis-cli ping` → PONG.
@@ -610,10 +632,11 @@ dep_check_redis() {
     host="$(_dep_env_get "$env_file" REDIS_HOST)"; host="${host:-127.0.0.1}"
     port="$(_dep_env_get "$env_file" REDIS_PORT)"; port="${port:-6379}"
     pass="$(_dep_env_get "$env_file" REDIS_PASSWORD)"
+    # Bounded: a stalled Redis client must not hang readiness or the doctor.
     if [ -n "$pass" ] && [ "$pass" != "null" ]; then
-        out="$("$ZPD_REDIS_CLI" -h "$host" -p "$port" -a "$pass" ping 2>/dev/null)"
+        out="$(timeout "${ZPD_DB_PROBE_TIMEOUT:-15}s" "$ZPD_REDIS_CLI" -h "$host" -p "$port" -a "$pass" ping </dev/null 2>/dev/null)"
     else
-        out="$("$ZPD_REDIS_CLI" -h "$host" -p "$port" ping 2>/dev/null)"
+        out="$(timeout "${ZPD_DB_PROBE_TIMEOUT:-15}s" "$ZPD_REDIS_CLI" -h "$host" -p "$port" ping </dev/null 2>/dev/null)"
     fi
     printf '%s' "$out" | grep -qi 'PONG'
 }
@@ -718,6 +741,14 @@ dep_cutover_services() {
 # deployment's snapshot; a repeated id gets a unique suffix). Root-owned,
 # dir 700, files 600. Prints the snapshot dir. No secrets are copied — these are
 # service configs, not credential files.
+#
+# TRANSACTIONAL SCHEDULER SOURCES: reconciliation may modify or delete
+# arbitrary discovered cron files (/etc/crontab, other /etc/cron.d/* files) —
+# not only the canonical scheduler. EVERY such file is discovered up front,
+# deduplicated, and captured here with its exact content, mode, ownership, and
+# existence state in a source-to-snapshot map, so a failed transaction can
+# restore all of them precisely (and remove files that did not exist). Sources
+# are only modified after this complete snapshot has succeeded.
 dep_snapshot_operational_config() {
     local id="$1" dir n=0
     dir="$(zpd_snapshots_dir)/${id}"
@@ -737,11 +768,31 @@ dep_snapshot_operational_config() {
     if declare -F zpw_backup_wrappers >/dev/null 2>&1; then
         zpw_backup_wrappers "${dir}/wrappers" >/dev/null 2>&1 || true
     fi
+    # Discover + capture every scheduler source reconciliation may touch.
+    # sources.map: <index> TAB <absolute path> TAB <mode> TAB <uid:gid> TAB <existed 0|1>
+    local base src map n_src=0
+    base="$(zpd_base)"
+    mkdir -p "${dir}/sched-sources" 2>/dev/null || return 1
+    map="${dir}/sched-sources/sources.map"
+    : > "$map" || return 1
+    chmod 600 "$map" 2>/dev/null || true
+    while IFS= read -r src; do
+        [ -n "$src" ] || continue
+        n_src=$((n_src + 1))
+        if [ -f "$src" ]; then
+            cp -a "$src" "${dir}/sched-sources/src-${n_src}" 2>/dev/null || return 1
+            chmod 600 "${dir}/sched-sources/src-${n_src}" 2>/dev/null || true
+            printf '%s\t%s\t%s\t%s\t1\n' "$n_src" "$src" \
+                "$(stat -c '%a' "$src" 2>/dev/null)" "$(stat -c '%u:%g' "$src" 2>/dev/null)" >> "$map" || return 1
+        else
+            printf '%s\t%s\t\t\t0\n' "$n_src" "$src" >> "$map" || return 1
+        fi
+    done < <(dep_scheduler_scan "$base" | sed -n 's/^OURS //p' | sort -u)
     zpd_write_manifest "${dir}/SNAPSHOT.json" \
         "release_id=${id}" "created_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
         "nginx_conf=$(zpd_nginx_conf_path)" "local_health_conf=$(zpd_local_health_conf_path)" \
         "supervisor_conf=$(zpd_supervisor_conf_path)" "scheduler_cron=$(zpd_scheduler_cron_path)" \
-        "deploy_env=$(zpd_deploy_env_file)"
+        "deploy_env=$(zpd_deploy_env_file)" "scheduler_sources=${n_src}"
     printf '%s' "$dir"
 }
 
@@ -766,6 +817,24 @@ dep_restore_operational_snapshot() {
     if declare -F zpw_restore_wrappers >/dev/null 2>&1 && [ -d "${dir}/wrappers" ]; then
         zpw_restore_wrappers "${dir}/wrappers" || dep_warn "restore: wrapper restore failed"
     fi
+    # Restore every scheduler SOURCE the transaction may have modified —
+    # content, mode, and ownership exactly; files that did not exist before the
+    # transaction are removed. This is what puts a stripped /etc/crontab entry
+    # back when a later reconciliation step fails.
+    local map="${dir}/sched-sources/sources.map" idx path mode owner existed
+    if [ -f "$map" ]; then
+        while IFS=$'\t' read -r idx path mode owner existed; do
+            [ -n "$path" ] || continue
+            if [ "$existed" = "1" ]; then
+                cp "${dir}/sched-sources/src-${idx}" "$path" 2>/dev/null \
+                    || { dep_warn "restore: could not restore scheduler source ${path}"; continue; }
+                [ -n "$mode" ]  && chmod "$mode" "$path" 2>/dev/null || true
+                [ -n "$owner" ] && chown "$owner" "$path" 2>/dev/null || true
+            else
+                rm -f "$path" 2>/dev/null || true
+            fi
+        done < "$map"
+    fi
     dep_validate_nginx || { dep_err "restore: nginx -t failed on restored config"; return 1; }
     dep_reload_nginx   || dep_warn "restore: nginx reload failed"
     dep_svc "$ZPD_SUPERVISORCTL" reread >/dev/null 2>&1 || dep_warn "restore: supervisor reread failed"
@@ -785,34 +854,46 @@ dep_reconcile_nginx() {
 }
 
 # dep_reconcile_supervisor BASE — ensure the worker program runs
-# current/artisan. Missing config is created; legacy/stale config rewritten;
-# reread + update must succeed (dep_cutover_supervisor is already idempotent).
+# current/artisan AND that the daemon has actually loaded it. Missing config is
+# created; legacy/stale config rewritten. `reread` + `update` run EVEN when the
+# file already looks correct — a previous failed reread/update can leave a
+# correct file that supervisord never loaded (the worker group then "does not
+# exist"), and skipping the reload would make that state permanently
+# unrepairable.
 dep_reconcile_supervisor() {
     local base="$1" conf; conf="$(zpd_supervisor_conf_path)"
-    if [ -f "$conf" ] && zpd_supervisor_ok "$conf" "$base"; then return 0; fi
+    if [ -f "$conf" ] && zpd_supervisor_ok "$conf" "$base"; then
+        dep_svc "$ZPD_SUPERVISORCTL" reread || { dep_err "$(zpd_msg_supervisor_failed)"; return 1; }
+        dep_svc "$ZPD_SUPERVISORCTL" update || { dep_err "$(zpd_msg_supervisor_failed)"; return 1; }
+        return 0
+    fi
     dep_log "Reconciling Supervisor worker config → current/artisan…"
     dep_cutover_supervisor "$base"
 }
 
 # dep_scheduler_scan BASE — inspect EVERY cron source for Laravel scheduler
-# entries. Prints classified lines:
+# entries. Prints classified, DEDUPLICATED lines (a file with multiple matching
+# scheduler lines appears exactly once per classification, so each source is
+# processed only once):
 #   OURS <file>        — a ZedProxy schedule:run entry in a non-canonical file
-#   FOREIGN <file>     — a schedule:run entry NOT referencing BASE (unrelated app)
+#   FOREIGN <file>     — a schedule:run entry NOT executing BASE (unrelated app)
 # The canonical file itself is not printed (its content is reconciled directly).
 dep_scheduler_scan() {
     local base="$1" src line
-    while IFS= read -r src; do
-        [ -n "$src" ] || continue
-        [ "$src" = "$(zpd_scheduler_cron_path)" ] && continue
-        while IFS= read -r line; do
-            [ -n "$line" ] || continue
-            if zpd_scheduler_line_is_ours "$line" "$base"; then
-                printf 'OURS %s\n' "$src"
-            else
-                printf 'FOREIGN %s\n' "$src"
-            fi
-        done < <(zpd_scheduler_lines "$src")
-    done < <(zpd_scheduler_sources)
+    {
+        while IFS= read -r src; do
+            [ -n "$src" ] || continue
+            [ "$src" = "$(zpd_scheduler_cron_path)" ] && continue
+            while IFS= read -r line; do
+                [ -n "$line" ] || continue
+                if zpd_scheduler_line_is_ours "$line" "$base"; then
+                    printf 'OURS %s\n' "$src"
+                else
+                    printf 'FOREIGN %s\n' "$src"
+                fi
+            done < <(zpd_scheduler_lines "$src")
+        done < <(zpd_scheduler_sources)
+    } | sort -u
     return 0
 }
 
@@ -847,18 +928,20 @@ dep_reconcile_scheduler() {
         fi
     done < <(dep_scheduler_scan "$base")
 
-    # 3: strip our schedule:run lines from other SYSTEM cron files (backup first;
-    #    every unrelated line is preserved).
-    while IFS= read -r entry; do
-        [ -n "$entry" ] || continue
-        kind="${entry%% *}"; src="${entry#* }"
-        [ "$kind" = "OURS" ] || continue
+    # 3: strip our schedule:run lines from other SYSTEM cron files. Each source
+    #    file is processed exactly ONCE (the scan is deduplicated) even when it
+    #    contains multiple matching lines; every unrelated line is preserved.
+    #    The per-deployment snapshot (sched-sources map) is the TRANSACTIONAL
+    #    backup — no unmanaged side files are created. The removal pattern is
+    #    the SAME ERE the classifier uses, passed via the environment so awk
+    #    never reinterprets backslashes.
+    local ours_re; ours_re="$(zpd_scheduler_ours_re "$base")"
+    while IFS= read -r src; do
+        [ -n "$src" ] || continue
         case "$src" in "$spool"/*) continue ;; esac
-        dep_log "Removing duplicate ZedProxy scheduler entry from ${src}…"
-        cp -a "$src" "${src}.zpd-dedup.bak" 2>/dev/null || true
+        dep_log "Removing duplicate ZedProxy scheduler entr(y/ies) from ${src}…"
         local tmp; tmp="$(mktemp)" || return 1
-        # Keep every line that is NOT one of our schedule:run invocations.
-        awk -v base="${base}/" '!(index($0, base) > 0 && $0 ~ /artisan[ \t]+schedule:run/ && $0 !~ /^[ \t]*#/)' \
+        ZPD_OURS_RE="$ours_re" awk '!($0 ~ ENVIRON["ZPD_OURS_RE"] && $0 !~ /^[ \t]*#/)' \
             "$src" > "$tmp" || { rm -f "$tmp"; return 1; }
         if [ -s "$tmp" ] || [ "$src" = "$(zpd_etc_crontab)" ]; then
             chmod --reference="$src" "$tmp" 2>/dev/null || chmod 644 "$tmp" 2>/dev/null || true
@@ -868,7 +951,7 @@ dep_reconcile_scheduler() {
             rm -f "$tmp"
             rm -f "$src" 2>/dev/null || true
         fi
-    done < <(dep_scheduler_scan "$base")
+    done < <(dep_scheduler_scan "$base" | sed -n 's/^OURS //p' | sort -u)
 
     # 4: canonical single-entry file (atomic write + strict verification).
     dep_cutover_scheduler "$base" || return 1
@@ -1124,8 +1207,11 @@ dep_adopt_current_release() {
 
     [ -f "${dir}/artisan" ] && [ -f "${dir}/public/index.php" ] \
         || { dep_warn "adopt: ${id} lacks required Laravel files"; return 0; }
-    [ -e "${dir}/.env" ] && [ -e "${dir}/storage" ] \
-        || { dep_warn "adopt: ${id} missing .env/storage links"; return 0; }
+    # .env / storage / public/storage must be SYMLINKS resolving into shared/ —
+    # a private regular .env (different APP_KEY, stale credentials) or local
+    # storage tree disqualifies the release from adoption.
+    dep_check_shared_links "$dir" \
+        || { dep_warn "adopt: ${id} .env/storage are not links into shared/ — not adopting"; return 0; }
 
     # Never mark an unhealthy release adopted.
     dep_cli_health "$dir" >/dev/null 2>&1 \
@@ -1514,10 +1600,17 @@ dep_main() {
         else
             dep_err "legacy application could not be restored to a healthy state"
         fi
-        # Finalize the attempt REGARDLESS of the rollback outcome.
+        # Finalize the attempt REGARDLESS of the rollback outcome. Rename the
+        # attempted directory ONLY when it is no longer the active target — a
+        # rollback that could not move the symlink must never leave `current`
+        # dangling (that would turn a rollback failure into an outage).
         dep_finalize_failed_release "$manifest" "$id" "$sha" "$rc" "legacy" "$rb_result" \
             || dep_warn "could not finalize failed-release manifest"
-        mv "$rel_dir" "${rel_dir}.failed" 2>/dev/null || true
+        if [ "$(zpd_current_release)" != "$id" ]; then
+            mv "$rel_dir" "${rel_dir}.failed" 2>/dev/null || true
+        else
+            dep_warn "attempted release is still the active target — directory kept in place"
+        fi
         dep_reconcile_state "failed" || dep_warn "state update failed"
         dep_failure_bundle
         return 1
@@ -1535,10 +1628,17 @@ dep_main() {
     # ── Finalize the attempted release BEFORE returning — regardless of the
     # rollback outcome. A completed failed deployment must NEVER stay
     # `activating`, and a rollback whose symlink switched but whose readiness
-    # failed is recorded as exactly that.
+    # failed is recorded as exactly that. The directory is renamed to .failed
+    # ONLY when the symlink no longer points at it — when the rollback switch
+    # itself failed, `current` still targets the attempted release and renaming
+    # it would leave the live symlink dangling (an instant outage).
     dep_finalize_failed_release "$manifest" "$id" "$sha" "$rc" "${current_before:-none}" "$rb_result" \
         || dep_warn "could not finalize failed-release manifest"
-    mv "$rel_dir" "${rel_dir}.failed" 2>/dev/null || true
+    if [ "$(zpd_current_release)" != "$id" ]; then
+        mv "$rel_dir" "${rel_dir}.failed" 2>/dev/null || true
+    else
+        dep_warn "attempted release is still the active target — directory kept in place"
+    fi
     dep_reconcile_state "failed" || dep_warn "state update failed"
 
     if [ "$rb_result" = "success" ]; then

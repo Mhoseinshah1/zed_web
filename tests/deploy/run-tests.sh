@@ -159,6 +159,7 @@ exit 0
 EOF
 cat > "${MOCKBIN}/psql" <<'EOF'
 #!/usr/bin/env bash
+[ "${MOCK_PSQL_HANG:-0}" = "1" ] && sleep 60
 exit ${MOCK_PSQL_RC:-0}
 EOF
 cat > "${MOCKBIN}/redis-cli" <<'EOF'
@@ -1227,6 +1228,201 @@ printf '%s' "$out" | grep -q 'Git SHA:          <unknown>' && bad "status still 
   assert_rc 0 "$?" "PRODUCTION FIXTURE: verified rollback to the adopted release works"
 assert_eq "$(zpd_current_release)" "20260724200918-829baf51f244" "adopted release active after rollback"
 unset ZPD_REPO_URL ZPD_REF; rm -rf "$BASE" "$(dirname "$SRC_BARE")"
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Prompt 19 — transactional scheduler, fail-closed repair, read-only doctor
+# ═════════════════════════════════════════════════════════════════════════════
+
+echo "-- transactional scheduler sources --"
+
+# P1. A stripped /etc/crontab entry is RESTORED when a LATER reconciliation step
+#     fails, and the newly created canonical file is removed (it did not exist).
+new_base; sha="$(mk_release_git 20260101000000-aaaaaaaaaaaa)"; zpd_switch_current 20260101000000-aaaaaaaaaaaa
+setup_atomic_service_configs; rm -f "$ZPD_SCHED_CRON"
+printf '* * * * * root php %s/artisan schedule:run\n17 * * * * root run-parts /etc/cron.hourly\n' "$BASE" > "$ZPD_ETC_CRONTAB"
+crontab_before="$(cat "$ZPD_ETC_CRONTAB")"
+rm -f "${BASE}/current/update.sh"       # wrapper verification will fail AFTER the scheduler step
+( dep_reconcile_operational "$BASE" 20260101000000-aaaaaaaaaaaa >/dev/null 2>&1 ); rc=$?
+assert_rc 1 "$rc" "reconciliation fails at the wrapper step"
+assert_eq "$(cat "$ZPD_ETC_CRONTAB")" "$crontab_before" "stripped /etc/crontab entry RESTORED by the snapshot"
+assert_false test -f "$ZPD_SCHED_CRON"   # newly created canonical removed with the failed transaction
+assert_false bash -c "find '$BASE' -name '*.zpd-dedup.bak' | grep -q ."   # no unmanaged side files
+rm -rf "$BASE"
+
+# P2. Multiple matching lines in ONE file: processed once, both removed,
+#     unrelated line preserved, exactly one snapshot entry for the file.
+new_base; sha="$(mk_release_git 20260101000000-aaaaaaaaaaaa)"; zpd_switch_current 20260101000000-aaaaaaaaaaaa
+setup_atomic_service_configs; rm -f "$ZPD_SCHED_CRON"
+printf '* * * * * root php %s/artisan schedule:run\n*/5 * * * * root php %s/current/artisan schedule:run\n17 * * * * root run-parts /etc/cron.hourly\n' "$BASE" "$BASE" > "$ZPD_ETC_CRONTAB"
+assert_true dep_reconcile_operational "$BASE" 20260101000000-aaaaaaaaaaaa
+assert_false bash -c "grep -q 'schedule:run' '$ZPD_ETC_CRONTAB'"
+assert_true bash -c "grep -q 'run-parts' '$ZPD_ETC_CRONTAB'"
+assert_true zpd_scheduler_cron_ok "$ZPD_SCHED_CRON" "$BASE"
+snapmap="$(find "${BASE}/shared/deploy/snapshots" -name sources.map | head -1)"
+assert_eq "$(grep -c "$ZPD_ETC_CRONTAB" "$snapmap")" "1" "one snapshot entry per source file (multi-line file processed once)"
+rm -rf "$BASE"
+
+# P3. A FOREIGN schedule:run that merely MENTIONS the base path (cd base &&
+#     php /other/artisan) is NOT ours — left untouched, no conflict, no removal.
+new_base; sha="$(mk_release_git 20260101000000-aaaaaaaaaaaa)"; zpd_switch_current 20260101000000-aaaaaaaaaaaa
+setup_atomic_service_configs; rm -f "$ZPD_SCHED_CRON"
+printf '* * * * * root cd %s && php /srv/other-app/artisan schedule:run\n' "$BASE" > "$ZPD_ETC_CRONTAB"
+assert_true dep_reconcile_scheduler "$BASE"
+assert_true bash -c "grep -q '/srv/other-app/artisan schedule:run' '$ZPD_ETC_CRONTAB'"   # foreign entry preserved
+rm -rf "$BASE"
+
+echo "-- fail-closed repair --"
+
+# P4. --apply refuses to run while the deployment lock is held.
+new_base; sha="$(mk_release_git 20260101000000-aaaaaaaaaaaa)"; zpd_switch_current 20260101000000-aaaaaaaaaaaa
+setup_atomic_service_configs
+( exec 9>"$ZPD_LOCK_FILE"; flock 9; sleep 2 ) & holder=$!
+sleep 0.3
+( MOCK_HTTP_CODE=200 zrp_main --apply >/dev/null 2>&1 ); rc=$?
+assert_rc 200 "$rc" "repair --apply is refused while a deployment holds the lock"
+kill "$holder" 2>/dev/null; wait "$holder" 2>/dev/null
+rm -rf "$BASE"
+
+# P5. Fail-closed: a supervisor reread failure aborts the repair, restores the
+#     snapshot, records failure + restore result, and NEVER prints success.
+new_base; sha="$(mk_release_git 20260101000000-aaaaaaaaaaaa)"; zpd_switch_current 20260101000000-aaaaaaaaaaaa
+setup_atomic_service_configs
+printf '[program:zedproxy-worker]\ncommand=php %s/artisan queue:work\n' "$BASE" > "$ZPD_SUPERVISOR_CONF"   # legacy
+sup_before="$(cat "$ZPD_SUPERVISOR_CONF")"
+out="$(MOCK_SUP_REREAD_RC=1 MOCK_HTTP_CODE=200 zrp_main --apply 2>&1)"; rc=$?
+assert_rc 1 "$rc" "repair --apply fails closed on supervisor reread failure"
+printf '%s' "$out" | grep -q "$(zpd_msg_repair_done)" && bad "success message shown on failed repair" || ok "no success message on failed repair"
+assert_eq "$(cat "$ZPD_SUPERVISOR_CONF")" "$sup_before" "failed repair restored the supervisor snapshot"
+lr="${BASE}/shared/deploy/last-repair.json"
+assert_eq "$(zpd_manifest_get "$lr" result)" "failed" "last-repair records the failure"
+assert_eq "$(zpd_manifest_get "$lr" failed_step)" "supervisor_reconcile" "last-repair records the failed step"
+assert_true bash -c "[ -n \"$(zpd_manifest_get "$lr" restore_result)\" ]"
+rm -rf "$BASE"
+
+# P6. Workers not RUNNING is a REQUIRED failure (was a warning).
+new_base; sha="$(mk_release_git 20260101000000-aaaaaaaaaaaa)"; zpd_switch_current 20260101000000-aaaaaaaaaaaa
+setup_atomic_service_configs
+out="$(MOCK_SUP_STATUS='zedproxy-worker:zedproxy-worker_00   FATAL   Exited too quickly' MOCK_HTTP_CODE=200 zrp_main --apply 2>&1)"; rc=$?
+assert_rc 1 "$rc" "repair fails when the worker group is not RUNNING"
+printf '%s' "$out" | grep -q "$(zpd_msg_repair_done)" && bad "success shown with broken workers" || ok "no success with broken workers"
+rm -rf "$BASE"
+
+# P7. HTTP health failure is a REQUIRED failure (was a warning).
+new_base; sha="$(mk_release_git 20260101000000-aaaaaaaaaaaa)"; zpd_switch_current 20260101000000-aaaaaaaaaaaa
+setup_atomic_service_configs
+( MOCK_HTTP_CODE=500 zrp_main --apply >/dev/null 2>&1 ); rc=$?
+assert_rc 1 "$rc" "repair fails when /health is not 200 after repair"
+rm -rf "$BASE"
+
+# P8. --scheduler repairs ONLY the scheduler: a legacy Nginx root is untouched.
+new_base; sha="$(mk_release_git 20260101000000-aaaaaaaaaaaa)"; zpd_switch_current 20260101000000-aaaaaaaaaaaa
+setup_atomic_service_configs; rm -f "$ZPD_SCHED_CRON"
+printf 'server {\n  listen 80;\n  root %s/public;\n}\n' "$BASE" > "$ZPD_NGINX_CONF"   # legacy nginx (out of scope)
+nginx_before="$(cat "$ZPD_NGINX_CONF")"
+( MOCK_HTTP_CODE=200 zrp_main --apply --scheduler >/dev/null 2>&1 ); rc=$?
+assert_rc 0 "$rc" "scoped --scheduler repair succeeds"
+assert_true zpd_scheduler_cron_ok "$ZPD_SCHED_CRON" "$BASE"
+assert_eq "$(cat "$ZPD_NGINX_CONF")" "$nginx_before" "--scheduler did NOT touch the Nginx config"
+rm -rf "$BASE"
+
+# P9. Manifests/state are backed up into the repair snapshot before repair
+#     modifies them (recoverable metadata).
+new_base; sha="$(mk_release_git 20260101000000-aaaaaaaaaaaa)"; zpd_switch_current 20260101000000-aaaaaaaaaaaa
+setup_atomic_service_configs
+mkdir -p "${BASE}/releases/20260102000000-bbbbbbbbbbbb"
+zpd_write_manifest "${BASE}/releases/20260102000000-bbbbbbbbbbbb/RELEASE_MANIFEST.json" \
+    "release_id=20260102000000-bbbbbbbbbbbb" "result=activating"
+( MOCK_HTTP_CODE=200 zrp_main --apply --manifests >/dev/null 2>&1 ); rc=$?
+assert_rc 0 "$rc" "manifest repair succeeds"
+assert_eq "$(zpd_manifest_get "${BASE}/releases/20260102000000-bbbbbbbbbbbb/RELEASE_MANIFEST.json" result)" "failed" "stale release finalized"
+metasnap="$(find "${BASE}/shared/deploy/snapshots" -name 'manifest-20260102000000-bbbbbbbbbbbb.json' | head -1)"
+assert_true test -n "$metasnap"
+assert_true bash -c "grep -q 'activating' '$metasnap'"   # pre-repair content preserved in the snapshot
+rm -rf "$BASE"
+
+echo "-- adoption requires shared symlinks --"
+
+# P10. A historical release with a REGULAR .env / local storage is NEVER
+#      adopted, and the compatibility rollback path rejects it.
+new_base
+rd="${BASE}/releases/20260724200918-829baf51f244"
+mkdir -p "$rd/public/build" "$rd/storage"; : > "$rd/artisan"; : > "$rd/public/index.php"
+printf '{}' > "$rd/public/build/manifest.json"
+printf 'APP_KEY=base64:PRIVATE-DIFFERENT-KEY\n' > "$rd/.env"       # REGULAR file, not a link
+mkdir -p "$rd/public/storage"                                       # local dir, not a link
+git -C "$rd" init -q -b main; git -C "$rd" add -A >/dev/null; git -C "$rd" commit -q -m x >/dev/null
+zpd_switch_current 20260724200918-829baf51f244
+dep_adopt_current_release >/dev/null 2>&1
+assert_eq "$(dep_release_verify_mode 20260724200918-829baf51f244)" "historical" "release with a private .env is NOT adopted"
+setup_atomic_service_configs; zpw_install_wrappers >/dev/null 2>&1
+( MOCK_HTTP_CODE=200 dep_verify_internal_release "$BASE" 20260724200918-829baf51f244 "" >/dev/null 2>&1 ); \
+  assert_rc 1 "$?" "compat verification rejects non-shared .env/storage links"
+rm -rf "$BASE"
+
+echo "-- rollback-switch failure keeps the active directory --"
+
+# P11. When activation fails and there is NO previous release to switch to, the
+#      attempted release is still the active target — its directory must NOT be
+#      renamed (a dangling `current` would be an instant outage).
+new_base; mk_source_repo; setup_atomic_service_configs
+export ZPD_REPO_URL="$SRC_BARE" ZPD_REF=main
+( MOCK_HTTP_CODE=500 dep_main >/dev/null 2>&1 ); rc=$?
+assert_rc 1 "$rc" "first deploy with failing HTTP fails"
+attempted="$(zpd_current_release)"
+assert_true test -n "$attempted"
+assert_true test -d "${BASE}/releases/${attempted}"            # directory kept in place
+assert_false test -e "${BASE}/releases/${attempted}.failed"
+assert_true test -e "$(zpd_current_link)"                      # current not dangling
+assert_eq "$(zpd_manifest_get "${BASE}/releases/${attempted}/RELEASE_MANIFEST.json" result)" "failed" "kept release still finalized as failed"
+unset ZPD_REPO_URL ZPD_REF; rm -rf "$BASE" "$(dirname "$SRC_BARE")"
+
+echo "-- read-only doctor + /dev/stdout safety + masking --"
+
+# P12. --json serializes directly to stdout and never clobbers /dev/stdout.
+new_base; sha="$(mk_release_git 20260101000000-aaaaaaaaaaaa)"; zpd_switch_current 20260101000000-aaaaaaaaaaaa
+setup_atomic_service_configs; zpw_install_wrappers >/dev/null 2>&1
+out="$(MOCK_HTTP_CODE=200 zdr_main --json 2>/dev/null)" || true
+printf '%s' "$out" | grep -q '"checks_total"' && ok "doctor --json emits the summary" || bad "doctor --json output missing"
+assert_true test -L /dev/stdout
+out="$(ds_report --json)" || true
+printf '%s' "$out" | grep -q '"active_release"' && ok "status --json emits the summary" || bad "status --json output missing"
+assert_true test -L /dev/stdout
+# P13. Empty state identity is reported as a repairable inconsistency.
+zpd_write_manifest "$ZPD_STATE_FILE" "result=success"
+out="$(MOCK_HTTP_CODE=200 zdr_main 2>&1)" || true
+printf '%s' "$out" | grep -Eq 'state_file\s+fail\s+incomplete' && ok "doctor flags an empty state identity" || bad "doctor missed empty state identity"
+# P14. A modern-schema manifest missing its SHA fails the doctor manifest check.
+zpd_write_manifest "${BASE}/releases/20260101000000-aaaaaaaaaaaa/RELEASE_MANIFEST.json" \
+    "release_id=20260101000000-aaaaaaaaaaaa" "result=success" "manifest_schema_version=2"
+out="$(MOCK_HTTP_CODE=200 zdr_main 2>&1)" || true
+printf '%s' "$out" | grep -Eq 'active_manifest\s+fail\s+modern manifest missing' && ok "doctor flags a modern manifest without a SHA" || bad "doctor missed missing modern SHA"
+rm -rf "$BASE"
+
+# P15. Observed authenticated origin is MASKED in deploy-status output.
+new_base
+hsha="$(mk_historical_release 20260724200918-829baf51f244)"; zpd_switch_current 20260724200918-829baf51f244
+git -C "${BASE}/releases/20260724200918-829baf51f244" remote add origin "https://deploy:sekret12345@example.com/private.git"
+out="$(ds_report)"
+printf '%s' "$out" | grep -q 'sekret12345' && bad "status leaked an observed origin credential" || ok "status masks observed origin credentials"
+printf '%s' "$out" | grep -q '\*\*\*' && ok "masked origin shown redacted" || bad "masked origin missing"
+rm -rf "$BASE"
+
+# P16. dep_check_pg is bounded — a hanging psql client times out fast.
+t0=$SECONDS
+new_base
+( MOCK_PSQL_HANG=1 ZPD_DB_PROBE_TIMEOUT=1 dep_check_pg "${BASE}/shared/.env" >/dev/null 2>&1 ); rc=$?
+elapsed=$((SECONDS - t0))
+assert_true test "$rc" -ne 0        # timeout → rc 124 (any non-zero = probe failed)
+assert_true test "$elapsed" -lt 10
+rm -rf "$BASE"
+
+# P17. Supervisor reconcile reloads the daemon even when the file is already
+#      correct (a stale reread failure must be repairable).
+new_base; setup_atomic_service_configs
+( MOCK_SUP_REREAD_RC=1 dep_reconcile_supervisor "$BASE" >/dev/null 2>&1 ); \
+  assert_rc 1 "$?" "reread failure surfaces even with a correct supervisor file"
+( dep_reconcile_supervisor "$BASE" >/dev/null 2>&1 ); assert_rc 0 "$?" "correct file + healthy daemon passes"
+rm -rf "$BASE"
 
 rm -rf "$MOCKBIN"
 echo ""

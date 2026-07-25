@@ -62,7 +62,9 @@ ds_report() {
         if [ -z "$repo" ] || [ "$repo" = "unknown" ]; then
             local origin
             origin="$(zpd_git_origin_of "$(zpd_releases_dir)/${current}" 2>/dev/null || true)"
-            if [ -n "$origin" ]; then repo="$origin"; warn_hist=1; fi
+            # An observed origin may be an AUTHENTICATED URL — mask credentials
+            # before it can reach a terminal or a captured support log.
+            if [ -n "$origin" ]; then repo="$(printf '%s' "$origin" | zpd_mask_secrets)"; warn_hist=1; fi
         fi
         if [ -z "$result" ]; then
             # No manifest at all → the release predates the manifest system.
@@ -72,7 +74,9 @@ ds_report() {
     result="$(ds_result_label "$result")"
 
     if [ "${1:-}" = "--json" ]; then
-        zpd_write_manifest /dev/stdout \
+        # Direct stdout serialization — the manifest FILE writer must never target
+        # /dev/stdout (its atomic rename would replace the symlink as root).
+        zpd_print_manifest \
             "active_release=${current:-none}" "git_sha=${sha:-unknown}" "git_sha_source=${sha_src}" \
             "git_ref=${ref:-unknown}" "repo_url=${repo:-unknown}" "current_link=${link_target}" \
             "previous_release=${prev:-none}" "result=${result}" \

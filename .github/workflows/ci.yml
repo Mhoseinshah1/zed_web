@@ -530,6 +530,56 @@ jobs:
             || { echo '::error::release verify-mode policy missing.'; exit 1; }
           echo 'Self-healing + diagnostics invariants hold.'
 
+      - name: Assert transactionality + fail-closed repair invariants (Prompt 19)
+        run: |
+          set -euo pipefail
+          dep=scripts/deploy/deploy.sh
+          rep=scripts/deploy/repair.sh
+          doc=scripts/deploy/doctor.sh
+          # ── Blocker 1: scheduler-source modifications are TRANSACTIONAL.
+          # Every discovered source is captured in the per-deployment snapshot
+          # (sources.map) and restored on failure; no unmanaged side backups.
+          grep -q 'sched-sources' "$dep" \
+            || { echo '::error::scheduler sources are not part of the snapshot.'; exit 1; }
+          grep -q 'sources.map' "$dep" \
+            || { echo '::error::snapshot lacks the source-to-snapshot map.'; exit 1; }
+          if grep -q 'zpd-dedup' "$dep"; then
+            echo '::error::unmanaged .zpd-dedup.bak side files are still used.'
+            exit 1
+          fi
+          # Classification and removal share ONE matcher.
+          grep -q 'zpd_scheduler_ours_re' scripts/lib/deploy-lib.sh \
+            && grep -q 'zpd_scheduler_ours_re' "$dep" \
+            || { echo '::error::scheduler classifier/removal do not share a matcher.'; exit 1; }
+          # ── Blocker 2: repair --apply is locked and fail-closed.
+          grep -q 'zpd_run_locked' "$rep" \
+            || { echo '::error::repair --apply does not take the deployment lock.'; exit 1; }
+          grep -q 'ZRP_FAILED_STEP' "$rep" && grep -q 'restore_result' "$rep" \
+            || { echo '::error::repair does not stop-on-first-failure/record restore.'; exit 1; }
+          grep -q 'zrp_backup_metadata' "$rep" \
+            || { echo '::error::repair does not back up manifests/state.'; exit 1; }
+          # ── Blocker 3: component flags are exact (scheduler tracked separately).
+          grep -q 'comp_sched' "$rep" \
+            || { echo '::error::--scheduler is not scoped separately from --operational.'; exit 1; }
+          # ── Read-only doctor: no write probe; /dev/stdout never a manifest target.
+          if grep -q 'dep_check_shared_writable' "$doc"; then
+            echo '::error::doctor performs a write probe (not read-only).'
+            exit 1
+          fi
+          if grep -Rn 'zpd_write_manifest /dev/stdout' scripts/; then
+            echo '::error::zpd_write_manifest is pointed at /dev/stdout (symlink clobber as root).'
+            exit 1
+          fi
+          # ── Failed rollback switch never orphans the live symlink.
+          grep -q 'directory kept in place' "$dep" \
+            || { echo '::error::attempted-release rename is not guarded by the active target.'; exit 1; }
+          # ── Adoption/compat require shared symlinks; DB/Redis probes bounded.
+          grep -q 'dep_check_shared_links' "$dep" \
+            || { echo '::error::shared-symlink verification missing from adoption/compat.'; exit 1; }
+          grep -Eq 'timeout[[:space:]]+"?\$\{ZPD_DB_PROBE_TIMEOUT' "$dep" \
+            || { echo '::error::PostgreSQL/Redis probes are not bounded.'; exit 1; }
+          echo 'Transactionality + fail-closed repair invariants hold.'
+
       # ── Supply-chain verification (authoritative home; formerly the separate
       #    supply-chain.yml workflow, folded in here to remove duplicate jobs). ──
       - name: Assert no forbidden supply-chain patterns remain

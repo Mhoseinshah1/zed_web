@@ -82,33 +82,51 @@ zdr_check_releases() {
     else
         zdr_add "current_symlink" fail "current symlink missing"
     fi
-    # State file vs symlink consistency.
+    # State file vs symlink consistency. A state file that exists but carries
+    # NO active identity is a repairable inconsistency, not "ok with unknown".
     local state_active; state_active="$(zpd_manifest_get "$(zpd_state_file)" active_release 2>/dev/null)"
     if [ ! -f "$(zpd_state_file)" ]; then
         zdr_add "state_file" warn "missing ($(zpd_state_file))"
-    elif [ -n "$cur" ] && [ -n "$state_active" ] && [ "$state_active" != "$cur" ] && [ "$state_active" != "none" ]; then
+    elif [ -n "$cur" ] && [ -z "$state_active" ]; then
+        zdr_add "state_file" fail "incomplete: no active_release recorded while current is ${cur}"
+    elif [ -n "$cur" ] && [ "$state_active" != "$cur" ] && [ "$state_active" != "none" ]; then
         zdr_add "state_file" fail "stale: records ${state_active}, current is ${cur}"
     else
         zdr_add "state_file" ok "active_release=${state_active:-unknown}"
     fi
     zdr_add "deploy_env" "$([ -f "$(zpd_deploy_env_file)" ] && echo ok || echo warn)" "$(zpd_deploy_env_file)"
 
-    # Active-release manifest + identity.
+    # Active-release manifest + identity, classified exactly like rollback
+    # verification (dep_release_verify_mode) so the doctor cannot report ok on
+    # a manifest that strict verification would reject.
     local manifest="$(zpd_releases_dir)/${cur}/RELEASE_MANIFEST.json"
     if [ -n "$cur" ]; then
-        if zpd_manifest_valid "$manifest"; then
-            local mansha headsha res
-            res="$(zpd_manifest_get "$manifest" result 2>/dev/null)"
-            mansha="$(zpd_manifest_get "$manifest" git_sha 2>/dev/null)"
-            headsha="$(zpd_git_head_sha "$(zpd_releases_dir)/${cur}" 2>/dev/null)"
-            if [ -n "$mansha" ] && [ "$mansha" != "unknown" ] && [ -n "$headsha" ] && [ "$mansha" != "$headsha" ]; then
-                zdr_add "active_manifest" fail "manifest SHA != deployed HEAD (result=${res})"
-            else
-                zdr_add "active_manifest" ok "result=${res:-unknown} sha=${mansha:-unknown}"
-            fi
-        else
-            zdr_add "active_manifest" warn "missing/incomplete — release predates the manifest system (adoptable)"
-        fi
+        local vmode; vmode="$(dep_release_verify_mode "$cur")"
+        local mansha headsha res
+        res="$(zpd_manifest_get "$manifest" result 2>/dev/null)"
+        mansha="$(zpd_manifest_get "$manifest" git_sha 2>/dev/null)"
+        headsha="$(zpd_git_head_sha "$(zpd_releases_dir)/${cur}" 2>/dev/null)"
+        case "$vmode" in
+            strict)
+                if [ -z "$mansha" ] || [ "$mansha" = "unknown" ]; then
+                    zdr_add "active_manifest" fail "modern manifest missing its git_sha (result=${res})"
+                elif [ -n "$headsha" ] && [ "$mansha" != "$headsha" ]; then
+                    zdr_add "active_manifest" fail "manifest SHA != deployed HEAD (result=${res})"
+                else
+                    zdr_add "active_manifest" ok "result=${res:-unknown} sha=${mansha}"
+                fi
+                ;;
+            adopted)
+                if [ -n "$mansha" ] && [ "$mansha" != "unknown" ] && [ -n "$headsha" ] && [ "$mansha" != "$headsha" ]; then
+                    zdr_add "active_manifest" fail "adopted manifest SHA no longer matches deployed HEAD"
+                else
+                    zdr_add "active_manifest" ok "adopted sha=${mansha:-unknown}"
+                fi
+                ;;
+            *)
+                zdr_add "active_manifest" warn "missing/incomplete — release predates the manifest system (adoptable)"
+                ;;
+        esac
     fi
 
     # Stale / failed attempts.
@@ -164,9 +182,13 @@ zdr_check_app() {
     else
         zdr_add "storage_links" fail "storage or public/storage link missing"
     fi
-    dep_check_shared_writable "$(zpd_shared_dir)" >/dev/null 2>&1 \
-        && zdr_add "shared_writable" ok "writable" \
-        || zdr_add "shared_writable" fail "shared storage not writable"
+    # Permission-bit inspection ONLY — the doctor is read-only and must never
+    # create even a transient probe file on the system.
+    if [ -d "$(zpd_shared_dir)/storage" ] && [ -w "$(zpd_shared_dir)/storage" ]; then
+        zdr_add "shared_writable" ok "writable (permission bits)"
+    else
+        zdr_add "shared_writable" fail "shared storage missing or not writable"
+    fi
     [ -f "${cur}/public/build/manifest.json" ] \
         && zdr_add "vite_manifest" ok "present" \
         || zdr_add "vite_manifest" fail "public/build/manifest.json missing"
@@ -275,14 +297,17 @@ zdr_report_text() {
     [ "$fails" -eq 0 ]
 }
 
-# zdr_report_json — flat JSON summary (name=status pairs + counts).
+# zdr_report_json — flat JSON summary (name=status pairs + counts). Serialized
+# DIRECTLY to the current stdout (zpd_print_manifest): the atomic file writer
+# must never be pointed at /dev/stdout, whose symlink it would replace when
+# running as root.
 zdr_report_json() {
     local i fails=0 pairs=()
     for i in "${!ZDR_NAMES[@]}"; do
         pairs+=("${ZDR_NAMES[$i]}=${ZDR_STATUS[$i]}: ${ZDR_DETAIL[$i]}")
         [ "${ZDR_STATUS[$i]}" = "fail" ] && fails=$((fails + 1))
     done
-    zpd_write_manifest /dev/stdout \
+    zpd_print_manifest \
         "generated_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
         "active_release=$(zpd_current_release)" \
         "checks_total=${#ZDR_NAMES[@]}" "checks_failed=${fails}" \
