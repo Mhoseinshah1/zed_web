@@ -779,6 +779,70 @@ jobs:
           fi
           echo 'Prompt-23 fail-closed discovery, worker-status, snapshot, and probe invariants hold.'
 
+      - name: Assert SEO hardening invariants (noindex-before-render, targeted seeding, nginx robots/www/gzip, fonts, schema, images)
+        run: |
+          set -euo pipefail
+          log=deploy-tests.log
+          # ── BEHAVIORAL evidence from this job's own run.
+          for line in \
+            'required-defaults seeding failure fails the deploy' \
+            'current NOT switched after a seeding failure' \
+            'wrong fallback replaced, not duplicated' \
+            'unclosed robots block refused' \
+            'duplicate robots blocks refused' \
+            'regex robots location refused' \
+            'robots block NOT inserted inside the favicon block' \
+            'mode and ownership preserved after repair' \
+            'second www reconciliation is byte-identical' \
+            'certbot lines byte-identical' \
+            'no invalid 443 www block' \
+            'canonical host does not redirect' \
+            'second gzip run is byte-identical' \
+            'custom gzip config untouched' \
+            'redirect-only block has no gzip'; do
+            grep -F "ok   - " "$log" | grep -qF "$line" \
+              || { echo "::error::SEO-hardening behavioral test did not pass: ${line}"; exit 1; }
+          done
+          # ── Static invariants.
+          grep -q "attributes->set(self::REQUEST_ATTRIBUTE, true)" app/Http/Middleware/NoIndexHeaders.php \
+            || { echo '::error::noindex middleware no longer publishes its verdict before render.'; exit 1; }
+          grep -q 'NoIndexHeaders::REQUEST_ATTRIBUTE' app/Services/Seo/SeoManager.php \
+            || { echo '::error::SeoManager no longer honors the middleware noindex verdict.'; exit 1; }
+          grep -q 'zedproxy:seed-required-defaults' install.sh \
+            || { echo '::error::install.sh no longer ensures required default records.'; exit 1; }
+          if grep -q 'artisan db:seed' install.sh scripts/deploy/deploy.sh; then
+            echo '::error::full DatabaseSeeder must never run on install/deploy.'; exit 1
+          fi
+          grep -qF 'try_files $uri /index.php?$query_string;' scripts/lib/deploy-lib.sh \
+            || { echo '::error::robots mutator lost the exact Laravel fallback.'; exit 1; }
+          grep -q 'acme-challenge' scripts/lib/deploy-lib.sh \
+            || { echo '::error::www redirect lost the ACME HTTP-01 exemption.'; exit 1; }
+          grep -q 'zpd_cert_covers_www' scripts/lib/deploy-lib.sh \
+            || { echo '::error::443 www redirect is no longer SAN-gated.'; exit 1; }
+          if { grep -hE '^[[:space:]]*gzip_types ' install.sh; grep -h 'ZPD_GZIP_TYPES=' scripts/lib/deploy-lib.sh; } \
+               | grep -Eq 'text/html|woff2|image/(png|jpeg|webp|gif)'; then
+            echo '::error::gzip_types must not list text/html or compressed formats.'; exit 1
+          fi
+          if grep -Rq 'fonts\.googleapis\.com\|fonts\.gstatic\.com' resources/views; then
+            echo '::error::Google Fonts URLs found in production views.'; exit 1
+          fi
+          for w in Regular Medium SemiBold Bold ExtraBold Black; do
+            test -f "resources/fonts/vazirmatn/Vazirmatn-33.0.3-${w}.woff2" \
+              || { echo "::error::missing vendored Vazirmatn weight: ${w}"; exit 1; }
+          done
+          if ls resources/fonts/vazirmatn/ | grep -q 'Light'; then
+            echo '::error::unused Light/ExtraLight font weight is vendored.'; exit 1
+          fi
+          test -f resources/fonts/vazirmatn/OFL.txt \
+            || { echo '::error::the SIL OFL license must ship beside the fonts.'; exit 1; }
+          grep -q "'sku' => (string) \$plan->slug" app/Services/Seo/SchemaBuilder.php \
+            || { echo '::error::Product schema lost the stable slug sku.'; exit 1; }
+          grep -q 'offerPriceValidUntil' app/Services/Seo/SchemaBuilder.php \
+            || { echo '::error::priceValidUntil must come from the validated setting only.'; exit 1; }
+          grep -q 'loading="eager" fetchpriority="high"' resources/views/partials/site-logo.blade.php \
+            || { echo '::error::header logos are no longer eager/high-priority.'; exit 1; }
+          echo 'SEO hardening invariants hold.'
+
       # ── Supply-chain verification (authoritative home; formerly the separate
       #    supply-chain.yml workflow, folded in here to remove duplicate jobs). ──
       - name: Assert no forbidden supply-chain patterns remain
