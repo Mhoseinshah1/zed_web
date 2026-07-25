@@ -559,7 +559,7 @@ jobs:
           grep -q 'zrp_backup_metadata' "$rep" \
             || { echo '::error::repair does not back up manifests/state.'; exit 1; }
           # ── Blocker 3: component flags are exact (scheduler tracked separately).
-          grep -q 'comp_sched' "$rep" \
+          grep -q 'ZRP_C_SCHED' "$rep" \
             || { echo '::error::--scheduler is not scoped separately from --operational.'; exit 1; }
           # ── Read-only doctor: no write probe; /dev/stdout never a manifest target.
           if grep -q 'dep_check_shared_writable' "$doc"; then
