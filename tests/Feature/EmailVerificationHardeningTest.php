@@ -351,6 +351,22 @@ class EmailVerificationHardeningTest extends TestCase
         $this->actingAs($user)->post('/email/verify', ['code' => '000000'])->assertStatus(429);
     }
 
+    public function test_user_bucket_follows_the_account_across_source_ips(): void
+    {
+        $user = $this->unverifiedUser();
+
+        for ($i = 0; $i < 10; $i++) {
+            $this->actingAs($user)->from('/email/verify')->post('/email/verify', ['code' => '000000']);
+        }
+
+        // Replaying the session from a DIFFERENT IP must not mint a fresh
+        // budget: the per-user bucket is already exhausted.
+        $this->actingAs($user)
+            ->withServerVariables(['REMOTE_ADDR' => '10.99.99.99'])
+            ->post('/email/verify', ['code' => '000000'])
+            ->assertStatus(429);
+    }
+
     // ── Item 8: transport-aware mail validation ──────────────────────────────
 
     public function test_undefined_mailer_name_is_never_configured(): void
@@ -400,15 +416,18 @@ class EmailVerificationHardeningTest extends TestCase
     {
         $svc = app(EmailVerificationService::class);
 
-        config(['mail.default' => 'ses', 'services.ses.region' => '']);
-        $this->assertFalse($svc->isMailConfigured(), 'SES without a region');
-        config(['services.ses.region' => 'eu-west-1']);
-        $this->assertTrue($svc->isMailConfigured(), 'SES with a region');
+        // The repo's services.php defaults the SES region to us-east-1, so a
+        // region alone must NOT count as configured — explicit keys required.
+        config(['mail.default' => 'ses', 'services.ses.key' => '', 'services.ses.secret' => '']);
+        $this->assertFalse($svc->isMailConfigured(), 'SES without credentials (default region alone)');
+        config(['services.ses.key' => 'AKIATEST', 'services.ses.secret' => 'ses-test-secret']);
+        $this->assertTrue($svc->isMailConfigured(), 'SES with key+secret+region');
 
-        config(['mail.default' => 'postmark', 'services.postmark.token' => '']);
-        $this->assertFalse($svc->isMailConfigured(), 'Postmark without a token');
-        config(['services.postmark.token' => 'pm-test-token']);
-        $this->assertTrue($svc->isMailConfigured(), 'Postmark with a token');
+        // services.postmark.key is what config/services.php actually exposes.
+        config(['mail.default' => 'postmark', 'services.postmark.key' => '']);
+        $this->assertFalse($svc->isMailConfigured(), 'Postmark without a key');
+        config(['services.postmark.key' => 'pm-test-key']);
+        $this->assertTrue($svc->isMailConfigured(), 'Postmark with a key');
 
         config(['mail.default' => 'resend', 'services.resend.key' => '']);
         $this->assertFalse($svc->isMailConfigured(), 'Resend without a key');

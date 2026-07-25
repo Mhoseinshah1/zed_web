@@ -154,10 +154,13 @@ class EmailVerificationService
             'smtp' => (string) config("mail.mailers.{$mailerName}.host") !== ''
                 && (int) config("mail.mailers.{$mailerName}.port") > 0,
             'sendmail' => (string) config("mail.mailers.{$mailerName}.path", '/usr/sbin/sendmail -bs') !== '',
-            // SES credentials may come from the AWS SDK default chain (env,
-            // instance profile) — require at least an explicit region.
-            'ses', 'ses-v2' => (string) config('services.ses.region') !== '',
-            'postmark' => (string) config('services.postmark.token') !== '',
+            // config/services.php has a region DEFAULT (us-east-1), so region
+            // alone proves nothing — require the explicit key pair this
+            // repository's configuration actually reads.
+            'ses', 'ses-v2' => (string) config('services.ses.key') !== ''
+                && (string) config('services.ses.secret') !== ''
+                && (string) config('services.ses.region') !== '',
+            'postmark' => (string) config('services.postmark.key') !== '',
             'resend' => (string) config('services.resend.key') !== '',
             'mailgun' => (string) config('services.mailgun.secret') !== ''
                 && (string) config('services.mailgun.domain') !== '',
