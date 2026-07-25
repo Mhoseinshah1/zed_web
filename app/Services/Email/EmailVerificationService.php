@@ -17,6 +17,7 @@ use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Validation\ValidationException;
 use Symfony\Component\Mailer\Bridge\Mailgun\Transport\MailgunTransportFactory;
 use Symfony\Component\Mailer\Bridge\Postmark\Transport\PostmarkTransportFactory;
 use Throwable;
@@ -76,42 +77,6 @@ class EmailVerificationService
             && (bool) SiteSetting::get('email_verification_required_on_register', false)
             && $this->isMailConfigured()
             && $this->hasVerifiedMailTest();
-    }
-
-    /**
-     * When "required on register" was last ENABLED. Users whose accounts
-     * predate this moment registered under a policy that never asked them to
-     * verify — enabling the policy later must not retroactively lock that
-     * whole cohort out (the one-time migration only covers accounts that
-     * existed at deployment).
-     */
-    public function requiredSince(): ?Carbon
-    {
-        $raw = (string) SiteSetting::get('email_verification_required_since', '');
-        if ($raw === '') {
-            return null;
-        }
-
-        try {
-            return Carbon::parse($raw);
-        } catch (Throwable) {
-            return null;
-        }
-    }
-
-    /**
-     * Grandfathered = created BEFORE required mode was (re-)enabled. With no
-     * recorded timestamp nobody is grandfathered — enforcement stays exactly
-     * as configured (the admin page records the timestamp on every
-     * off → on transition).
-     */
-    public function isGrandfathered(User $user): bool
-    {
-        $since = $this->requiredSince();
-
-        return $since !== null
-            && $user->created_at !== null
-            && $user->created_at->lt($since);
     }
 
     // ── Transport-test proof ─────────────────────────────────────────────────
@@ -428,12 +393,15 @@ class EmailVerificationService
     /** Seconds until the user may request another code (0 = allowed now). */
     public function resendCooldownRemaining(User $user): int
     {
-        // Terminal obsolete records (failed dispatch/delivery, superseded and
-        // skipped) left the user with nothing they can act on — they must not
-        // hold the cooldown against an immediate retry.
+        // Terminal obsolete records (failed dispatch/delivery, superseded,
+        // skipped — and EXPIRED codes, which verification explicitly tells
+        // the user to replace) left the user with nothing they can act on —
+        // they must not hold the cooldown against an immediate retry, even
+        // when an admin configures a cooldown longer than the TTL.
         $latest = EmailVerificationCode::where('user_id', $user->id)
             ->where('email', $user->email)
             ->whereNull('used_at')
+            ->where('expires_at', '>', now())
             ->whereNotIn('send_status', [
                 EmailVerificationCode::SEND_STATUS_FAILED,
                 EmailVerificationCode::SEND_STATUS_DISPATCH_FAILED,
@@ -563,7 +531,7 @@ class EmailVerificationService
             // surrounding database transaction (if any) commits. The address
             // comes from the RECORD (written under the lock) — never from the
             // possibly-stale caller model.
-            SendEmailOtpJob::dispatch($record->id, $record->email, $code, $this->ttlMinutes());
+            SendEmailOtpJob::dispatch($record->id, $record->user_id, $record->email, $code, $this->ttlMinutes());
         } catch (Throwable $e) {
             // NEVER pretend the code was sent when the dispatch itself failed.
             // The record is consumed (used_at) so this never-queued attempt
@@ -773,6 +741,86 @@ class EmailVerificationService
         }
 
         return false;
+    }
+
+    /**
+     * ONE authoritative, ALL-OR-NOTHING mutation for trusted admin edits of a
+     * user (Filament EditUser): every requested field — a possible email
+     * change (with the admin's explicit verified/unverified choice and OTP
+     * invalidation only when the address actually changes), is_admin, and all
+     * other fillable attributes — commits in a SINGLE transaction under the
+     * standard lock ordering (cache/Redis user lock → user row → OTP rows).
+     * The cache lock is released only after the transaction ends; no
+     * email-related mutation can ever commit while the rest of the edit
+     * fails.
+     *
+     * $data special keys: `email` (normalized here), `is_admin` (trusted
+     * explicit forceFill), `email_change_mark_verified` (admin's choice).
+     * Everything else goes through normal mass assignment — Filament already
+     * excludes untouched password fields, so existing password semantics are
+     * preserved.
+     *
+     * Failure modes: cache-lock contention or a bounded row-lock timeout →
+     * ValidationException with the controlled busy message on `data.email`;
+     * a lost email-uniqueness race → the standard Persian validation error on
+     * `data.email`; every unrelated QueryException rethrows untouched. In all
+     * failure cases the transaction rolled back — NO partial state survives.
+     */
+    public function applyAdminUpdate(User $user, array $data): User
+    {
+        try {
+            $result = $this->withUserLock($user->id, fn () => DB::transaction(function () use ($user, $data) {
+                DatabaseLockTimeout::applyLocal();
+
+                $lockedUser = User::whereKey($user->id)->lockForUpdate()->first();
+                if ($lockedUser === null) {
+                    return null;
+                }
+
+                $markVerified = (bool) ($data['email_change_mark_verified'] ?? true);
+                unset($data['email_change_mark_verified']);
+
+                if (array_key_exists('is_admin', $data)) {
+                    $lockedUser->forceFill(['is_admin' => (bool) $data['is_admin']]);
+                    unset($data['is_admin']);
+                }
+
+                if (array_key_exists('email', $data)) {
+                    $newEmail = strtolower(trim((string) $data['email']));
+                    unset($data['email']);
+                    if ($newEmail !== strtolower((string) $lockedUser->email)) {
+                        // Email changes NEVER silently retain the old
+                        // verification timestamp; old codes die WITH this
+                        // transaction (rolled back together on any failure).
+                        $this->invalidateCodes($lockedUser);
+                        $lockedUser->forceFill([
+                            'email' => $newEmail,
+                            'email_verified_at' => $markVerified ? now() : null,
+                        ]);
+                    }
+                }
+
+                $lockedUser->fill($data);
+                $lockedUser->save();
+
+                return $lockedUser;
+            }));
+        } catch (QueryException $e) {
+            if (DatabaseLockTimeout::isLockTimeout($e)) {
+                throw ValidationException::withMessages([
+                    'data.email' => self::BUSY_MESSAGE,
+                ]);
+            }
+            EmailUniqueViolationProbe::translateOrRethrow($e, 'data.email');
+        }
+
+        if ($result === null) {
+            throw ValidationException::withMessages([
+                'data.email' => self::BUSY_MESSAGE,
+            ]);
+        }
+
+        return $result->refresh();
     }
 
     /** Mark every unused code for this user as consumed. */

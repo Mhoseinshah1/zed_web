@@ -68,6 +68,9 @@ class User extends Authenticatable implements FilamentUser
             'email_verified_at' => 'datetime',
             'phone_verified_at' => 'datetime',
             'profile_completed_at' => 'datetime',
+            // Immutable registration policy marker — set once (forceFill) in
+            // the registration transaction, never recalculated later.
+            'email_verification_required_at_registration' => 'boolean',
             'password' => 'hashed',
             'is_admin' => 'boolean',
             'wallet_balance_toman' => 'integer',

@@ -4,6 +4,7 @@ namespace App\Jobs;
 
 use App\Mail\EmailOtpMail;
 use App\Models\EmailVerificationCode;
+use App\Models\User;
 use App\Services\Email\EmailVerificationService;
 use App\Support\DatabaseLockTimeout;
 use App\Support\MailFailure;
@@ -70,6 +71,7 @@ class SendEmailOtpJob implements ShouldBeEncrypted, ShouldQueue
 
     public function __construct(
         private readonly int $codeId,
+        private readonly int $userId,
         private readonly string $email,
         private readonly string $code,
         private readonly int $ttlMinutes,
@@ -80,16 +82,11 @@ class SendEmailOtpJob implements ShouldBeEncrypted, ShouldQueue
 
     public function handle(): void
     {
-        $userId = EmailVerificationCode::whereKey($this->codeId)->value('user_id');
-        if ($userId === null) {
-            return;
-        }
-
-        // Same lock, same ordering as the service (cache lock → user row →
-        // code rows). Contention (e.g. an address change in progress) releases
-        // the job back to the queue instead of waiting unboundedly.
+        // The user id travels IN the encrypted payload (captured under the
+        // issuance lock) — the lock key never depends on a pre-lock query,
+        // and claim() re-validates record ownership against it under locks.
         try {
-            $lock = Cache::lock(EmailVerificationService::userLockKey((int) $userId), self::LOCK_TTL_SECONDS);
+            $lock = Cache::lock(EmailVerificationService::userLockKey($this->userId), self::LOCK_TTL_SECONDS);
             $lock->block(EmailVerificationService::LOCK_WAIT_SECONDS);
         } catch (Throwable) {
             // Contention (LockTimeoutException) or cache outage: retry soon
@@ -177,6 +174,15 @@ class SendEmailOtpJob implements ShouldBeEncrypted, ShouldQueue
         return DB::transaction(function () use ($claimableFrom) {
             DatabaseLockTimeout::applyLocal();
 
+            // EXACT documented lock order — identical to requestCode/verify/
+            // changeAddressTo: the authoritative USER row first, then the
+            // code row. A transaction outside the cache-lock protocol
+            // (commands, imports, admin tooling) contends here, bounded by
+            // the local lock timeout.
+            $user = User::whereKey($this->userId)
+                ->lockForUpdate()
+                ->first();
+
             $record = EmailVerificationCode::whereKey($this->codeId)
                 ->lockForUpdate()
                 ->first();
@@ -185,7 +191,15 @@ class SendEmailOtpJob implements ShouldBeEncrypted, ShouldQueue
                 return null;
             }
 
-            $user = $record->user()->first();
+            // Ownership is validated UNDER the locks against the payload —
+            // never trusted from any pre-lock read.
+            if ($record->user_id !== $this->userId) {
+                EmailVerificationCode::whereKey($this->codeId)
+                    ->whereIn('send_status', $claimableFrom)
+                    ->update(['send_status' => EmailVerificationCode::SEND_STATUS_SKIPPED]);
+
+                return null;
+            }
 
             // Obsolete when: consumed/invalidated, expired, address changed
             // (record- or user-side), user gone, user ALREADY verified, or a

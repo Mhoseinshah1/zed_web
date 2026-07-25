@@ -64,7 +64,12 @@ class EmailVerificationHardeningTest extends TestCase
 
     private function unverifiedUser(array $attrs = []): User
     {
-        return User::factory()->create(array_merge(['email_verified_at' => null], $attrs));
+        // These suites exercise the ENFORCED path: the factory user carries
+        // the per-user registration obligation marker.
+        $user = User::factory()->create(array_merge(['email_verified_at' => null], $attrs));
+        $user->forceFill(['email_verification_required_at_registration' => true])->save();
+
+        return $user;
     }
 
     // ── Item 1: email normalization ──────────────────────────────────────────
@@ -245,7 +250,7 @@ class EmailVerificationHardeningTest extends TestCase
             'send_status' => EmailVerificationCode::SEND_STATUS_SENDING,
         ]);
 
-        (new SendEmailOtpJob($record->id, (string) $user->email, '123456', 10))
+        (new SendEmailOtpJob($record->id, $user->id, (string) $user->email, '123456', 10))
             ->failed(new \RuntimeException('535 Authentication failed: Authorization: Basic dXNlcjpwYXNz with password "TopSecret42"'));
 
         $record->refresh();
@@ -479,7 +484,7 @@ class EmailVerificationHardeningTest extends TestCase
             'send_status' => EmailVerificationCode::SEND_STATUS_QUEUED,
         ]);
 
-        return [$record, new SendEmailOtpJob($record->id, (string) $user->email, $code, 10)];
+        return [$record, new SendEmailOtpJob($record->id, $user->id, (string) $user->email, $code, 10)];
     }
 
     public function test_resend_makes_the_older_queued_job_obsolete(): void
@@ -770,32 +775,258 @@ class EmailVerificationHardeningTest extends TestCase
         Mail::assertSent(TestEmailMail::class, 1);
     }
 
-    // ── Grandfathering: required mode never locks out earlier cohorts ────────
+    // ── Per-user registration obligation (immutable policy marker) ───────────
 
-    public function test_users_created_while_optional_are_grandfathered_when_required_is_enabled(): void
+    private function registeredUser(string $email): User
     {
+        // Registration logs the new user in, and earlier actingAs() calls are
+        // sticky across test requests — reset the guards so each registration
+        // arrives as a genuine guest.
+        auth()->logout();
+        $this->app['auth']->forgetGuards();
+
+        $this->post('/register', $this->registrationPayload(['email' => $email]))
+            ->assertStatus(302);
+        $user = User::where('email', $email)->first();
+        $this->assertNotNull($user);
+
+        auth()->logout();
+        $this->app['auth']->forgetGuards();
+
+        return $user;
+    }
+
+    public function test_obligation_flag_captures_the_effective_policy_at_registration(): void
+    {
+        Mail::fake();
+
+        // Effective required mode active → obligated.
+        $obligated = $this->registeredUser('obligated@example.com');
+        $this->assertTrue((bool) $obligated->email_verification_required_at_registration);
+        $this->actingAs($obligated)->get('/dashboard')->assertRedirect(route('verification.notice'));
+
+        // Optional mode → not obligated.
         SiteSetting::set('email_verification_required_on_register', 'false');
-        $legacy = $this->unverifiedUser();
-        $this->travel(2)->minutes();
+        $optional = $this->registeredUser('optional.marker@example.com');
+        $this->assertFalse((bool) $optional->email_verification_required_at_registration);
 
-        // The admin enables required mode THROUGH the settings page (which
-        // records the transition moment); the proof already exists (setUp).
-        Livewire::actingAs($this->admin())
-            ->test(EmailSettingsPage::class)
-            ->fillForm([
-                'email_verification_enabled' => true,
-                'email_verification_required_on_register' => true,
-            ])
-            ->call('save');
-        $this->assertTrue(app(EmailVerificationService::class)->isRequiredOnRegister());
+        // Feature disabled → not obligated.
+        SiteSetting::set('email_verification_enabled', 'false');
+        $disabled = $this->registeredUser('disabled.marker@example.com');
+        $this->assertFalse((bool) $disabled->email_verification_required_at_registration);
+    }
 
-        // The pre-existing unverified account keeps full access…
+    public function test_fail_safe_registrations_are_never_retroactively_locked_out(): void
+    {
+        Mail::fake();
+        $svc = app(EmailVerificationService::class);
+
+        // Raw toggle stays TRUE the whole time, but the effective policy is
+        // inactive: expired proof, drifted fingerprint, unusable mailer.
+        $failSafeUsers = [];
+
+        $this->travel(EmailVerificationService::MAIL_TEST_PROOF_MAX_DAYS + 1)->days();   // proof expired
+        $this->assertFalse($svc->isRequiredOnRegister());
+        $failSafeUsers[] = $this->registeredUser('expired.proof@example.com');
+
+        $svc->recordSuccessfulMailTest();
+        config(['mail.from.address' => 'drifted-from@example.com']);                      // fingerprint drift
+        $this->assertFalse($svc->isRequiredOnRegister());
+        $failSafeUsers[] = $this->registeredUser('drifted.proof@example.com');
+
+        config(['mail.from.address' => 'noreply@example.com', 'mail.default' => 'not-a-real-mailer']); // unusable
+        $this->assertFalse($svc->isRequiredOnRegister());
+        $failSafeUsers[] = $this->registeredUser('unusable.mailer@example.com');
+
+        // The mail service RECOVERS: fresh proof, effective required again.
+        config(['mail.default' => 'array']);
+        $svc->recordSuccessfulMailTest();
+        $this->assertTrue($svc->isRequiredOnRegister());
+
+        // Every fail-safe registration keeps its false marker and full access
+        // FOREVER — no retroactive lockout after proof/credential restoration.
+        foreach ($failSafeUsers as $user) {
+            $this->assertFalse((bool) $user->fresh()->email_verification_required_at_registration);
+            $this->actingAs($user)->get('/dashboard')->assertOk();
+        }
+
+        // While a user registered under the enforced policy stays obligated
+        // after the outage window closed.
+        $obligated = $this->registeredUser('post.recovery@example.com');
+        $this->assertTrue((bool) $obligated->email_verification_required_at_registration);
+        $this->actingAs($obligated)->get('/dashboard')->assertRedirect(route('verification.notice'));
+    }
+
+    public function test_toggling_required_mode_never_rewrites_existing_markers(): void
+    {
+        Mail::fake();
+        $obligated = $this->registeredUser('sticky.true@example.com');
+        SiteSetting::set('email_verification_required_on_register', 'false');
+        $free = $this->registeredUser('sticky.false@example.com');
+
+        // Flip the policy off and on again — existing flags are untouched.
+        SiteSetting::set('email_verification_required_on_register', 'true');
+        SiteSetting::set('email_verification_required_on_register', 'false');
+        SiteSetting::set('email_verification_required_on_register', 'true');
+
+        $this->assertTrue((bool) $obligated->fresh()->email_verification_required_at_registration);
+        $this->assertFalse((bool) $free->fresh()->email_verification_required_at_registration);
+        $this->actingAs($free)->get('/dashboard')->assertOk();
+        $this->actingAs($obligated)->get('/dashboard')->assertRedirect(route('verification.notice'));
+    }
+
+    public function test_obligated_users_are_not_locked_during_a_transport_outage(): void
+    {
+        Mail::fake();
+        $obligated = $this->registeredUser('outage.window@example.com');
+        $this->assertTrue((bool) $obligated->email_verification_required_at_registration);
+
+        // The mailer becomes unusable: enforcement fails safe TEMPORARILY…
+        config(['mail.default' => 'not-a-real-mailer']);
+        $this->actingAs($obligated)->get('/dashboard')->assertOk();
+
+        // …and resumes for the obligated user once the transport recovers.
+        config(['mail.default' => 'array']);
+        app(EmailVerificationService::class)->recordSuccessfulMailTest();
+        $this->actingAs($obligated)->get('/dashboard')->assertRedirect(route('verification.notice'));
+    }
+
+    public function test_backfilled_users_without_the_marker_remain_accessible(): void
+    {
+        // Factory users mirror pre-migration accounts: marker false (column
+        // default) — the middleware never blocks them even under required mode.
+        $legacy = User::factory()->create(['email_verified_at' => null]);
+        $this->assertFalse((bool) $legacy->email_verification_required_at_registration);
+
         $this->actingAs($legacy)->get('/dashboard')->assertOk();
+    }
 
-        // …while accounts created AFTER the transition are enforced.
-        $this->travel(1)->minutes();
-        $fresh = $this->unverifiedUser();
-        $this->actingAs($fresh)->get('/dashboard')->assertRedirect(route('verification.notice'));
+    // ── Atomic Filament admin update ─────────────────────────────────────────
+
+    public function test_admin_update_is_all_or_nothing_on_late_failure(): void
+    {
+        Queue::fake();
+        User::factory()->create(['username' => 'blocking_name']);
+        $user = User::factory()->create([
+            'email' => 'atomic.before@example.com', 'email_verified_at' => now(),
+            'name' => 'Original Name',
+        ]);
+        $activeCode = EmailVerificationCode::create([
+            'user_id' => $user->id, 'email' => $user->email,
+            'code_hash' => Hash::make('123456'),
+            'expires_at' => now()->addMinutes(10), 'attempts' => 0,
+            'send_status' => EmailVerificationCode::SEND_STATUS_SENT,
+        ]);
+
+        // The email change is VALID; the username collides — the single UPDATE
+        // fails after the email mutation logic already ran, and EVERYTHING
+        // must roll back together.
+        try {
+            app(EmailVerificationService::class)->applyAdminUpdate($user, [
+                'email' => 'atomic.after@example.com',
+                'email_change_mark_verified' => false,
+                'username' => 'blocking_name',
+                'name' => 'Changed Name',
+                'is_admin' => true,
+            ]);
+            $this->fail('the username collision must surface');
+        } catch (QueryException $e) {
+            $this->assertStringNotContainsString('این ایمیل', $e->getMessage(), 'unrelated violations are never mislabeled');
+        }
+
+        $user->refresh();
+        $this->assertSame('atomic.before@example.com', $user->email, 'email rolled back');
+        $this->assertNotNull($user->email_verified_at, 'verification timestamp rolled back');
+        $this->assertSame('Original Name', $user->name, 'other fields rolled back');
+        $this->assertFalse((bool) $user->is_admin, 'is_admin rolled back');
+        $this->assertNull($activeCode->fresh()->used_at, 'OTP records remain active');
+        Queue::assertNothingPushed();
+    }
+
+    public function test_admin_update_commits_email_is_admin_and_fields_together(): void
+    {
+        $user = User::factory()->create(['email' => 'combo.before@example.com', 'email_verified_at' => now()]);
+        $staleCode = EmailVerificationCode::create([
+            'user_id' => $user->id, 'email' => $user->email,
+            'code_hash' => Hash::make('123456'),
+            'expires_at' => now()->addMinutes(10), 'attempts' => 0,
+            'send_status' => EmailVerificationCode::SEND_STATUS_SENT,
+        ]);
+
+        $updated = app(EmailVerificationService::class)->applyAdminUpdate($user, [
+            'email' => 'Combo.After@Example.com',
+            'email_change_mark_verified' => false,
+            'name' => 'Renamed',
+            'is_admin' => true,
+        ]);
+
+        // ONE commit carries everything — including is_admin alongside the
+        // email change (previously refresh() could silently drop it).
+        $this->assertSame('combo.after@example.com', $updated->email);
+        $this->assertNull($updated->email_verified_at);
+        $this->assertSame('Renamed', $updated->name);
+        $this->assertTrue((bool) $updated->is_admin);
+        $this->assertNotNull($staleCode->fresh()->used_at, 'old codes died with the same commit');
+    }
+
+    public function test_admin_update_lock_contention_is_a_controlled_field_error(): void
+    {
+        $user = User::factory()->create(['email' => 'locked.admin@example.com', 'email_verified_at' => now()]);
+        $lock = Cache::lock(EmailVerificationService::userLockKey($user->id), 60);
+        $this->assertTrue($lock->get());
+
+        try {
+            app(EmailVerificationService::class)->applyAdminUpdate($user, [
+                'email' => 'moved.admin@example.com', 'name' => 'x',
+            ]);
+            $this->fail('contention must be refused');
+        } catch (ValidationException $e) {
+            $this->assertSame([EmailVerificationService::BUSY_MESSAGE], $e->errors()['data.email']);
+        } finally {
+            $lock->release();
+        }
+
+        $this->assertSame('locked.admin@example.com', $user->fresh()->email, 'no partial edits');
+    }
+
+    // ── Expired codes never hold the resend cooldown ─────────────────────────
+
+    public function test_expired_codes_do_not_hold_a_longer_cooldown_hostage(): void
+    {
+        Mail::fake();
+        SiteSetting::set('email_otp_ttl_minutes', 1);
+        SiteSetting::set('email_otp_resend_cooldown_seconds', 3600);
+        $user = $this->unverifiedUser();
+        $svc = app(EmailVerificationService::class);
+
+        $this->assertSame('queued', $svc->requestCode($user)['status']);
+
+        // The code expires long before the (misconfigured) hour-long cooldown:
+        // "request a new code" must actually be possible.
+        $this->travel(2)->minutes();
+        $this->assertTrue($svc->canResend($user));
+        $this->assertSame('queued', $svc->requestCode($user)['status']);
+    }
+
+    // ── Job payload ownership ────────────────────────────────────────────────
+
+    public function test_job_with_mismatched_record_ownership_sends_nothing(): void
+    {
+        Mail::fake();
+        $owner = $this->unverifiedUser();
+        $other = $this->unverifiedUser();
+        $record = EmailVerificationCode::create([
+            'user_id' => $owner->id, 'email' => $owner->email,
+            'code_hash' => Hash::make('123456'),
+            'expires_at' => now()->addMinutes(10), 'attempts' => 0,
+            'send_status' => EmailVerificationCode::SEND_STATUS_QUEUED,
+        ]);
+
+        // Payload claims a DIFFERENT user than the record's owner.
+        (new SendEmailOtpJob($record->id, $other->id, (string) $owner->email, '123456', 10))->handle();
+
+        Mail::assertNothingSent();
+        $this->assertSame(EmailVerificationCode::SEND_STATUS_SKIPPED, $record->fresh()->send_status);
     }
 
     // ── Address-change collisions: the DB index is the final authority ───────
@@ -888,7 +1119,7 @@ class EmailVerificationHardeningTest extends TestCase
             'send_status' => EmailVerificationCode::SEND_STATUS_QUEUED,
         ]);
 
-        (new SendEmailOtpJob($record->id, (string) $user->email, '123456', 10))->handle();
+        (new SendEmailOtpJob($record->id, $user->id, (string) $user->email, '123456', 10))->handle();
 
         Mail::assertSent(EmailOtpMail::class, fn ($mail) => $mail->ttlMinutes === 3);
     }
@@ -913,7 +1144,7 @@ class EmailVerificationHardeningTest extends TestCase
             return $pending;
         });
 
-        (new SendEmailOtpJob($record->id, (string) $user->email, '123456', 10))->handle();
+        (new SendEmailOtpJob($record->id, $user->id, (string) $user->email, '123456', 10))->handle();
 
         // NEVER reported as a delivered, still-actionable code.
         $this->assertSame(EmailVerificationCode::SEND_STATUS_SKIPPED, $record->fresh()->send_status);
@@ -933,7 +1164,7 @@ class EmailVerificationHardeningTest extends TestCase
         $lock = Cache::lock(EmailVerificationService::userLockKey($user->id), 60);
         $this->assertTrue($lock->get());
         try {
-            (new SendEmailOtpJob($record->id, (string) $user->email, '123456', 10))->handle();
+            (new SendEmailOtpJob($record->id, $user->id, (string) $user->email, '123456', 10))->handle();
         } finally {
             $lock->release();
         }
@@ -953,7 +1184,7 @@ class EmailVerificationHardeningTest extends TestCase
             'send_status' => EmailVerificationCode::SEND_STATUS_SENT,
         ]);
 
-        (new SendEmailOtpJob($record->id, (string) $user->email, '123456', 10))
+        (new SendEmailOtpJob($record->id, $user->id, (string) $user->email, '123456', 10))
             ->failed(new \RuntimeException('late failure after acceptance'));
 
         $this->assertSame(EmailVerificationCode::SEND_STATUS_SENT, $record->fresh()->send_status);

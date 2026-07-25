@@ -34,9 +34,11 @@ class EmailVerificationController extends Controller
             // client countdown past what the server actually enforces.
             'cooldownSeconds' => $this->verification->resendCooldownRemaining($user),
             'ttlMinutes' => $this->verification->ttlMinutes(),
-            // OPTIONAL mode shows a "skip for now" path to the dashboard;
-            // required mode never does.
-            'isRequired' => $this->verification->isRequiredOnRegister(),
+            // The skip affordance follows the PER-USER obligation: only a
+            // user who registered under an effectively-required policy (and
+            // while enforcement is currently active) is denied the shortcut.
+            'isRequired' => $this->verification->isRequiredOnRegister()
+                && (bool) $user->email_verification_required_at_registration,
         ]);
     }
 

@@ -246,7 +246,9 @@ class EmailMailTestProofTest extends TestCase
         config(['mail.mailers.smtp.password' => 'RotatedAway222']);
 
         $this->assertFalse($this->svc()->isRequiredOnRegister(), 'credential drift degrades required mode');
+        // Even a user OBLIGATED at registration passes during the fail-safe.
         $user = User::factory()->create(['email_verified_at' => null]);
+        $user->forceFill(['email_verification_required_at_registration' => true])->save();
         $this->actingAs($user)->get('/dashboard')->assertOk();
     }
 
@@ -303,7 +305,9 @@ class EmailMailTestProofTest extends TestCase
             $this->svc()->isRequiredOnRegister(),
             'runtime enforcement becomes inert on drift — new users are never locked out',
         );
+        // Even a user OBLIGATED at registration passes during the fail-safe.
         $user = User::factory()->create(['email_verified_at' => null]);
+        $user->forceFill(['email_verification_required_at_registration' => true])->save();
         $this->actingAs($user)->get('/dashboard')->assertOk();
     }
 }

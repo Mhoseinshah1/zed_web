@@ -52,7 +52,12 @@ class EmailVerificationTest extends TestCase
 
     private function unverifiedUser(array $attrs = []): User
     {
-        return User::factory()->create(array_merge(['email_verified_at' => null], $attrs));
+        // These suites exercise the ENFORCED path: the factory user carries
+        // the per-user registration obligation marker.
+        $user = User::factory()->create(array_merge(['email_verified_at' => null], $attrs));
+        $user->forceFill(['email_verification_required_at_registration' => true])->save();
+
+        return $user;
     }
 
     /** Issue a code directly and return [record, plaintext]. */
@@ -538,7 +543,7 @@ class EmailVerificationTest extends TestCase
         $user->forceFill(['email' => 'second@example.com'])->save();
         app(EmailVerificationService::class)->invalidateCodes($user);
 
-        (new SendEmailOtpJob($record->id, 'first@example.com', '123456', 10))->handle();
+        (new SendEmailOtpJob($record->id, $user->id, 'first@example.com', '123456', 10))->handle();
 
         Mail::assertNothingSent();
         $this->assertSame(EmailVerificationCode::SEND_STATUS_SKIPPED, $record->fresh()->send_status);

@@ -158,7 +158,7 @@ class EmailLockTimeoutPgTest extends TestCase
         $blocker->select('select id from email_verification_codes where id = ? for update', [$record->id]);
 
         $started = microtime(true);
-        (new SendEmailOtpJob($record->id, (string) $user->email, '123456', 10))->handle();
+        (new SendEmailOtpJob($record->id, $user->id, (string) $user->email, '123456', 10))->handle();
         $elapsed = microtime(true) - $started;
 
         Mail::assertNothingSent();
@@ -169,7 +169,7 @@ class EmailLockTimeoutPgTest extends TestCase
         $this->assertNull($record->fresh()->send_error);
 
         $this->releaseBlocker();
-        (new SendEmailOtpJob($record->id, (string) $user->email, '123456', 10))->handle();
+        (new SendEmailOtpJob($record->id, $user->id, (string) $user->email, '123456', 10))->handle();
         $this->assertSame(EmailVerificationCode::SEND_STATUS_SENT, $record->fresh()->send_status);
     }
 

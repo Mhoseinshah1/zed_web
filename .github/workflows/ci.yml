@@ -209,6 +209,12 @@ jobs:
       - name: Email row-lock timeout behavior (PostgreSQL)
         run: php artisan test --testsuite=Feature --filter='EmailLockTimeoutPgTest'
 
+      - name: Atomic admin email update behavior (PostgreSQL)
+        run: php artisan test --testsuite=Feature --filter='EmailAdminUpdatePgTest'
+
+      - name: Queued-job User-row lock ordering (PostgreSQL)
+        run: php artisan test --testsuite=Feature --filter='EmailJobLockOrderPgTest'
+
       - name: Scheduler locking + Redis-outage resilience
         run: php artisan test --testsuite=Feature --filter='SchedulerTest'
 

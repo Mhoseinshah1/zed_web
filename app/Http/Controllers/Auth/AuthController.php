@@ -163,13 +163,23 @@ class AuthController extends Controller
             ?? $request->session()->pull('referral_code')
             ?? $request->cookie('referral_code');
 
+        // ONE effective-policy decision for this whole registration: the
+        // EFFECTIVE requirement (enabled + raw toggle + usable mail + valid
+        // transport-test proof) is resolved exactly once, persisted on the
+        // user inside the registration transaction as an immutable marker,
+        // and reused unchanged for every post-commit flow decision — no
+        // drift between insert and redirect, and no later recalculation.
+        $emailVerification = app(EmailVerificationService::class);
+        $phoneRequired = app(PhoneVerificationService::class)->isRequiredOnRegister();
+        $emailRequiredForThisRegistration = $emailVerification->isRequiredOnRegister();
+
         // ONE transaction for the whole registration write set: the user row
         // and its referral attachment commit together or not at all — no
         // half-registered users with lost referrals. Side effects (Telegram,
         // OTP dispatch, login) run strictly AFTER the commit, so a rollback
         // produces no notification and no queued email.
         try {
-            $user = DB::transaction(function () use ($validated, $normalized, $referralCode) {
+            $user = DB::transaction(function () use ($validated, $normalized, $referralCode, $emailRequiredForThisRegistration) {
                 $user = User::create([
                     'name' => $validated['name'],
                     'username' => $validated['username'],
@@ -178,6 +188,13 @@ class AuthController extends Controller
                     'normalized_phone' => $normalized,
                     'password' => Hash::make($validated['password']),
                 ]);
+
+                // The immutable per-user obligation marker commits WITH the
+                // user row: registered under enforced verification or not —
+                // never rewritten by later policy/proof changes.
+                $user->forceFill([
+                    'email_verification_required_at_registration' => $emailRequiredForThisRegistration,
+                ])->save();
 
                 // Attach the referrer from ?ref= / session / cookie (mode-aware, safe).
                 app(ReferralService::class)->attachReferrer($user, $referralCode);
@@ -219,9 +236,9 @@ class AuthController extends Controller
         // available from the profile). When email verification is REQUIRED,
         // the phone OTP is sent right after the email step succeeds (see
         // EmailVerificationController::verify).
-        $emailVerification = app(EmailVerificationService::class);
-        $phoneRequired = app(PhoneVerificationService::class)->isRequiredOnRegister();
-        if ($emailVerification->isRequiredOnRegister()
+        // All flow decisions reuse the SAME captured policy values resolved
+        // before the transaction — never re-evaluated mid-request.
+        if ($emailRequiredForThisRegistration
             || ($emailVerification->isEnabled() && ! $phoneRequired)) {
             if ($emailVerification->isMailConfigured()) {
                 $result = $emailVerification->requestCode($user, [
