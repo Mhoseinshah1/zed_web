@@ -19,6 +19,19 @@
             ->whereIn('payment_status', [Order::PAYMENT_UNPAID, Order::PAYMENT_PENDING])
             ->count()
         : 0;
+
+    // Fixed site navigation — ONE shared definition used by BOTH the desktop
+    // category bar and the mobile menu (never duplicated). Array order is the
+    // fixed-nav order; the orange "همه محصولات" button and the dynamic plan
+    // categories are rendered separately around it.
+    $wmNavLinks = [
+        ['label' => site_setting('woodmart_nav_home', 'خانه'),             'url' => route('home'),      'active' => request()->routeIs('home')],
+        ['label' => site_setting('woodmart_nav_tutorials', 'آموزش‌ها'),    'url' => route('tutorials'), 'active' => request()->routeIs('tutorials*')],
+        ['label' => site_setting('woodmart_nav_status', 'وضعیت سرویس‌ها'), 'url' => route('status'),    'active' => request()->routeIs('status')],
+        ['label' => site_setting('woodmart_nav_about', 'درباره ما'),       'url' => url('/about'),      'active' => request()->is('about', 'pages/about')],
+        ['label' => site_setting('woodmart_nav_terms', 'قوانین'),          'url' => url('/terms'),      'active' => request()->is('terms', 'pages/terms')],
+        ['label' => site_setting('woodmart_nav_support', 'پشتیبانی'),      'url' => route('contact'),   'active' => request()->routeIs('contact')],
+    ];
 @endphp
 
 {{-- ===== Top utility / trust bar ===== --}}
@@ -92,7 +105,8 @@
             </div>
 
             {{-- Mobile hamburger --}}
-            <button id="wm-menu-btn" class="md:hidden mr-auto w-[42px] h-[42px] rounded-full bg-surface-soft text-content flex items-center justify-center" aria-label="منو">
+            <button id="wm-menu-btn" type="button" aria-label="منو" aria-controls="wm-menu" aria-expanded="false"
+                    class="md:hidden mr-auto w-[42px] h-[42px] rounded-full bg-surface-soft text-content flex items-center justify-center">
                 <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/></svg>
             </button>
         </div>
@@ -101,7 +115,10 @@
     {{-- ===== Category nav (desktop) ===== --}}
     <div class="border-t border-line bg-surface hidden md:block">
         <div class="max-w-[1180px] mx-auto px-5">
-            <nav class="flex items-center gap-1 h-[50px] overflow-x-auto">
+            {{-- One-line bar: labels never wrap; when width genuinely runs out
+                 the bar scrolls horizontally with a visually hidden scrollbar
+                 (wm-navscroll) instead of overlapping or overflowing the page. --}}
+            <nav class="wm-navscroll flex items-center gap-1 h-[50px] overflow-x-auto" aria-label="دسته‌بندی‌ها و صفحات">
                 <a href="{{ route('plans') }}"
                    class="wm-accent-bg flex items-center gap-1.5 px-[15px] py-2 rounded-lg text-sm font-semibold whitespace-nowrap shrink-0">
                     <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M3 12h18M3 18h18"/></svg>
@@ -113,8 +130,10 @@
                         @if($cat->icon)<span>{{ $cat->icon }}</span>@endif{{ $cat->title }}
                     </a>
                 @endforeach
-                <a href="{{ route('tutorials') }}" class="wm-navlink {{ request()->routeIs('tutorials') ? 'is-on' : '' }} px-[15px] py-2 rounded-lg text-sm font-semibold text-content-muted whitespace-nowrap shrink-0">{{ site_setting('woodmart_nav_tutorials', 'آموزش‌ها') }}</a>
-                <a href="{{ route('contact') }}" class="wm-navlink {{ request()->routeIs('contact') ? 'is-on' : '' }} px-[15px] py-2 rounded-lg text-sm font-semibold text-content-muted whitespace-nowrap shrink-0">{{ site_setting('woodmart_nav_support', 'پشتیبانی') }}</a>
+                @foreach($wmNavLinks as $link)
+                    <a href="{{ $link['url'] }}"
+                       class="wm-navlink {{ $link['active'] ? 'is-on' : '' }} px-[15px] py-2 rounded-lg text-sm font-semibold text-content-muted whitespace-nowrap shrink-0">{{ $link['label'] }}</a>
+                @endforeach
             </nav>
         </div>
     </div>
@@ -129,19 +148,46 @@
                        placeholder="{{ site_setting('woodmart_search_placeholder', 'جستجوی پلن، لوکیشن...') }}"
                        class="bg-transparent border-none outline-none text-content w-full text-sm placeholder:text-content-muted">
             </form>
-            <div class="space-y-1">
-                <a href="{{ route('plans') }}" class="block py-2 px-2 rounded-lg text-sm font-semibold wm-accent-soft-bg">{{ site_setting('woodmart_nav_all', 'همه محصولات') }}</a>
-                @foreach($wmCategories as $cat)
-                    <a href="{{ route('plans', ['cat' => $cat->id]) }}" class="block py-2 px-2 rounded-lg text-sm text-content-muted hover:text-content">{{ $cat->title }}</a>
+            <nav class="space-y-1.5" aria-label="منوی موبایل">
+                {{-- همه محصولات — keeps the soft orange highlight --}}
+                <a href="{{ route('plans') }}"
+                   class="wm-accent-soft-bg flex items-center gap-2 min-h-[44px] px-3 rounded-lg text-sm font-semibold">
+                    <svg class="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M3 12h18M3 18h18"/></svg>
+                    {{ site_setting('woodmart_nav_all', 'همه محصولات') }}
+                </a>
+                {{-- خانه (first fixed link) --}}
+                <a href="{{ $wmNavLinks[0]['url'] }}"
+                   class="wm-navlink {{ $wmNavLinks[0]['active'] ? 'is-on' : '' }} flex items-center min-h-[44px] px-3 rounded-lg text-sm font-semibold text-content-muted">{{ $wmNavLinks[0]['label'] }}</a>
+                {{-- Dynamic plan categories — native collapsible group (no JS
+                     dependency; stays usable when scripts fail). Open when a
+                     category is currently selected. --}}
+                @if($wmCategories->isNotEmpty())
+                    <details class="rounded-lg" @if(request()->filled('cat')) open @endif>
+                        <summary class="wm-navlink flex items-center justify-between min-h-[44px] px-3 rounded-lg text-sm font-semibold text-content-muted cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden">
+                            {{ site_setting('woodmart_nav_categories', 'دسته‌بندی محصولات') }}
+                            <svg class="wm-mnav-caret w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg>
+                        </summary>
+                        <div class="pr-3 pt-1 space-y-1">
+                            @foreach($wmCategories as $cat)
+                                <a href="{{ route('plans', ['cat' => $cat->id]) }}"
+                                   class="wm-navlink {{ request('cat') == $cat->id ? 'is-on' : '' }} flex items-center gap-1.5 min-h-[44px] px-3 rounded-lg text-sm text-content-muted break-words">
+                                    @if($cat->icon)<span class="shrink-0">{{ $cat->icon }}</span>@endif<span class="min-w-0 break-words leading-6">{{ $cat->title }}</span>
+                                </a>
+                            @endforeach
+                        </div>
+                    </details>
+                @endif
+                {{-- Remaining fixed links (same shared definition as desktop) --}}
+                @foreach(array_slice($wmNavLinks, 1) as $link)
+                    <a href="{{ $link['url'] }}"
+                       class="wm-navlink {{ $link['active'] ? 'is-on' : '' }} flex items-center min-h-[44px] px-3 rounded-lg text-sm font-semibold text-content-muted">{{ $link['label'] }}</a>
                 @endforeach
-                <a href="{{ route('tutorials') }}" class="block py-2 px-2 rounded-lg text-sm text-content-muted hover:text-content">{{ site_setting('woodmart_nav_tutorials', 'آموزش‌ها') }}</a>
-                <a href="{{ route('contact') }}" class="block py-2 px-2 rounded-lg text-sm text-content-muted hover:text-content">{{ site_setting('woodmart_nav_support', 'پشتیبانی') }}</a>
-            </div>
-            <div class="pt-2 border-t border-line">
+            </nav>
+            <div class="pt-3 border-t border-line">
                 @auth
-                    <a href="{{ route('dashboard.index') }}" class="wm-accent-bg block text-center py-2.5 rounded-full font-bold text-sm">پنل کاربری</a>
+                    <a href="{{ route('dashboard.index') }}" class="wm-accent-bg flex items-center justify-center min-h-[44px] w-full text-center rounded-full font-bold text-sm">پنل کاربری</a>
                 @else
-                    <a href="{{ route('login') }}" class="wm-accent-bg block text-center py-2.5 rounded-full font-bold text-sm">{{ site_setting('woodmart_login_label', 'ورود / پنل') }}</a>
+                    <a href="{{ route('login') }}" class="wm-accent-bg flex items-center justify-center min-h-[44px] w-full text-center rounded-full font-bold text-sm">{{ site_setting('woodmart_login_label', 'ورود / پنل') }}</a>
                 @endauth
             </div>
         </div>
