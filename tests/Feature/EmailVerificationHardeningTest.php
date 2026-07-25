@@ -1008,6 +1008,45 @@ class EmailVerificationHardeningTest extends TestCase
         $this->assertSame('queued', $svc->requestCode($user)['status']);
     }
 
+    // ── Honest lifetimes & synchronous delivery failures ─────────────────────
+
+    public function test_notice_page_advertises_the_remaining_lifetime_of_the_active_code(): void
+    {
+        Mail::fake();
+        $user = $this->unverifiedUser();
+        app(EmailVerificationService::class)->requestCode($user);
+
+        // Nine of the ten configured minutes have passed.
+        $this->travel(9)->minutes();
+
+        $remaining = app(EmailVerificationService::class)->activeCodeRemainingMinutes($user->fresh());
+        $this->assertSame(1, $remaining, 'the code has one minute left, not ten');
+
+        $html = $this->actingAs($user)->get('/email/verify')->getContent();
+        $this->assertStringContainsString('1 دقیقه', $html);
+        $this->assertStringNotContainsString('10 دقیقه', $html, 'never advertise the full TTL for a dying code');
+    }
+
+    public function test_sync_queue_transport_failure_stays_a_counted_delivery_failure(): void
+    {
+        SiteSetting::set('email_otp_daily_cap', 1);
+        $user = $this->unverifiedUser();
+
+        // The sync driver executes the handler inline: the transport throws,
+        // the job's failed() hook records the honest outcome, and the
+        // exception then reaches requestCode's dispatch catch.
+        Mail::shouldReceive('to')->andThrow(new \RuntimeException('SMTP connection timed out'));
+
+        $result = app(EmailVerificationService::class)->requestCode($user);
+
+        $this->assertSame('error', $result['status']);
+        $record = EmailVerificationCode::first();
+        // A REAL transport attempt: `failed`, not `dispatch_failed` — and it
+        // burns the daily allowance so repeated failures can't loop forever.
+        $this->assertSame(EmailVerificationCode::SEND_STATUS_FAILED, $record->send_status);
+        $this->assertTrue(app(EmailVerificationService::class)->reachedDailyCap($user->fresh()));
+    }
+
     // ── Job payload ownership ────────────────────────────────────────────────
 
     public function test_job_with_mismatched_record_ownership_sends_nothing(): void

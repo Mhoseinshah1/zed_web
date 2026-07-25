@@ -33,7 +33,10 @@ class EmailVerificationController extends Controller
             // The REMAINING seconds only — refreshing must never restart the
             // client countdown past what the server actually enforces.
             'cooldownSeconds' => $this->verification->resendCooldownRemaining($user),
-            'ttlMinutes' => $this->verification->ttlMinutes(),
+            // The REMAINING lifetime of the current code — the configured TTL
+            // only when no active code exists yet.
+            'ttlMinutes' => $this->verification->activeCodeRemainingMinutes($user)
+                ?? $this->verification->ttlMinutes(),
             // The skip affordance follows the PER-USER obligation: only a
             // user who registered under an effectively-required policy (and
             // while enforcement is currently active) is denied the shortcut.

@@ -418,6 +418,27 @@ class EmailVerificationService
         return $remaining > 0 ? (int) ceil($remaining) : 0;
     }
 
+    /**
+     * Remaining validity of the LATEST active code in whole minutes (≥1), or
+     * null when no active code exists. The notice page must never advertise
+     * the full configured TTL for a code that is minutes from expiring.
+     */
+    public function activeCodeRemainingMinutes(User $user): ?int
+    {
+        $latest = EmailVerificationCode::where('user_id', $user->id)
+            ->where('email', $user->email)
+            ->whereNull('used_at')
+            ->where('expires_at', '>', now())
+            ->latest('id')
+            ->first();
+
+        if ($latest === null) {
+            return null;
+        }
+
+        return max(1, (int) floor(now()->diffInSeconds($latest->expires_at, false) / 60));
+    }
+
     public function reachedDailyCap(User $user): bool
     {
         return EmailVerificationCode::where(function ($q) use ($user) {
@@ -533,16 +554,25 @@ class EmailVerificationService
             // possibly-stale caller model.
             SendEmailOtpJob::dispatch($record->id, $record->user_id, $record->email, $code, $this->ttlMinutes());
         } catch (Throwable $e) {
-            // NEVER pretend the code was sent when the dispatch itself failed.
-            // The record is consumed (used_at) so this never-queued attempt
-            // doesn't hold the resend cooldown against an immediate retry, and
-            // the stored error is a SANITIZED category — raw transport/queue
-            // exception text can echo credentials.
-            $record->forceFill([
-                'send_status' => EmailVerificationCode::SEND_STATUS_DISPATCH_FAILED,
-                'send_error' => MailFailure::summarize('queue dispatch failed', $e),
-                'used_at' => now(),
-            ])->save();
+            // NEVER pretend the code was sent when the dispatch failed — but
+            // distinguish WHERE it failed. On the sync driver, dispatch()
+            // executes the handler inline: a transport exception propagates
+            // here AFTER the job's own failed() hook already recorded the
+            // honest `failed` outcome (a REAL delivery attempt, which must
+            // keep counting toward the daily cap). Only when the record is
+            // still `queued` did publication itself fail — no handler ever
+            // ran — and only then is it marked dispatch_failed and consumed
+            // (so a never-queued attempt can't hold the cooldown). The stored
+            // error is a SANITIZED category — raw transport/queue exception
+            // text can echo credentials.
+            $record->refresh();
+            if ($record->send_status === EmailVerificationCode::SEND_STATUS_QUEUED) {
+                $record->forceFill([
+                    'send_status' => EmailVerificationCode::SEND_STATUS_DISPATCH_FAILED,
+                    'send_error' => MailFailure::summarize('queue dispatch failed', $e),
+                    'used_at' => now(),
+                ])->save();
+            }
 
             return ['status' => 'error', 'message' => 'ارسال ایمیل با خطا مواجه شد. لطفاً دوباره تلاش کنید.', 'email_sent' => false];
         }
