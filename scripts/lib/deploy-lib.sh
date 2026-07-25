@@ -557,7 +557,25 @@ zpd_etc_crontab()    { printf '%s' "${ZPD_ETC_CRONTAB:-/etc/crontab}"; }
 zpd_cron_spool_dir() { printf '%s' "${ZPD_CRON_SPOOL_DIR:-/var/spool/cron/crontabs}"; }
 # Non-cron scheduler homes (read-only discovery; never modified automatically):
 zpd_systemd_unit_dir()     { printf '%s' "${ZPD_SYSTEMD_UNIT_DIR:-/etc/systemd/system}"; }
+# ALL effective systemd unit trees (admin, runtime, and vendor). Override with a
+# colon-separated ZPD_SYSTEMD_UNIT_DIRS for tests. One dir per line.
+zpd_systemd_unit_dirs() {
+    if [ -n "${ZPD_SYSTEMD_UNIT_DIRS:-}" ]; then
+        printf '%s' "$ZPD_SYSTEMD_UNIT_DIRS" | tr ':' '\n'
+        printf '\n'
+        return 0
+    fi
+    printf '%s\n' \
+        "$(zpd_systemd_unit_dir)" \
+        "/run/systemd/system" \
+        "/usr/local/lib/systemd/system" \
+        "/usr/lib/systemd/system" \
+        "/lib/systemd/system"
+}
 zpd_supervisor_scan_dir()  { printf '%s' "${ZPD_SUPERVISOR_SCAN_DIR:-$(dirname "$(zpd_supervisor_conf_path)")}"; }
+# The main supervisord config (its [include] globs define the EFFECTIVE program
+# set — never assume a single conf.d directory).
+zpd_supervisord_conf()     { printf '%s' "${ZPD_SUPERVISORD_CONF:-/etc/supervisor/supervisord.conf}"; }
 
 # -----------------------------------------------------------------------------
 # zpd_scheduler_sources — print every readable file that may carry cron entries:
@@ -644,18 +662,42 @@ zpd_manifest_schema_version() { printf '2'; }
 
 zpd_legacy_marker_file() { printf '%s/shared/deploy/legacy-rollback.json' "$(zpd_base)"; }
 
-# zpd_save_legacy_rollback BASE NGINX_CONF SUPERVISOR_CONF SCHED_CRON — snapshot
-# the pre-cutover config files (including the loopback health vhost) so
-# first-cutover rollback can restore them exactly.
+# zpd_save_legacy_rollback BASE NGINX_CONF SUPERVISOR_CONF SCHED_CRON
+#
+# MANDATORY, VERIFIED snapshot of the pre-cutover config files (including the
+# loopback health vhost) so first-cutover rollback can restore them exactly.
+# Every existing source is copied AND verified (cmp); its mode and ownership
+# are recorded; sources that did not exist are recorded as absent so restore
+# can remove files the failed cutover created. Returns non-zero on ANY capture
+# failure — the first cutover must never start without a complete rollback path.
 zpd_save_legacy_rollback() {
     local base="$1" nginx="$2" super="$3" cron="$4"
-    local dir lh; dir="$(dirname "$(zpd_legacy_marker_file)")"
+    local dir lh map; dir="$(dirname "$(zpd_legacy_marker_file)")"
     lh="$(zpd_local_health_conf_path)"
     mkdir -p "$dir" 2>/dev/null || return 1
-    [ -f "$nginx" ] && cp -a "$nginx" "${dir}/nginx.legacy" 2>/dev/null || true
-    [ -f "$super" ] && cp -a "$super" "${dir}/supervisor.legacy" 2>/dev/null || true
-    [ -f "$cron" ]  && cp -a "$cron"  "${dir}/scheduler.legacy" 2>/dev/null || true
-    [ -f "$lh" ]    && cp -a "$lh"    "${dir}/localhealth.legacy" 2>/dev/null || true
+    map="${dir}/legacy-files.map"
+    : > "$map" || return 1
+    chmod 600 "$map" 2>/dev/null || true
+    # name TAB path TAB mode TAB uid:gid TAB existed
+    local name src snap
+    for name in nginx supervisor scheduler localhealth; do
+        case "$name" in
+            nginx)       src="$nginx" ;;
+            supervisor)  src="$super" ;;
+            scheduler)   src="$cron" ;;
+            localhealth) src="$lh" ;;
+        esac
+        snap="${dir}/${name}.legacy"
+        if [ -f "$src" ]; then
+            cp -a "$src" "$snap" 2>/dev/null || return 1
+            cmp -s "$src" "$snap"            || return 1
+            printf '%s\t%s\t%s\t%s\t1\n' "$name" "$src" \
+                "$(stat -c '%a' "$src" 2>/dev/null)" "$(stat -c '%u:%g' "$src" 2>/dev/null)" >> "$map" || return 1
+        else
+            rm -f "$snap" 2>/dev/null || true
+            printf '%s\t%s\t\t\t0\n' "$name" "$src" >> "$map" || return 1
+        fi
+    done
     zpd_write_manifest "$(zpd_legacy_marker_file)" \
         "legacy_base=${base}" "nginx_conf=${nginx}" "supervisor_conf=${super}" \
         "scheduler_cron=${cron}" "local_health_conf=${lh}" \
@@ -667,21 +709,54 @@ zpd_has_legacy_rollback() { [ -f "$(zpd_legacy_marker_file)" ]; }
 
 # zpd_restore_legacy_rollback — restore the snapshotted nginx/supervisor/cron
 # files (used when the first cutover fails). Returns 0 on success.
+# zpd_restore_legacy_rollback — EXACT, FAIL-CLOSED restore of the pre-cutover
+# state. Every copy/remove/chmod/chown error accumulates into the return code;
+# restored content is verified with cmp and modes/ownership are re-applied from
+# the recorded values; files that did not exist before the cutover are removed
+# (and verified absent). Legacy-map installations (pre-map markers) fall back
+# to best-effort copies but still verify content.
 zpd_restore_legacy_rollback() {
     local marker; marker="$(zpd_legacy_marker_file)"
     [ -f "$marker" ] || return 1
-    local dir nginx super cron lh
+    local dir map rc=0
     dir="$(dirname "$marker")"
+    map="${dir}/legacy-files.map"
+    if [ -f "$map" ]; then
+        local name path mode owner existed snap
+        while IFS=$'\t' read -r name path mode owner existed; do
+            [ -n "$name" ] && [ -n "$path" ] || continue
+            snap="${dir}/${name}.legacy"
+            if [ "$existed" = "1" ]; then
+                if ! cp "$snap" "$path" 2>/dev/null || ! cmp -s "$snap" "$path"; then
+                    rc=1; continue
+                fi
+                [ -n "$mode" ]  && { chmod "$mode" "$path" 2>/dev/null || rc=1; }
+                [ -n "$owner" ] && { chown "$owner" "$path" 2>/dev/null || rc=1; }
+            else
+                rm -f "$path" 2>/dev/null || rc=1
+                [ -e "$path" ] && rc=1     # the cutover-created file must be GONE
+            fi
+        done < "$map"
+        return "$rc"
+    fi
+    # Pre-map marker (older snapshot): best-effort copies, content-verified.
+    local nginx super cron lh
     nginx="$(zpd_manifest_get "$marker" nginx_conf)"
     super="$(zpd_manifest_get "$marker" supervisor_conf)"
     cron="$(zpd_manifest_get "$marker" scheduler_cron)"
     lh="$(zpd_manifest_get "$marker" local_health_conf)"
     [ -z "$lh" ] && lh="$(zpd_local_health_conf_path)"
-    [ -f "${dir}/nginx.legacy" ] && [ -n "$nginx" ] && cp -a "${dir}/nginx.legacy" "$nginx" 2>/dev/null || true
-    [ -f "${dir}/supervisor.legacy" ] && [ -n "$super" ] && cp -a "${dir}/supervisor.legacy" "$super" 2>/dev/null || true
-    [ -f "${dir}/scheduler.legacy" ] && [ -n "$cron" ] && cp -a "${dir}/scheduler.legacy" "$cron" 2>/dev/null || true
-    [ -f "${dir}/localhealth.legacy" ] && [ -n "$lh" ] && cp -a "${dir}/localhealth.legacy" "$lh" 2>/dev/null || true
-    return 0
+    local s d
+    for s in nginx supervisor scheduler localhealth; do
+        case "$s" in
+            nginx) d="$nginx" ;; supervisor) d="$super" ;;
+            scheduler) d="$cron" ;; localhealth) d="$lh" ;;
+        esac
+        if [ -f "${dir}/${s}.legacy" ] && [ -n "$d" ]; then
+            cp "${dir}/${s}.legacy" "$d" 2>/dev/null && cmp -s "${dir}/${s}.legacy" "$d" || rc=1
+        fi
+    done
+    return "$rc"
 }
 
 # ── JSON manifest / state (no secrets) ──────────────────────────────────────

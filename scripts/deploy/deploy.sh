@@ -81,6 +81,16 @@ ZPD_META_TIMEOUT="${ZPD_META_TIMEOUT:-30}"
 ZPD_HEALTH_CLI_TIMEOUT="${ZPD_HEALTH_CLI_TIMEOUT:-20}"
 ZPD_SVC_TIMEOUT="${ZPD_SVC_TIMEOUT:-60}"
 ZPD_DOCTOR_TIMEOUT="${ZPD_DOCTOR_TIMEOUT:-120}"
+# Long-running stage deadlines (seconds). Each stage has its OWN bound — never
+# an umbrella timeout that could kill rollback recovery. Generous defaults for
+# legitimately slow work; a wedged command can still never block forever.
+ZPD_BACKUP_TIMEOUT="${ZPD_BACKUP_TIMEOUT:-1800}"
+ZPD_COMPOSER_TIMEOUT="${ZPD_COMPOSER_TIMEOUT:-1200}"
+ZPD_NPM_TIMEOUT="${ZPD_NPM_TIMEOUT:-1200}"
+ZPD_BUILD_TIMEOUT="${ZPD_BUILD_TIMEOUT:-1800}"
+ZPD_ARTISAN_TIMEOUT="${ZPD_ARTISAN_TIMEOUT:-300}"
+ZPD_MIGRATION_TIMEOUT="${ZPD_MIGRATION_TIMEOUT:-1800}"
+ZPD_MAINTENANCE_TIMEOUT="${ZPD_MAINTENANCE_TIMEOUT:-60}"
 
 dep_log()  { printf '[%s] %s\n' "$(date -u +%H:%M:%S)" "$*"; }
 dep_warn() { printf '[%s] WARN: %s\n' "$(date -u +%H:%M:%S)" "$*" >&2; }
@@ -90,6 +100,31 @@ dep_debug(){ [ "${ZPD_DEBUG:-0}" = "1" ] && printf '[%s] DEBUG: %s\n' "$(date -u
 # dep_svc CMD ARGS... — run a service-control command BOUNDED and non-interactive
 # (a hung systemctl/supervisorctl/nginx can never freeze the deploy).
 dep_svc() { timeout "${ZPD_SVC_TIMEOUT}s" "$@" </dev/null; }
+
+# dep_run_bounded SECS STAGE_LABEL CMD ARGS...
+#
+# The shared bounded runner for every potentially blocking production command:
+#   - stdin from /dev/null (never waits for terminal input)
+#   - non-interactive environment
+#   - TERM at the deadline, KILL 10s later (timeout -k)
+#   - distinguishes a TIMEOUT (rc 124/137, logged as such) from an ordinary
+#     non-zero failure — both logged with the exact redacted stage label
+dep_run_bounded() {
+    local secs="$1" label="$2"; shift 2
+    local rc=0
+    timeout -k 10 "${secs}s" env \
+        COMPOSER_NO_INTERACTION=1 GIT_TERMINAL_PROMPT=0 \
+        CI=1 DEBIAN_FRONTEND=noninteractive \
+        "$@" </dev/null || rc=$?
+    if [ "$rc" -eq 124 ] || [ "$rc" -eq 137 ]; then
+        dep_err "$(printf '%s' "$label" | zpd_mask_secrets): timed out after ${secs}s"
+        return 124
+    fi
+    if [ "$rc" -ne 0 ]; then
+        dep_err "$(printf '%s' "$label" | zpd_mask_secrets): failed (rc=${rc})"
+    fi
+    return "$rc"
+}
 
 # ── Deployment stage model ───────────────────────────────────────────────────
 #
@@ -220,7 +255,13 @@ dep_backup_database() {
     [ -n "$db" ] && [ -n "$user" ] || { dep_err "backup: DB_DATABASE/DB_USERNAME missing"; return 1; }
     mkdir -p "$(dirname "$out")" 2>/dev/null || return 1
 
-    PGPASSWORD="$pass" "$ZPD_PG_DUMP" -h "$host" -p "$port" -U "$user" -d "$db" -Fc -f "$out" || return 1
+    # Bounded: a wedged database connection cannot hang the deploy. On ANY
+    # failure (incl. timeout) the INCOMPLETE dump file is removed — a partial
+    # dump must never be mistaken for a usable backup.
+    if ! dep_run_bounded "$ZPD_BACKUP_TIMEOUT" "backup: pg_dump"             env PGPASSWORD="$pass" "$ZPD_PG_DUMP" -h "$host" -p "$port" -U "$user" -d "$db" -Fc -f "$out"; then
+        rm -f "$out" 2>/dev/null || true
+        return 1
+    fi
     chmod 600 "$out" 2>/dev/null || true
     return 0
 }
@@ -246,14 +287,19 @@ dep_build() {
       else
           [ -f composer.lock ] && [ -f package-lock.json ] || exit 9
       fi
-      "$ZPD_COMPOSER" validate --strict --no-check-publish --no-interaction </dev/null || exit 8
-      "$ZPD_COMPOSER" install --no-dev --prefer-dist --optimize-autoloader --no-interaction </dev/null || exit 10
-      "$ZPD_NPM" ci </dev/null || exit 11
-      "$ZPD_NPM" run build </dev/null || exit 12
-      "$ZPD_PHP" artisan optimize:clear </dev/null || exit 13
-      "$ZPD_PHP" artisan config:cache </dev/null || exit 14
-      "$ZPD_PHP" artisan route:cache  </dev/null || exit 15
-      "$ZPD_PHP" artisan view:cache   </dev/null || exit 16
+      # Every step is BOUNDED via dep_run_bounded (its own deadline, TERM→KILL,
+      # timeout distinguished from ordinary failure, stage logged). A build
+      # timeout surfaces as a non-zero build → the release is finalized failed.
+      dep_run_bounded "$ZPD_COMPOSER_TIMEOUT" "build: composer validate" \
+          "$ZPD_COMPOSER" validate --strict --no-check-publish --no-interaction || exit 8
+      dep_run_bounded "$ZPD_COMPOSER_TIMEOUT" "build: composer install" \
+          "$ZPD_COMPOSER" install --no-dev --prefer-dist --optimize-autoloader --no-interaction || exit 10
+      dep_run_bounded "$ZPD_NPM_TIMEOUT" "build: npm ci" "$ZPD_NPM" ci || exit 11
+      dep_run_bounded "$ZPD_BUILD_TIMEOUT" "build: npm run build" "$ZPD_NPM" run build || exit 12
+      dep_run_bounded "$ZPD_ARTISAN_TIMEOUT" "build: optimize:clear" "$ZPD_PHP" artisan optimize:clear || exit 13
+      dep_run_bounded "$ZPD_ARTISAN_TIMEOUT" "build: config:cache"   "$ZPD_PHP" artisan config:cache || exit 14
+      dep_run_bounded "$ZPD_ARTISAN_TIMEOUT" "build: route:cache"    "$ZPD_PHP" artisan route:cache  || exit 15
+      dep_run_bounded "$ZPD_ARTISAN_TIMEOUT" "build: view:cache"     "$ZPD_PHP" artisan view:cache   || exit 16
     )
 }
 
@@ -385,9 +431,14 @@ dep_verify_scheduler() {
 # dep_is_in_maintenance APP_DIR — 0 when the app is in maintenance mode.
 dep_is_in_maintenance() { zpd_is_in_maintenance "$1"; }
 
-# dep_bring_down APP_DIR — enter maintenance (best-effort; used to fence the app).
+# dep_bring_down APP_DIR — enter maintenance. BOUNDED and returning the real
+# result: required activation fencing must never be best-effort (a hung
+# `artisan down` would previously block the deploy forever, and a failed fence
+# would let the old release keep serving mid-migration). Callers that use it
+# for OPTIONAL re-fencing append `|| true` explicitly.
 dep_bring_down() {
-    ( cd "$1" 2>/dev/null && "$ZPD_PHP" artisan down --render="errors::503" </dev/null >/dev/null 2>&1 ) || true
+    ( cd "$1" 2>/dev/null && timeout -k 5 "${ZPD_MAINTENANCE_TIMEOUT}s" \
+        "$ZPD_PHP" artisan down --render="errors::503" </dev/null >/dev/null 2>&1 )
 }
 
 # dep_bring_up APP_DIR — REQUIRED exit from maintenance. `artisan up` must succeed
@@ -395,7 +446,8 @@ dep_bring_down() {
 # `|| true`), so a stuck maintenance state fails activation/rollback.
 dep_bring_up() {
     local d="$1"
-    if ! ( cd "$d" 2>/dev/null && "$ZPD_PHP" artisan up </dev/null >/dev/null 2>&1 ); then
+    if ! ( cd "$d" 2>/dev/null && timeout -k 5 "${ZPD_MAINTENANCE_TIMEOUT}s" \
+            "$ZPD_PHP" artisan up </dev/null >/dev/null 2>&1 ); then
         dep_err "$(zpd_msg_up_failed)"
         return 1
     fi
@@ -417,7 +469,17 @@ DEP_MIGRATION_STATUS="not_run"
 # so parsing it is reliable. Returns non-zero only on an actual migration failure.
 dep_run_migrations() {
     local rel="$1" out rc
-    out="$( cd "$rel" 2>/dev/null && "$ZPD_PHP" artisan migrate --force --no-interaction </dev/null 2>&1 )"; rc=$?
+    out="$( cd "$rel" 2>/dev/null && timeout -k 10 "${ZPD_MIGRATION_TIMEOUT}s" \
+        "$ZPD_PHP" artisan migrate --force --no-interaction </dev/null 2>&1 )"; rc=$?
+    if [ "$rc" -eq 124 ] || [ "$rc" -eq 137 ]; then
+        # Timed out MID-MIGRATION: the DB state is INDETERMINATE — record
+        # `unknown`, never a confident `failed`/`applied`. The symlink has not
+        # switched at this stage, so the caller's rc-30 path rolls back safely.
+        DEP_MIGRATION_STATUS="unknown"
+        dep_err "migrate: timed out after ${ZPD_MIGRATION_TIMEOUT}s — database state is UNKNOWN"
+        printf '%s\n' "$out" | zpd_mask_secrets | tail -n 8 >&2
+        return 1
+    fi
     if [ "$rc" -ne 0 ]; then
         DEP_MIGRATION_STATUS="failed"
         # Show the tail of the (redacted) output so operators see the cause.
@@ -857,19 +919,33 @@ dep_snapshot_operational_config() {
 # can never report "restored and validated" over services still running a
 # partially modified configuration.
 dep_restore_operational_snapshot() {
-    local dir="$1" rc=0
+    local dir="$1" scope="${2:-all}" rc=0
     [ -d "$dir" ] || { dep_err "restore: snapshot ${dir} missing"; return 1; }
-    local f dest
-    for dest in "$(zpd_nginx_conf_path)" "$(zpd_local_health_conf_path)" \
-                "$(zpd_supervisor_conf_path)" "$(zpd_scheduler_cron_path)"; do
+    local f dest managed
+    if [ "$scope" = "scheduler" ]; then
+        # Component-scoped restore: a scheduler-only failure must not rewrite
+        # or reload unrelated Nginx/Supervisor configuration.
+        managed="$(zpd_scheduler_cron_path)"
+    else
+        managed="$(zpd_nginx_conf_path) $(zpd_local_health_conf_path) $(zpd_supervisor_conf_path) $(zpd_scheduler_cron_path)"
+    fi
+    for dest in $managed; do
         f="${dir}/$(basename "$dest").snap"
         if [ -f "$f" ]; then
-            cp -a "$f" "$dest" 2>/dev/null || { dep_err "restore: could not restore ${dest}"; rc=1; }
+            # EXACT: copy must succeed, bytes must match, and mode/uid/gid must
+            # equal the snapshot's recorded values.
+            if ! cp -a "$f" "$dest" 2>/dev/null || ! cmp -s "$f" "$dest"; then
+                dep_err "restore: could not restore ${dest} exactly"; rc=1; continue
+            fi
+            if [ "$(stat -c '%a %u %g' "$dest" 2>/dev/null)" != "$(stat -c '%a %u %g' "$f" 2>/dev/null)" ]; then
+                dep_err "restore: ${dest} mode/ownership differ from the snapshot"; rc=1
+            fi
         else
-            rm -f "$dest" 2>/dev/null || true   # did not exist pre-deploy
+            rm -f "$dest" 2>/dev/null || { dep_err "restore: could not remove ${dest}"; rc=1; }
+            [ -e "$dest" ] && { dep_err "restore: ${dest} still exists (was created by the failed transaction)"; rc=1; }
         fi
     done
-    if declare -F zpw_restore_wrappers >/dev/null 2>&1 && [ -d "${dir}/wrappers" ]; then
+    if [ "$scope" = "all" ] && declare -F zpw_restore_wrappers >/dev/null 2>&1 && [ -d "${dir}/wrappers" ]; then
         zpw_restore_wrappers "${dir}/wrappers" || { dep_err "restore: wrapper restore failed"; rc=1; }
     fi
     # Restore every scheduler SOURCE the transaction may have modified —
@@ -887,19 +963,28 @@ dep_restore_operational_snapshot() {
                     rc=1
                     continue
                 fi
-                [ -n "$mode" ]  && chmod "$mode" "$path" 2>/dev/null || true
-                [ -n "$owner" ] && chown "$owner" "$path" 2>/dev/null || true
+                [ -n "$mode" ]  && { chmod "$mode" "$path" 2>/dev/null || { dep_err "restore: chmod ${path} failed"; rc=1; }; }
+                [ -n "$owner" ] && { chown "$owner" "$path" 2>/dev/null || { dep_err "restore: chown ${path} failed"; rc=1; }; }
+                if [ -n "$mode" ] && [ "$(stat -c '%a' "$path" 2>/dev/null)" != "$mode" ]; then
+                    dep_err "restore: ${path} mode differs from the recorded value"; rc=1
+                fi
+                if [ -n "$owner" ] && [ "$(stat -c '%u:%g' "$path" 2>/dev/null)" != "$owner" ]; then
+                    dep_err "restore: ${path} ownership differs from the recorded value"; rc=1
+                fi
             else
-                rm -f "$path" 2>/dev/null || true
+                rm -f "$path" 2>/dev/null || { dep_err "restore: could not remove ${path}"; rc=1; }
+                [ -e "$path" ] && { dep_err "restore: ${path} still exists (created by the failed transaction)"; rc=1; }
             fi
         done < "$map"
     fi
-    dep_validate_nginx || { dep_err "restore: nginx -t failed on restored config"; rc=1; }
-    dep_reload_nginx   || { dep_err "restore: nginx reload failed"; rc=1; }
-    dep_svc "$ZPD_SUPERVISORCTL" reread >/dev/null 2>&1 || { dep_err "restore: supervisor reread failed"; rc=1; }
-    dep_svc "$ZPD_SUPERVISORCTL" update >/dev/null 2>&1 || { dep_err "restore: supervisor update failed"; rc=1; }
-    dep_restart_workers || { dep_err "restore: worker restart failed"; rc=1; }
-    dep_supervisor_group_running || { dep_err "restore: worker group not RUNNING after restore"; rc=1; }
+    if [ "$scope" = "all" ]; then
+        dep_validate_nginx || { dep_err "restore: nginx -t failed on restored config"; rc=1; }
+        dep_reload_nginx   || { dep_err "restore: nginx reload failed"; rc=1; }
+        dep_svc "$ZPD_SUPERVISORCTL" reread >/dev/null 2>&1 || { dep_err "restore: supervisor reread failed"; rc=1; }
+        dep_svc "$ZPD_SUPERVISORCTL" update >/dev/null 2>&1 || { dep_err "restore: supervisor update failed"; rc=1; }
+        dep_restart_workers || { dep_err "restore: worker restart failed"; rc=1; }
+        dep_supervisor_group_running || { dep_err "restore: worker group not RUNNING after restore"; rc=1; }
+    fi
     # Bounded functional scheduler verification of the RESTORED state.
     if [ -L "$(zpd_current_link)" ]; then
         dep_verify_scheduler "$(zpd_current_link)" \
@@ -962,47 +1047,147 @@ dep_scheduler_scan() {
     return 0
 }
 
+# _dep_systemd_unit_state UNIT — print "enabled-state/active-state" for a unit
+# (both queries bounded; unknown when systemctl is unavailable).
+_dep_systemd_unit_state() {
+    local unit="$1" en ac
+    en="$(dep_svc "$ZPD_SYSTEMCTL" is-enabled "$unit" 2>/dev/null | head -n1 || true)"
+    ac="$(dep_svc "$ZPD_SYSTEMCTL" is-active "$unit" 2>/dev/null | head -n1 || true)"
+    printf '%s/%s' "${en:-unknown}" "${ac:-unknown}"
+}
+
+# _dep_supervisor_effective_files — the EFFECTIVE Supervisor config set: the
+# main supervisord config plus every file matched by its [include] globs
+# (relative globs resolve against the main config's directory, per supervisord
+# semantics), plus the conventional scan directory as a safety net. Never
+# assumes a single conf.d. One absolute path per line, deduplicated.
+_dep_supervisor_effective_files() {
+    local main d g f
+    main="$(zpd_supervisord_conf)"
+    {
+        if [ -f "$main" ]; then
+            printf '%s\n' "$main"
+            d="$(dirname "$main")"
+            while IFS= read -r g; do
+                [ -n "$g" ] || continue
+                case "$g" in /*) ;; *) g="${d}/${g}" ;; esac
+                # shellcheck disable=SC2231  # intentional glob expansion of the include pattern
+                for f in $g; do [ -f "$f" ] && printf '%s\n' "$f"; done
+            done < <(awk '
+                /^\[include\]/ { inc=1; next }
+                /^\[/          { inc=0 }
+                inc && /^[ \t]*files[ \t]*=/ {
+                    sub(/^[ \t]*files[ \t]*=[ \t]*/, "");
+                    n = split($0, a, /[ \t]+/);
+                    for (i = 1; i <= n; i++) if (a[i] != "") print a[i]
+                }' "$main" 2>/dev/null)
+        fi
+        if [ -d "$(zpd_supervisor_scan_dir)" ]; then
+            for f in "$(zpd_supervisor_scan_dir)"/*.conf; do
+                [ -f "$f" ] && printf '%s\n' "$f"
+            done
+        fi
+    } | sort -u
+    return 0
+}
+
 # dep_scheduler_scan_noncron BASE — bounded, READ-ONLY discovery of ZedProxy
-# scheduler invocations OUTSIDE cron: systemd .timer/.service units and
-# Supervisor program definitions. These are UNMANAGED homes — the reconciler
-# never edits them automatically; any hit is a conflict that must fail BEFORE
-# modification. Prints classified lines:
-#   SYSTEMD <unit-file> (<enabled-state>/<active-state>)
+# scheduler invocations OUTSIDE cron. Covers EVERY systemd unit load tree
+# (admin /etc, runtime /run, vendor /usr/local/lib, /usr/lib, /lib), drop-in
+# overrides (<unit>.d/*.conf), symlinked aliases (grep follows the symlink),
+# units systemd itself reports (`systemctl list-unit-files` +
+# `systemctl list-timers --all`, each rendered via `systemctl cat` so
+# generator-produced or aliased units outside the scanned trees are seen), and
+# the EFFECTIVE Supervisor program set (main config + [include] globs). These
+# are UNMANAGED homes — the reconciler never edits them automatically. Prints
+# classified lines:
+#   SYSTEMD <unit-file-or-name> (<enabled-state>/<active-state>)
 #   SUPERVISOR <conf-file>
 dep_scheduler_scan_noncron() {
-    local base="$1" f re en ac
+    local base="$1" re
     re="$(zpd_scheduler_ours_re "$base")"
-    # systemd units (.timer + .service): ExecStart / command lines.
-    if [ -d "$(zpd_systemd_unit_dir)" ]; then
-        for f in "$(zpd_systemd_unit_dir)"/*.timer "$(zpd_systemd_unit_dir)"/*.service; do
-            [ -f "$f" ] || continue
-            if grep -E 'artisan[[:space:]]+schedule:run' "$f" 2>/dev/null | grep -vE '^[[:space:]]*#' | grep -qE "$re"; then
-                en="$(dep_svc "$ZPD_SYSTEMCTL" is-enabled "$(basename "$f")" 2>/dev/null | head -n1 || true)"
-                ac="$(dep_svc "$ZPD_SYSTEMCTL" is-active "$(basename "$f")" 2>/dev/null | head -n1 || true)"
-                printf 'SYSTEMD %s (%s/%s)\n' "$f" "${en:-unknown}" "${ac:-unknown}"
+    {
+        local d f unit
+        # 1. Every systemd unit load tree, including drop-ins.
+        while IFS= read -r d; do
+            [ -d "$d" ] || continue
+            for f in "$d"/*.timer "$d"/*.service "$d"/*.timer.d/*.conf "$d"/*.service.d/*.conf; do
+                [ -f "$f" ] || continue
+                if grep -E 'artisan[[:space:]]+schedule:run' "$f" 2>/dev/null | grep -vE '^[[:space:]]*#' | grep -E "$re" >/dev/null; then
+                    unit="$(basename "$f")"
+                    case "$f" in
+                        *.d/*.conf) unit="$(basename "$(dirname "$f")")"; unit="${unit%.d}" ;;
+                    esac
+                    printf 'SYSTEMD %s (%s)\n' "$f" "$(_dep_systemd_unit_state "$unit")"
+                fi
+            done
+        done < <(zpd_systemd_unit_dirs)
+        # 2. Units systemd itself knows about (generators, aliases, masked
+        #    overrides), rendered via bounded read-only `systemctl cat`.
+        while IFS= read -r unit; do
+            [ -n "$unit" ] || continue
+            if dep_svc "$ZPD_SYSTEMCTL" cat "$unit" 2>/dev/null \
+                | grep -E 'artisan[[:space:]]+schedule:run' \
+                | grep -vE '^[[:space:]]*#' | grep -E "$re" >/dev/null; then
+                printf 'SYSTEMD %s (%s)\n' "$unit" "$(_dep_systemd_unit_state "$unit")"
             fi
-        done
-    fi
-    # Supervisor programs (any command= executing our schedule:run).
-    if [ -d "$(zpd_supervisor_scan_dir)" ]; then
-        for f in "$(zpd_supervisor_scan_dir)"/*.conf; do
+        done < <(
+            {
+                dep_svc "$ZPD_SYSTEMCTL" list-unit-files --type=timer --type=service --no-legend --no-pager 2>/dev/null | awk '{print $1}'
+                dep_svc "$ZPD_SYSTEMCTL" list-timers --all --no-legend --no-pager 2>/dev/null | awk '{for (i = 1; i <= NF; i++) if (a = $i) if (a ~ /\.timer$/) print a}'
+            } | grep -E '\.(timer|service)$' | sort -u
+        )
+        # 3. Effective Supervisor programs (any command= executing our schedule:run).
+        while IFS= read -r f; do
             [ -f "$f" ] || continue
-            if grep -E '^[[:space:]]*command[[:space:]]*=' "$f" 2>/dev/null | grep -qE "$re"; then
+            if grep -E '^[[:space:]]*command[[:space:]]*=' "$f" 2>/dev/null | grep -E "$re" >/dev/null; then
                 printf 'SUPERVISOR %s\n' "$f"
             fi
-        done
-    fi
+        done < <(_dep_supervisor_effective_files)
+    } | sort -u
+    return 0
+}
+
+# dep_scheduler_filter_active — stdin: scan lines from dep_scheduler_scan_noncron;
+# stdout: only the ACTIVE subset. A systemd source is active when its unit is
+# running/activating or enabled (will start at boot). Every Supervisor program
+# is treated as active — supervisord autostarts loaded programs. Everything
+# else is an INACTIVE leftover: a cleanup candidate, not a live duplicate.
+dep_scheduler_filter_active() {
+    local line state en ac
+    while IFS= read -r line; do
+        [ -n "$line" ] || continue
+        case "$line" in
+            SUPERVISOR\ *) printf '%s\n' "$line" ;;
+            SYSTEMD\ *)
+                state="${line##*\(}"; state="${state%\)}"
+                en="${state%%/*}"; ac="${state##*/}"
+                if [ "$ac" = "active" ] || [ "$ac" = "activating" ] || [ "$en" = "enabled" ]; then
+                    printf '%s\n' "$line"
+                fi
+                ;;
+        esac
+    done
+    return 0
+}
+
+# dep_scheduler_active_conflicts BASE — the ACTIVE non-cron scheduler sources
+# only. These are the deployment-blocking duplicates; inactive leftovers are
+# reported as warnings by the reconciler instead.
+dep_scheduler_active_conflicts() {
+    dep_scheduler_scan_noncron "$1" | dep_scheduler_filter_active
     return 0
 }
 
 # dep_scheduler_single_source_ok BASE — after reconciliation EXACTLY ONE active
 # ZedProxy scheduler source may exist: the canonical cron file. Any remaining
-# cron duplicate or non-cron (systemd/supervisor) source fails.
+# cron duplicate or ACTIVE non-cron (systemd/supervisor) source fails; an
+# inactive leftover unit does not (it executes nothing).
 dep_scheduler_single_source_ok() {
     local base="$1"
     zpd_scheduler_cron_ok "$(zpd_scheduler_cron_path)" "$base" || return 1
     dep_scheduler_scan "$base" | grep -q '^OURS ' && return 1
-    [ -n "$(dep_scheduler_scan_noncron "$base")" ] && return 1
+    [ -n "$(dep_scheduler_active_conflicts "$base")" ] && return 1
     return 0
 }
 
@@ -1024,16 +1209,25 @@ dep_reconcile_scheduler() {
 
     # 1+2: conflict scan BEFORE any modification. ZedProxy entries in user
     # spool crontabs, systemd .timer/.service units, or Supervisor programs are
-    # UNMANAGED/AMBIGUOUS homes — abort with a clear diagnostic instead of
-    # editing them (or leaving a second active scheduler running).
-    local conflict
-    conflict="$(dep_scheduler_scan_noncron "$base")"
+    # UNMANAGED/AMBIGUOUS homes. An ACTIVE source aborts with a clear
+    # diagnostic instead of editing it (or leaving a second live scheduler
+    # running). An INACTIVE leftover unit executes nothing — it is reported as
+    # a cleanup candidate, not a deployment blocker.
+    local allscan conflict inactive
+    allscan="$(dep_scheduler_scan_noncron "$base")"
+    conflict="$(printf '%s\n' "$allscan" | dep_scheduler_filter_active)"
     if [ -n "$conflict" ]; then
         printf '%s\n' "$conflict" | while IFS= read -r entry; do
-            dep_err "scheduler: unmanaged scheduler source found: ${entry}"
+            dep_err "scheduler: ACTIVE unmanaged scheduler source found: ${entry}"
         done
         dep_err "$(zpd_msg_sched_conflict)"
         return 1
+    fi
+    inactive="$(comm -23 <(printf '%s\n' "$allscan" | sort -u) <(printf '%s\n' "$conflict" | sort -u) | sed '/^$/d')"
+    if [ -n "$inactive" ]; then
+        printf '%s\n' "$inactive" | while IFS= read -r entry; do
+            dep_warn "scheduler: INACTIVE leftover scheduler source (cleanup candidate, not blocking): ${entry}"
+        done
     fi
     while IFS= read -r entry; do
         [ -n "$entry" ] || continue
@@ -1159,13 +1353,23 @@ dep_activate() {
     base="$(zpd_base)"
     if [ "$legacy" = "1" ] && [ ! -L "$current_dir" ]; then
         maint_dir="$base"
-    else
+    elif [ -L "$current_dir" ]; then
         maint_dir="$current_dir"
+    else
+        # First deploy onto an already-atomic layout: no live application
+        # exists yet, so there is nothing to fence.
+        maint_dir=""
     fi
 
-    # 1. maintenance mode (against the currently-live app)
+    # 1. maintenance mode (against the currently-live app) — REQUIRED fencing:
+    # a hung or failed `artisan down` aborts BEFORE migrations/switch (nothing
+    # has changed yet; the caller's rollback re-verifies the previous release).
     dep_stage "maintenance"
-    dep_bring_down "$maint_dir"
+    if [ -n "$maint_dir" ] && ! dep_bring_down "$maint_dir"; then
+        dep_record_failure "$DEP_STAGE" "maintenance_fence_failed" "dep_bring_down" "activation: could not enter maintenance mode"
+        dep_err "activation: could not enter maintenance mode"
+        return 31
+    fi
 
     # 2. pause workers (stop consuming with the old code)
     dep_svc "$ZPD_SUPERVISORCTL" stop "$(zpd_supervisor_worker_group):*" 2>/dev/null || true
@@ -1263,13 +1467,40 @@ dep_activate() {
 # dangling target and the check would be meaningless.
 dep_first_cutover_rollback() {
     local base="$1" fpm="$2"
-    zpd_restore_legacy_rollback || dep_warn "no legacy snapshot to restore"
+    # EXACT legacy restore is REQUIRED (content verified, modes/ownership
+    # re-applied, cutover-created files removed). Only a server with no
+    # snapshot at all falls through with a warning — and then the semantic
+    # verification below still gates the result.
+    if zpd_has_legacy_rollback; then
+        zpd_restore_legacy_rollback \
+            || { dep_err "rollback: legacy snapshot restore failed"; return 1; }
+    else
+        dep_warn "no legacy snapshot to restore"
+    fi
     # Restore the pre-cutover command wrappers so the server keeps whatever
     # zedproxy-* commands it had before the failed migration.
     if declare -F zpw_restore_wrappers >/dev/null 2>&1 && [ -d "$(dep_wrapper_backup_dir)" ]; then
         zpw_restore_wrappers "$(dep_wrapper_backup_dir)" || dep_warn "wrapper restore failed"
     fi
     rm -f "$(zpd_current_link)" 2>/dev/null || true
+    # SEMANTIC verification of the restored configuration — the rollback is
+    # never reported healthy just because files came back (or because the
+    # internal health vhost was repaired): the public Nginx root must serve
+    # the LEGACY application and the Supervisor command must run the LEGACY
+    # artisan path.
+    if [ -f "$(zpd_nginx_conf_path)" ]; then
+        grep -Eq "root[[:space:]]+${base}/public;" "$(zpd_nginx_conf_path)" \
+            || { dep_err "rollback: restored Nginx root does not serve the legacy application"; return 1; }
+    fi
+    if [ -f "$(zpd_supervisor_conf_path)" ]; then
+        grep -q "command=php ${base}/artisan" "$(zpd_supervisor_conf_path)" \
+            || { dep_err "rollback: restored Supervisor command does not run the legacy artisan"; return 1; }
+    fi
+    if [ -f "$(zpd_scheduler_cron_path)" ]; then
+        grep -Eq "php ${base}(/current)?/artisan[[:space:]]+schedule:run" "$(zpd_scheduler_cron_path)" \
+            && ! grep -q "php ${base}/current/artisan" "$(zpd_scheduler_cron_path)" \
+            || { dep_err "rollback: restored Scheduler source is not the expected legacy source"; return 1; }
+    fi
     # Verified loopback health target for the RESTORED LEGACY app (root
     # <base>/public — never current/public once `current` is gone). If the
     # legacy snapshot restored its own (legacy-rooted) vhost this is a no-op.
@@ -1314,11 +1545,17 @@ dep_rollback_code() {
     dep_stage "rollback_switch"
     zpd_switch_current "$prev" || { DEP_ROLLBACK_SWITCH="failed"; dep_err "rollback: switch back failed"; return 1; }
     DEP_ROLLBACK_SWITCH="success"
+    # ── Rollback reconciliation is FAIL-CLOSED: a rollback whose PHP-FPM,
+    # Nginx, or workers could not actually be reloaded onto the previous
+    # release is NOT a successful rollback, even if HTTP happens to answer.
     dep_stage "rollback_reconcile"
+    DEP_ROLLBACK_RECONCILE="failed"
+    dep_reload_php_fpm "$fpm"    || { dep_err "rollback: php-fpm reload failed"; return 1; }
+    dep_validate_nginx           || { dep_err "rollback: nginx -t failed"; return 1; }
+    dep_reload_nginx             || { dep_err "rollback: nginx reload failed"; return 1; }
+    dep_restart_workers          || { dep_err "rollback: worker restart failed"; return 1; }
+    dep_supervisor_group_running || { dep_err "rollback: worker group not RUNNING"; return 1; }
     DEP_ROLLBACK_RECONCILE="success"
-    dep_reload_php_fpm "$fpm" || { DEP_ROLLBACK_RECONCILE="failed"; dep_warn "rollback: php-fpm reload failed"; }
-    dep_reload_nginx          || { DEP_ROLLBACK_RECONCILE="failed"; dep_warn "rollback: nginx reload failed"; }
-    dep_restart_workers       || { DEP_ROLLBACK_RECONCILE="failed"; dep_warn "rollback: worker restart failed"; }
     dep_stage "rollback_readiness"
     DEP_ROLLBACK_READY="failed"
     dep_bring_up "$(zpd_current_link)" || { dep_err "rollback: previous release could not exit maintenance"; return 1; }
@@ -1418,7 +1655,7 @@ dep_adopt_current_release() {
 # it as failed/stale so no attempted release stays `activating` forever. The
 # directory, logs, and manifest are preserved for diagnostics.
 dep_finalize_stale_releases() {
-    local active rel manifest result
+    local active rel manifest result rc=0
     active="$(zpd_current_release)"
     while IFS= read -r rel; do
         [ -n "$rel" ] || continue
@@ -1437,9 +1674,9 @@ dep_finalize_stale_releases() {
             "active_release_after_failure=${active}" \
             "finished_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             "manifest_schema_version=$(zpd_manifest_schema_version)" \
-            || dep_warn "could not finalize stale release ${rel}"
+            || { dep_warn "could not finalize stale release ${rel}"; rc=1; }
     done < <(zpd_list_releases)
-    return 0
+    return "$rc"
 }
 
 # dep_reconcile_state [RESULT] — repair the central deployment state file from
@@ -1502,7 +1739,9 @@ dep_finalize_failed_release() {
             *)  orig_reason="activation_failed" ;;
         esac
     fi
-    [ "$rc" -eq 30 ] && mig_state="failed"
+    # A migrate-stage failure is `failed` — unless the migration TIMED OUT, in
+    # which case the DB state is honestly `unknown` and must stay that way.
+    [ "$rc" -eq 30 ] && [ "$mig_state" != "unknown" ] && mig_state="failed"
     zpd_write_manifest "$manifest" \
         "release_id=${id}" \
         "git_sha=${sha}" \
@@ -1621,7 +1860,7 @@ dep_main() {
     # unfinalized, and repair the central state file from the current symlink.
     DEP_STAGE_PREVIOUS="$(zpd_current_release)"
     dep_adopt_current_release
-    dep_finalize_stale_releases
+    dep_finalize_stale_releases || dep_warn "could not finalize every stale release manifest (continuing)"
     dep_reconcile_state >/dev/null 2>&1 || dep_warn "state reconciliation failed (continuing)"
 
     # ── Resolve repository + ref + exact commit SHA BEFORE any backup/migration.
@@ -1725,11 +1964,19 @@ dep_main() {
         return 1
     fi
 
-    # Snapshot the legacy operational config so a failed FIRST cutover can restore
-    # the legacy application exactly (there is no previous release to fall back on).
+    # Snapshot the legacy operational config so a failed FIRST cutover can
+    # restore the legacy application exactly (there is no previous release to
+    # fall back on). MANDATORY: capture is verified (content, existence, mode,
+    # ownership) and a failure ABORTS here — before maintenance, migrations,
+    # the symlink switch, or any service cutover. A first cutover never starts
+    # without a complete rollback path.
     if [ "$legacy" = "1" ] && ! zpd_has_legacy_rollback; then
-        zpd_save_legacy_rollback "$base" \
-            "$(zpd_nginx_conf_path)" "$(zpd_supervisor_conf_path)" "$(zpd_scheduler_cron_path)"
+        if ! zpd_save_legacy_rollback "$base" \
+            "$(zpd_nginx_conf_path)" "$(zpd_supervisor_conf_path)" "$(zpd_scheduler_cron_path)"; then
+            dep_fail "legacy_snapshot" "legacy_snapshot_failed" \
+                "could not capture a verified legacy rollback snapshot — aborting before any modification"
+            return 1
+        fi
     fi
 
     dep_log "Activating ${id}…"
@@ -1738,14 +1985,45 @@ dep_main() {
 
     if [ "$rc" -eq 0 ]; then
         dep_stage "success"
-        zpd_write_manifest "$manifest" \
+        # The final manifest write is REQUIRED: without `result=success` the
+        # release history claims the active code is still `activating` and a
+        # later reconciliation would finalize the LIVE release as stale/failed.
+        # The code activation itself succeeded and is left in place — this is
+        # a metadata-commit failure, reported as such (never silent success).
+        if ! zpd_write_manifest "$manifest" \
             "release_id=${id}" "git_sha=${sha}" "git_ref=${ref}" "repo_url=${repo}" \
             "previous_release=${current_before}" "legacy_migration=${legacy}" \
             "started_at=${ts_start}" "finished_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             "result=success" "migration_status=${DEP_MIGRATION_STATUS}" "health=ok" \
             "manifest_schema_version=$(zpd_manifest_schema_version)" \
-            "${ver_pairs[@]}"
-        dep_reconcile_state "success" || dep_warn "state update failed after success"
+            "${ver_pairs[@]}"; then
+            dep_err "code activation SUCCEEDED but the final release manifest could not be written"
+            dep_err "the new release is live and healthy; its metadata commit failed — fix storage and run zedproxy-deploy-repair"
+            zpd_write_manifest "$(zpd_shared_dir)/deploy/last-failure.json" \
+                "stage=metadata_commit" "reason_code=success_manifest_write_failed" \
+                "message=code activation succeeded but the final manifest write failed" \
+                "code_active=true" "release_id=${id}" \
+                "previous_release=${current_before:-none}" \
+                "occurred_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+                || dep_warn "could not write the central failure event"
+            dep_failure_bundle
+            return 1
+        fi
+        # Central-state reconciliation after a committed manifest: a failure
+        # here is a clearly-recorded DEGRADED success (the release manifest —
+        # the primary record — is already durable; the state file is derived
+        # and repairable), never a silent one.
+        if ! dep_reconcile_state "success"; then
+            dep_warn "DEGRADED SUCCESS: deployment succeeded and its manifest is committed, but the central state file could not be reconciled"
+            dep_warn "run zedproxy-deploy-repair to rebuild the state file"
+            zpd_write_manifest "$(zpd_shared_dir)/deploy/last-failure.json" \
+                "stage=state_reconcile" "reason_code=state_reconcile_failed_after_success" \
+                "message=deployment succeeded (manifest committed) but central state reconciliation failed" \
+                "code_active=true" "release_id=${id}" \
+                "previous_release=${current_before:-none}" \
+                "occurred_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+                || dep_warn "could not write the central failure event"
+        fi
         # Honest migration reporting — only mention the DB backup when something
         # actually ran.
         case "$DEP_MIGRATION_STATUS" in

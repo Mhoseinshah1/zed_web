@@ -235,17 +235,29 @@ zdr_check_scheduler() {
         || zdr_add "scheduler_cron" fail "canonical cron missing/legacy/duplicated"
     # Every discovered scheduler source outside the canonical file — cron AND
     # non-cron homes (systemd timers/services, Supervisor programs).
-    local entry kind src ours=0 foreign=0
+    # Repeated findings get NUMBERED check names so the flat JSON report keeps
+    # one distinct key per finding (repeated keys would silently collapse).
+    local entry kind src ours=0 foreign=0 ndup=0 nconf=0 nleft=0
     while IFS= read -r entry; do
         [ -n "$entry" ] || continue
         kind="${entry%% *}"; src="${entry#* }"
-        if [ "$kind" = "OURS" ]; then ours=$((ours + 1)); zdr_add "scheduler_duplicate" fail "ZedProxy schedule:run also in ${src}"; fi
+        if [ "$kind" = "OURS" ]; then
+            ours=$((ours + 1)); ndup=$((ndup + 1))
+            zdr_add "scheduler_duplicate_${ndup}" fail "ZedProxy schedule:run also in ${src}"
+        fi
         [ "$kind" = "FOREIGN" ] && foreign=$((foreign + 1))
     done < <(dep_scheduler_scan "$base")
+    # Non-cron homes: an ACTIVE source is a live duplicate scheduler (fail); an
+    # INACTIVE leftover unit executes nothing (warn — cleanup candidate).
     while IFS= read -r entry; do
         [ -n "$entry" ] || continue
-        ours=$((ours + 1))
-        zdr_add "scheduler_conflict" fail "unmanaged scheduler source: ${entry}"
+        if printf '%s\n' "$entry" | dep_scheduler_filter_active | grep -q .; then
+            ours=$((ours + 1)); nconf=$((nconf + 1))
+            zdr_add "scheduler_conflict_${nconf}" fail "ACTIVE unmanaged scheduler source: ${entry}"
+        else
+            nleft=$((nleft + 1))
+            zdr_add "scheduler_leftover_${nleft}" warn "inactive leftover scheduler source: ${entry}"
+        fi
     done < <(dep_scheduler_scan_noncron "$base")
     [ "$ours" -eq 0 ] && zdr_add "scheduler_sources" ok "single canonical source"
     [ "$foreign" -gt 0 ] && zdr_add "scheduler_foreign" warn "${foreign} unrelated Laravel scheduler line(s) found (left untouched)"
@@ -346,9 +358,12 @@ zdr_bundle() {
     outdir="$(zpd_log_dir)/diagnostics"
     stamp="$(date -u +%Y%m%d%H%M%S)"
     work="$(mktemp -d)" || return 1
-    archive="${outdir}/zedproxy-diagnostic-${stamp}.tar.gz"
     mkdir -p "$outdir" 2>/dev/null || { rm -rf "$work"; return 1; }
     chmod 700 "$outdir" 2>/dev/null || true
+    # Collision-free archive name (two bundles within the same second must
+    # never overwrite each other) — mktemp reserves the unique path.
+    archive="$(mktemp --suffix=.tar.gz "${outdir}/zedproxy-diagnostic-${stamp}-XXXXXX" 2>/dev/null)" \
+        || { rm -rf "$work"; return 1; }
 
     { zdr_report_text || true; } > "${work}/report.txt" 2>&1
     {

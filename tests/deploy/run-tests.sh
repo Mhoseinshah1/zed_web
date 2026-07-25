@@ -49,6 +49,7 @@ cat > "${MOCKBIN}/composer" <<'EOF'
 case "$*" in
   *--version*) echo "Composer version 2.8.1 2024-10-01 12:00:00"; exit 0 ;;
 esac
+[ "${MOCK_COMPOSER_HANG:-0}" = "1" ] && sleep 60
 if [ "${MOCK_COMPOSER_REQUIRE_SUPERUSER:-0}" = "1" ] && [ "${COMPOSER_ALLOW_SUPERUSER:-0}" != "1" ]; then
   echo "Composer plugins have been disabled for safety in this non-interactive session." >&2
   exit 1
@@ -58,8 +59,8 @@ EOF
 cat > "${MOCKBIN}/npm" <<'EOF'
 #!/usr/bin/env bash
 case "${1:-}" in
-  ci)        exit ${MOCK_NPM_CI_RC:-0} ;;
-  run)       [ "${2:-}" = "build" ] && exit ${MOCK_NPM_BUILD_RC:-0}; exit 0 ;;
+  ci)        [ "${MOCK_NPM_HANG:-0}" = "1" ] && sleep 60; exit ${MOCK_NPM_CI_RC:-0} ;;
+  run)       if [ "${2:-}" = "build" ]; then [ "${MOCK_NPM_BUILD_HANG:-0}" = "1" ] && sleep 60; exit ${MOCK_NPM_BUILD_RC:-0}; fi; exit 0 ;;
   --version) echo "10.8.2"; exit 0 ;;
   *)         exit 0 ;;
 esac
@@ -86,10 +87,12 @@ if [ "${1:-}" = "-r" ]; then echo "${MOCK_PHP_VERSION:-8.3.7}"; exit 0; fi
 if [ "${1:-}" = "-v" ]; then echo "PHP ${MOCK_PHP_VERSION:-8.3.7} (cli)"; exit 0; fi
 case "$*" in
   *"artisan down"*)
+      [ "${MOCK_DOWN_HANG:-0}" = "1" ] && sleep 60
       mkdir -p storage/framework 2>/dev/null || true
       printf '<?php return array();\n' > storage/framework/maintenance.php 2>/dev/null || true
       exit 0 ;;
   *"artisan up"*)
+      [ "${MOCK_UP_HANG:-0}" = "1" ] && sleep 60
       rc="${MOCK_UP_RC:-0}"
       if [ "$rc" = "0" ] && [ "${MOCK_UP_STUCK:-0}" != "1" ]; then
           rm -f storage/framework/maintenance.php storage/framework/down 2>/dev/null || true
@@ -99,6 +102,7 @@ case "$*" in
       case "${MOCK_MIGRATE_MODE:-none}" in
         applied) echo "Migrating: 2026_01_01_000000_add_widget"; echo "Migrated:  2026_01_01_000000_add_widget (12.34ms)"; exit 0 ;;
         fail)    echo "   SQLSTATE[42P01]: undefined_table"; exit 1 ;;
+        hang)    echo "Migrating: 2026_01_01_000000_add_widget"; sleep 60; exit 0 ;;
         *)       echo "Nothing to migrate."; exit 0 ;;
       esac ;;
   *"artisan schedule:list"*) exit ${MOCK_SCHEDULE_RC:-0} ;;
@@ -114,6 +118,13 @@ EOF
 cat > "${MOCKBIN}/pg_dump" <<'EOF'
 #!/usr/bin/env bash
 out=""; while [ $# -gt 0 ]; do [ "$1" = "-f" ] && { out="$2"; shift; }; shift; done
+if [ "${MOCK_PGDUMP_HANG:-0}" = "1" ]; then
+  # Writes a PARTIAL dump, then hangs — the bounded runner must kill it and the
+  # deployer must REMOVE the incomplete file.
+  [ -n "$out" ] && printf 'PGDMP-partial' > "$out"
+  sleep 60
+  exit 0
+fi
 [ -n "$out" ] && : > "$out"
 exit ${MOCK_PGDUMP_RC:-0}
 EOF
@@ -260,7 +271,11 @@ new_base() {
     export ZPD_SCHED_LOG="${BASE}/scheduler.log"
     # Non-cron scheduler homes (systemd units, Supervisor programs) — all temp.
     export ZPD_SYSTEMD_UNIT_DIR="${BASE}/systemd"
+    # Full-discovery trees isolated from the host (tests override per-scenario
+    # with extra vendor/runtime dirs).
+    export ZPD_SYSTEMD_UNIT_DIRS="${BASE}/systemd"
     export ZPD_SUPERVISOR_SCAN_DIR="${BASE}/supervisor.d"
+    export ZPD_SUPERVISORD_CONF="${BASE}/supervisord.conf"
     export ZPD_WRAPPER_BIN="${BASE}/wbin"
     export ZPD_WRAPPER_LIB="${BASE}/wlib"
     export ZPD_DEPLOY_ENV="${BASE}/deploy.env"
@@ -1622,6 +1637,298 @@ export ZPD_REPO_URL="$SRC_BARE" ZPD_REF=main
 ( MOCK_PGDUMP_RC=1 MOCK_HTTP_CODE=200 dep_main >/dev/null 2>&1 ); assert_rc 1 "$?" "backup failure fails deploy"
 assert_eq "$(zpd_manifest_get "${BASE}/shared/deploy/last-failure.json" stage)" "backup" "central failure event records stage=backup"
 unset ZPD_REPO_URL ZPD_REF; rm -rf "$BASE" "$(dirname "$SRC_BARE")"
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Prompt 21 — remaining production-safety gaps
+# ═════════════════════════════════════════════════════════════════════════════
+
+echo "-- fail-closed rollback reconciliation (HTTP passing is not enough) --"
+
+# R1a. Worker-restart failure fails the rollback even though HTTP would pass.
+new_base
+mkdir -p "${BASE}/releases/20260101000000-aaaaaaaaaaaa"
+setup_atomic_service_configs
+MOCK_SUP_RESTART_RC=1 MOCK_HTTP_CODE=200 dep_rollback_code 20260101000000-aaaaaaaaaaaa php8.3-fpm >/dev/null 2>&1; rc=$?
+assert_rc 1 "$rc" "rollback fails when worker restart fails (HTTP 200 irrelevant)"
+assert_eq "$DEP_ROLLBACK_SWITCH" "success" "switch recorded separately (success)"
+assert_eq "$DEP_ROLLBACK_RECONCILE" "failed" "reconciliation recorded separately (failed)"
+assert_eq "$DEP_ROLLBACK_READY" "not_available" "readiness never reached after reconcile failure"
+
+# R1b. nginx -t is validated BEFORE reload — a broken config fails the rollback.
+( MOCK_NGINX_RC=1 MOCK_HTTP_CODE=200 dep_rollback_code 20260101000000-aaaaaaaaaaaa php8.3-fpm >/dev/null 2>&1 ); \
+  assert_rc 1 "$?" "rollback fails when nginx -t fails (validated before reload)"
+
+# R1c. Workers not RUNNING fails the rollback.
+( MOCK_SUP_STATUS='zedproxy-worker:x FATAL Exited' MOCK_HTTP_CODE=200 dep_rollback_code 20260101000000-aaaaaaaaaaaa php8.3-fpm >/dev/null 2>&1 ); \
+  assert_rc 1 "$?" "rollback fails when the worker group is not RUNNING"
+rm -rf "$BASE"
+
+echo "-- mandatory legacy rollback snapshot --"
+
+# R2a. Snapshot creation failure is DETECTED (capture is verified).
+new_base; make_legacy_base; setup_legacy_service_configs
+mkdir -p "${BASE}/shared/deploy/nginx.legacy"      # cp target blocked → capture fails
+( zpd_save_legacy_rollback "$BASE" "$ZPD_NGINX_CONF" "$ZPD_SUPERVISOR_CONF" "$ZPD_SCHED_CRON" 2>/dev/null ); \
+  assert_rc 1 "$?" "legacy snapshot capture failure returns non-zero"
+rm -rf "$BASE"
+
+# R2b. A first cutover ABORTS before maintenance/migration/switch when the
+#      snapshot cannot be created — the legacy install is untouched.
+new_base; mk_source_repo; make_legacy_base; setup_legacy_service_configs
+export ZPD_REPO_URL="$SRC_BARE" ZPD_REF=main
+nginx_before="$(cat "$ZPD_NGINX_CONF")"
+mkdir -p "${BASE}/shared" && mkdir -p "${BASE}/shared/deploy/nginx.legacy"
+( MOCK_HTTP_CODE=200 dep_main >/dev/null 2>&1 ); rc=$?
+assert_rc 1 "$rc" "first cutover aborts when the legacy snapshot fails"
+assert_eq "$(zpd_manifest_get "${BASE}/shared/deploy/last-failure.json" stage)" "legacy_snapshot" "failure recorded at stage=legacy_snapshot"
+assert_eq "$(cat "$ZPD_NGINX_CONF")" "$nginx_before" "legacy nginx untouched (aborted before cutover)"
+assert_false test -L "${BASE}/current"
+assert_false zpd_is_in_maintenance "$BASE"          # never entered maintenance
+unset ZPD_REPO_URL ZPD_REF; rm -rf "$BASE" "$(dirname "$SRC_BARE")"
+
+echo "-- exact fail-closed legacy restore --"
+
+# R3a. A copy failure during the legacy restore fails the whole rollback.
+new_base; make_legacy_base; setup_legacy_service_configs
+zpd_save_legacy_rollback "$BASE" "$ZPD_NGINX_CONF" "$ZPD_SUPERVISOR_CONF" "$ZPD_SCHED_CRON"
+rm -f "$ZPD_NGINX_CONF"; mkdir "$ZPD_NGINX_CONF"    # restore target blocked
+( MOCK_HTTP_CODE=200 dep_first_cutover_rollback "$BASE" php8.3-fpm >/dev/null 2>&1 ); \
+  assert_rc 1 "$?" "legacy restore copy failure fails the rollback"
+rm -rf "$BASE"
+
+# R3b. Restored Nginx root NOT serving the legacy app → rollback fails (never
+#      healthy just because the internal health vhost was repaired).
+new_base; make_legacy_base
+setup_atomic_service_configs                        # snapshot captures WRONG (current/) configs
+zpd_save_legacy_rollback "$BASE" "$ZPD_NGINX_CONF" "$ZPD_SUPERVISOR_CONF" "$ZPD_SCHED_CRON"
+( MOCK_HTTP_CODE=200 dep_first_cutover_rollback "$BASE" php8.3-fpm >/dev/null 2>&1 ); \
+  assert_rc 1 "$?" "restored nginx root not serving legacy → rollback fails"
+rm -rf "$BASE"
+
+# R3c. Restored Supervisor command NOT running the legacy artisan → fails.
+new_base; make_legacy_base; setup_legacy_service_configs
+zpd_supervisor_conf_content "$BASE" > "$ZPD_SUPERVISOR_CONF"   # current/artisan (wrong for legacy)
+zpd_save_legacy_rollback "$BASE" "$ZPD_NGINX_CONF" "$ZPD_SUPERVISOR_CONF" "$ZPD_SCHED_CRON"
+( MOCK_HTTP_CODE=200 dep_first_cutover_rollback "$BASE" php8.3-fpm >/dev/null 2>&1 ); \
+  assert_rc 1 "$?" "restored supervisor command not running legacy artisan → rollback fails"
+rm -rf "$BASE"
+
+echo "-- bounded blocking commands (hang → timeout, fail-closed) --"
+
+# R4a. Hanging pg_dump times out fast AND the partial dump is removed.
+t0=$SECONDS
+new_base
+( MOCK_PGDUMP_HANG=1 ZPD_BACKUP_TIMEOUT=1 dep_backup_database "${BASE}/backups/x/db.dump" "${BASE}/shared/.env" >/dev/null 2>&1 ); rc=$?
+elapsed=$((SECONDS - t0))
+assert_true test "$rc" -ne 0
+assert_true test "$elapsed" -lt 15
+assert_false test -e "${BASE}/backups/x/db.dump"    # incomplete dump removed
+rm -rf "$BASE"
+
+# R4b. Hanging composer install times out fast (build fails, never freezes).
+t0=$SECONDS
+new_base; rd="${BASE}/rel"; mkdir -p "$rd"; : > "${rd}/composer.lock"; : > "${rd}/package-lock.json"
+( MOCK_COMPOSER_HANG=1 ZPD_COMPOSER_TIMEOUT=1 dep_build "$rd" >/dev/null 2>&1 ); rc=$?
+elapsed=$((SECONDS - t0))
+assert_true test "$rc" -ne 0
+assert_true test "$elapsed" -lt 15
+
+# R4c. Hanging npm ci times out fast.
+t0=$SECONDS
+( MOCK_NPM_HANG=1 ZPD_NPM_TIMEOUT=1 dep_build "$rd" >/dev/null 2>&1 ); rc=$?
+elapsed=$((SECONDS - t0))
+assert_true test "$rc" -ne 0
+assert_true test "$elapsed" -lt 15
+rm -rf "$BASE"
+
+# R4d. A hanging asset build (npm run build) finalizes the attempted release as
+#      FAILED — full dep_main, bounded end-to-end.
+t0=$SECONDS
+new_base; mk_source_repo; setup_atomic_service_configs
+export ZPD_REPO_URL="$SRC_BARE" ZPD_REF=main
+( MOCK_NPM_BUILD_HANG=1 ZPD_BUILD_TIMEOUT=1 MOCK_HTTP_CODE=200 dep_main >/dev/null 2>&1 ); rc=$?
+elapsed=$((SECONDS - t0))
+assert_rc 1 "$rc" "hanging build fails the deploy (bounded)"
+assert_true test "$elapsed" -lt 60
+attempted="$(ls "$BASE/releases" | grep -E '\.failed$' | head -1)"
+assert_eq "$(zpd_manifest_get "${BASE}/releases/${attempted}/RELEASE_MANIFEST.json" result)" "failed" "hung-build release finalized as failed"
+assert_eq "$(zpd_manifest_get "${BASE}/shared/deploy/last-failure.json" stage)" "build" "central event records stage=build"
+unset ZPD_REPO_URL ZPD_REF; rm -rf "$BASE" "$(dirname "$SRC_BARE")"
+
+# R4e. A hanging migration times out → DB state recorded as UNKNOWN (never a
+#      confident applied/failed) and the deploy rolls back safely.
+new_base; rd="${BASE}/rel"; mkdir -p "$rd"
+t0=$SECONDS
+MOCK_MIGRATE_MODE=hang ZPD_MIGRATION_TIMEOUT=1 dep_run_migrations "$rd" >/dev/null 2>&1; rc=$?
+elapsed=$((SECONDS - t0))
+assert_rc 1 "$rc" "hanging migration times out and fails"
+assert_eq "$DEP_MIGRATION_STATUS" "unknown" "migration timeout → status UNKNOWN"
+assert_true test "$elapsed" -lt 15
+rm -rf "$BASE"
+new_base; mk_source_repo
+psha="$(mk_release_git 20260101000000-aaaaaaaaaaaa)"; zpd_switch_current 20260101000000-aaaaaaaaaaaa
+setup_atomic_service_configs; zpw_install_wrappers >/dev/null 2>&1
+export ZPD_REPO_URL="$SRC_BARE" ZPD_REF=main
+( MOCK_MIGRATE_MODE=hang ZPD_MIGRATION_TIMEOUT=1 MOCK_HTTP_CODE=200 dep_main >/dev/null 2>&1 ); rc=$?
+assert_rc 1 "$rc" "deploy with hung migration fails and rolls back"
+assert_eq "$(zpd_current_release)" "20260101000000-aaaaaaaaaaaa" "previous release restored after migration timeout"
+attempted="$(ls "$BASE/releases" | grep -E '\.failed$' | head -1)"
+assert_eq "$(zpd_manifest_get "${BASE}/releases/${attempted}/RELEASE_MANIFEST.json" migration_status)" "unknown" "manifest records migration_status=unknown"
+unset ZPD_REPO_URL ZPD_REF; rm -rf "$BASE" "$(dirname "$SRC_BARE")"
+
+# R4f. Hanging `artisan down` (required fencing) is bounded and fails.
+t0=$SECONDS
+new_base
+( MOCK_DOWN_HANG=1 ZPD_MAINTENANCE_TIMEOUT=1 dep_bring_down "$BASE" >/dev/null 2>&1 ); rc=$?
+elapsed=$((SECONDS - t0))
+assert_true test "$rc" -ne 0
+assert_true test "$elapsed" -lt 15
+
+# R4g. Hanging `artisan up` is bounded and fails (required, never best-effort).
+t0=$SECONDS
+( MOCK_UP_HANG=1 ZPD_MAINTENANCE_TIMEOUT=1 dep_bring_up "$BASE" >/dev/null 2>&1 ); rc=$?
+elapsed=$((SECONDS - t0))
+assert_rc 1 "$rc" "hanging artisan up times out and fails"
+assert_true test "$elapsed" -lt 15
+rm -rf "$BASE"
+
+echo "-- transactional metadata/state repair --"
+
+# R5a. State file ABSENT before a failed repair → the repair-created state file
+#      is REMOVED again (no half-committed state).
+new_base; sha="$(mk_release_git 20260101000000-aaaaaaaaaaaa)"; zpd_switch_current 20260101000000-aaaaaaaaaaaa
+setup_atomic_service_configs; zpw_install_wrappers >/dev/null 2>&1
+rm -f "$ZPD_STATE_FILE"
+( MOCK_HTTP_CODE=500 zrp_main --apply >/dev/null 2>&1 ); rc=$?
+assert_rc 1 "$rc" "repair fails at the HTTP gate"
+assert_false test -e "$ZPD_STATE_FILE"              # newly created state removed
+rm -rf "$BASE"
+
+# R5b. State file EXISTED → failed repair restores its exact bytes.
+new_base; sha="$(mk_release_git 20260101000000-aaaaaaaaaaaa)"; zpd_switch_current 20260101000000-aaaaaaaaaaaa
+setup_atomic_service_configs; zpw_install_wrappers >/dev/null 2>&1
+mkdir -p "$(dirname "$ZPD_STATE_FILE")"
+printf '{"sentinel":"pre-repair-state"}\n' > "$ZPD_STATE_FILE"
+cp "$ZPD_STATE_FILE" "${BASE}/state.ref"
+( MOCK_HTTP_CODE=500 zrp_main --apply >/dev/null 2>&1 ); rc=$?
+assert_rc 1 "$rc" "repair fails at the HTTP gate (state existed)"
+assert_true cmp -s "$ZPD_STATE_FILE" "${BASE}/state.ref"
+rm -rf "$BASE"
+
+# R5c. A restore REMOVE failure is accounted (returns non-zero, never silent).
+new_base
+snap="$(mktemp -d)"; mkdir -p "${snap}/meta"; printf '0\n' > "${snap}/meta/state.existed"
+mkdir -p "${ZPD_STATE_FILE}/blocker"                # state path is a dir → rm -f fails
+( zrp_restore_metadata "$snap" >/dev/null 2>&1 ); assert_rc 1 "$?" "metadata restore remove-failure returns non-zero"
+rm -rf "$BASE" "$snap"
+
+echo "-- component-scoped operational restore --"
+
+# R6a. A scheduler-scoped restore restores the cron file but NEVER rewrites
+#      unrelated Nginx configuration.
+new_base; sha="$(mk_release_git 20260101000000-aaaaaaaaaaaa)"; zpd_switch_current 20260101000000-aaaaaaaaaaaa
+setup_atomic_service_configs
+snap="$(dep_snapshot_operational_config scope-test)"
+printf 'BROKEN-BY-TEST\n' > "$ZPD_NGINX_CONF"
+printf '* * * * * root echo corrupted\n' > "$ZPD_SCHED_CRON"
+( dep_restore_operational_snapshot "$snap" scheduler >/dev/null 2>&1 ); rc=$?
+assert_rc 0 "$rc" "scheduler-scoped restore succeeds"
+assert_true zpd_scheduler_cron_ok "$ZPD_SCHED_CRON" "$BASE"
+assert_eq "$(cat "$ZPD_NGINX_CONF")" "BROKEN-BY-TEST" "scheduler-scoped restore did NOT touch nginx"
+
+# R6b. Files CREATED after the snapshot are removed (verified absent) by a
+#      full restore.
+rm -f "$ZPD_SCHED_CRON"
+snap2="$(dep_snapshot_operational_config absent-test)"
+zpd_scheduler_cron_content "$BASE" > "$ZPD_SCHED_CRON"   # created AFTER snapshot
+( dep_restore_operational_snapshot "$snap2" >/dev/null 2>&1 )
+assert_false test -e "$ZPD_SCHED_CRON"
+rm -rf "$BASE"
+
+echo "-- complete scheduler-source discovery --"
+
+# R7a. A unit in a VENDOR systemd tree (not /etc) is discovered and blocks.
+new_base; sha="$(mk_release_git 20260101000000-aaaaaaaaaaaa)"; zpd_switch_current 20260101000000-aaaaaaaaaaaa
+setup_atomic_service_configs; rm -f "$ZPD_SCHED_CRON"
+mkdir -p "${BASE}/vendor-systemd"
+export ZPD_SYSTEMD_UNIT_DIRS="${BASE}/systemd:${BASE}/vendor-systemd"
+printf '[Service]\nExecStart=/usr/bin/php %s/current/artisan schedule:run\n' "$BASE" > "${BASE}/vendor-systemd/zp-sched.service"
+( dep_reconcile_scheduler "$BASE" >/dev/null 2>&1 ); assert_rc 1 "$?" "vendor-tree systemd unit blocks reconciliation"
+assert_false test -f "$ZPD_SCHED_CRON"
+
+# R7b. A DROP-IN override (<unit>.d/*.conf) is discovered and blocks.
+rm -f "${BASE}/vendor-systemd/zp-sched.service"
+mkdir -p "${BASE}/systemd/cron-shim.service.d"
+printf '[Service]\nExecStart=php %s/artisan schedule:run\n' "$BASE" > "${BASE}/systemd/cron-shim.service.d/override.conf"
+( dep_reconcile_scheduler "$BASE" >/dev/null 2>&1 ); assert_rc 1 "$?" "systemd drop-in override blocks reconciliation"
+rm -rf "${BASE}/systemd/cron-shim.service.d"
+
+# R7c. A Supervisor program included via the MAIN supervisord [include] globs
+#      (outside the conventional conf.d) is discovered and blocks.
+mkdir -p "${BASE}/custom-super"
+printf '[include]\nfiles = custom-super/*.conf\n' > "$ZPD_SUPERVISORD_CONF"
+printf '[program:zp-sched]\ncommand=php %s/current/artisan schedule:run\n' "$BASE" > "${BASE}/custom-super/sched.conf"
+( dep_reconcile_scheduler "$BASE" >/dev/null 2>&1 ); assert_rc 1 "$?" "supervisord include-glob program blocks reconciliation"
+rm -f "$ZPD_SUPERVISORD_CONF" "${BASE}/custom-super/sched.conf"
+
+# R7d. INACTIVE leftover unit ≠ ACTIVE duplicate: a disabled+inactive unit is a
+#      warning (reconciliation succeeds, single active source verified); the
+#      same unit active blocks.
+printf '[Service]\nExecStart=php %s/current/artisan schedule:run\n' "$BASE" > "${BASE}/systemd/leftover.service"
+out="$(MOCK_TIMER_ENABLED=disabled MOCK_TIMER_ACTIVE=inactive dep_reconcile_scheduler "$BASE" 2>&1)"; rc=$?
+assert_rc 0 "$rc" "inactive leftover unit does not block reconciliation"
+printf '%s' "$out" | grep -qi 'leftover' && ok "inactive leftover reported as warning" || bad "inactive leftover not reported"
+( MOCK_TIMER_ENABLED=disabled MOCK_TIMER_ACTIVE=inactive dep_scheduler_single_source_ok "$BASE" ); \
+  assert_rc 0 "$?" "single-source check passes with only an inactive leftover"
+( dep_reconcile_scheduler "$BASE" >/dev/null 2>&1 ); assert_rc 1 "$?" "the SAME unit while enabled/active blocks reconciliation"
+rm -rf "$BASE"
+
+echo "-- required success-metadata commit --"
+
+# R8a. Code activation succeeds but the FINAL manifest write fails → NOT an
+#      ordinary success: non-zero exit + metadata_commit failure event with
+#      code_active=true (the live code is left in place).
+new_base; mk_source_repo; setup_atomic_service_configs
+export ZPD_REPO_URL="$SRC_BARE" ZPD_REF=main
+(
+  eval "$(declare -f zpd_write_manifest | sed '1s/zpd_write_manifest/zpd_orig_write_manifest/')"
+  zpd_write_manifest() {
+    case "$1" in *RELEASE_MANIFEST.json) case "$*" in *"result=success"*) return 1 ;; esac ;; esac
+    zpd_orig_write_manifest "$@"
+  }
+  MOCK_HTTP_CODE=200 dep_main >/dev/null 2>&1
+); rc=$?
+assert_rc 1 "$rc" "success-manifest write failure is NOT reported as ordinary success"
+lf="${BASE}/shared/deploy/last-failure.json"
+assert_eq "$(zpd_manifest_get "$lf" stage)" "metadata_commit" "failure event records stage=metadata_commit"
+assert_eq "$(zpd_manifest_get "$lf" code_active)" "true" "diagnostics preserve: code activation succeeded"
+assert_true test -L "${BASE}/current"               # live code left in place
+unset ZPD_REPO_URL ZPD_REF; rm -rf "$BASE" "$(dirname "$SRC_BARE")"
+
+# R8b. Manifest committed but central-state reconciliation fails → DEGRADED
+#      success: exit 0, manifest result=success, and a recorded state_reconcile
+#      event (never silent).
+new_base; mk_source_repo; setup_atomic_service_configs
+export ZPD_REPO_URL="$SRC_BARE" ZPD_REF=main
+(
+  dep_reconcile_state() { return 1; }
+  MOCK_HTTP_CODE=200 dep_main >/dev/null 2>&1
+); rc=$?
+assert_rc 0 "$rc" "state-reconcile failure after committed manifest is a degraded SUCCESS"
+man="${BASE}/releases/$(zpd_current_release)/RELEASE_MANIFEST.json"
+assert_eq "$(zpd_manifest_get "$man" result)" "success" "release manifest committed as success"
+assert_eq "$(zpd_manifest_get "${BASE}/shared/deploy/last-failure.json" stage)" "state_reconcile" "degradation recorded (stage=state_reconcile)"
+unset ZPD_REPO_URL ZPD_REF; rm -rf "$BASE" "$(dirname "$SRC_BARE")"
+
+# R8c. dep_finalize_stale_releases PROPAGATES a manifest-write failure.
+new_base
+mk_release 20260101000000-aaaaaaaaaaaa activating
+(
+  eval "$(declare -f zpd_write_manifest | sed '1s/zpd_write_manifest/zpd_orig_write_manifest/')"
+  zpd_write_manifest() { case "$*" in *stale_interrupted*) return 1 ;; esac; zpd_orig_write_manifest "$@"; }
+  dep_finalize_stale_releases >/dev/null 2>&1
+); assert_rc 1 "$?" "stale-release finalization failure propagates non-zero"
+rm -rf "$BASE"
 
 rm -rf "$MOCKBIN"
 echo ""

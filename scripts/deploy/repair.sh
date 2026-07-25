@@ -157,21 +157,34 @@ zrp_scan_state() {
 # ── Apply (fail-closed) ──────────────────────────────────────────────────────
 
 # zrp_backup_metadata SNAP — copy the state file and EVERY release manifest into
-# the snapshot; releases WITHOUT a manifest are recorded in an absence list so a
-# failed repair also removes any manifest it newly created (e.g. by adoption).
+# the snapshot. The state file's EXISTENCE is recorded explicitly (with its
+# exact mode + ownership when present) so a failed repair can either restore
+# the original bytes or REMOVE a state file the repair newly created — never
+# leave half-written state behind. Releases WITHOUT a manifest are recorded in
+# an absence list so a failed repair also removes any manifest it newly created
+# (e.g. by adoption). NOTE: last-repair.json is deliberately NOT part of this
+# transaction — it is the audit record OF the repair attempt itself and must
+# survive a rolled-back repair.
 zrp_backup_metadata() {
-    local snap="$1" rel m
+    local snap="$1" rel m st
+    st="$(zpd_state_file)"
     mkdir -p "${snap}/meta" 2>/dev/null || return 1
     chmod 700 "${snap}/meta" 2>/dev/null || true
     : > "${snap}/meta/absent.list" || return 1
-    if [ -f "$(zpd_state_file)" ]; then
-        cp -a "$(zpd_state_file)" "${snap}/meta/state.json" 2>/dev/null || return 1
+    if [ -f "$st" ]; then
+        printf '1\n' > "${snap}/meta/state.existed" || return 1
+        cp -a "$st" "${snap}/meta/state.json" 2>/dev/null || return 1
+        cmp -s "$st" "${snap}/meta/state.json" || return 1
+        stat -c '%a %u %g' "$st" > "${snap}/meta/state.stat" 2>/dev/null || return 1
+    else
+        printf '0\n' > "${snap}/meta/state.existed" || return 1
     fi
     while IFS= read -r rel; do
         [ -n "$rel" ] || continue
         m="$(zpd_releases_dir)/${rel}/RELEASE_MANIFEST.json"
         if [ -f "$m" ]; then
             cp -a "$m" "${snap}/meta/manifest-${rel}.json" 2>/dev/null || return 1
+            cmp -s "$m" "${snap}/meta/manifest-${rel}.json" || return 1
         else
             printf '%s\n' "$rel" >> "${snap}/meta/absent.list" || return 1
         fi
@@ -179,24 +192,51 @@ zrp_backup_metadata() {
     return 0
 }
 
-# zrp_restore_metadata SNAP — put the snapshotted state file + manifests back,
-# and REMOVE manifests that did not exist before the repair.
+# zrp_restore_metadata SNAP — put the snapshotted state file + manifests back
+# EXACTLY (bytes verified with cmp, state mode/ownership restored to the
+# recorded values), REMOVE a state file or manifests that did not exist before
+# the repair (absence verified), and accumulate EVERY copy/remove/chmod/chown
+# failure into the return code. last-repair.json is intentionally untouched —
+# it is the audit record of the attempt, not repaired state.
 zrp_restore_metadata() {
-    local snap="$1" f rel rc=0
+    local snap="$1" f rel rc=0 st existed mode uid gid
+    st="$(zpd_state_file)"
     [ -d "${snap}/meta" ] || return 0
-    if [ -f "${snap}/meta/state.json" ]; then
-        cp -a "${snap}/meta/state.json" "$(zpd_state_file)" 2>/dev/null || rc=1
+    existed="$(cat "${snap}/meta/state.existed" 2>/dev/null || echo "")"
+    if [ "$existed" = "0" ]; then
+        # The state file did not exist before the repair — anything there now
+        # was created by the failed transaction and must be removed.
+        rm -f "$st" 2>/dev/null || rc=1
+        [ -e "$st" ] && { echo "restore: ${st} still exists (created by the failed repair)" >&2; rc=1; }
+    elif [ -f "${snap}/meta/state.json" ]; then
+        if ! cp "${snap}/meta/state.json" "$st" 2>/dev/null || ! cmp -s "${snap}/meta/state.json" "$st"; then
+            echo "restore: state file was not restored exactly" >&2; rc=1
+        else
+            read -r mode uid gid < "${snap}/meta/state.stat" 2>/dev/null || { mode=""; uid=""; gid=""; }
+            if [ -n "$mode" ]; then
+                chmod "$mode" "$st" 2>/dev/null || { echo "restore: chmod state file failed" >&2; rc=1; }
+                chown "${uid}:${gid}" "$st" 2>/dev/null || { echo "restore: chown state file failed" >&2; rc=1; }
+                [ "$(stat -c '%a %u %g' "$st" 2>/dev/null)" = "${mode} ${uid} ${gid}" ] \
+                    || { echo "restore: state file mode/ownership differ from the recorded values" >&2; rc=1; }
+            fi
+        fi
     fi
     for f in "${snap}/meta"/manifest-*.json; do
         [ -f "$f" ] || continue
         rel="$(basename "$f")"; rel="${rel#manifest-}"; rel="${rel%.json}"
-        [ -d "$(zpd_releases_dir)/${rel}" ] \
-            && { cp -a "$f" "$(zpd_releases_dir)/${rel}/RELEASE_MANIFEST.json" 2>/dev/null || rc=1; }
+        if [ -d "$(zpd_releases_dir)/${rel}" ]; then
+            if ! cp -a "$f" "$(zpd_releases_dir)/${rel}/RELEASE_MANIFEST.json" 2>/dev/null \
+               || ! cmp -s "$f" "$(zpd_releases_dir)/${rel}/RELEASE_MANIFEST.json"; then
+                echo "restore: manifest for ${rel} was not restored exactly" >&2; rc=1
+            fi
+        fi
     done
     if [ -f "${snap}/meta/absent.list" ]; then
         while IFS= read -r rel; do
             [ -n "$rel" ] || continue
-            rm -f "$(zpd_releases_dir)/${rel}/RELEASE_MANIFEST.json" 2>/dev/null || true
+            m="$(zpd_releases_dir)/${rel}/RELEASE_MANIFEST.json"
+            rm -f "$m" 2>/dev/null || rc=1
+            [ -e "$m" ] && { echo "restore: ${m} still exists (created by the failed repair)" >&2; rc=1; }
         done < "${snap}/meta/absent.list"
     fi
     return "$rc"
@@ -300,10 +340,18 @@ zrp_apply() {
     # ── FAIL-CLOSED: restore the snapshot FOR THE SCOPE THAT WAS TOUCHED,
     # validate, record, exit non-zero. A metadata-only repair must never reload
     # live services during its restore.
-    local failed_step="$ZRP_FAILED_STEP" restore_result="success"
+    local failed_step="$ZRP_FAILED_STEP" restore_result="success" restore_scope=""
     echo "repair failed at step: ${failed_step} — restoring the pre-repair snapshot" >&2
-    if [ "$ZRP_OP_TOUCHED" = "1" ]; then
-        dep_restore_operational_snapshot "$snap" || restore_result="failed"
+    # Restore ONLY the components this repair was allowed to touch: a
+    # scheduler-only repair must not rewrite or reload Nginx/Supervisor, and a
+    # metadata-only repair must not touch live services at all.
+    if [ "$ZRP_C_NGINX" = "1" ] || [ "$ZRP_C_SUPER" = "1" ] || [ "$ZRP_C_WRAP" = "1" ] || [ "$ZRP_C_HV" = "1" ]; then
+        restore_scope="all"
+    elif [ "$ZRP_C_SCHED" = "1" ]; then
+        restore_scope="scheduler"
+    fi
+    if [ -n "$restore_scope" ]; then
+        dep_restore_operational_snapshot "$snap" "$restore_scope" || restore_result="failed"
     fi
     if [ "$ZRP_C_MAN" = "1" ] || [ "$ZRP_C_STATE" = "1" ]; then
         zrp_restore_metadata "$snap" || restore_result="failed"

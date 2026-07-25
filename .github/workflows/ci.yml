@@ -623,6 +623,72 @@ jobs:
             || { echo '::error::dep_fail is not wired into every meaningful stage.'; exit 1; }
           echo 'Legacy-rollback, failure-context, and discovery invariants hold.'
 
+      - name: Assert bounded-command, exact-restore, and metadata-commit invariants (Prompt 21)
+        run: |
+          set -euo pipefail
+          dep=scripts/deploy/deploy.sh
+          rep=scripts/deploy/repair.sh
+          lib=scripts/lib/deploy-lib.sh
+          # ── Fail-closed rollback reconciliation (validate before reload,
+          # RUNNING workers required, reconcile+readiness recorded separately).
+          body="$(awk '/^dep_rollback_code\(\)/{f=1} f&&/^}/{f=0} f' "$dep")"
+          for req in dep_validate_nginx dep_reload_nginx dep_supervisor_group_running DEP_ROLLBACK_RECONCILE DEP_ROLLBACK_READY; do
+            printf '%s' "$body" | grep "$req" >/dev/null \
+              || { echo "::error::dep_rollback_code lacks ${req} (fail-closed reconciliation)."; exit 1; }
+          done
+          printf '%s' "$body" | grep -E '\|\| *true' \
+            && { echo '::error::dep_rollback_code contains a fail-open reconciliation step.'; exit 1; }
+          # ── Mandatory verified legacy snapshot (checked result; abort stage).
+          grep -q 'legacy_snapshot_failed' "$dep" \
+            || { echo '::error::legacy snapshot failure does not abort the cutover.'; exit 1; }
+          awk '/^zpd_save_legacy_rollback\(\)/{f=1} f&&/^}/{f=0} f' "$lib" | grep 'cmp -s' >/dev/null \
+            || { echo '::error::legacy snapshot capture is not content-verified.'; exit 1; }
+          awk '/^zpd_restore_legacy_rollback\(\)/{f=1} f&&/^}/{f=0} f' "$lib" | grep 'cmp -s' >/dev/null \
+            || { echo '::error::legacy restore is not content-verified.'; exit 1; }
+          # ── Every blocking production command is bounded (shared runner +
+          # per-stage deadlines; no unlimited umbrella timeout).
+          grep -q 'dep_run_bounded()' "$dep" \
+            || { echo '::error::shared bounded runner dep_run_bounded missing.'; exit 1; }
+          for var in ZPD_BACKUP_TIMEOUT ZPD_BUILD_TIMEOUT ZPD_COMPOSER_TIMEOUT ZPD_NPM_TIMEOUT ZPD_ARTISAN_TIMEOUT ZPD_MIGRATION_TIMEOUT ZPD_MAINTENANCE_TIMEOUT; do
+            grep -q "$var" "$dep" || { echo "::error::stage timeout ${var} missing."; exit 1; }
+          done
+          awk '/^dep_run_migrations\(\)/{f=1} f&&/^}/{f=0} f' "$dep" | grep 'unknown' >/dev/null \
+            || { echo '::error::migration timeout does not record UNKNOWN DB state.'; exit 1; }
+          awk '/^dep_backup_database\(\)/{f=1} f&&/^}/{f=0} f' "$dep" | grep 'rm -f "\$out"' >/dev/null \
+            || { echo '::error::incomplete pg_dump output is not removed on failure.'; exit 1; }
+          grep -q 'maintenance_fence_failed' "$dep" \
+            || { echo '::error::artisan down fencing is not required (best-effort).'; exit 1; }
+          # ── Transactional metadata/state repair (existence recorded; exact
+          # restore verified; audit record outside the transaction).
+          grep -q 'state.existed' "$rep" \
+            || { echo '::error::state-file existence is not recorded in the repair snapshot.'; exit 1; }
+          awk '/^zrp_restore_metadata\(\)/{f=1} f&&/^}/{f=0} f' "$rep" | grep 'cmp -s' >/dev/null \
+            || { echo '::error::metadata restore is not content-verified.'; exit 1; }
+          # ── Component-scoped restore (a scheduler/metadata repair must not
+          # rewrite or reload unrelated live services).
+          grep -q 'restore_scope' "$rep" \
+            || { echo '::error::repair restore is not component-scoped.'; exit 1; }
+          awk '/^dep_restore_operational_snapshot\(\)/{f=1} f&&/^}/{f=0} f' "$dep" | grep 'scope' >/dev/null \
+            || { echo '::error::operational snapshot restore lacks a scope parameter.'; exit 1; }
+          # ── Complete scheduler discovery (all systemd trees, drop-ins,
+          # systemctl cat/list-timers, supervisord [include] globs) and the
+          # active-vs-inactive distinction.
+          grep -q 'zpd_systemd_unit_dirs' "$dep" \
+            || { echo '::error::discovery does not scan every systemd unit tree.'; exit 1; }
+          grep -q 'list-timers' "$dep" && grep -q 'list-unit-files' "$dep" \
+            || { echo '::error::systemctl-reported units are not inspected.'; exit 1; }
+          grep -q '_dep_supervisor_effective_files' "$dep" && grep -q 'include' "$dep" \
+            || { echo '::error::effective supervisord include-glob set is not scanned.'; exit 1; }
+          for fn in dep_scheduler_filter_active dep_scheduler_active_conflicts; do
+            grep -q "$fn" "$dep" || { echo "::error::missing ${fn} (active-vs-inactive distinction)."; exit 1; }
+          done
+          # ── Required success-metadata commit (never silent success).
+          grep -q 'metadata_commit' "$dep" && grep -q 'code_active=true' "$dep" \
+            || { echo '::error::final manifest write failure is not surfaced as metadata_commit.'; exit 1; }
+          grep -q 'state_reconcile_failed_after_success' "$dep" \
+            || { echo '::error::degraded success (state reconcile failure) is not recorded.'; exit 1; }
+          echo 'Bounded-command, exact-restore, and metadata-commit invariants hold.'
+
       # ── Supply-chain verification (authoritative home; formerly the separate
       #    supply-chain.yml workflow, folded in here to remove duplicate jobs). ──
       - name: Assert no forbidden supply-chain patterns remain
