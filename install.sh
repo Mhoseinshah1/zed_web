@@ -1641,13 +1641,31 @@ if [ -f "$NGINX_CONF" ] && grep -q "ssl_certificate" "$NGINX_CONF" 2>/dev/null; 
     sed -i "s|fastcgi_pass unix:/run/php/php[0-9.]*-fpm-zedproxy.sock|fastcgi_pass unix:${PHP_FPM_SOCK}|g" "$NGINX_CONF"
 else
     cat > "$NGINX_CONF" <<NGINX
+# Canonical-host redirect: www.${DOMAIN} permanently redirects to ${DOMAIN}
+# (scheme/path/query preserved). Certbot may later add SSL to these blocks;
+# when an SSL-managed config exists this file is preserved untouched.
 server {
     listen 80;
-    server_name ${DOMAIN} www.${DOMAIN};
+    server_name www.${DOMAIN};
+    return 301 \$scheme://${DOMAIN}\$request_uri;
+}
+
+server {
+    listen 80;
+    server_name ${DOMAIN};
     root ${ACTIVE_APP_DIR}/public;
     index index.php;
 
     charset utf-8;
+
+    # Compression (kept inside the server block so it never depends on the
+    # distro nginx.conf). Text formats only — never re-compress woff2/images.
+    gzip on;
+    gzip_vary on;
+    gzip_comp_level 5;
+    gzip_min_length 256;
+    gzip_proxied any;
+    gzip_types text/plain text/css application/javascript application/json application/xml image/svg+xml;
 
     add_header X-Frame-Options "SAMEORIGIN";
     add_header X-Content-Type-Options "nosniff";
@@ -1658,7 +1676,9 @@ server {
     }
 
     location = /favicon.ico { access_log off; log_not_found off; }
-    location = /robots.txt  { access_log off; log_not_found off; }
+    # robots.txt is DYNAMIC (Laravel RobotsController) — no static file exists.
+    # Keep the quiet logging but fall through to the front controller.
+    location = /robots.txt  { access_log off; log_not_found off; try_files \$uri /index.php?\$query_string; }
 
     error_page 404 /index.php;
 

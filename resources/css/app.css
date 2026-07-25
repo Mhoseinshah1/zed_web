@@ -5,6 +5,45 @@
 
 @import './theme.css';
 
+/* ── Vazirmatn — self-hosted (Google Fonts is render-blocking and frequently
+   slow/blocked from Iran). Only the weights actually used ship: 400/500/600/700.
+   Vite fingerprints the woff2 files referenced here. */
+@font-face {
+    font-family: 'Vazirmatn';
+    font-style: normal;
+    font-weight: 400;
+    font-display: swap;
+    src: url('../fonts/Vazirmatn-Regular.woff2') format('woff2');
+}
+@font-face {
+    font-family: 'Vazirmatn';
+    font-style: normal;
+    font-weight: 500;
+    font-display: swap;
+    src: url('../fonts/Vazirmatn-Medium.woff2') format('woff2');
+}
+@font-face {
+    font-family: 'Vazirmatn';
+    font-style: normal;
+    font-weight: 600;
+    font-display: swap;
+    src: url('../fonts/Vazirmatn-SemiBold.woff2') format('woff2');
+}
+@font-face {
+    font-family: 'Vazirmatn';
+    font-style: normal;
+    font-weight: 700;
+    font-display: swap;
+    src: url('../fonts/Vazirmatn-Bold.woff2') format('woff2');
+}
+
 @theme {
     --font-sans: 'Vazirmatn', ui-sans-serif, system-ui, sans-serif;
+}
+
+/* Family comes from the Tailwind theme (--font-sans) — no inline styles. */
+@layer base {
+    body {
+        font-family: var(--font-sans);
+    }
 }

@@ -33,16 +33,15 @@
     @if($fav = cms_image('favicon'))<link rel="icon" href="{{ $fav }}">@endif
     <script>{!! ThemeManager::noFoucScript($zedAppearance) !!}</script>
 
-    <!-- Fonts: Vazirmatn (Persian) -->
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+    <!-- Fonts: Vazirmatn — self-hosted woff2 (declared in app.css, served from
+         our own origin; no third-party render-blocking request). Preload the
+         two critical weights only. -->
+    @production
+        <link rel="preload" href="{{ Vite::asset('resources/fonts/Vazirmatn-Regular.woff2') }}" as="font" type="font/woff2" crossorigin>
+        <link rel="preload" href="{{ Vite::asset('resources/fonts/Vazirmatn-Bold.woff2') }}" as="font" type="font/woff2" crossorigin>
+    @endproduction
 
     @vite(['resources/css/app.css', 'resources/js/app.js'])
-
-    <style>
-        body { font-family: 'Vazirmatn', system-ui, sans-serif; }
-    </style>
     {{-- Optional per-template head styles (e.g. matrix canvas styling). --}}
     @includeIf("templates.$tpl.styles")
     @stack('styles')

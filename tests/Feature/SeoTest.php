@@ -125,9 +125,29 @@ class SeoTest extends TestCase
         $this->assertNotNull($ld);
         $first = $ld['itemListElement'][0]['item'];
         $this->assertSame('Product', $first['@type']);
+        // Product URL: absolute /plans URL with the plan anchor.
+        $this->assertStringStartsWith('http', $first['url']);
+        $this->assertStringContainsString('/plans#plan-', $first['url']);
+        // No default OG image configured in this fixture → image key omitted.
+        $this->assertArrayNotHasKey('image', $first);
         $this->assertArrayHasKey('offers', $first);
         $this->assertSame('IRR', $first['offers']['priceCurrency']);
         $this->assertSame('500000', $first['offers']['price']); // 50000 Toman → Rial
+        // Offer completeness: url mirrors the Product; priceValidUntil is a
+        // real ISO-8601 date ~30 days out. Ratings/reviews stay absent.
+        $this->assertSame($first['url'], $first['offers']['url']);
+        $this->assertSame(now()->addDays(30)->toDateString(), $first['offers']['priceValidUntil']);
+        $this->assertArrayNotHasKey('aggregateRating', $first);
+        $this->assertArrayNotHasKey('review', $first);
+    }
+
+    public function test_plans_item_list_uses_default_og_image_when_configured(): void
+    {
+        SeoSettings::set('seo_default_og_image', 'https://cdn.example.com/og.png');
+        Plan::factory()->create(['name' => 'پلن تصویر', 'price_toman' => 10000, 'is_active' => true]);
+        $html = $this->get('/plans')->assertOk()->getContent();
+        $ld = collect($this->jsonLd($html))->firstWhere('@type', 'ItemList');
+        $this->assertSame('https://cdn.example.com/og.png', $ld['itemListElement'][0]['item']['image']);
     }
 
     // 10 + 11. Organization + WebSite schema on home ──────────────────────────
@@ -337,5 +357,71 @@ class SeoTest extends TestCase
         $this->assertTrue(SeoManager::isForcedNoindexPath('payments/centralpay/callback'));
         $this->assertFalse(SeoManager::isForcedNoindexPath('plans'));
         $this->assertFalse(SeoManager::isForcedNoindexPath(''));
+    }
+
+    // ── Delivery-layer fixes ──────────────────────────────────────────────────
+
+    public function test_no_static_robots_txt_file_exists(): void
+    {
+        // A static file would shadow the dynamic RobotsController via nginx
+        // try_files — it must never exist in the repo/public dir again.
+        $this->assertFileDoesNotExist(public_path('robots.txt'));
+    }
+
+    public function test_pretty_page_aliases_redirect_permanently(): void
+    {
+        foreach (['/terms', '/privacy', '/about'] as $alias) {
+            $response = $this->get($alias);
+            $response->assertStatus(301);
+            $this->assertStringContainsString('/pages/', $response->headers->get('Location'));
+        }
+    }
+
+    public function test_ga_snippet_absent_when_id_empty(): void
+    {
+        $this->app->detectEnvironment(fn () => 'production');
+        $html = $this->get('/')->assertOk()->getContent();
+        $this->assertStringNotContainsString('googletagmanager.com/gtag', $html);
+    }
+
+    public function test_ga_snippet_rendered_once_for_valid_id_in_production(): void
+    {
+        $this->app->detectEnvironment(fn () => 'production');
+        SeoSettings::set('seo_google_analytics_id', 'G-AB12CD34EF');
+        $html = $this->get('/')->assertOk()->getContent();
+        $this->assertSame(1, substr_count($html, 'googletagmanager.com/gtag/js?id=G-AB12CD34EF'));
+        $this->assertSame(1, substr_count($html, "gtag('config', 'G-AB12CD34EF')"));
+    }
+
+    public function test_ga_snippet_absent_for_invalid_id(): void
+    {
+        $this->app->detectEnvironment(fn () => 'production');
+        SeoSettings::set('seo_google_analytics_id', 'UA-1234-5"><script>alert(1)</script>');
+        $html = $this->get('/')->assertOk()->getContent();
+        $this->assertStringNotContainsString('googletagmanager.com/gtag', $html);
+        $this->assertStringNotContainsString('alert(1)', $html);
+    }
+
+    public function test_ga_snippet_absent_outside_production(): void
+    {
+        SeoSettings::set('seo_google_analytics_id', 'G-AB12CD34EF');
+        $html = $this->get('/')->assertOk()->getContent();   // testing env
+        $this->assertStringNotContainsString('googletagmanager.com/gtag', $html);
+    }
+
+    public function test_ga_snippet_absent_on_noindex_routes(): void
+    {
+        $this->app->detectEnvironment(fn () => 'production');
+        SeoSettings::set('seo_google_analytics_id', 'G-AB12CD34EF');
+        $html = $this->get('/login')->assertOk()->getContent();   // noindex middleware
+        $this->assertStringNotContainsString('googletagmanager.com/gtag', $html);
+    }
+
+    public function test_layout_uses_self_hosted_fonts(): void
+    {
+        $html = $this->get('/')->assertOk()->getContent();
+        $this->assertStringNotContainsString('fonts.googleapis.com', $html);
+        $this->assertStringNotContainsString('fonts.gstatic.com', $html);
+        $this->assertStringNotContainsString("body { font-family: 'Vazirmatn'", $html);
     }
 }

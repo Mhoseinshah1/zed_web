@@ -16,7 +16,7 @@
             <div class="col-span-1 md:col-span-2">
                 <a href="{{ route('home') }}" class="text-xl font-bold text-white">
                     @if($flogo = cms_image('footer_logo', cms_image('logo')))
-                        <img src="{{ $flogo }}" alt="{{ site_setting('site_name', 'ZedProxy') }}" class="h-8 w-auto" style="min-height:2rem">
+                        <img src="{{ $flogo }}" alt="{{ site_setting('site_name', 'ZedProxy') }}" width="128" height="32" loading="lazy" decoding="async" class="h-8 w-auto" style="min-height:2rem">
                     @else
                         <span class="text-indigo-400">{{ site_setting('site_name', 'ZedProxy') }}</span>
                     @endif

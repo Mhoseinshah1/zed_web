@@ -13,9 +13,9 @@
             {{-- Image thumbnail — click opens full image in a new tab --}}
             <a href="{{ $att['url'] }}" target="_blank" rel="noopener"
                class="block group" title="{{ $att['name'] }}">
-                <img src="{{ $att['url'] }}" alt="{{ $att['name'] }}"
+                <img src="{{ $att['url'] }}" alt="{{ $att['name'] }}" width="112" height="112"
                      class="h-28 w-28 rounded-lg border border-gray-700 object-cover transition group-hover:opacity-90"
-                     loading="lazy">
+                     loading="lazy" decoding="async">
                 <span class="mt-1 block max-w-28 truncate text-[11px] text-gray-400">{{ $att['name'] }}</span>
             </a>
         @else

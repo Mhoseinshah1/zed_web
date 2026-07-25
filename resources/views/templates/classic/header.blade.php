@@ -17,7 +17,7 @@
             <!-- Logo -->
             <a href="{{ route('home') }}" class="flex items-center gap-2 text-xl font-bold text-white">
                 @if($logo = cms_image('logo'))
-                    <img src="{{ $logo }}" alt="{{ site_setting('site_name', 'ZedProxy') }}" class="h-8 w-auto" style="height:var(--zp-logo-size,1.15rem);min-height:2rem">
+                    <img src="{{ $logo }}" alt="{{ site_setting('site_name', 'ZedProxy') }}" width="128" height="32" fetchpriority="high" decoding="async" class="h-8 w-auto" style="height:var(--zp-logo-size,1.15rem);min-height:2rem">
                 @else
                     <span class="text-indigo-400">{{ site_setting('site_name', 'ZedProxy') }}</span>
                 @endif

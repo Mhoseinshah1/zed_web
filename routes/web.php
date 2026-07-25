@@ -65,10 +65,11 @@ Route::get('/tutorials/{slug}', [TutorialsController::class, 'show'])->name('tut
 Route::get('/status', [StatusController::class, 'index'])->name('status');
 Route::get('/contact', [ContactController::class, 'index'])->name('contact');
 
-// Pretty aliases for common static pages → CMS pages
-Route::get('/terms', fn () => redirect()->route('pages.show', 'terms'));
-Route::get('/privacy', fn () => redirect()->route('pages.show', 'privacy'));
-Route::get('/about', fn () => redirect()->route('pages.show', 'about'));
+// Pretty aliases for common static pages → CMS pages (permanent: link equity
+// consolidates onto the canonical /pages/{slug} URLs).
+Route::get('/terms', fn () => redirect()->route('pages.show', 'terms', 301));
+Route::get('/privacy', fn () => redirect()->route('pages.show', 'privacy', 301));
+Route::get('/about', fn () => redirect()->route('pages.show', 'about', 301));
 
 // CMS static pages (keep last so it doesn't shadow named routes above)
 Route::get('/pages/{slug}', [PageController::class, 'show'])->name('pages.show');

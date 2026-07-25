@@ -7,7 +7,7 @@
             <div class="col-span-2">
                 <div class="flex items-center gap-2.5 font-black text-lg text-white">
                     @if($flogo = cms_image('footer_logo', cms_image('logo')))
-                        <img src="{{ $flogo }}" alt="{{ site_setting('site_name', 'ZedProxy') }}" class="h-7 w-auto" style="min-height:1.75rem">
+                        <img src="{{ $flogo }}" alt="{{ site_setting('site_name', 'ZedProxy') }}" width="112" height="28" loading="lazy" decoding="async" class="h-7 w-auto" style="min-height:1.75rem">
                     @else
                         <span>Zed<b class="text-green-400">Proxy</b></span>
                     @endif

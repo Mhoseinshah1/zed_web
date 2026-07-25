@@ -17,7 +17,7 @@
         <div class="zed-card zed-animate overflow-hidden border {{ $bg }} p-5 flex flex-col sm:flex-row sm:items-center gap-4"
              @if($bgImage) style="background-image:linear-gradient(rgba(0,0,0,.55),rgba(0,0,0,.55)),url('{{ $bgImage }}');background-size:cover;background-position:center" @endif>
             @if($img = cms_asset_url($banner->image))
-                <img src="{{ $img }}" alt="{{ $banner->title }}" class="h-14 w-14 rounded-xl object-cover shrink-0">
+                <img src="{{ $img }}" alt="{{ $banner->title }}" width="56" height="56" loading="lazy" decoding="async" class="h-14 w-14 rounded-xl object-cover shrink-0">
             @endif
             <div class="min-w-0 flex-1">
                 @if($banner->title)<p class="font-bold text-white">{{ $banner->title }}</p>@endif

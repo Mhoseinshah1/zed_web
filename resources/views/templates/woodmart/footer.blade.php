@@ -12,7 +12,7 @@
             <div class="col-span-2 md:col-span-1">
                 <div class="flex items-center gap-2.5 font-black text-lg text-content">
                     @if($flogo = cms_image('footer_logo', cms_image('logo')))
-                        <img src="{{ $flogo }}" alt="{{ site_setting('site_name', 'ZedProxy') }}" class="h-7 w-auto" style="min-height:1.75rem">
+                        <img src="{{ $flogo }}" alt="{{ site_setting('site_name', 'ZedProxy') }}" width="112" height="28" loading="lazy" decoding="async" class="h-7 w-auto" style="min-height:1.75rem">
                     @else
                         <span class="wm-logo-badge w-8 h-8 rounded-lg flex items-center justify-center text-white">
                             <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 2 4 6v6c0 5 3.4 7.7 8 10 4.6-2.3 8-5 8-10V6l-8-4z"/></svg>

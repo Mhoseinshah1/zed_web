@@ -28,3 +28,4 @@ Thumbs.db
 
 # Backups
 storage/app/backups/*.dump
+/public/robots.txt

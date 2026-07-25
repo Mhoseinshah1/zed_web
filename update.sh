@@ -133,6 +133,37 @@ if [ ! -f "$DEPLOY" ]; then
     exit 1
 fi
 
+# ── One-time server hygiene: dynamic robots.txt (idempotent, safe to re-run) ──
+# A static public/robots.txt from an older release shadows Laravel's dynamic
+# RobotsController (nginx try_files serves the file first) — remove any stale
+# copy. Also patch an nginx config whose robots.txt location still lacks the
+# front-controller fallback. Only that exact line is edited, so certbot-managed
+# SSL blocks are never touched; the sed is a no-op once patched.
+for _pub in "${ZPD_BASE}/public" "${ZPD_BASE}/current/public"; do
+    if [ -f "${_pub}/robots.txt" ]; then
+        if rm -f "${_pub}/robots.txt" 2>/dev/null; then
+            log "Removed stale static ${_pub}/robots.txt (robots.txt is dynamic now)"
+        else
+            err "could not remove stale ${_pub}/robots.txt — remove it manually"
+        fi
+    fi
+done
+_ngx="/etc/nginx/sites-available/zedproxy"
+if [ -f "$_ngx" ] && grep -q 'location = /robots.txt' "$_ngx" \
+   && ! grep -E 'location = /robots\.txt' "$_ngx" | grep -q 'try_files'; then
+    sed -i 's|location = /robots.txt  { access_log off; log_not_found off; }|location = /robots.txt  { access_log off; log_not_found off; try_files $uri /index.php?$query_string; }|' "$_ngx"
+    if grep -E 'location = /robots\.txt' "$_ngx" | grep -q 'try_files'; then
+        if nginx -t >/dev/null 2>&1; then
+            systemctl reload nginx >/dev/null 2>&1 || true
+            log "Patched nginx robots.txt location to reach Laravel (reloaded)"
+        else
+            err "nginx config test failed after robots.txt patch — review ${_ngx}"
+        fi
+    else
+        log "nginx robots.txt block uses a custom layout — patch it manually to add: try_files \$uri /index.php?\$query_string;"
+    fi
+fi
+
 # The fetched deploy script re-resolves + re-clones the exact release itself.
 log "Running atomic deployment from verified updater ${RESOLVED_SHA:0:12}…"
 exec bash "$DEPLOY" "$@"

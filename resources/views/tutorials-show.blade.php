@@ -34,7 +34,7 @@
         @endif
 
         @if($img = cms_asset_url($tutorial->image))
-            <img src="{{ $img }}" alt="{{ $tutorial->title }}" class="rounded-xl w-full mb-6">
+            <img src="{{ $img }}" alt="{{ $tutorial->title }}" width="1200" height="630" decoding="async" class="rounded-xl w-full mb-6 h-auto">
         @endif
 
         <div class="prose-content text-gray-300 leading-8 text-sm sm:text-base">

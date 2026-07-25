@@ -169,22 +169,34 @@ class SchemaBuilder
             return null;
         }
 
+        // Shared image: the site default OG image when it resolves to a real
+        // absolute URL (plans have no per-plan image field); omitted otherwise.
+        $image = $this->seo->absoluteUrl(SeoSettings::defaultOgImage());
+
         $elements = [];
         $pos = 1;
         foreach ($plans as $plan) {
+            $url = $this->seo->absoluteUrl('/plans').'#plan-'.$plan->id;
             $product = [
                 '@type' => 'Product',
                 'name' => (string) $plan->name,
+                'url' => $url,
             ];
+            if ($image !== '') {
+                $product['image'] = $image;
+            }
             if (filled($plan->description ?? null)) {
                 $product['description'] = $this->htmlToText((string) $plan->description);
             }
-            // Offer only with real price data (Toman → IRR currency).
+            // Offer only with real price data (Toman → IRR currency). Ratings,
+            // reviews, and availability beyond InStock are never fabricated.
             if (($plan->price_toman ?? 0) > 0) {
                 $product['offers'] = [
                     '@type' => 'Offer',
+                    'url' => $url,
                     'price' => (string) ((int) $plan->price_toman * 10), // Toman → Rial
                     'priceCurrency' => 'IRR',
+                    'priceValidUntil' => now()->addDays(30)->toDateString(),
                     'availability' => 'https://schema.org/InStock',
                 ];
             }

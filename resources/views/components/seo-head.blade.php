@@ -68,6 +68,9 @@
 <meta name="msvalidate.01" content="{{ $bing }}">
 @endif
 
+{{-- Google Analytics (GA4) — production only, never on noindex routes. --}}
+<x-seo-analytics />
+
 {{-- JSON-LD structured data — safe encoding; </script> can never break out. --}}
 @foreach($seo->schemas as $schema)
 <script type="application/ld+json">{!! json_encode($schema, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) !!}</script>
