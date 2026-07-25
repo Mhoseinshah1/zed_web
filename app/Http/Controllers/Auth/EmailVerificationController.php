@@ -40,10 +40,11 @@ class EmailVerificationController extends Controller
             // the code the user is about to request.
             'ttlMinutes' => $remainingMinutes ?? $this->verification->ttlMinutes(),
             'hasActiveCode' => $remainingMinutes !== null,
-            // The skip affordance follows the PER-USER obligation: only a
-            // user who registered under an effectively-required policy (and
-            // while enforcement is currently active) is denied the shortcut.
-            'isRequired' => $this->verification->isRequiredOnRegister()
+            // The skip affordance mirrors the middleware exactly: only a user
+            // CARRYING the per-user obligation (registration-stamped or
+            // admin-imposed), while enforcement is currently possible, is
+            // denied the shortcut.
+            'isRequired' => $this->verification->isEnforceableNow()
                 && (bool) $user->email_verification_required_at_registration,
         ]);
     }

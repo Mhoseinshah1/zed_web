@@ -94,6 +94,25 @@ class EmailVerificationService
         return $value === 'true' || (is_numeric($value) && (int) $value !== 0);
     }
 
+    /**
+     * Whether an EXISTING per-user obligation can be enforced RIGHT NOW:
+     * feature enabled + usable mail + valid transport-test proof.
+     *
+     * Deliberately WITHOUT the registration-wide "required" toggle: that
+     * toggle only decides whether NEW registrations get stamped with the
+     * obligation. An obligation a user already carries — stamped at
+     * registration or imposed by an explicit admin «require_verification» —
+     * stays enforceable while the mail fail-safes hold, even in optional
+     * mode. The fail-safes still guarantee nobody is ever locked behind an
+     * unproven mailer.
+     */
+    public function isEnforceableNow(): bool
+    {
+        return $this->isEnabled()
+            && $this->isMailConfigured()
+            && $this->hasVerifiedMailTest();
+    }
+
     // ── Transport-test proof ─────────────────────────────────────────────────
 
     /**

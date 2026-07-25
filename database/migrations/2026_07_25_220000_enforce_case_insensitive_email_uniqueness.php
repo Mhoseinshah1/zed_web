@@ -5,7 +5,8 @@ use Illuminate\Support\Facades\DB;
 
 /**
  * DB-level guarantee that two addresses differing only by case (or stray
- * whitespace) can never coexist: a functional unique index on lower(email).
+ * whitespace) can never coexist: a functional unique index on
+ * lower(trim(email)) — the same expression as the duplicate pre-check.
  *
  * SAFE + guarded:
  *  1. Existing case-insensitive duplicates ABORT the migration with a clear
@@ -44,9 +45,15 @@ return new class extends Migration
             ->update(['email' => DB::raw('lower(trim(email))')]);
 
         // 3) Functional unique index — the database itself now refuses a
-        //    second address that differs only by case.
+        //    second address that differs only by case OR stray whitespace
+        //    (matching the duplicate check above and the application
+        //    invariant: a DB-level writer inserting 'user@x.com ' must
+        //    collide with 'user@x.com'). Drop-and-recreate so environments
+        //    that ran an earlier lower(email)-only build of this migration
+        //    converge on the full expression.
         if (in_array(DB::connection()->getDriverName(), ['pgsql', 'sqlite'], true)) {
-            DB::statement('CREATE UNIQUE INDEX IF NOT EXISTS users_email_lower_unique ON users ((lower(email)))');
+            DB::statement('DROP INDEX IF EXISTS users_email_lower_unique');
+            DB::statement('CREATE UNIQUE INDEX IF NOT EXISTS users_email_lower_unique ON users ((lower(trim(email))))');
         }
     }
 

@@ -133,6 +133,21 @@ class EmailVerificationHardeningTest extends TestCase
         ]);
     }
 
+    public function test_db_index_refuses_second_address_differing_only_by_whitespace(): void
+    {
+        User::factory()->create(['email' => 'padded.addr@example.com']);
+
+        $this->expectException(QueryException::class);
+        // The index covers lower(TRIM(email)) — a DB-level writer (bulk
+        // import, maintenance SQL) sneaking in trailing whitespace must
+        // collide with the normalized row, not create a shadow account.
+        DB::table('users')->insert([
+            'name' => 'x', 'username' => 'dbdup2', 'account_id' => '999903',
+            'email' => 'padded.addr@example.com  ', 'password' => Hash::make('irrelevant1'),
+            'created_at' => now(), 'updated_at' => now(),
+        ]);
+    }
+
     public function test_migration_aborts_on_existing_case_duplicates_without_modifying_data(): void
     {
         $migration = $this->uniquenessMigration();
@@ -1404,6 +1419,20 @@ class EmailVerificationHardeningTest extends TestCase
         auth()->logout();
         $this->app['auth']->forgetGuards();
         $this->actingAs($fresh)->get('/dashboard')->assertRedirect(route('verification.notice'));
+
+        // OPTIONAL mode (registration-wide toggle off) does NOT release an
+        // imposed obligation — that toggle only governs stamping of NEW
+        // registrations. The mail fail-safes still do: disabling the feature
+        // (or losing the transport proof) always unblocks.
+        SiteSetting::set('email_verification_required_on_register', 'false');
+        auth()->logout();
+        $this->app['auth']->forgetGuards();
+        $this->actingAs($fresh)->get('/dashboard')->assertRedirect(route('verification.notice'));
+
+        SiteSetting::set('email_verification_enabled', 'false');
+        auth()->logout();
+        $this->app['auth']->forgetGuards();
+        $this->actingAs($fresh)->get('/dashboard')->assertOk();
     }
 
     public function test_changing_the_email_demands_an_explicit_verification_policy(): void

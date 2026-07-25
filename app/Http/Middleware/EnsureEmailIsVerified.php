@@ -25,19 +25,23 @@ class EnsureEmailIsVerified
         $user = $request->user();
         $verification = app(EmailVerificationService::class);
 
-        // Enforce ONLY when all of these hold: the feature is effectively
-        // enforceable RIGHT NOW (enabled + required + usable mail + valid
-        // transport-test proof — the temporary fail-safe for obligated users
-        // during an outage), the user is not an exempt admin, the address is
-        // still unverified, AND this specific account was registered under an
-        // effectively-required policy (immutable per-user marker — accounts
+        // Enforce ONLY when all of these hold: the feature is enforceable
+        // RIGHT NOW (enabled + usable mail + valid transport-test proof —
+        // the temporary fail-safe for obligated users during an outage), the
+        // user is not an exempt admin, the address is still unverified, AND
+        // this specific account CARRIES the obligation (per-user marker —
+        // stamped at registration under an effectively-required policy, or
+        // imposed by an explicit admin «require_verification»). The
+        // registration-wide "required" toggle is deliberately NOT consulted
+        // here: it only governs stamping of NEW registrations, so an
+        // admin-imposed obligation binds even in optional mode, and accounts
         // from disabled/optional/fail-safe intervals are never retroactively
-        // locked out, regardless of later toggles or proof recovery).
+        // locked out.
         if (
             $user === null
             || $user->email_verified_at !== null
             || $user->is_admin
-            || ! $verification->isRequiredOnRegister()
+            || ! $verification->isEnforceableNow()
             || ! $user->email_verification_required_at_registration
         ) {
             return $next($request);
