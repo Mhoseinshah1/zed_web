@@ -44,7 +44,7 @@ zdr_run() {
     local name="$1"; shift
     local t0 t1 rc out
     t0="$(date +%s)"
-    out="$(timeout "${ZDR_TIMEOUT}s" "$@" </dev/null 2>&1)"; rc=$?
+    out="$(timeout -k "${ZPD_KILL_GRACE:-10}" "${ZDR_TIMEOUT}s" "$@" </dev/null 2>&1)"; rc=$?
     t1="$(date +%s)"
     if [ "$rc" -eq 0 ]; then
         zdr_add "$name" ok "$(printf '%s' "$out" | head -n1)" "$((t1 - t0))"
@@ -95,6 +95,19 @@ zdr_check_releases() {
         zdr_add "state_file" ok "active_release=${state_active:-unknown}"
     fi
     zdr_add "deploy_env" "$([ -f "$(zpd_deploy_env_file)" ] && echo ok || echo warn)" "$(zpd_deploy_env_file)"
+    # Legacy-rollback snapshots: only a COMMITTED current-schema per-attempt
+    # snapshot is automatically usable; old-layout global snapshots are listed
+    # for MANUAL recovery only.
+    if [ -f "$(zpd_legacy_marker_file)" ]; then
+        zdr_add "legacy_snapshot_old_layout" warn "old-layout snapshot at $(zpd_legacy_marker_file) (manual recovery only — never used automatically)"
+    fi
+    if zpd_has_legacy_rollback 2>/dev/null; then
+        if zpd_legacy_rollback_valid 2>/dev/null; then
+            zdr_add "legacy_snapshot" ok "committed: $(zpd_legacy_snapshot_dir 2>/dev/null)"
+        else
+            zdr_add "legacy_snapshot" warn "pointer names an incomplete/old-schema snapshot (will be re-captured)"
+        fi
+    fi
 
     # Active-release manifest + identity, classified exactly like rollback
     # verification (dep_release_verify_mode) so the doctor cannot report ok on

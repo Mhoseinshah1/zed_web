@@ -464,7 +464,7 @@ jobs:
           grep -q 'zpd_maintenance_file' "$lib" \
             || { echo '::error::maintenance state is not detected via the framework file.'; exit 1; }
           # The health CLI probe must be bounded (timeout), never `|| true`.
-          grep -Eq 'timeout[[:space:]]+"?\$\{ZPD_HEALTH_CLI_TIMEOUT' "$dep" \
+          grep -Eq 'timeout[[:space:]]+(-k[[:space:]]+"?\$\{ZPD_KILL_GRACE\}"?[[:space:]]+)?"?\$\{ZPD_HEALTH_CLI_TIMEOUT' "$dep" \
             || { echo '::error::zedproxy:health CLI probe is not bounded by a timeout.'; exit 1; }
           echo 'Maintenance-readiness + bounded-probe invariants hold.'
 
@@ -576,7 +576,7 @@ jobs:
           # ── Adoption/compat require shared symlinks; DB/Redis probes bounded.
           grep -q 'dep_check_shared_links' "$dep" \
             || { echo '::error::shared-symlink verification missing from adoption/compat.'; exit 1; }
-          grep -Eq 'timeout[[:space:]]+"?\$\{ZPD_DB_PROBE_TIMEOUT' "$dep" \
+          grep -Eq 'timeout[[:space:]]+(-k[[:space:]]+"?\$\{ZPD_KILL_GRACE\}"?[[:space:]]+)?"?\$\{ZPD_DB_PROBE_TIMEOUT' "$dep" \
             || { echo '::error::PostgreSQL/Redis probes are not bounded.'; exit 1; }
           echo 'Transactionality + fail-closed repair invariants hold.'
 
@@ -688,6 +688,51 @@ jobs:
           grep -q 'state_reconcile_failed_after_success' "$dep" \
             || { echo '::error::degraded success (state reconcile failure) is not recorded.'; exit 1; }
           echo 'Bounded-command, exact-restore, and metadata-commit invariants hold.'
+
+      - name: Assert TERM-KILL, worker-fence, inventory, unknown-state, and fresh-snapshot behavior (Prompt 22)
+        run: |
+          set -euo pipefail
+          log=deploy-tests.log
+          # ── BEHAVIORAL evidence: the Prompt-22 test group must have RUN and
+          # PASSED in this very job (static greps alone are insufficient).
+          for line in \
+            'SIGTERM-ignoring child is SIGKILLed after the grace period' \
+            'deployment lock released after the bounded failure' \
+            'deploy fails when the worker fence cannot verify STOPPED' \
+            'current never switched' \
+            'failure recorded at stage=worker_stop' \
+            'wrapper capture failure fails the snapshot' \
+            'deploy.env bytes restored' \
+            'symlink target restored' \
+            'unknown systemd state blocks reconciliation' \
+            'systemctl timeout blocks reconciliation' \
+            'unparseable supervisor status is unknown' \
+            'committed snapshot records snapshot_complete=true' \
+            'restore refuses an uncommitted snapshot' \
+            'restore refuses an old-schema snapshot'; do
+            grep -F "ok   - " "$log" | grep -qF "$line" \
+              || { echo "::error::Prompt-22 behavioral test did not pass: ${line}"; exit 1; }
+          done
+          if grep -F "  FAIL - " "$log" >/dev/null; then echo '::error::deploy suite has failures.'; exit 1; fi
+          # ── Static invariants for the same fixes.
+          dep=scripts/deploy/deploy.sh
+          grep -q 'dep_svc() { timeout -k' "$dep" \
+            || { echo '::error::dep_svc is not TERM-then-KILL bounded.'; exit 1; }
+          if grep -nE 'timeout "\$\{ZPD_[A-Z_]+(_TIMEOUT[^}]*)?\}s?"' "$dep" scripts/lib/deploy-lib.sh scripts/deploy/doctor.sh | grep -v 'timeout -k'; then
+            echo '::error::plain (non -k) timeout invocation remains.'; exit 1
+          fi
+          grep -q 'dep_stop_workers()' "$dep" && grep -q 'worker_stop_failed' "$dep" \
+            || { echo '::error::required worker fencing missing.'; exit 1; }
+          grep -q 'inventory.tsv' "$dep" && grep -q 'sha256sum' "$dep" \
+            || { echo '::error::manifest-driven snapshot inventory missing.'; exit 1; }
+          grep -q 'zpw_backup_wrappers .*|| true' "$dep" \
+            && { echo '::error::wrapper snapshot is still fail-open.'; exit 1; }
+          grep -q '_dep_systemd_state_class' "$dep" \
+            || { echo '::error::explicit systemd state classification missing.'; exit 1; }
+          grep -q 'snapshot_complete' scripts/lib/deploy-lib.sh \
+            && grep -q 'snapshot_schema_version' scripts/lib/deploy-lib.sh \
+            || { echo '::error::committed fresh-snapshot protocol missing.'; exit 1; }
+          echo 'Prompt-22 behavioral coverage and invariants hold.'
 
       # ── Supply-chain verification (authoritative home; formerly the separate
       #    supply-chain.yml workflow, folded in here to remove duplicate jobs). ──

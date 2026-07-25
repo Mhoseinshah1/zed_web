@@ -260,7 +260,7 @@ zpd_resolve_sha() {
     [ -n "$repo" ] && [ -n "$ref" ] || return 1
     local out rc
     # Network operation — bounded so a wedged remote can never hang the deploy.
-    out="$(timeout "${ZPD_GIT_NET_TIMEOUT:-60}s" \
+    out="$(timeout -k "${ZPD_KILL_GRACE:-10}" "${ZPD_GIT_NET_TIMEOUT:-60}s" \
             env GIT_TERMINAL_PROMPT=0 \
             "${ZPD_GIT:-git}" ls-remote "$repo" "$ref" "${ref}^{}" </dev/null 2>"$errfile")"; rc=$?
     if [ "$rc" -ne 0 ]; then
@@ -299,13 +299,13 @@ zpd_git_clone_ref() {
     local net_to="${ZPD_GIT_CLONE_TIMEOUT:-900}"
     [ -n "$repo" ] && [ -n "$ref" ] && [ -n "$dest" ] || return 1
     rm -rf "$dest" 2>/dev/null || true
-    if ! timeout "${net_to}s" env GIT_TERMINAL_PROMPT=0 \
+    if ! timeout -k "${ZPD_KILL_GRACE:-10}" "${net_to}s" env GIT_TERMINAL_PROMPT=0 \
             "$git" clone "$repo" "$dest" </dev/null >>"$err" 2>&1; then
         rm -rf "$dest" 2>/dev/null || true
         return 1
     fi
     # Ensure tags are present (annotated + lightweight) for tag refs.
-    timeout "${ZPD_GIT_NET_TIMEOUT:-60}s" env GIT_TERMINAL_PROMPT=0 \
+    timeout -k "${ZPD_KILL_GRACE:-10}" "${ZPD_GIT_NET_TIMEOUT:-60}s" env GIT_TERMINAL_PROMPT=0 \
         "$git" -C "$dest" fetch --tags --force --quiet origin </dev/null >>"$err" 2>&1 || true
     if ! "$git" -C "$dest" checkout --quiet --detach "$ref" </dev/null >>"$err" 2>&1; then
         rm -rf "$dest" 2>/dev/null || true
@@ -665,133 +665,188 @@ zpd_manifest_schema_version() { printf '2'; }
 
 zpd_legacy_marker_file() { printf '%s/shared/deploy/legacy-rollback.json' "$(zpd_base)"; }
 
-# zpd_save_legacy_rollback BASE NGINX_CONF SUPERVISOR_CONF SCHED_CRON
+# Fresh per-attempt snapshots live under a dedicated directory; a pointer file
+# names the COMMITTED snapshot for the current attempt. Old global snapshots
+# (the pre-pointer layout above) are never used automatically — the doctor may
+# list them for manual recovery.
+zpd_legacy_snapshots_dir()   { printf '%s/shared/deploy/legacy-snapshots' "$(zpd_base)"; }
+zpd_legacy_pointer_file()    { printf '%s/current.ptr' "$(zpd_legacy_snapshots_dir)"; }
+zpd_legacy_snapshot_schema() { printf '2'; }
+
+# zpd_save_legacy_rollback BASE NGINX_CONF SUPERVISOR_CONF SCHED_CRON [ID]
 #
-# MANDATORY, VERIFIED snapshot of the pre-cutover config files (including the
-# loopback health vhost) so first-cutover rollback can restore them exactly.
-# Every existing source is copied AND verified (cmp); its mode and ownership
-# are recorded; sources that did not exist are recorded as absent so restore
-# can remove files the failed cutover created. Returns non-zero on ANY capture
-# failure — the first cutover must never start without a complete rollback path.
+# FRESH, IMMUTABLE, PER-ATTEMPT snapshot of the pre-cutover configuration.
+# Every first-cutover attempt captures its OWN release-scoped snapshot — a
+# complete-looking snapshot from an earlier attempt is never reused (it may no
+# longer match the current pre-cutover state). The capture is transactional:
+#   1. everything is written into a TEMPORARY directory (<id>.tmp)
+#   2. every source (nginx, supervisor, scheduler, local-health vhost,
+#      deploy.env — plus the wrapper set when the wrapper library is loaded)
+#      is copied, cmp-verified, SHA-256-fingerprinted, and recorded in the map
+#      with its mode/ownership/existence
+#   3. marker.json records snapshot_schema_version and snapshot_complete=false
+#   4. every artifact + metadata record is re-verified
+#   5. marker.json is rewritten with snapshot_complete=true and the directory
+#      is ATOMICALLY renamed to its final name; only then is the pointer file
+#      atomically updated to name this snapshot
+# Only a pointer to a committed (snapshot_complete=true, current-schema)
+# snapshot permits maintenance/migration to start. Returns non-zero on ANY
+# capture failure.
 zpd_save_legacy_rollback() {
-    local base="$1" nginx="$2" super="$3" cron="$4"
-    local dir lh map; dir="$(dirname "$(zpd_legacy_marker_file)")"
+    local base="$1" nginx="$2" super="$3" cron="$4" id="${5:-}"
+    local snaps tmp final map lh envf ptr ptmp
+    [ -n "$id" ] || id="$(date -u +%Y%m%d%H%M%S).$$"
+    snaps="$(zpd_legacy_snapshots_dir)"
+    tmp="${snaps}/${id}.tmp"
+    final="${snaps}/${id}"
     lh="$(zpd_local_health_conf_path)"
-    mkdir -p "$dir" 2>/dev/null || return 1
-    map="${dir}/legacy-files.map"
+    envf="$(zpd_deploy_env_file)"
+    mkdir -p "$snaps" 2>/dev/null || return 1
+    chmod 700 "$snaps" 2>/dev/null || true
+    rm -rf "$tmp" 2>/dev/null || return 1
+    [ -e "$final" ] && return 1                    # ids are per-attempt unique
+    mkdir -p "$tmp" 2>/dev/null || return 1
+    map="${tmp}/legacy-files.map"
     : > "$map" || return 1
     chmod 600 "$map" 2>/dev/null || true
-    # name TAB path TAB mode TAB uid:gid TAB existed
-    local name src snap
-    for name in nginx supervisor scheduler localhealth; do
+    # name TAB path TAB mode TAB uid:gid TAB existed TAB sha256
+    local name src snap sha
+    for name in nginx supervisor scheduler localhealth deployenv; do
         case "$name" in
             nginx)       src="$nginx" ;;
             supervisor)  src="$super" ;;
             scheduler)   src="$cron" ;;
             localhealth) src="$lh" ;;
+            deployenv)   src="$envf" ;;
         esac
-        snap="${dir}/${name}.legacy"
+        snap="${tmp}/${name}.legacy"
         if [ -f "$src" ]; then
             cp -a "$src" "$snap" 2>/dev/null || return 1
             cmp -s "$src" "$snap"            || return 1
-            printf '%s\t%s\t%s\t%s\t1\n' "$name" "$src" \
-                "$(stat -c '%a' "$src" 2>/dev/null)" "$(stat -c '%u:%g' "$src" 2>/dev/null)" >> "$map" || return 1
+            sha="$(sha256sum "$snap" 2>/dev/null | awk '{print $1}')"
+            [ -n "$sha" ] || return 1
+            printf '%s\t%s\t%s\t%s\t1\t%s\n' "$name" "$src" \
+                "$(stat -c '%a' "$src" 2>/dev/null)" "$(stat -c '%u:%g' "$src" 2>/dev/null)" "$sha" >> "$map" || return 1
         else
-            rm -f "$snap" 2>/dev/null || true
-            printf '%s\t%s\t\t\t0\n' "$name" "$src" >> "$map" || return 1
+            printf '%s\t%s\t\t\t0\t-\n' "$name" "$src" >> "$map" || return 1
         fi
     done
-    zpd_write_manifest "$(zpd_legacy_marker_file)" \
+    # Wrapper commands + bootstrap library — REQUIRED verified capture.
+    if declare -F zpw_backup_wrappers >/dev/null 2>&1; then
+        zpw_backup_wrappers "${tmp}/wrappers" >/dev/null 2>&1 || return 1
+    fi
+    zpd_write_manifest "${tmp}/marker.json" \
         "legacy_base=${base}" "nginx_conf=${nginx}" "supervisor_conf=${super}" \
-        "scheduler_cron=${cron}" "local_health_conf=${lh}" \
-        "created_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        "scheduler_cron=${cron}" "local_health_conf=${lh}" "deploy_env=${envf}" \
+        "snapshot_schema_version=$(zpd_legacy_snapshot_schema)" \
+        "snapshot_complete=false" \
+        "created_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" || return 1
+    # Re-verify EVERY recorded artifact before committing.
+    _zpd_legacy_map_verified "$tmp" || return 1
+    zpd_write_manifest "${tmp}/marker.json" \
+        "legacy_base=${base}" "nginx_conf=${nginx}" "supervisor_conf=${super}" \
+        "scheduler_cron=${cron}" "local_health_conf=${lh}" "deploy_env=${envf}" \
+        "snapshot_schema_version=$(zpd_legacy_snapshot_schema)" \
+        "snapshot_complete=true" \
+        "created_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" || return 1
+    mv -T "$tmp" "$final" 2>/dev/null || return 1   # atomic commit
+    # Atomic pointer update — the pointer only ever names a COMMITTED snapshot.
+    ptr="$(zpd_legacy_pointer_file)"
+    ptmp="${ptr}.tmp"
+    printf '%s\n' "$final" > "$ptmp" || return 1
+    chmod 600 "$ptmp" 2>/dev/null || true
+    mv -f "$ptmp" "$ptr" || return 1
+    return 0
 }
 
-# zpd_has_legacy_rollback — return 0 if a saved legacy snapshot exists.
-zpd_has_legacy_rollback() { [ -f "$(zpd_legacy_marker_file)" ]; }
-
-# zpd_legacy_rollback_valid — 0 only when the saved legacy snapshot is COMPLETE
-# and usable: the marker exists, the verified map format is present, and every
-# artifact the map records as existing is a non-empty readable snapshot copy.
-# Old-format markers (written by earlier updaters WITHOUT the verified map —
-# possibly even when individual copies failed) are NOT valid: the caller must
-# re-capture before relying on the snapshot as a first-cutover rollback path.
-zpd_legacy_rollback_valid() {
-    local marker dir map name path mode owner existed
-    local seen_nginx=0 seen_super=0 seen_sched=0 seen_lh=0
-    marker="$(zpd_legacy_marker_file)"
-    [ -f "$marker" ] || return 1
-    dir="$(dirname "$marker")"
+# _zpd_legacy_map_verified DIR — every map record must be present (all five
+# managed names) and every existing artifact must be readable, non-empty, and
+# match its recorded SHA-256. Used both before commit and before restore.
+_zpd_legacy_map_verified() {
+    local dir="$1" map name path mode owner existed sha have
+    local seen_nginx=0 seen_super=0 seen_sched=0 seen_lh=0 seen_env=0
     map="${dir}/legacy-files.map"
     [ -f "$map" ] || return 1
-    while IFS=$'\t' read -r name path mode owner existed; do
+    while IFS=$'\t' read -r name path mode owner existed sha; do
         [ -n "$name" ] || continue
         if [ "$existed" = "1" ]; then
             [ -s "${dir}/${name}.legacy" ] && [ -r "${dir}/${name}.legacy" ] || return 1
+            have="$(sha256sum "${dir}/${name}.legacy" 2>/dev/null | awk '{print $1}')"
+            [ -n "$have" ] && [ "$have" = "$sha" ] || return 1
         fi
         case "$name" in
             nginx)       seen_nginx=1 ;;
             supervisor)  seen_super=1 ;;
             scheduler)   seen_sched=1 ;;
             localhealth) seen_lh=1 ;;
+            deployenv)   seen_env=1 ;;
         esac
     done < "$map"
-    # An empty or TRUNCATED map (e.g. a recapture that failed mid-write while
-    # an older marker survived) must never pass: every managed source needs a
-    # recorded entry — existing artifact or explicit recorded absence.
-    [ "$seen_nginx" = "1" ] && [ "$seen_super" = "1" ] \
-        && [ "$seen_sched" = "1" ] && [ "$seen_lh" = "1" ]
+    [ "$seen_nginx" = "1" ] && [ "$seen_super" = "1" ] && [ "$seen_sched" = "1" ] \
+        && [ "$seen_lh" = "1" ] && [ "$seen_env" = "1" ]
 }
 
-# zpd_restore_legacy_rollback — restore the snapshotted nginx/supervisor/cron
-# files (used when the first cutover fails). Returns 0 on success.
-# zpd_restore_legacy_rollback — EXACT, FAIL-CLOSED restore of the pre-cutover
-# state. Every copy/remove/chmod/chown error accumulates into the return code;
-# restored content is verified with cmp and modes/ownership are re-applied from
-# the recorded values; files that did not exist before the cutover are removed
-# (and verified absent). Legacy-map installations (pre-map markers) fall back
-# to best-effort copies but still verify content.
-zpd_restore_legacy_rollback() {
-    local marker; marker="$(zpd_legacy_marker_file)"
+# zpd_legacy_snapshot_dir — print the COMMITTED snapshot directory the pointer
+# names, or nothing when no committed snapshot exists.
+zpd_legacy_snapshot_dir() {
+    local ptr dir
+    ptr="$(zpd_legacy_pointer_file)"
+    [ -f "$ptr" ] || return 1
+    dir="$(cat "$ptr" 2>/dev/null)"
+    [ -n "$dir" ] && [ -d "$dir" ] || return 1
+    printf '%s' "$dir"
+}
+
+# zpd_has_legacy_rollback — a committed per-attempt snapshot exists. Old-layout
+# global markers (legacy-rollback.json) do NOT count — they are listed by the
+# doctor for manual recovery only, never used as an automatic rollback path.
+zpd_has_legacy_rollback() { zpd_legacy_snapshot_dir >/dev/null 2>&1; }
+
+# zpd_legacy_rollback_valid — the pointed-to snapshot is COMMITTED
+# (snapshot_complete=true), carries the CURRENT snapshot schema version, has a
+# record for every managed source, and every artifact matches its recorded
+# SHA-256. An interrupted (.tmp / snapshot_complete=false), truncated,
+# old-schema, or old-layout snapshot is NEVER valid.
+zpd_legacy_rollback_valid() {
+    local dir marker
+    dir="$(zpd_legacy_snapshot_dir)" || return 1
+    marker="${dir}/marker.json"
     [ -f "$marker" ] || return 1
+    [ "$(zpd_manifest_get "$marker" snapshot_complete 2>/dev/null)" = "true" ] || return 1
+    [ "$(zpd_manifest_get "$marker" snapshot_schema_version 2>/dev/null)" = "$(zpd_legacy_snapshot_schema)" ] || return 1
+    _zpd_legacy_map_verified "$dir"
+}
+
+# zpd_restore_legacy_rollback — EXACT, FAIL-CLOSED restore of the pre-cutover
+# state from THIS ATTEMPT's committed snapshot. The snapshot must validate
+# (committed, current schema, complete, SHA-verified) — an old-layout or
+# interrupted snapshot is refused, never silently applied. Every
+# copy/remove/chmod/chown error accumulates into the return code; restored
+# content is cmp-verified; files that did not exist before the cutover are
+# removed (verified absent); the wrapper set is restored fail-closed.
+zpd_restore_legacy_rollback() {
     local dir map rc=0
-    dir="$(dirname "$marker")"
+    dir="$(zpd_legacy_snapshot_dir)" || return 1
+    zpd_legacy_rollback_valid       || return 1
     map="${dir}/legacy-files.map"
-    if [ -f "$map" ]; then
-        local name path mode owner existed snap
-        while IFS=$'\t' read -r name path mode owner existed; do
-            [ -n "$name" ] && [ -n "$path" ] || continue
-            snap="${dir}/${name}.legacy"
-            if [ "$existed" = "1" ]; then
-                if ! cp "$snap" "$path" 2>/dev/null || ! cmp -s "$snap" "$path"; then
-                    rc=1; continue
-                fi
-                [ -n "$mode" ]  && { chmod "$mode" "$path" 2>/dev/null || rc=1; }
-                [ -n "$owner" ] && { chown "$owner" "$path" 2>/dev/null || rc=1; }
-            else
-                rm -f "$path" 2>/dev/null || rc=1
-                [ -e "$path" ] && rc=1     # the cutover-created file must be GONE
+    local name path mode owner existed sha snap
+    while IFS=$'\t' read -r name path mode owner existed sha; do
+        [ -n "$name" ] && [ -n "$path" ] || continue
+        snap="${dir}/${name}.legacy"
+        if [ "$existed" = "1" ]; then
+            if ! cp "$snap" "$path" 2>/dev/null || ! cmp -s "$snap" "$path"; then
+                rc=1; continue
             fi
-        done < "$map"
-        return "$rc"
-    fi
-    # Pre-map marker (older snapshot): best-effort copies, content-verified.
-    local nginx super cron lh
-    nginx="$(zpd_manifest_get "$marker" nginx_conf)"
-    super="$(zpd_manifest_get "$marker" supervisor_conf)"
-    cron="$(zpd_manifest_get "$marker" scheduler_cron)"
-    lh="$(zpd_manifest_get "$marker" local_health_conf)"
-    [ -z "$lh" ] && lh="$(zpd_local_health_conf_path)"
-    local s d
-    for s in nginx supervisor scheduler localhealth; do
-        case "$s" in
-            nginx) d="$nginx" ;; supervisor) d="$super" ;;
-            scheduler) d="$cron" ;; localhealth) d="$lh" ;;
-        esac
-        if [ -f "${dir}/${s}.legacy" ] && [ -n "$d" ]; then
-            cp "${dir}/${s}.legacy" "$d" 2>/dev/null && cmp -s "${dir}/${s}.legacy" "$d" || rc=1
+            [ -n "$mode" ]  && { chmod "$mode" "$path" 2>/dev/null || rc=1; }
+            [ -n "$owner" ] && { chown "$owner" "$path" 2>/dev/null || rc=1; }
+        else
+            rm -f "$path" 2>/dev/null || rc=1
+            [ -e "$path" ] && rc=1     # the cutover-created file must be GONE
         fi
-    done
+    done < "$map"
+    if declare -F zpw_restore_wrappers >/dev/null 2>&1 && [ -d "${dir}/wrappers" ]; then
+        zpw_restore_wrappers "${dir}/wrappers" || rc=1
+    fi
     return "$rc"
 }
 

@@ -178,12 +178,24 @@ zpw_install_wrappers() {
 # their basenames) so a failed first cutover can restore them. Missing files are
 # skipped. Returns 0.
 # -----------------------------------------------------------------------------
+# FAIL-CLOSED: every existing managed file (wrapper commands AND the bootstrap
+# library) must be copied and content-verified; recorded absence lets restore
+# remove files a failed transaction created. Returns non-zero on ANY error.
 zpw_backup_wrappers() {
-    local dir="$1" p
+    local dir="$1" p b
     [ -n "$dir" ] || return 1
     mkdir -p "$dir" 2>/dev/null || return 1
+    : > "${dir}/wrappers.map" || return 1
     while IFS= read -r p; do
-        [ -e "$p" ] && cp -a "$p" "${dir}/$(basename "$p")" 2>/dev/null || true
+        b="${dir}/$(basename "$p")"
+        if [ -e "$p" ]; then
+            cp -a "$p" "$b" 2>/dev/null || return 1
+            cmp -s "$p" "$b"            || return 1
+            printf '%s\t1\n' "$p" >> "${dir}/wrappers.map" || return 1
+        else
+            rm -f "$b" 2>/dev/null || true
+            printf '%s\t0\n' "$p" >> "${dir}/wrappers.map" || return 1
+        fi
     done < <(zpw_managed_paths)
     return 0
 }
@@ -193,19 +205,25 @@ zpw_backup_wrappers() {
 # zpw_backup_wrappers. Files absent from the backup are removed so the wrapper
 # set matches the pre-cutover state exactly. Returns 0.
 # -----------------------------------------------------------------------------
+# FAIL-CLOSED: every restore copy is content-verified and every removal is
+# verified absent; any error accumulates into a non-zero return code — a
+# caller can never report wrappers "restored" over a partial copy.
 zpw_restore_wrappers() {
-    local dir="$1" p b
+    local dir="$1" p b rc=0
     [ -d "$dir" ] || return 1
     while IFS= read -r p; do
         b="${dir}/$(basename "$p")"
         if [ -e "$b" ]; then
-            mkdir -p "$(dirname "$p")" 2>/dev/null || true
-            cp -a "$b" "$p" 2>/dev/null || true
+            mkdir -p "$(dirname "$p")" 2>/dev/null || { rc=1; continue; }
+            if ! cp -a "$b" "$p" 2>/dev/null || ! cmp -s "$b" "$p"; then
+                rc=1; continue
+            fi
         else
-            rm -f "$p" 2>/dev/null || true
+            rm -f "$p" 2>/dev/null || rc=1
+            [ -e "$p" ] && rc=1
         fi
     done < <(zpw_managed_paths)
-    return 0
+    return "$rc"
 }
 
 # -----------------------------------------------------------------------------

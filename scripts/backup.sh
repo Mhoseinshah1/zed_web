@@ -37,7 +37,7 @@ echo "[$(date)] Starting backup: $FILENAME"
 # ZPD_BACKUP_TIMEOUT for very large databases).
 # PGPASSWORD travels via the environment (prefix assignment), never as an argv
 # word under timeout/env where /proc/*/cmdline would expose it while the dump runs.
-if ! PGPASSWORD="$DB_PASSWORD" timeout "${ZPD_BACKUP_TIMEOUT:-3600}s" pg_dump \
+if ! PGPASSWORD="$DB_PASSWORD" timeout -k 10 "${ZPD_BACKUP_TIMEOUT:-3600}s" pg_dump \
     -h "$DB_HOST" \
     -p "$DB_PORT" \
     -U "$DB_USERNAME" \

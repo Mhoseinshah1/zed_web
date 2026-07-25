@@ -138,7 +138,9 @@ cat > "${MOCKBIN}/systemctl" <<'EOF'
 #!/usr/bin/env bash
 # Per-unit-type states: *.timer queries answer MOCK_TIMER_*, everything else
 # answers MOCK_SVC_* (falling back to MOCK_TIMER_*), so a stopped .service with
-# an enabled companion .timer can be modelled.
+# an enabled companion .timer can be modelled. MOCK_SYSTEMCTL_HANG hangs EVERY
+# query (models an unresponsive systemd → bounded callers must time out).
+[ "${MOCK_SYSTEMCTL_HANG:-0}" = "1" ] && sleep 60
 case "${1:-}" in
   is-enabled)
     case "${2:-}" in
@@ -150,6 +152,12 @@ case "${1:-}" in
     case "${2:-}" in
       *.timer) echo "${MOCK_TIMER_ACTIVE:-active}" ;;
       *)       echo "${MOCK_SVC_ACTIVE:-${MOCK_TIMER_ACTIVE:-active}}" ;;
+    esac
+    exit 0 ;;
+  list-unit-files)
+    # A companion timer is "known to systemd" only when MOCK_TIMER_LISTED=1.
+    case "${2:-}" in
+      *.timer) [ "${MOCK_TIMER_LISTED:-0}" = "1" ] && echo "${2} ${MOCK_TIMER_ENABLED:-enabled}" ;;
     esac
     exit 0 ;;
 esac
@@ -164,13 +172,31 @@ EOF
 cat > "${MOCKBIN}/supervisorctl" <<'EOF'
 #!/usr/bin/env bash
 [ "${MOCK_SUP_HANG:-0}" = "1" ] && sleep 60
+# Hostile child: IGNORES SIGTERM — only SIGKILL (timeout -k grace) can end it.
+if [ "${MOCK_SUP_IGNORE_TERM:-0}" = "1" ]; then
+  trap '' TERM
+  sleep 60 & wait $!
+  exit 0
+fi
+# Stateful worker group: `stop` moves it to STOPPED, `start`/`restart` back to
+# RUNNING — so the required worker fence sees a real stop→verify transition.
+# An explicit MOCK_SUP_STATUS always wins (used to model FATAL/refusing states).
+statefile="${ZPD_BASE:-/tmp}/.mock-sup-state"
 case "${1:-}" in
   reread)  exit ${MOCK_SUP_REREAD_RC:-0} ;;
   update)  exit ${MOCK_SUP_UPDATE_RC:-0} ;;
-  restart) exit ${MOCK_SUP_RESTART_RC:-0} ;;
-  start)   exit 0 ;;
-  stop)    exit 0 ;;
-  status)  printf '%s\n' "${MOCK_SUP_STATUS:-zedproxy-worker:zedproxy-worker_00   RUNNING   pid 100, uptime 0:00:05}"; exit ${MOCK_SUP_STATUS_RC:-0} ;;
+  restart) rc=${MOCK_SUP_RESTART_RC:-0}; [ "$rc" = "0" ] && echo running > "$statefile" 2>/dev/null; exit $rc ;;
+  start)   echo running > "$statefile" 2>/dev/null; exit 0 ;;
+  stop)    [ "${MOCK_SUP_STOP_RC:-0}" = "0" ] && echo stopped > "$statefile" 2>/dev/null; exit ${MOCK_SUP_STOP_RC:-0} ;;
+  status)
+    if [ -n "${MOCK_SUP_STATUS+x}" ]; then
+      printf '%s\n' "$MOCK_SUP_STATUS"
+    elif [ "$(cat "$statefile" 2>/dev/null)" = "stopped" ]; then
+      printf 'zedproxy-worker:zedproxy-worker_00   STOPPED   Jul 25 08:00 AM\n'
+    else
+      printf 'zedproxy-worker:zedproxy-worker_00   RUNNING   pid 100, uptime 0:00:05\n'
+    fi
+    exit ${MOCK_SUP_STATUS_RC:-0} ;;
   *)       exit 0 ;;
 esac
 EOF
@@ -1686,7 +1712,7 @@ echo "-- mandatory legacy rollback snapshot --"
 
 # R2a. Snapshot creation failure is DETECTED (capture is verified).
 new_base; make_legacy_base; setup_legacy_service_configs
-mkdir -p "${BASE}/shared/deploy/nginx.legacy"      # cp target blocked → capture fails
+mkdir -p "${BASE}/shared/deploy"; : > "${BASE}/shared/deploy/legacy-snapshots"  # dir blocked → capture fails
 ( zpd_save_legacy_rollback "$BASE" "$ZPD_NGINX_CONF" "$ZPD_SUPERVISOR_CONF" "$ZPD_SCHED_CRON" 2>/dev/null ); \
   assert_rc 1 "$?" "legacy snapshot capture failure returns non-zero"
 rm -rf "$BASE"
@@ -1696,7 +1722,7 @@ rm -rf "$BASE"
 new_base; mk_source_repo; make_legacy_base; setup_legacy_service_configs
 export ZPD_REPO_URL="$SRC_BARE" ZPD_REF=main
 nginx_before="$(cat "$ZPD_NGINX_CONF")"
-mkdir -p "${BASE}/shared" && mkdir -p "${BASE}/shared/deploy/nginx.legacy"
+mkdir -p "${BASE}/shared/deploy" && : > "${BASE}/shared/deploy/legacy-snapshots"
 ( MOCK_HTTP_CODE=200 dep_main >/dev/null 2>&1 ); rc=$?
 assert_rc 1 "$rc" "first cutover aborts when the legacy snapshot fails"
 assert_eq "$(zpd_manifest_get "${BASE}/shared/deploy/last-failure.json" stage)" "legacy_snapshot" "failure recorded at stage=legacy_snapshot"
@@ -2012,16 +2038,18 @@ new_base
 assert_false bash -c "grep -RqE 'env[[:space:]]+PGPASSWORD=' '$REPO_ROOT/scripts' '$REPO_ROOT/install.sh' '$REPO_ROOT/update.sh'"
 rm -rf "$BASE"
 
-# Y2. An OLD-FORMAT legacy marker (no verified map) or a snapshot with a
-#     missing artifact is NOT a valid rollback path; a fresh capture is.
+# Y2. An OLD-LAYOUT global marker (pre-pointer format) is never an automatic
+#     rollback path; a committed fresh capture is; a lost artifact invalidates.
 new_base; make_legacy_base; setup_legacy_service_configs
 mkdir -p "${BASE}/shared/deploy"
-zpd_write_manifest "${BASE}/shared/deploy/legacy-rollback.json" "legacy_base=${BASE}"   # old format: marker only
-assert_true zpd_has_legacy_rollback
+zpd_write_manifest "${BASE}/shared/deploy/legacy-rollback.json" "legacy_base=${BASE}"   # old layout: global marker
+assert_false zpd_has_legacy_rollback
 assert_false zpd_legacy_rollback_valid
 zpd_save_legacy_rollback "$BASE" "$ZPD_NGINX_CONF" "$ZPD_SUPERVISOR_CONF" "$ZPD_SCHED_CRON"
+assert_true zpd_has_legacy_rollback
 assert_true zpd_legacy_rollback_valid
-rm -f "${BASE}/shared/deploy/nginx.legacy"                                              # artifact lost
+snapdir="$(zpd_legacy_snapshot_dir)"
+rm -f "${snapdir}/nginx.legacy"                                                         # artifact lost
 assert_false zpd_legacy_rollback_valid
 rm -rf "$BASE"
 
@@ -2030,11 +2058,11 @@ rm -rf "$BASE"
 new_base; sha="$(mk_release_git 20260101000000-aaaaaaaaaaaa)"; zpd_switch_current 20260101000000-aaaaaaaaaaaa
 setup_atomic_service_configs; rm -f "$ZPD_SCHED_CRON"
 printf '[Service]\nExecStart=/usr/bin/php %s/current/artisan schedule:run\n' "$BASE" > "${BASE}/systemd/zp-sched.service"
-( MOCK_SVC_ENABLED=static MOCK_SVC_ACTIVE=inactive MOCK_TIMER_ENABLED=enabled MOCK_TIMER_ACTIVE=active \
+( MOCK_TIMER_LISTED=1 MOCK_SVC_ENABLED=static MOCK_SVC_ACTIVE=inactive MOCK_TIMER_ENABLED=enabled MOCK_TIMER_ACTIVE=active \
     dep_reconcile_scheduler "$BASE" >/dev/null 2>&1 ); \
   assert_rc 1 "$?" "stopped service with an ACTIVE companion timer blocks reconciliation"
 rm -f "$ZPD_SCHED_CRON"
-( MOCK_SVC_ENABLED=static MOCK_SVC_ACTIVE=inactive MOCK_TIMER_ENABLED=disabled MOCK_TIMER_ACTIVE=inactive \
+( MOCK_TIMER_LISTED=1 MOCK_SVC_ENABLED=static MOCK_SVC_ACTIVE=inactive MOCK_TIMER_ENABLED=disabled MOCK_TIMER_ACTIVE=inactive \
     dep_reconcile_scheduler "$BASE" >/dev/null 2>&1 ); \
   assert_rc 0 "$?" "stopped service with an inactive companion timer is a leftover"
 rm -rf "$BASE"
@@ -2076,8 +2104,9 @@ rm -rf "$BASE"
 new_base; make_legacy_base; setup_legacy_service_configs
 zpd_save_legacy_rollback "$BASE" "$ZPD_NGINX_CONF" "$ZPD_SUPERVISOR_CONF" "$ZPD_SCHED_CRON"
 assert_true zpd_legacy_rollback_valid
-grep -v '^scheduler	' "${BASE}/shared/deploy/legacy-files.map" > "${BASE}/map.tmp" \
-  && mv "${BASE}/map.tmp" "${BASE}/shared/deploy/legacy-files.map"
+snapdir="$(zpd_legacy_snapshot_dir)"
+grep -v '^scheduler	' "${snapdir}/legacy-files.map" > "${BASE}/map.tmp" \
+  && mv "${BASE}/map.tmp" "${snapdir}/legacy-files.map"
 assert_false zpd_legacy_rollback_valid
 rm -rf "$BASE"
 
@@ -2086,6 +2115,182 @@ rm -rf "$BASE"
 #     only in production).
 assert_true bash -c "grep -q 'rm -f \"\$BACKUP_DIR/\$FILENAME\"' '$REPO_ROOT/scripts/backup.sh'"
 assert_true bash -c "grep -qE 'if ! PGPASSWORD' '$REPO_ROOT/scripts/backup.sh'"
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Prompt 22 — behavioral test group
+# ═════════════════════════════════════════════════════════════════════════════
+
+echo "-- P22: TERM-then-KILL bounds (SIGTERM-ignoring child) --"
+
+# W1a. A child that IGNORES SIGTERM is still killed after the grace period.
+t0=$SECONDS
+( MOCK_SUP_IGNORE_TERM=1 ZPD_SVC_TIMEOUT=1 ZPD_KILL_GRACE=1 dep_svc "$ZPD_SUPERVISORCTL" status >/dev/null 2>&1 ); rc=$?
+elapsed=$((SECONDS - t0))
+assert_rc 137 "$rc" "SIGTERM-ignoring child is SIGKILLed after the grace period"
+assert_true test "$elapsed" -lt 10
+
+# W1b. Full script run (with the real flock wrapper): a SIGTERM-ignoring hang
+#      cannot wedge the deployment, and the DEPLOYMENT LOCK is released.
+t0=$SECONDS
+new_base; mk_source_repo
+psha="$(mk_release_git 20260101000000-aaaaaaaaaaaa)"; zpd_switch_current 20260101000000-aaaaaaaaaaaa
+setup_atomic_service_configs; zpw_install_wrappers >/dev/null 2>&1
+( ZPD_REPO_URL="$SRC_BARE" ZPD_REF=main MOCK_SUP_IGNORE_TERM=1 ZPD_SVC_TIMEOUT=1 ZPD_KILL_GRACE=1 \
+  ZPD_WORKER_STOP_TIMEOUT=4 MOCK_HTTP_CODE=200 bash "$DEPLOY" >/dev/null 2>&1 ); rc=$?
+elapsed=$((SECONDS - t0))
+assert_true test "$rc" -ne 0
+assert_true test "$elapsed" -lt 120
+( exec 9>>"$ZPD_LOCK_FILE"; flock -n 9 ); assert_rc 0 "$?" "deployment lock released after the bounded failure"
+rm -rf "$BASE" "$(dirname "$SRC_BARE")"
+
+echo "-- P22: required worker fencing (migrate never runs after a failed fence) --"
+
+# W2. Workers that never verify STOPPED abort BEFORE migrations: migrate is not
+#     executed, current does not switch, operational config is untouched,
+#     maintenance is cleared, and failure_stage=worker_stop.
+new_base; mk_source_repo
+psha="$(mk_release_git 20260101000000-aaaaaaaaaaaa)"; zpd_switch_current 20260101000000-aaaaaaaaaaaa
+setup_atomic_service_configs; zpw_install_wrappers >/dev/null 2>&1
+nginx_before="$(cat "$ZPD_NGINX_CONF")"
+export MOCK_LOG="${BASE}/php-invocations.log"; : > "$MOCK_LOG"
+( export MOCK_LOG; ZPD_REPO_URL="$SRC_BARE" ZPD_REF=main ZPD_WORKER_STOP_TIMEOUT=4 \
+  MOCK_SUP_STATUS='zedproxy-worker:zedproxy-worker_00   RUNNING   pid 100, uptime 0:00:05' \
+  MOCK_HTTP_CODE=200 dep_main >/dev/null 2>&1 ); rc=$?
+assert_rc 1 "$rc" "deploy fails when the worker fence cannot verify STOPPED"
+assert_false bash -c "grep -q 'artisan migrate' '$MOCK_LOG'"
+assert_eq "$(zpd_current_release)" "20260101000000-aaaaaaaaaaaa" "current never switched"
+assert_eq "$(cat "$ZPD_NGINX_CONF")" "$nginx_before" "operational config untouched"
+assert_false zpd_is_in_maintenance "$(zpd_current_link)"
+assert_eq "$(zpd_manifest_get "${BASE}/shared/deploy/last-failure.json" stage)" "worker_stop" "failure recorded at stage=worker_stop"
+attempted="$(ls "$BASE/releases" | grep -E '\.failed$' | head -1)"
+assert_eq "$(zpd_manifest_get "${BASE}/releases/${attempted}/RELEASE_MANIFEST.json" original_failure_stage)" "worker_stop" "manifest original_failure_stage=worker_stop"
+unset MOCK_LOG; rm -rf "$BASE" "$(dirname "$SRC_BARE")"
+
+# W2b. A fence rejecting FATAL/BACKOFF/malformed states (unit-level).
+new_base
+( MOCK_SUP_STATUS='zedproxy-worker:x   FATAL   Exited too quickly' ZPD_WORKER_STOP_TIMEOUT=4 dep_stop_workers >/dev/null 2>&1 ); \
+  assert_rc 1 "$?" "FATAL worker state rejects the fence"
+( MOCK_SUP_STATUS='zedproxy-worker:x   BACKOFF   restarting' ZPD_WORKER_STOP_TIMEOUT=4 dep_stop_workers >/dev/null 2>&1 ); \
+  assert_rc 1 "$?" "BACKOFF worker state rejects the fence"
+( MOCK_SUP_STATUS='zedproxy-worker:x' ZPD_WORKER_STOP_TIMEOUT=4 dep_stop_workers >/dev/null 2>&1 ); \
+  assert_rc 1 "$?" "malformed status line rejects the fence"
+( MOCK_SUP_STOP_RC=1 dep_stop_workers >/dev/null 2>&1 ); \
+  assert_rc 1 "$?" "failed stop command rejects the fence"
+( dep_stop_workers >/dev/null 2>&1 ); assert_rc 0 "$?" "verified STOPPED workers pass the fence"
+rm -rf "$BASE"
+
+echo "-- P22: symmetric inventory snapshot/restore --"
+
+# W3a. Wrapper capture failure FAILS the operational snapshot (no fail-open).
+new_base; sha="$(mk_release_git 20260101000000-aaaaaaaaaaaa)"; zpd_switch_current 20260101000000-aaaaaaaaaaaa
+setup_atomic_service_configs; zpw_install_wrappers >/dev/null 2>&1
+rm -f "${ZPD_WRAPPER_LIB}/bootstrap.sh"; mkdir -p "${ZPD_WRAPPER_LIB}/bootstrap.sh/x"   # unreadable-as-file
+( dep_snapshot_operational_config wrapfail-test >/dev/null 2>&1 ); \
+  assert_rc 1 "$?" "wrapper capture failure fails the snapshot"
+rm -rf "${ZPD_WRAPPER_LIB}/bootstrap.sh"; zpw_install_wrappers >/dev/null 2>&1
+
+# W3b. The inventory records path/type/sha256/mode/uid/gid for every resource,
+#      and deploy.env IS restored (bytes + metadata verified).
+printf 'ZPD_KEEP_RELEASES=5\n' > "$ZPD_DEPLOY_ENV"; chmod 640 "$ZPD_DEPLOY_ENV"
+snap="$(dep_snapshot_operational_config inv-test)"
+assert_true test -f "${snap}/inventory.tsv"
+assert_true bash -c "awk -F'\t' '\$1==\"env\" && \$3==\"file\" && \$5 ~ /^[0-9a-f]{64}\$/ && \$6==\"640\" {ok=1} END {exit ok?0:1}' '${snap}/inventory.tsv'"
+printf 'ZPD_KEEP_RELEASES=99\nTAMPERED=1\n' > "$ZPD_DEPLOY_ENV"; chmod 600 "$ZPD_DEPLOY_ENV"
+( dep_restore_operational_snapshot "$snap" >/dev/null 2>&1 ); assert_rc 0 "$?" "full restore succeeds"
+assert_eq "$(cat "$ZPD_DEPLOY_ENV")" "ZPD_KEEP_RELEASES=5" "deploy.env bytes restored"
+assert_eq "$(stat -c '%a' "$ZPD_DEPLOY_ENV")" "640" "deploy.env mode restored"
+
+# W3c. A symlink resource is restored as a symlink with its recorded target.
+rm -f "$ZPD_DEPLOY_ENV"; printf 'REAL\n' > "${BASE}/real.env"; ln -s "${BASE}/real.env" "$ZPD_DEPLOY_ENV"
+snap2="$(dep_snapshot_operational_config sym-test)"
+rm -f "$ZPD_DEPLOY_ENV"; printf 'REPLACED\n' > "$ZPD_DEPLOY_ENV"                        # symlink → regular file
+( dep_restore_operational_snapshot "$snap2" >/dev/null 2>&1 ); assert_rc 0 "$?" "restore with symlink record succeeds"
+assert_true test -L "$ZPD_DEPLOY_ENV"
+assert_eq "$(readlink "$ZPD_DEPLOY_ENV")" "${BASE}/real.env" "symlink target restored"
+rm -rf "$BASE"
+
+echo "-- P22: unknown scheduler state is fail-closed --"
+
+# W4a. Unrecognized systemd states (unknown) BLOCK reconciliation.
+new_base; sha="$(mk_release_git 20260101000000-aaaaaaaaaaaa)"; zpd_switch_current 20260101000000-aaaaaaaaaaaa
+setup_atomic_service_configs; rm -f "$ZPD_SCHED_CRON"
+printf '[Service]\nExecStart=php %s/current/artisan schedule:run\n' "$BASE" > "${BASE}/systemd/mystery.service"
+( MOCK_SVC_ENABLED=n/a MOCK_SVC_ACTIVE=n/a dep_reconcile_scheduler "$BASE" >/dev/null 2>&1 ); \
+  assert_rc 1 "$?" "unknown systemd state blocks reconciliation (never assumed inactive)"
+
+# W4b. A systemctl TIMEOUT is unknown → blocks (bounded, no hang).
+t0=$SECONDS
+( MOCK_SYSTEMCTL_HANG=1 ZPD_SVC_TIMEOUT=1 ZPD_KILL_GRACE=1 dep_reconcile_scheduler "$BASE" >/dev/null 2>&1 ); rc=$?
+elapsed=$((SECONDS - t0))
+assert_rc 1 "$rc" "systemctl timeout blocks reconciliation"
+assert_true test "$elapsed" -lt 60
+rm -f "${BASE}/systemd/mystery.service"
+
+# W4c. Supervisor: an autostart=false stanza with an unparseable/timed-out/
+#      BACKOFF status is UNKNOWN → blocks; only verified STOPPED/EXITED passes.
+printf '[program:zp-sched]\ncommand=php %s/current/artisan schedule:run\nautostart=false\n' "$BASE" \
+    > "${BASE}/supervisor.d/zp-sched.conf"
+( MOCK_SUP_STATUS='zp-sched   BACKOFF   restarting' dep_reconcile_scheduler "$BASE" >/dev/null 2>&1 ); \
+  assert_rc 1 "$?" "BACKOFF supervisor status is unknown → blocks"
+rm -f "$ZPD_SCHED_CRON"
+( MOCK_SUP_STATUS='garbage' dep_reconcile_scheduler "$BASE" >/dev/null 2>&1 ); \
+  assert_rc 1 "$?" "unparseable supervisor status is unknown → blocks"
+rm -f "$ZPD_SCHED_CRON"
+t0=$SECONDS
+( MOCK_SUP_HANG=1 ZPD_SVC_TIMEOUT=1 ZPD_KILL_GRACE=1 dep_reconcile_scheduler "$BASE" >/dev/null 2>&1 ); rc=$?
+elapsed=$((SECONDS - t0))
+assert_rc 1 "$rc" "supervisorctl status timeout is unknown → blocks"
+assert_true test "$elapsed" -lt 30
+rm -f "$ZPD_SCHED_CRON"
+( MOCK_SUP_STATUS='zp-sched   STOPPED   Not started' dep_reconcile_scheduler "$BASE" >/dev/null 2>&1 ); \
+  assert_rc 0 "$?" "positively STOPPED stanza is a leftover (proceeds)"
+rm -rf "$BASE"
+
+echo "-- P22: fresh immutable first-cutover snapshots --"
+
+# W5a. Every attempt gets its OWN committed snapshot; the pointer moves.
+new_base; make_legacy_base; setup_legacy_service_configs
+zpd_save_legacy_rollback "$BASE" "$ZPD_NGINX_CONF" "$ZPD_SUPERVISOR_CONF" "$ZPD_SCHED_CRON" attempt-1
+d1="$(zpd_legacy_snapshot_dir)"
+zpd_save_legacy_rollback "$BASE" "$ZPD_NGINX_CONF" "$ZPD_SUPERVISOR_CONF" "$ZPD_SCHED_CRON" attempt-2
+d2="$(zpd_legacy_snapshot_dir)"
+assert_true test -d "$d1"
+assert_true test -d "$d2"
+assert_false bash -c "[ '$d1' = '$d2' ]"
+assert_eq "$(zpd_manifest_get "${d2}/marker.json" snapshot_complete)" "true" "committed snapshot records snapshot_complete=true"
+assert_eq "$(zpd_manifest_get "${d2}/marker.json" snapshot_schema_version)" "2" "snapshot records its schema version"
+rm -rf "$BASE"
+
+# W5b. A COMPLETE BUT STALE earlier snapshot is not reused: the failed cutover
+#      restores the CURRENT pre-cutover configuration, not the stale capture.
+new_base; mk_source_repo; make_legacy_base; setup_legacy_service_configs
+zpd_save_legacy_rollback "$BASE" "$ZPD_NGINX_CONF" "$ZPD_SUPERVISOR_CONF" "$ZPD_SCHED_CRON" stale-attempt
+stale_dir="$(zpd_legacy_snapshot_dir)"
+printf 'server {\n  listen 80;\n  root %s/public;\n  # CURRENT-PRECUTOVER-MARK\n}\n' "$BASE" > "$ZPD_NGINX_CONF"
+export ZPD_REPO_URL="$SRC_BARE" ZPD_REF=main
+( MOCK_SUP_REREAD_RC=1 MOCK_HTTP_CODE=200 dep_main >/dev/null 2>&1 ); rc=$?
+assert_rc 1 "$rc" "cutover fails (supervisor reread)"
+assert_true bash -c "grep -q 'CURRENT-PRECUTOVER-MARK' '$ZPD_NGINX_CONF'"
+assert_false bash -c "[ '$(zpd_legacy_snapshot_dir)' = '$stale_dir' ]"
+unset ZPD_REPO_URL ZPD_REF; rm -rf "$BASE" "$(dirname "$SRC_BARE")"
+
+# W5c. An INTERRUPTED (uncommitted) snapshot is ignored/refused.
+new_base; make_legacy_base; setup_legacy_service_configs
+mkdir -p "${BASE}/shared/deploy/legacy-snapshots/broken"
+zpd_write_manifest "${BASE}/shared/deploy/legacy-snapshots/broken/marker.json" \
+  "snapshot_schema_version=2" "snapshot_complete=false"
+printf '%s\n' "${BASE}/shared/deploy/legacy-snapshots/broken" > "${BASE}/shared/deploy/legacy-snapshots/current.ptr"
+assert_false zpd_legacy_rollback_valid
+( zpd_restore_legacy_rollback >/dev/null 2>&1 ); assert_rc 1 "$?" "restore refuses an uncommitted snapshot"
+
+# W5d. An OLD SCHEMA version is rejected.
+zpd_save_legacy_rollback "$BASE" "$ZPD_NGINX_CONF" "$ZPD_SUPERVISOR_CONF" "$ZPD_SCHED_CRON" schema-test
+assert_true zpd_legacy_rollback_valid
+snapdir="$(zpd_legacy_snapshot_dir)"
+zpd_write_manifest "${snapdir}/marker.json" "snapshot_schema_version=1" "snapshot_complete=true"
+assert_false zpd_legacy_rollback_valid
+( zpd_restore_legacy_rollback >/dev/null 2>&1 ); assert_rc 1 "$?" "restore refuses an old-schema snapshot"
+rm -rf "$BASE"
 
 rm -rf "$MOCKBIN"
 echo ""
