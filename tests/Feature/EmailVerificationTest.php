@@ -404,13 +404,13 @@ class EmailVerificationTest extends TestCase
         // Simulate the EditUser flow: admin changes email, chooses "require verification".
         $page = new EditUser;
         $method = new \ReflectionMethod($page, 'handleRecordUpdate');
-        $method->invoke($page, $user, ['email' => 'Changed@Example.com', 'email_change_mark_verified' => false]);
+        $method->invoke($page, $user, ['email' => 'Changed@Example.com', 'email_verification_action' => 'require_verification']);
         $user->refresh();
         $this->assertSame('changed@example.com', $user->email);
         $this->assertNull($user->email_verified_at, 'never silently retains the old timestamp');
 
         // And "mark verified" sets a fresh timestamp.
-        $method->invoke($page, $user, ['email' => 'again@example.com', 'email_change_mark_verified' => true]);
+        $method->invoke($page, $user, ['email' => 'again@example.com', 'email_verification_action' => 'mark_verified']);
         $this->assertNotNull($user->fresh()->email_verified_at);
     }
 

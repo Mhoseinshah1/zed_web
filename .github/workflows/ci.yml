@@ -212,6 +212,13 @@ jobs:
       - name: Atomic admin email update behavior (PostgreSQL)
         run: php artisan test --testsuite=Feature --filter='EmailAdminUpdatePgTest'
 
+      - name: OTP delivery claim + finalization concurrency (PostgreSQL)
+        # Redis-backed Cache::lock so the cache-lock-expiry vs finalization
+        # race runs against a real lock backend.
+        env:
+          CACHE_STORE: redis
+        run: php artisan test --testsuite=Feature --filter='EmailDeliveryClaimTest|EmailDeliveryFinalizePgTest'
+
       - name: Queued-job User-row lock ordering (PostgreSQL)
         run: php artisan test --testsuite=Feature --filter='EmailJobLockOrderPgTest'
 

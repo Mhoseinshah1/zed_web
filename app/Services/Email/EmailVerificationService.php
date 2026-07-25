@@ -396,20 +396,13 @@ class EmailVerificationService
     /** Seconds until the user may request another code (0 = allowed now). */
     public function resendCooldownRemaining(User $user): int
     {
-        // Terminal obsolete records (failed dispatch/delivery, superseded,
-        // skipped — and EXPIRED codes, which verification explicitly tells
-        // the user to replace) left the user with nothing they can act on —
-        // they must not hold the cooldown against an immediate retry, even
-        // when an admin configures a cooldown longer than the TTL.
-        $latest = EmailVerificationCode::where('user_id', $user->id)
-            ->where('email', $user->email)
-            ->whereNull('used_at')
-            ->where('expires_at', '>', now())
-            ->whereNotIn('send_status', [
-                EmailVerificationCode::SEND_STATUS_FAILED,
-                EmailVerificationCode::SEND_STATUS_DISPATCH_FAILED,
-                EmailVerificationCode::SEND_STATUS_SKIPPED,
-            ])
+        // Only an ACTIONABLE code (the shared positive-list scope: unused,
+        // unexpired, queued/sending/sent/accepted_pending) may hold the
+        // cooldown — terminal or dead-end records (failed, dispatch_failed,
+        // skipped) and expired codes left the user with nothing to act on,
+        // even when an admin configures a cooldown longer than the TTL.
+        $latest = EmailVerificationCode::query()
+            ->actionableFor($user)
             ->latest('id')
             ->first();
         if ($latest === null) {
@@ -422,16 +415,16 @@ class EmailVerificationService
     }
 
     /**
-     * Remaining validity of the LATEST active code in whole minutes (≥1), or
-     * null when no active code exists. The notice page must never advertise
-     * the full configured TTL for a code that is minutes from expiring.
+     * Remaining validity of the LATEST ACTIONABLE code (shared scope:
+     * unused, unexpired, queued/sending/sent/accepted_pending) in whole
+     * minutes (≥1), or null when none exists. The notice page must never
+     * advertise a lifetime for a code the user can't realistically use —
+     * failed/dispatch_failed/skipped records are not "active".
      */
     public function activeCodeRemainingMinutes(User $user): ?int
     {
-        $latest = EmailVerificationCode::where('user_id', $user->id)
-            ->where('email', $user->email)
-            ->whereNull('used_at')
-            ->where('expires_at', '>', now())
+        $latest = EmailVerificationCode::query()
+            ->actionableFor($user)
             ->latest('id')
             ->first();
 
@@ -652,9 +645,11 @@ class EmailVerificationService
                     return ['status' => 'error', 'message' => 'کد تایید یافت نشد. یک کد جدید درخواست کنید.'];
                 }
 
-                $record = EmailVerificationCode::where('user_id', $lockedUser->id)
-                    ->where('email', $lockedUser->email)
-                    ->whereNull('used_at')
+                // The shared actionable scope WITHOUT the expiry filter: an
+                // expired code still resolves so the user gets the specific
+                // "expired — request a new one" message, not "not found".
+                $record = EmailVerificationCode::query()
+                    ->actionableFor($lockedUser, unexpiredOnly: false)
                     ->latest('id')
                     ->lockForUpdate()
                     ->first();
@@ -788,7 +783,7 @@ class EmailVerificationService
      * fails.
      *
      * $data special keys: `email` (normalized here), `is_admin` (trusted
-     * explicit forceFill), `email_change_mark_verified` (admin's choice).
+     * explicit forceFill), `email_verification_action` (keep | mark_verified | require_verification).
      * Everything else goes through normal mass assignment — Filament already
      * excludes untouched password fields, so existing password semantics are
      * preserved.
@@ -810,8 +805,19 @@ class EmailVerificationService
                     return null;
                 }
 
-                $markVerified = (bool) ($data['email_change_mark_verified'] ?? true);
-                unset($data['email_change_mark_verified']);
+                // EXPLICIT verification semantics — never a raw timestamp
+                // through mass assignment: `keep` (default) preserves the
+                // current state, `mark_verified` stamps now(), and
+                // `require_verification` clears it; both explicit actions
+                // invalidate pending OTP codes. Unrelated field edits with
+                // `keep` can never change the verification state.
+                $action = (string) ($data['email_verification_action'] ?? 'keep');
+                unset($data['email_verification_action'], $data['email_verified_at']);
+                if (! in_array($action, ['keep', 'mark_verified', 'require_verification'], true)) {
+                    throw ValidationException::withMessages([
+                        'data.email_verification_action' => 'وضعیت تایید ایمیل انتخاب‌شده معتبر نیست.',
+                    ]);
+                }
 
                 if (array_key_exists('is_admin', $data)) {
                     $lockedUser->forceFill(['is_admin' => (bool) $data['is_admin']]);
@@ -822,15 +828,26 @@ class EmailVerificationService
                     $newEmail = strtolower(trim((string) $data['email']));
                     unset($data['email']);
                     if ($newEmail !== strtolower((string) $lockedUser->email)) {
-                        // Email changes NEVER silently retain the old
-                        // verification timestamp; old codes die WITH this
-                        // transaction (rolled back together on any failure).
+                        // A CHANGED address demands an explicit policy — the
+                        // old state must never silently carry over.
+                        if ($action === 'keep') {
+                            throw ValidationException::withMessages([
+                                'data.email_verification_action' => 'برای تغییر آدرس ایمیل باید وضعیت تایید را صریحاً مشخص کنید: «تاییدشده» یا «نیازمند تایید».',
+                            ]);
+                        }
+                        // Old codes die WITH this transaction (rolled back
+                        // together on any failure).
                         $this->invalidateCodes($lockedUser);
-                        $lockedUser->forceFill([
-                            'email' => $newEmail,
-                            'email_verified_at' => $markVerified ? now() : null,
-                        ]);
+                        $lockedUser->forceFill(['email' => $newEmail]);
                     }
+                }
+
+                if ($action === 'mark_verified') {
+                    $this->invalidateCodes($lockedUser);
+                    $lockedUser->forceFill(['email_verified_at' => now()]);
+                } elseif ($action === 'require_verification') {
+                    $this->invalidateCodes($lockedUser);
+                    $lockedUser->forceFill(['email_verified_at' => null]);
                 }
 
                 $lockedUser->fill($data);

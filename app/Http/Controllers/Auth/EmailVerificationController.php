@@ -28,15 +28,18 @@ class EmailVerificationController extends Controller
             return redirect()->route('dashboard.index');
         }
 
+        $remainingMinutes = $this->verification->activeCodeRemainingMinutes($user);
+
         return view('auth.verify-email', [
             'maskedEmail' => $this->maskEmail((string) $user->email),
             // The REMAINING seconds only — refreshing must never restart the
             // client countdown past what the server actually enforces.
             'cooldownSeconds' => $this->verification->resendCooldownRemaining($user),
-            // The REMAINING lifetime of the current code — the configured TTL
-            // only when no active code exists yet.
-            'ttlMinutes' => $this->verification->activeCodeRemainingMinutes($user)
-                ?? $this->verification->ttlMinutes(),
+            // The REMAINING lifetime of the current ACTIONABLE code; with no
+            // actionable code the configured TTL is only explanatory text for
+            // the code the user is about to request.
+            'ttlMinutes' => $remainingMinutes ?? $this->verification->ttlMinutes(),
+            'hasActiveCode' => $remainingMinutes !== null,
             // The skip affordance follows the PER-USER obligation: only a
             // user who registered under an effectively-required policy (and
             // while enforcement is currently active) is denied the shortcut.

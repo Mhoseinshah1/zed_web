@@ -74,12 +74,31 @@ class UserResource extends Resource
                         }
                     })
                     ->maxLength(255),
-                Forms\Components\Toggle::make('email_change_mark_verified')
-                    ->label('ایمیل جدید تاییدشده در نظر گرفته شود')
-                    ->helperText('فقط وقتی آدرس ایمیل را تغییر دهید اعمال می‌شود: روشن = ایمیل جدید تاییدشده ثبت می‌شود؛ خاموش = کاربر باید ایمیل جدید را با کد تایید کند.')
-                    ->default(true)
+                // EXPLICIT verification controls — never a raw editable
+                // timestamp: `keep` preserves the current state (and is
+                // refused when the ADDRESS changes, which demands an explicit
+                // policy); the explicit actions invalidate pending OTP codes.
+                Forms\Components\Select::make('email_verification_action')
+                    ->label('وضعیت تایید ایمیل')
+                    ->options([
+                        'keep' => 'حفظ وضعیت فعلی',
+                        'mark_verified' => 'تاییدشده علامت بزن (اکنون)',
+                        'require_verification' => 'نیازمند تایید (لغو تایید)',
+                    ])
+                    ->default('keep')
+                    // Not backed by a model attribute: edit forms hydrate it
+                    // explicitly to the safe `keep` default.
+                    ->formatStateUsing(fn () => 'keep')
+                    ->required()
+                    ->helperText('در صورت تغییر آدرس ایمیل، انتخاب صریح «تاییدشده» یا «نیازمند تایید» الزامی است.')
                     ->dehydrated(true)
                     ->visibleOn('edit'),
+                Forms\Components\Toggle::make('email_is_verified')
+                    ->label('ایمیل تاییدشده ثبت شود')
+                    ->helperText('روشن = حساب با ایمیل تاییدشده ساخته می‌شود؛ خاموش = بدون تایید (و بدون الزام خودکار).')
+                    ->default(false)
+                    ->dehydrated(true)
+                    ->visibleOn('create'),
 
                 Forms\Components\TextInput::make('phone')
                     ->label('شماره موبایل')
@@ -98,8 +117,10 @@ class UserResource extends Resource
                     ->label('دسترسی ادمین')
                     ->default(false),
 
-                Forms\Components\DateTimePicker::make('email_verified_at')
-                    ->label('تاریخ تایید ایمیل'),
+                Forms\Components\Placeholder::make('email_verified_at_display')
+                    ->label('تاریخ تایید ایمیل')
+                    ->content(fn (?Model $record) => $record?->email_verified_at?->format('Y-m-d H:i') ?? '—')
+                    ->visibleOn('edit'),
 
                 Forms\Components\DateTimePicker::make('phone_verified_at')
                     ->label('تاریخ تایید شماره موبایل')

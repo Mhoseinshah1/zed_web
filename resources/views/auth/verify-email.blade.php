@@ -7,11 +7,22 @@
     <div class="w-full max-w-md">
         <div class="zed-card p-6 sm:p-8">
             <h1 class="text-xl font-bold text-white mb-2">تایید آدرس ایمیل</h1>
-            <p class="text-sm text-gray-400 leading-7 mb-6">
-                کد ۶ رقمی ارسال‌شده به
-                <span class="font-mono text-gray-200" dir="ltr">{{ $maskedEmail }}</span>
-                را وارد کنید. کد تا <span class="font-semibold text-gray-200">{{ $ttlMinutes }} دقیقه</span> معتبر است.
-            </p>
+            @if($hasActiveCode)
+                <p class="text-sm text-gray-400 leading-7 mb-6">
+                    کد ۶ رقمی ارسال‌شده به
+                    <span class="font-mono text-gray-200" dir="ltr">{{ $maskedEmail }}</span>
+                    را وارد کنید. کد تا <span class="font-semibold text-gray-200">{{ $ttlMinutes }} دقیقه</span> معتبر است.
+                </p>
+            @else
+                {{-- No ACTIONABLE code (none yet, expired, or delivery failed):
+                     never imply an undeliverable code is currently valid. --}}
+                <p class="text-sm text-gray-400 leading-7 mb-6">
+                    در حال حاضر کد فعالی برای
+                    <span class="font-mono text-gray-200" dir="ltr">{{ $maskedEmail }}</span>
+                    وجود ندارد. روی «ارسال مجدد کد» بزنید تا کد جدیدی
+                    (با اعتبار {{ $ttlMinutes }} دقیقه) دریافت کنید.
+                </p>
+            @endif
 
             @if(session('success'))
                 <div class="mb-4 rounded-xl border border-green-700 bg-green-900/30 px-4 py-3 text-sm text-green-300">{{ session('success') }}</div>

@@ -9,14 +9,17 @@ use App\Services\Email\EmailVerificationService;
 use App\Support\DatabaseLockTimeout;
 use App\Support\MailFailure;
 use Illuminate\Bus\Queueable;
+use Illuminate\Contracts\Cache\Lock;
 use Illuminate\Contracts\Queue\ShouldBeEncrypted;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
+use Illuminate\Queue\Jobs\SyncJob;
 use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
 use RuntimeException;
 use Throwable;
@@ -27,30 +30,31 @@ use Throwable;
  * - ShouldBeEncrypted: the payload carries the plaintext code, so it is
  *   encrypted at rest in Redis (the database only ever holds the hash).
  * - afterCommit: never dispatched before the surrounding transaction commits.
- * - RACE-SAFE claiming: the job first takes the SAME per-user distributed
- *   lock used by issuance/verification/address changes and holds it through
- *   claim → transport send → finalize, so an address change can never commit
- *   while an already-validated send is in flight. Laravel cache locks carry
- *   an OWNER token internally: release() only ever releases this worker's
- *   own acquisition (never another worker's), and the TTL (45s) exceeds the
- *   job timeout (30s) so an abandoned lock always expires. Inside the lock,
- *   a short DB transaction (with a bounded row-lock wait) atomically claims
- *   the record (queued → sending) after re-validating it is still the newest
- *   active code for a still-unverified user whose address still matches; the
- *   SMTP conversation itself runs with NO database transaction open. States
- *   move monotonically: queued → sending → sent, queued/sending → failed,
- *   queued/sending → skipped.
- * - The advertised validity in the email is the REMAINING lifetime at claim
- *   time, not the full configured TTL — a queue delay must not promise
- *   minutes the code no longer has.
+ * - CLAIM-OWNED delivery: every attempt claims the record inside a short
+ *   bounded transaction (cache lock → User row → OTP row, `SET LOCAL
+ *   lock_timeout`), writing a fresh cryptographically random per-attempt
+ *   delivery_claim_token. Finalization (sent / skipped / accepted_pending /
+ *   failed) runs in its OWN short bounded transaction with the same lock
+ *   order and only ever mutates the record while it still carries THIS
+ *   attempt's exact token — a worker resuming after its cache-lock TTL
+ *   expired can never overwrite a newer worker's claim or state. The raw
+ *   token is random non-secret material, held in memory for the attempt and
+ *   hidden from serialized model output; it is never logged.
+ * - The SMTP conversation runs with NO database transaction open, inside the
+ *   per-user cache lock; the advertised validity is the REMAINING lifetime
+ *   at claim time.
  * - Transport exceptions are re-thrown SANITIZED (category + scrubbed text,
- *   no chained original), so the framework's failed_jobs.exception column can
- *   never store raw SMTP credentials.
- * - HONEST residual limitation (at-least-once): if the transport ACCEPTS the
- *   message and the worker dies before recording `sent`, a retry may send
- *   the same still-valid code again. The code itself stays single-use and
- *   the claim re-validation minimizes the window, but exactly-once delivery
- *   over SMTP is not achievable.
+ *   no chained original), so failed_jobs.exception can never store raw SMTP
+ *   credentials.
+ * - HONEST residual limitations (at-least-once): (1) if the transport
+ *   accepts and the worker DIES before finalization, a retry re-claims and
+ *   may re-send the still-valid single-use code; (2) if the worker survives
+ *   but lost cache-lock ownership, the record is closed out as
+ *   `accepted_pending` (delivered-but-uncertain, NOT claimable — no
+ *   duplicate send); (3) if even finalization's bounded row-lock wait times
+ *   out twice, the record stays `sending` under this attempt's token and a
+ *   later retry may re-send. Exactly-once delivery over SMTP is not
+ *   achievable; the code itself stays single-use throughout.
  */
 class SendEmailOtpJob implements ShouldBeEncrypted, ShouldQueue
 {
@@ -68,6 +72,9 @@ class SendEmailOtpJob implements ShouldBeEncrypted, ShouldQueue
      * its TTL must exceed the job timeout (abandoned locks still expire).
      */
     private const LOCK_TTL_SECONDS = 45;
+
+    /** This attempt's delivery claim — in memory only, never serialized/logged. */
+    private ?string $claimToken = null;
 
     public function __construct(
         private readonly int $codeId,
@@ -121,28 +128,17 @@ class SendEmailOtpJob implements ShouldBeEncrypted, ShouldQueue
             try {
                 Mail::to($this->email)->send(new EmailOtpMail($this->code, $remainingMinutes));
             } catch (Throwable $e) {
-                // Re-throw SANITIZED and UNCHAINED: the framework persists the
-                // thrown exception into failed_jobs.exception verbatim, and
-                // raw transport text can echo SMTP credentials.
+                // Token-matched failure bookkeeping happens HERE, not in
+                // failed(): the framework re-unserializes the job before
+                // invoking failed(), so this attempt's in-memory claim token
+                // would be lost there. Then re-throw SANITIZED and UNCHAINED —
+                // failed_jobs.exception must never store raw SMTP credentials.
+                $this->failTransportAttempt($e);
+
                 throw new RuntimeException(MailFailure::summarize('delivery failed', $e));
             }
 
-            // Terminal `sent` only while this worker still owns its claim AND
-            // the per-user lock: a record invalidated after lock expiry (an
-            // address change won the expired lock) is closed out as skipped —
-            // never reported as a delivered, still-actionable code.
-            if ($lock->isOwnedByCurrentProcess()) {
-                EmailVerificationCode::whereKey($this->codeId)
-                    ->where('send_status', EmailVerificationCode::SEND_STATUS_SENDING)
-                    ->whereNull('used_at')
-                    ->update([
-                        'send_status' => EmailVerificationCode::SEND_STATUS_SENT,
-                        'send_error' => null,
-                    ]);
-            }
-            EmailVerificationCode::whereKey($this->codeId)
-                ->where('send_status', EmailVerificationCode::SEND_STATUS_SENDING)
-                ->update(['send_status' => EmailVerificationCode::SEND_STATUS_SKIPPED]);
+            $this->finalizeAccepted($lock);
         } finally {
             try {
                 // Owner-token release: never force-releases another worker's lock.
@@ -154,38 +150,20 @@ class SendEmailOtpJob implements ShouldBeEncrypted, ShouldQueue
     }
 
     /**
-     * Release this job back to the queue for a delayed retry — or, when no
-     * queue context exists to release into (the sync driver executes exactly
-     * once; direct invocation has no job at all), surface the contention as a
-     * FAILURE: a silent return would let dispatch() report success while the
-     * record stays `queued` forever and no email is ever sent. The message is
-     * static (no exception text, no secrets) and carries the `delivery
-     * failed:` prefix so failed() stores it verbatim.
-     */
-    private function releaseForRetry(int $delaySeconds): void
-    {
-        if ($this->job !== null) {
-            $this->release($delaySeconds);
-
-            return;
-        }
-
-        throw new RuntimeException('delivery failed: lock_contention (no retry available on the current queue driver)');
-    }
-
-    /**
-     * Atomically claim the record (queued → sending) after re-validating it,
-     * all inside one SHORT transaction with a bounded row-lock wait. Returns
-     * the REMAINING validity in whole minutes (≥1) when the send may proceed,
-     * or null when it must not: obsolete records are marked skipped, records
-     * claimed by another worker are simply left alone.
+     * Atomically claim the record for THIS attempt inside one SHORT bounded
+     * transaction (User row locked first, then the OTP row): re-validate
+     * ownership/state, then transition queued → sending (or re-claim this
+     * job's own `sending` leftover on retry) with a FRESH random claim token.
+     * Returns the remaining validity in whole minutes (≥1), or null when the
+     * send must not proceed (obsolete records are marked skipped with their
+     * claim cleared; records owned elsewhere are left untouched).
      */
     private function claim(): ?int
     {
         // First attempt claims from `queued` only — two workers handed the
         // same job can never both pass the conditional update. A RETRY of
         // this same job (attempts > 1) may re-claim its own `sending` record,
-        // which a previous attempt left behind when the transport threw.
+        // which a previous attempt left behind — under a NEW token.
         $claimableFrom = [EmailVerificationCode::SEND_STATUS_QUEUED];
         if ($this->attempts() > 1) {
             $claimableFrom[] = EmailVerificationCode::SEND_STATUS_SENDING;
@@ -196,9 +174,7 @@ class SendEmailOtpJob implements ShouldBeEncrypted, ShouldQueue
 
             // EXACT documented lock order — identical to requestCode/verify/
             // changeAddressTo: the authoritative USER row first, then the
-            // code row. A transaction outside the cache-lock protocol
-            // (commands, imports, admin tooling) contends here, bounded by
-            // the local lock timeout.
+            // code row.
             $user = User::whereKey($this->userId)
                 ->lockForUpdate()
                 ->first();
@@ -214,9 +190,7 @@ class SendEmailOtpJob implements ShouldBeEncrypted, ShouldQueue
             // Ownership is validated UNDER the locks against the payload —
             // never trusted from any pre-lock read.
             if ($record->user_id !== $this->userId) {
-                EmailVerificationCode::whereKey($this->codeId)
-                    ->whereIn('send_status', $claimableFrom)
-                    ->update(['send_status' => EmailVerificationCode::SEND_STATUS_SKIPPED]);
+                $this->markSkipped($claimableFrom);
 
                 return null;
             }
@@ -236,17 +210,23 @@ class SendEmailOtpJob implements ShouldBeEncrypted, ShouldQueue
                     ->exists();
 
             if ($obsolete) {
-                EmailVerificationCode::whereKey($this->codeId)
-                    ->whereIn('send_status', $claimableFrom)
-                    ->update(['send_status' => EmailVerificationCode::SEND_STATUS_SKIPPED]);
+                $this->markSkipped($claimableFrom);
 
                 return null;
             }
 
+            $this->claimToken = bin2hex(random_bytes(32));
+
             $claimed = EmailVerificationCode::whereKey($this->codeId)
                 ->whereIn('send_status', $claimableFrom)
-                ->update(['send_status' => EmailVerificationCode::SEND_STATUS_SENDING]) === 1;
+                ->update([
+                    'send_status' => EmailVerificationCode::SEND_STATUS_SENDING,
+                    'delivery_claim_token' => $this->claimToken,
+                    'delivery_claimed_at' => now(),
+                ]) === 1;
             if (! $claimed) {
+                $this->claimToken = null;
+
                 return null;
             }
 
@@ -255,23 +235,203 @@ class SendEmailOtpJob implements ShouldBeEncrypted, ShouldQueue
         });
     }
 
+    /** Terminal skip inside the claim transaction — claim fields cleared. */
+    private function markSkipped(array $fromStatuses): void
+    {
+        EmailVerificationCode::whereKey($this->codeId)
+            ->whereIn('send_status', $fromStatuses)
+            ->update([
+                'send_status' => EmailVerificationCode::SEND_STATUS_SKIPPED,
+                'delivery_claim_token' => null,
+                'delivery_claimed_at' => null,
+            ]);
+    }
+
+    /**
+     * Post-acceptance finalization in its OWN short bounded transaction with
+     * the standard lock order. Mutates the record ONLY while it still carries
+     * THIS attempt's exact claim token (timing-safe compare):
+     *
+     *  - still valid + cache lock still owned  → sent
+     *  - still valid + cache-lock ownership lost → accepted_pending
+     *    (delivered-but-uncertain; NOT claimable, so no duplicate send)
+     *  - became non-actionable mid-send (used/address change/verified)
+     *    → skipped (never an actionable `sent`)
+     *  - token no longer ours → touch NOTHING (a newer worker owns it)
+     *
+     * If even the bounded row-lock wait times out (twice, including the
+     * accepted_pending fallback), the record stays `sending` under our token:
+     * a later retry may re-claim and re-send — the documented at-least-once
+     * residual after transport acceptance.
+     */
+    private function finalizeAccepted(Lock $lock): void
+    {
+        try {
+            DB::transaction(function () use ($lock) {
+                DatabaseLockTimeout::applyLocal();
+
+                $user = User::whereKey($this->userId)->lockForUpdate()->first();
+                $record = EmailVerificationCode::whereKey($this->codeId)->lockForUpdate()->first();
+
+                if (
+                    $record === null
+                    || $record->send_status !== EmailVerificationCode::SEND_STATUS_SENDING
+                    || ! hash_equals((string) $this->claimToken, (string) $record->delivery_claim_token)
+                ) {
+                    // Another worker re-claimed (new token) or already reached
+                    // a terminal state — its claim is NOT ours to touch.
+                    return;
+                }
+
+                $stillActionable = $record->used_at === null
+                    && $record->user_id === $this->userId
+                    && strcasecmp($record->email, $this->email) === 0
+                    && $user !== null
+                    && strcasecmp((string) $user->email, $this->email) === 0
+                    && $user->email_verified_at === null;
+
+                if (! $stillActionable) {
+                    $record->forceFill([
+                        'send_status' => EmailVerificationCode::SEND_STATUS_SKIPPED,
+                        'delivery_claim_token' => null,
+                        'delivery_claimed_at' => null,
+                    ])->save();
+
+                    return;
+                }
+
+                if ($lock->isOwnedByCurrentProcess()) {
+                    $record->forceFill([
+                        'send_status' => EmailVerificationCode::SEND_STATUS_SENT,
+                        'send_error' => null,
+                        'delivery_claim_token' => null,
+                        'delivery_claimed_at' => null,
+                    ])->save();
+                } else {
+                    // Transport accepted, ownership uncertain: honest terminal
+                    // marker that can never be re-claimed into a re-send.
+                    $record->forceFill([
+                        'send_status' => EmailVerificationCode::SEND_STATUS_ACCEPTED_PENDING,
+                        'delivery_claim_token' => null,
+                        'delivery_claimed_at' => null,
+                    ])->save();
+                }
+            });
+        } catch (QueryException $e) {
+            if (! DatabaseLockTimeout::isLockTimeout($e)) {
+                throw $e;
+            }
+
+            // Transport accepted but finalization contended: ONE bounded
+            // fallback recording the honest uncertain state for OUR claim.
+            try {
+                DB::transaction(function () {
+                    DatabaseLockTimeout::applyLocal();
+                    EmailVerificationCode::whereKey($this->codeId)
+                        ->where('send_status', EmailVerificationCode::SEND_STATUS_SENDING)
+                        ->where('delivery_claim_token', $this->claimToken)
+                        ->update([
+                            'send_status' => EmailVerificationCode::SEND_STATUS_ACCEPTED_PENDING,
+                            'delivery_claim_token' => null,
+                            'delivery_claimed_at' => null,
+                        ]);
+                });
+            } catch (QueryException $e2) {
+                if (! DatabaseLockTimeout::isLockTimeout($e2)) {
+                    throw $e2;
+                }
+                // Sanitized, token-free operational signal: the record stays
+                // `sending` under this attempt's claim; a retry may re-send.
+                Log::warning('Email OTP finalization contended after transport acceptance', [
+                    'code_id' => $this->codeId,
+                    'outcome' => 'left_sending_for_retry',
+                ]);
+            }
+        }
+    }
+
+    /**
+     * Transport-failure bookkeeping WHILE the claim token is still in memory.
+     * With retries remaining, the record deliberately stays `sending` under
+     * this attempt's token — the retry re-claims it with a fresh one. On the
+     * FINAL attempt (or with no queue context to retry in), the record is
+     * closed out as `failed` ONLY while it still carries this attempt's exact
+     * token, so no newer claim can ever be failed by an older worker. A
+     * genuine transport attempt happened, so `failed` (which counts toward
+     * the daily cap) is the honest state. Residual: a worker killed so hard
+     * that this never runs leaves the record `sending`; a retry re-claims it,
+     * and after the last attempt it stays `sending` as an operational signal
+     * rather than being guessed into a terminal state.
+     */
+    private function failTransportAttempt(Throwable $e): void
+    {
+        // Final when no retry can follow: direct invocation, the sync driver
+        // (executes exactly once — attempts() never advances), or the last
+        // allowed attempt of a real worker.
+        $isFinalAttempt = $this->job === null
+            || $this->job instanceof SyncJob
+            || $this->attempts() >= $this->tries;
+        if (! $isFinalAttempt || $this->claimToken === null) {
+            return;
+        }
+
+        $safe = MailFailure::summarize('delivery failed', $e);
+
+        EmailVerificationCode::whereKey($this->codeId)
+            ->where('send_status', EmailVerificationCode::SEND_STATUS_SENDING)
+            ->where('delivery_claim_token', $this->claimToken)
+            ->update([
+                'send_status' => EmailVerificationCode::SEND_STATUS_FAILED,
+                'send_error' => $safe,
+                'delivery_claim_token' => null,
+                'delivery_claimed_at' => null,
+            ]);
+    }
+
+    /**
+     * Release this job back to the queue for a delayed retry — or, when no
+     * queue context exists to release into (the sync driver executes exactly
+     * once; direct invocation has no job at all), surface the contention as a
+     * FAILURE: a silent return would let dispatch() report success while the
+     * record stays `queued` forever. The message is static (no exception
+     * text, no secrets) and carries the `delivery failed:` prefix so failed()
+     * stores it verbatim.
+     */
+    private function releaseForRetry(int $delaySeconds): void
+    {
+        if ($this->job !== null) {
+            $this->release($delaySeconds);
+
+            return;
+        }
+
+        throw new RuntimeException('delivery failed: lock_contention (no retry available on the current queue driver)');
+    }
+
+    /**
+     * The framework invokes this on a RE-UNSERIALIZED instance — the claim
+     * token never survives into it, so this callback is deliberately limited
+     * to the only mutation that is safe without claim ownership: an UNOWNED
+     * `queued` record. That covers retries exhausted purely by lock/cache
+     * contention (releaseForRetry) — ZERO transport attempts happened, so
+     * the record closes out as `dispatch_failed`, which the daily cap and
+     * cooldown exclude: contention or a cache outage can never burn a user's
+     * OTP allowance. Real transport failures were already closed out
+     * token-matched inside handle() (failTransportAttempt); a claimed
+     * `sending` record is NEVER touched here — it may belong to a newer
+     * retry's claim.
+     */
     public function failed(Throwable $e): void
     {
-        // Record the failure WITHOUT the message body, the code, or raw
-        // transport text (which can echo SMTP credentials). handle() already
-        // re-throws sanitized summaries — store those verbatim; anything else
-        // is summarized (category + scrubbed bounded diagnostic) here.
+        // Sanitized only — raw transport text can echo SMTP credentials.
         $safe = str_starts_with($e->getMessage(), 'delivery failed:')
             ? mb_substr($e->getMessage(), 0, MailFailure::MAX_LENGTH)
             : MailFailure::summarize('delivery failed', $e);
 
         EmailVerificationCode::whereKey($this->codeId)
-            ->whereIn('send_status', [
-                EmailVerificationCode::SEND_STATUS_QUEUED,
-                EmailVerificationCode::SEND_STATUS_SENDING,
-            ])
+            ->where('send_status', EmailVerificationCode::SEND_STATUS_QUEUED)
             ->update([
-                'send_status' => EmailVerificationCode::SEND_STATUS_FAILED,
+                'send_status' => EmailVerificationCode::SEND_STATUS_DISPATCH_FAILED,
                 'send_error' => $safe,
             ]);
     }

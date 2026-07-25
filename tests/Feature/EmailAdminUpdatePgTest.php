@@ -68,7 +68,7 @@ class EmailAdminUpdatePgTest extends TestCase
         try {
             app(EmailVerificationService::class)->applyAdminUpdate($user, [
                 'email' => self::PREFIX.'moved@test.com',
-                'email_change_mark_verified' => false,
+                'email_verification_action' => 'require_verification',
                 'username' => self::PREFIX.'holder',
                 'name' => 'Changed',
                 'is_admin' => true,
@@ -96,7 +96,7 @@ class EmailAdminUpdatePgTest extends TestCase
 
         $updated = app(EmailVerificationService::class)->applyAdminUpdate($user, [
             'email' => self::PREFIX.'good-moved@test.com',
-            'email_change_mark_verified' => true,
+            'email_verification_action' => 'mark_verified',
             'name' => 'Renamed',
             'is_admin' => true,
         ]);

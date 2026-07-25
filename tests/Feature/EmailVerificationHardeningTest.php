@@ -243,18 +243,32 @@ class EmailVerificationHardeningTest extends TestCase
     public function test_job_failed_hook_stores_category_not_raw_transport_text(): void
     {
         $user = $this->unverifiedUser();
-        $record = EmailVerificationCode::create([
+        // A claimed `sending` record is NEVER touched by the re-unserialized
+        // failed() callback — it may belong to a newer retry's claim.
+        $claimed = EmailVerificationCode::create([
             'user_id' => $user->id, 'email' => $user->email,
             'code_hash' => Hash::make('123456'),
             'expires_at' => now()->addMinutes(10), 'attempts' => 0,
             'send_status' => EmailVerificationCode::SEND_STATUS_SENDING,
         ]);
+        (new SendEmailOtpJob($claimed->id, $user->id, (string) $user->email, '123456', 10))
+            ->failed(new \RuntimeException('535 Authentication failed with password "TopSecret42"'));
+        $this->assertSame(EmailVerificationCode::SEND_STATUS_SENDING, $claimed->fresh()->send_status, 'a claimed record is never failed without its token');
 
-        (new SendEmailOtpJob($record->id, $user->id, (string) $user->email, '123456', 10))
+        // An UNOWNED queued record (contention exhausted before any claim)
+        // closes out as dispatch_failed with a SANITIZED error.
+        $record = EmailVerificationCode::create([
+            'user_id' => $user->id, 'email' => $user->email,
+            'code_hash' => Hash::make('654321'),
+            'expires_at' => now()->addMinutes(10), 'attempts' => 0,
+            'send_status' => EmailVerificationCode::SEND_STATUS_QUEUED,
+        ]);
+
+        (new SendEmailOtpJob($record->id, $user->id, (string) $user->email, '654321', 10))
             ->failed(new \RuntimeException('535 Authentication failed: Authorization: Basic dXNlcjpwYXNz with password "TopSecret42"'));
 
         $record->refresh();
-        $this->assertSame(EmailVerificationCode::SEND_STATUS_FAILED, $record->send_status);
+        $this->assertSame(EmailVerificationCode::SEND_STATUS_DISPATCH_FAILED, $record->send_status);
         $this->assertStringNotContainsString('TopSecret42', (string) $record->send_error);
         $this->assertStringNotContainsString('dXNlcjpwYXNz', (string) $record->send_error);
         $this->assertStringContainsString('auth_failed', (string) $record->send_error);
@@ -924,7 +938,7 @@ class EmailVerificationHardeningTest extends TestCase
         try {
             app(EmailVerificationService::class)->applyAdminUpdate($user, [
                 'email' => 'atomic.after@example.com',
-                'email_change_mark_verified' => false,
+                'email_verification_action' => 'require_verification',
                 'username' => 'blocking_name',
                 'name' => 'Changed Name',
                 'is_admin' => true,
@@ -955,7 +969,7 @@ class EmailVerificationHardeningTest extends TestCase
 
         $updated = app(EmailVerificationService::class)->applyAdminUpdate($user, [
             'email' => 'Combo.After@Example.com',
-            'email_change_mark_verified' => false,
+            'email_verification_action' => 'require_verification',
             'name' => 'Renamed',
             'is_admin' => true,
         ]);
@@ -1109,7 +1123,7 @@ class EmailVerificationHardeningTest extends TestCase
 
         // Mixed-case collision → a normal field validation error, never a 500.
         try {
-            $method->invoke($page, $user, ['email' => 'HELD@Example.COM', 'email_change_mark_verified' => true]);
+            $method->invoke($page, $user, ['email' => 'HELD@Example.COM', 'email_verification_action' => 'mark_verified']);
             $this->fail('colliding admin email change must be refused');
         } catch (ValidationException $e) {
             $this->assertArrayHasKey('data.email', $e->errors());
@@ -1255,6 +1269,104 @@ class EmailVerificationHardeningTest extends TestCase
             app(EmailVerificationService::class)->reachedDailyCap($user),
             'real transport attempts burn the allowance — only never-dispatched/skipped records are free',
         );
+    }
+
+    // ── Admin verification-state semantics (explicit actions, no raw dates) ──
+
+    public function test_admin_verification_actions_are_explicit_and_invalidate_codes(): void
+    {
+        $svc = app(EmailVerificationService::class);
+        $user = User::factory()->create(['email' => 'action.user@example.com', 'email_verified_at' => null]);
+        $pending = EmailVerificationCode::create([
+            'user_id' => $user->id, 'email' => $user->email,
+            'code_hash' => Hash::make('123456'),
+            'expires_at' => now()->addMinutes(10), 'attempts' => 0,
+            'send_status' => EmailVerificationCode::SEND_STATUS_SENT,
+        ]);
+
+        // `keep` + unrelated fields: verification state untouched.
+        $svc->applyAdminUpdate($user, ['name' => 'Renamed', 'email_verification_action' => 'keep']);
+        $this->assertNull($user->fresh()->email_verified_at);
+        $this->assertNull($pending->fresh()->used_at, 'keep leaves pending codes alone');
+
+        // mark_verified: timestamp set, pending codes die.
+        $svc->applyAdminUpdate($user, ['email_verification_action' => 'mark_verified']);
+        $this->assertNotNull($user->fresh()->email_verified_at);
+        $this->assertNotNull($pending->fresh()->used_at, 'explicit verification invalidates pending codes');
+
+        // require_verification: timestamp cleared.
+        $svc->applyAdminUpdate($user, ['email_verification_action' => 'require_verification']);
+        $this->assertNull($user->fresh()->email_verified_at);
+
+        // A raw email_verified_at value in the payload is stripped, never
+        // mass-assigned.
+        $svc->applyAdminUpdate($user, ['email_verified_at' => now()->subYear(), 'email_verification_action' => 'keep']);
+        $this->assertNull($user->fresh()->email_verified_at, 'no silent DateTimePicker-style assignment survives');
+    }
+
+    public function test_changing_the_email_demands_an_explicit_verification_policy(): void
+    {
+        $svc = app(EmailVerificationService::class);
+        $user = User::factory()->create(['email' => 'policy.user@example.com', 'email_verified_at' => now()]);
+
+        try {
+            $svc->applyAdminUpdate($user, ['email' => 'policy.moved@example.com', 'email_verification_action' => 'keep']);
+            $this->fail('keep must be refused for a CHANGED address');
+        } catch (ValidationException $e) {
+            $this->assertArrayHasKey('data.email_verification_action', $e->errors());
+        }
+        $this->assertSame('policy.user@example.com', $user->fresh()->email, 'nothing changed');
+
+        // Explicit policies work for the changed address.
+        $svc->applyAdminUpdate($user, ['email' => 'policy.moved@example.com', 'email_verification_action' => 'mark_verified']);
+        $fresh = $user->fresh();
+        $this->assertSame('policy.moved@example.com', $fresh->email);
+        $this->assertNotNull($fresh->email_verified_at);
+
+        $svc->applyAdminUpdate($user, ['email' => 'policy.again@example.com', 'email_verification_action' => 'require_verification']);
+        $fresh = $user->fresh();
+        $this->assertSame('policy.again@example.com', $fresh->email);
+        $this->assertNull($fresh->email_verified_at);
+    }
+
+    public function test_admin_create_applies_the_explicit_verification_state_atomically(): void
+    {
+        $page = new CreateUser;
+        $method = new \ReflectionMethod($page, 'handleRecordCreation');
+
+        // Verified creation persists the timestamp; the obligation marker is
+        // DELIBERATELY false regardless of the current global policy.
+        $verified = $method->invoke($page, [
+            'name' => 'v', 'username' => 'admin_made_v',
+            'email' => 'admin.verified@example.com', 'password' => Hash::make('irrelevant1'),
+            'email_is_verified' => true, 'is_admin' => false,
+        ]);
+        $this->assertNotNull($verified->fresh()->email_verified_at);
+        $this->assertFalse((bool) $verified->fresh()->email_verification_required_at_registration, 'admin-created users are never auto-obligated');
+
+        // Unverified creation persists null — and is NOT blocked by the
+        // middleware (marker false), matching the documented policy.
+        $unverified = $method->invoke($page, [
+            'name' => 'u', 'username' => 'admin_made_u',
+            'email' => 'admin.unverified@example.com', 'password' => Hash::make('irrelevant1'),
+            'email_is_verified' => false, 'is_admin' => false,
+        ]);
+        $this->assertNull($unverified->fresh()->email_verified_at);
+        $this->actingAs($unverified->fresh())->get('/dashboard')->assertOk();
+
+        // A collision rolls the WHOLE creation back — no partial user with
+        // is_admin/verification applied survives.
+        try {
+            $method->invoke($page, [
+                'name' => 'x', 'username' => 'admin_made_dup',
+                'email' => 'Admin.VERIFIED@example.com', 'password' => Hash::make('irrelevant1'),
+                'email_is_verified' => true, 'is_admin' => true,
+            ]);
+            $this->fail('the email collision must surface as a field error');
+        } catch (ValidationException $e) {
+            $this->assertArrayHasKey('data.email', $e->errors());
+        }
+        $this->assertSame(0, User::where('username', 'admin_made_dup')->count(), 'no partially created user survives');
     }
 
     // ── Item 10: registration transaction ────────────────────────────────────
