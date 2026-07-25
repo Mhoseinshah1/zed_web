@@ -3,7 +3,10 @@
 namespace Tests\Feature;
 
 use App\Filament\Pages\EmailSettingsPage;
+use App\Filament\Resources\UserResource\Pages\CreateUser;
+use App\Filament\Resources\UserResource\Pages\EditUser;
 use App\Jobs\SendEmailOtpJob;
+use App\Mail\EmailOtpMail;
 use App\Mail\TestEmailMail;
 use App\Models\EmailVerificationCode;
 use App\Models\SiteSetting;
@@ -22,6 +25,7 @@ use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\RateLimiter;
+use Illuminate\Validation\ValidationException;
 use Livewire\Livewire;
 use Symfony\Component\Mailer\Bridge\Postmark\Transport\PostmarkTransportFactory;
 use Tests\TestCase;
@@ -224,7 +228,7 @@ class EmailVerificationHardeningTest extends TestCase
 
         $this->assertSame('error', $result['status']);
         $record = EmailVerificationCode::first();
-        $this->assertSame(EmailVerificationCode::SEND_STATUS_FAILED, $record->send_status);
+        $this->assertSame(EmailVerificationCode::SEND_STATUS_DISPATCH_FAILED, $record->send_status);
         $this->assertStringNotContainsString('SuperSecret99', (string) $record->send_error);
         // The never-queued attempt must not hold the cooldown or the cap.
         $this->assertTrue(app(EmailVerificationService::class)->canResend($user->fresh()));
@@ -594,13 +598,13 @@ class EmailVerificationHardeningTest extends TestCase
         Queue::assertNothingPushed();
     }
 
-    public function test_skipped_and_failed_records_block_neither_resend_nor_the_daily_cap(): void
+    public function test_never_dispatched_and_skipped_records_block_neither_resend_nor_the_daily_cap(): void
     {
         SiteSetting::set('email_otp_daily_cap', 2);
         $user = $this->unverifiedUser();
         $svc = app(EmailVerificationService::class);
 
-        foreach ([EmailVerificationCode::SEND_STATUS_FAILED, EmailVerificationCode::SEND_STATUS_SKIPPED] as $i => $status) {
+        foreach ([EmailVerificationCode::SEND_STATUS_DISPATCH_FAILED, EmailVerificationCode::SEND_STATUS_SKIPPED] as $i => $status) {
             EmailVerificationCode::create([
                 'user_id' => $user->id, 'email' => $user->email,
                 'code_hash' => Hash::make('00000'.$i),
@@ -764,6 +768,216 @@ class EmailVerificationHardeningTest extends TestCase
             ->callAction('testEmail', ['test_email' => 'probe@example.com']);
 
         Mail::assertSent(TestEmailMail::class, 1);
+    }
+
+    // ── Grandfathering: required mode never locks out earlier cohorts ────────
+
+    public function test_users_created_while_optional_are_grandfathered_when_required_is_enabled(): void
+    {
+        SiteSetting::set('email_verification_required_on_register', 'false');
+        $legacy = $this->unverifiedUser();
+        $this->travel(2)->minutes();
+
+        // The admin enables required mode THROUGH the settings page (which
+        // records the transition moment); the proof already exists (setUp).
+        Livewire::actingAs($this->admin())
+            ->test(EmailSettingsPage::class)
+            ->fillForm([
+                'email_verification_enabled' => true,
+                'email_verification_required_on_register' => true,
+            ])
+            ->call('save');
+        $this->assertTrue(app(EmailVerificationService::class)->isRequiredOnRegister());
+
+        // The pre-existing unverified account keeps full access…
+        $this->actingAs($legacy)->get('/dashboard')->assertOk();
+
+        // …while accounts created AFTER the transition are enforced.
+        $this->travel(1)->minutes();
+        $fresh = $this->unverifiedUser();
+        $this->actingAs($fresh)->get('/dashboard')->assertRedirect(route('verification.notice'));
+    }
+
+    // ── Address-change collisions: the DB index is the final authority ───────
+
+    public function test_lost_address_change_race_becomes_a_validation_error_with_nothing_changed(): void
+    {
+        Mail::fake();
+        User::factory()->create(['email' => 'occupied@example.com']);
+        $loser = $this->unverifiedUser(['email' => 'loser.before@example.com']);
+        $keptCode = EmailVerificationCode::create([
+            'user_id' => $loser->id, 'email' => $loser->email,
+            'code_hash' => Hash::make('123456'),
+            'expires_at' => now()->addMinutes(10), 'attempts' => 0,
+            'send_status' => EmailVerificationCode::SEND_STATUS_SENT,
+        ]);
+
+        // Straight to the service (as a TOCTOU race would after the
+        // controller's pre-validation already passed).
+        try {
+            app(EmailVerificationService::class)->changeAddressTo($loser, 'OCCUPIED@Example.com');
+            $this->fail('the DB unique index must win the race');
+        } catch (ValidationException $e) {
+            $this->assertSame(['این ایمیل قبلاً ثبت شده است.'], $e->errors()['email']);
+        }
+
+        // The losing transaction rolled back COMPLETELY.
+        $loser->refresh();
+        $this->assertSame('loser.before@example.com', $loser->email);
+        $this->assertNull($loser->email_verified_at);
+        $this->assertNull($keptCode->fresh()->used_at, 'existing OTP records stay untouched');
+        Mail::assertNothingSent();
+    }
+
+    public function test_filament_edit_translates_email_collision_and_keeps_unrelated_errors(): void
+    {
+        User::factory()->create(['email' => 'held@example.com']);
+        $user = User::factory()->create(['email' => 'editable@example.com', 'email_verified_at' => now()]);
+
+        $page = new EditUser;
+        $method = new \ReflectionMethod($page, 'handleRecordUpdate');
+
+        // Mixed-case collision → a normal field validation error, never a 500.
+        try {
+            $method->invoke($page, $user, ['email' => 'HELD@Example.COM', 'email_change_mark_verified' => true]);
+            $this->fail('colliding admin email change must be refused');
+        } catch (ValidationException $e) {
+            $this->assertArrayHasKey('data.email', $e->errors());
+        }
+        // A refused change never silently marks anything verified/unverified.
+        $user->refresh();
+        $this->assertSame('editable@example.com', $user->email);
+        $this->assertNotNull($user->email_verified_at);
+
+        // Unrelated unique violations (username) still surface as real errors.
+        User::factory()->create(['username' => 'occupied_name']);
+        $this->expectException(QueryException::class);
+        $method->invoke($page, $user, ['username' => 'occupied_name']);
+    }
+
+    public function test_filament_create_translates_email_collision(): void
+    {
+        User::factory()->create(['email' => 'created.first@example.com']);
+
+        $page = new CreateUser;
+        $method = new \ReflectionMethod($page, 'handleRecordCreation');
+
+        try {
+            $method->invoke($page, [
+                'name' => 'x', 'username' => 'fresh_admin_made',
+                'email' => 'Created.FIRST@example.com', 'password' => Hash::make('irrelevant1'),
+            ]);
+            $this->fail('colliding admin-created email must be refused');
+        } catch (ValidationException $e) {
+            $this->assertArrayHasKey('data.email', $e->errors());
+        }
+        $this->assertSame(0, User::where('username', 'fresh_admin_made')->count());
+    }
+
+    // ── Job lock/retry safety ────────────────────────────────────────────────
+
+    public function test_email_advertises_the_remaining_lifetime_not_the_full_ttl(): void
+    {
+        Mail::fake();
+        $user = $this->unverifiedUser();
+        // Issued earlier: only ~3 minutes of validity remain by delivery time.
+        $record = EmailVerificationCode::create([
+            'user_id' => $user->id, 'email' => $user->email,
+            'code_hash' => Hash::make('123456'),
+            'expires_at' => now()->addMinutes(3)->addSeconds(30), 'attempts' => 0,
+            'send_status' => EmailVerificationCode::SEND_STATUS_QUEUED,
+        ]);
+
+        (new SendEmailOtpJob($record->id, (string) $user->email, '123456', 10))->handle();
+
+        Mail::assertSent(EmailOtpMail::class, fn ($mail) => $mail->ttlMinutes === 3);
+    }
+
+    public function test_mid_send_invalidation_finalizes_as_skipped_not_sent(): void
+    {
+        $user = $this->unverifiedUser();
+        $record = EmailVerificationCode::create([
+            'user_id' => $user->id, 'email' => $user->email,
+            'code_hash' => Hash::make('123456'),
+            'expires_at' => now()->addMinutes(10), 'attempts' => 0,
+            'send_status' => EmailVerificationCode::SEND_STATUS_QUEUED,
+        ]);
+
+        // The transport call happens AFTER the claim; simulate a competing
+        // invalidation landing exactly during the SMTP conversation.
+        $pending = \Mockery::mock();
+        $pending->shouldReceive('send')->once();
+        Mail::shouldReceive('to')->andReturnUsing(function () use ($record, $pending) {
+            EmailVerificationCode::whereKey($record->id)->update(['used_at' => now()]);
+
+            return $pending;
+        });
+
+        (new SendEmailOtpJob($record->id, (string) $user->email, '123456', 10))->handle();
+
+        // NEVER reported as a delivered, still-actionable code.
+        $this->assertSame(EmailVerificationCode::SEND_STATUS_SKIPPED, $record->fresh()->send_status);
+    }
+
+    public function test_job_contention_releases_without_sending_or_failing_the_record(): void
+    {
+        Mail::fake();
+        $user = $this->unverifiedUser();
+        $record = EmailVerificationCode::create([
+            'user_id' => $user->id, 'email' => $user->email,
+            'code_hash' => Hash::make('123456'),
+            'expires_at' => now()->addMinutes(10), 'attempts' => 0,
+            'send_status' => EmailVerificationCode::SEND_STATUS_QUEUED,
+        ]);
+
+        $lock = Cache::lock(EmailVerificationService::userLockKey($user->id), 60);
+        $this->assertTrue($lock->get());
+        try {
+            (new SendEmailOtpJob($record->id, (string) $user->email, '123456', 10))->handle();
+        } finally {
+            $lock->release();
+        }
+
+        Mail::assertNothingSent();
+        // Contention is NOT a delivery failure: still queued for the retry.
+        $this->assertSame(EmailVerificationCode::SEND_STATUS_QUEUED, $record->fresh()->send_status);
+    }
+
+    public function test_failed_hook_never_downgrades_a_terminal_sent_state(): void
+    {
+        $user = $this->unverifiedUser();
+        $record = EmailVerificationCode::create([
+            'user_id' => $user->id, 'email' => $user->email,
+            'code_hash' => Hash::make('123456'),
+            'expires_at' => now()->addMinutes(10), 'attempts' => 0,
+            'send_status' => EmailVerificationCode::SEND_STATUS_SENT,
+        ]);
+
+        (new SendEmailOtpJob($record->id, (string) $user->email, '123456', 10))
+            ->failed(new \RuntimeException('late failure after acceptance'));
+
+        $this->assertSame(EmailVerificationCode::SEND_STATUS_SENT, $record->fresh()->send_status);
+    }
+
+    public function test_delivery_failures_count_toward_the_daily_cap(): void
+    {
+        SiteSetting::set('email_otp_daily_cap', 2);
+        $user = $this->unverifiedUser();
+
+        // Two DELIVERY failures = up to six real transport attempts already.
+        foreach ([1, 2] as $i) {
+            EmailVerificationCode::create([
+                'user_id' => $user->id, 'email' => $user->email,
+                'code_hash' => Hash::make('00000'.$i),
+                'expires_at' => now()->addMinutes(10), 'attempts' => 0,
+                'send_status' => EmailVerificationCode::SEND_STATUS_FAILED,
+            ]);
+        }
+
+        $this->assertTrue(
+            app(EmailVerificationService::class)->reachedDailyCap($user),
+            'real transport attempts burn the allowance — only never-dispatched/skipped records are free',
+        );
     }
 
     // ── Item 10: registration transaction ────────────────────────────────────

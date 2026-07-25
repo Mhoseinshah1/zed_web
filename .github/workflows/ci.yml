@@ -201,6 +201,14 @@ jobs:
           CACHE_STORE: redis
         run: php artisan test --testsuite=Feature --filter='EmailConcurrencyPgTest'
 
+      - name: Concurrent email-address collisions (PostgreSQL)
+        env:
+          CACHE_STORE: redis
+        run: php artisan test --testsuite=Feature --filter='EmailChangeCollisionPgTest'
+
+      - name: Email row-lock timeout behavior (PostgreSQL)
+        run: php artisan test --testsuite=Feature --filter='EmailLockTimeoutPgTest'
+
       - name: Scheduler locking + Redis-outage resilience
         run: php artisan test --testsuite=Feature --filter='SchedulerTest'
 

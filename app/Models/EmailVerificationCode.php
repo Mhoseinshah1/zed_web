@@ -33,7 +33,11 @@ class EmailVerificationCode extends Model
 
     public const SEND_STATUS_SENT = 'sent';
 
+    /** Delivery FAILED after real transport attempts (job retries exhausted). */
     public const SEND_STATUS_FAILED = 'failed';
+
+    /** The job never reached the queue — no transport attempt ever happened. */
+    public const SEND_STATUS_DISPATCH_FAILED = 'dispatch_failed';
 
     public const SEND_STATUS_SKIPPED = 'skipped';
 

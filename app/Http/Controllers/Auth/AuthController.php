@@ -23,7 +23,6 @@ use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rules\Password;
-use Illuminate\Validation\ValidationException;
 
 class AuthController extends Controller
 {
@@ -192,13 +191,7 @@ class AuthController extends Controller
             // anything else (username/account_id/referral/…) stays a real
             // exception. The losing transaction rolled back completely: no
             // user, no referral, no Telegram, no OTP, no job.
-            if (EmailUniqueViolationProbe::isEmailUniqueViolation($e)) {
-                throw ValidationException::withMessages([
-                    'email' => 'این ایمیل قبلاً ثبت شده است.',
-                ]);
-            }
-
-            throw $e;
+            EmailUniqueViolationProbe::translateOrRethrow($e);
         }
 
         Cookie::queue(Cookie::forget('referral_code'));

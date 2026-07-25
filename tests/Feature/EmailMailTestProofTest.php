@@ -141,7 +141,7 @@ class EmailMailTestProofTest extends TestCase
         }
     }
 
-    public function test_changing_only_the_password_neither_invalidates_nor_stores_the_secret(): void
+    public function test_every_credential_rotation_invalidates_the_proof_without_storing_secrets(): void
     {
         config([
             'mail.default' => 'smtp',
@@ -149,18 +149,105 @@ class EmailMailTestProofTest extends TestCase
             'mail.mailers.smtp.port' => 587,
             'mail.mailers.smtp.username' => 'mailer-user',
             'mail.mailers.smtp.password' => 'OldSecret111',
+            'mail.mailers.smtp.url' => null,
         ]);
         $this->svc()->recordSuccessfulMailTest();
+        $this->assertTrue($this->svc()->hasVerifiedMailTest());
 
-        config(['mail.mailers.smtp.password' => 'NewSecret222']);
-        $this->assertTrue($this->svc()->hasVerifiedMailTest(), 'secrets are not part of the fingerprint');
-
-        // No secret (or username value) may appear in ANY stored setting.
-        foreach (DB::table('site_settings')->pluck('value') as $value) {
-            $this->assertStringNotContainsString('OldSecret111', (string) $value);
-            $this->assertStringNotContainsString('NewSecret222', (string) $value);
-            $this->assertStringNotContainsString('mailer-user', (string) $value);
+        // Rotating ANY credential the effective transport uses invalidates
+        // the proof; restoring the original value revalidates it (same
+        // APP_KEY): the keyed digest is deterministic but non-reversible.
+        $drifts = [
+            'mail.mailers.smtp.password' => 'NewSecret222',
+            'mail.mailers.smtp.username' => 'other-user',
+            'mail.mailers.smtp.url' => 'smtp://mailer-user:UrlSecret333@mail.example.com:587',
+        ];
+        foreach ($drifts as $key => $value) {
+            $original = config($key);
+            config([$key => $value]);
+            $this->assertFalse($this->svc()->hasVerifiedMailTest(), "credential drift must invalidate: {$key}");
+            config([$key => $original]);
+            $this->assertTrue($this->svc()->hasVerifiedMailTest(), "restored credential revalidates: {$key}");
         }
+
+        // No secret (or username value) may appear in ANY stored setting, and
+        // the persisted fingerprint is an opaque hash with no recognizable
+        // credential fragments.
+        $fingerprint = (string) SiteSetting::get('email_mail_test_fingerprint', '');
+        $this->assertMatchesRegularExpression('/^[0-9a-f]{64}$/', $fingerprint);
+        foreach (DB::table('site_settings')->pluck('value') as $value) {
+            foreach (['OldSecret111', 'NewSecret222', 'UrlSecret333', 'mailer-user', 'other-user'] as $secret) {
+                $this->assertStringNotContainsString($secret, (string) $value);
+            }
+        }
+
+        // And nothing leaked into the application log either.
+        $log = storage_path('logs/laravel.log');
+        $contents = file_exists($log) ? (string) file_get_contents($log) : '';
+        $this->assertStringNotContainsString('OldSecret111', $contents);
+        $this->assertStringNotContainsString('NewSecret222', $contents);
+    }
+
+    public function test_api_transport_credential_rotations_invalidate_the_proof(): void
+    {
+        $cases = [
+            ['mail.default' => 'ses', 'secret' => 'services.ses.secret'],
+            ['mail.default' => 'ses', 'secret' => 'services.ses.key'],
+            ['mail.default' => 'postmark', 'secret' => 'services.postmark.key'],
+            ['mail.default' => 'resend', 'secret' => 'services.resend.key'],
+        ];
+
+        foreach ($cases as $case) {
+            config(['mail.default' => $case['mail.default'], $case['secret'] => 'original-credential-1']);
+            $this->svc()->recordSuccessfulMailTest();
+            $this->assertTrue($this->svc()->hasVerifiedMailTest(), $case['secret'].' baseline');
+
+            config([$case['secret'] => 'rotated-credential-2']);
+            $this->assertFalse($this->svc()->hasVerifiedMailTest(), $case['secret'].' rotation must invalidate');
+        }
+
+        // Mailgun (mailer defined ad hoc — services.mailgun holds the secret).
+        config([
+            'mail.default' => 'mailgun',
+            'mail.mailers.mailgun' => ['transport' => 'mailgun'],
+            'services.mailgun.secret' => 'mg-original', 'services.mailgun.domain' => 'mg.example.com',
+        ]);
+        $this->svc()->recordSuccessfulMailTest();
+        $this->assertTrue($this->svc()->hasVerifiedMailTest());
+        config(['services.mailgun.secret' => 'mg-rotated']);
+        $this->assertFalse($this->svc()->hasVerifiedMailTest(), 'Mailgun secret rotation must invalidate');
+    }
+
+    public function test_app_key_rotation_invalidates_the_proof(): void
+    {
+        $this->svc()->recordSuccessfulMailTest();
+        $this->assertTrue($this->svc()->hasVerifiedMailTest());
+
+        config(['app.key' => 'base64:'.base64_encode(random_bytes(32))]);
+
+        $this->assertFalse(
+            $this->svc()->hasVerifiedMailTest(),
+            'the digest is keyed by an APP_KEY-derived key — rotation invalidates old proofs',
+        );
+    }
+
+    public function test_required_mode_fails_safe_after_credential_drift(): void
+    {
+        SiteSetting::set('email_verification_required_on_register', 'true');
+        config([
+            'mail.default' => 'smtp',
+            'mail.mailers.smtp.host' => 'mail.example.com',
+            'mail.mailers.smtp.port' => 587,
+            'mail.mailers.smtp.password' => 'RotateMe111',
+        ]);
+        $this->svc()->recordSuccessfulMailTest();
+        $this->assertTrue($this->svc()->isRequiredOnRegister());
+
+        config(['mail.mailers.smtp.password' => 'RotatedAway222']);
+
+        $this->assertFalse($this->svc()->isRequiredOnRegister(), 'credential drift degrades required mode');
+        $user = User::factory()->create(['email_verified_at' => null]);
+        $this->actingAs($user)->get('/dashboard')->assertOk();
     }
 
     public function test_expired_proof_blocks_enabling_required_mode(): void

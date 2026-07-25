@@ -4,6 +4,7 @@ namespace App\Support;
 
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\ValidationException;
 
 /**
  * Driver-aware detection of an EMAIL uniqueness violation on the users table —
@@ -13,6 +14,26 @@ use Illuminate\Support\Facades\DB;
  */
 final class EmailUniqueViolationProbe
 {
+    /** The single shared user-facing message for a lost email-uniqueness race. */
+    public const MESSAGE = 'این ایمیل قبلاً ثبت شده است.';
+
+    /**
+     * The ONE translation every email-writing path uses: an email unique
+     * violation becomes a normal field validation error (no SQLSTATE, index
+     * name, or database text ever reaches the user); anything else is
+     * rethrown untouched so unrelated failures still surface.
+     *
+     * @return never
+     */
+    public static function translateOrRethrow(QueryException $e, string $attribute = 'email'): void
+    {
+        if (self::isEmailUniqueViolation($e)) {
+            throw ValidationException::withMessages([$attribute => self::MESSAGE]);
+        }
+
+        throw $e;
+    }
+
     public static function isEmailUniqueViolation(QueryException $e): bool
     {
         $driver = DB::connection()->getDriverName();

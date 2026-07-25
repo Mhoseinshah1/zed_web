@@ -5,10 +5,12 @@ namespace App\Jobs;
 use App\Mail\EmailOtpMail;
 use App\Models\EmailVerificationCode;
 use App\Services\Email\EmailVerificationService;
+use App\Support\DatabaseLockTimeout;
 use App\Support\MailFailure;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldBeEncrypted;
 use Illuminate\Contracts\Queue\ShouldQueue;
+use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
@@ -27,15 +29,27 @@ use Throwable;
  * - RACE-SAFE claiming: the job first takes the SAME per-user distributed
  *   lock used by issuance/verification/address changes and holds it through
  *   claim → transport send → finalize, so an address change can never commit
- *   while an already-validated send is in flight. Inside the lock, a short DB
- *   transaction atomically claims the record (queued → sending) after
- *   re-validating it is still the newest active code for a still-unverified
- *   user whose address still matches; the SMTP conversation itself runs with
- *   NO database transaction open. States move monotonically:
- *   queued → sending → sent, queued/sending → failed, queued → skipped.
+ *   while an already-validated send is in flight. Laravel cache locks carry
+ *   an OWNER token internally: release() only ever releases this worker's
+ *   own acquisition (never another worker's), and the TTL (45s) exceeds the
+ *   job timeout (30s) so an abandoned lock always expires. Inside the lock,
+ *   a short DB transaction (with a bounded row-lock wait) atomically claims
+ *   the record (queued → sending) after re-validating it is still the newest
+ *   active code for a still-unverified user whose address still matches; the
+ *   SMTP conversation itself runs with NO database transaction open. States
+ *   move monotonically: queued → sending → sent, queued/sending → failed,
+ *   queued/sending → skipped.
+ * - The advertised validity in the email is the REMAINING lifetime at claim
+ *   time, not the full configured TTL — a queue delay must not promise
+ *   minutes the code no longer has.
  * - Transport exceptions are re-thrown SANITIZED (category + scrubbed text,
  *   no chained original), so the framework's failed_jobs.exception column can
- *   never store raw SMTP credentials either.
+ *   never store raw SMTP credentials.
+ * - HONEST residual limitation (at-least-once): if the transport ACCEPTS the
+ *   message and the worker dies before recording `sent`, a retry may send
+ *   the same still-valid code again. The code itself stays single-use and
+ *   the claim re-validation minimizes the window, but exactly-once delivery
+ *   over SMTP is not achievable.
  */
 class SendEmailOtpJob implements ShouldBeEncrypted, ShouldQueue
 {
@@ -86,7 +100,21 @@ class SendEmailOtpJob implements ShouldBeEncrypted, ShouldQueue
         }
 
         try {
-            if (! $this->claim()) {
+            try {
+                $remainingMinutes = $this->claim();
+            } catch (QueryException $e) {
+                // Bounded row-lock timeout: pure contention, NOT a delivery
+                // failure — release for a retry with backoff, change nothing.
+                if (DatabaseLockTimeout::isLockTimeout($e)) {
+                    $this->release(10);
+
+                    return;
+                }
+
+                throw $e;
+            }
+
+            if ($remainingMinutes === null) {
                 return;
             }
 
@@ -94,7 +122,7 @@ class SendEmailOtpJob implements ShouldBeEncrypted, ShouldQueue
             // slow SMTP server must never pin row locks — but INSIDE the
             // per-user lock, so no address change can interleave mid-send.
             try {
-                Mail::to($this->email)->send(new EmailOtpMail($this->code, $this->ttlMinutes));
+                Mail::to($this->email)->send(new EmailOtpMail($this->code, $remainingMinutes));
             } catch (Throwable $e) {
                 // Re-throw SANITIZED and UNCHAINED: the framework persists the
                 // thrown exception into failed_jobs.exception verbatim, and
@@ -102,15 +130,25 @@ class SendEmailOtpJob implements ShouldBeEncrypted, ShouldQueue
                 throw new RuntimeException(MailFailure::summarize('delivery failed', $e));
             }
 
-            // Terminal state only if this job still owns the claim.
+            // Terminal `sent` only while this worker still owns its claim AND
+            // the per-user lock: a record invalidated after lock expiry (an
+            // address change won the expired lock) is closed out as skipped —
+            // never reported as a delivered, still-actionable code.
+            if ($lock->isOwnedByCurrentProcess()) {
+                EmailVerificationCode::whereKey($this->codeId)
+                    ->where('send_status', EmailVerificationCode::SEND_STATUS_SENDING)
+                    ->whereNull('used_at')
+                    ->update([
+                        'send_status' => EmailVerificationCode::SEND_STATUS_SENT,
+                        'send_error' => null,
+                    ]);
+            }
             EmailVerificationCode::whereKey($this->codeId)
                 ->where('send_status', EmailVerificationCode::SEND_STATUS_SENDING)
-                ->update([
-                    'send_status' => EmailVerificationCode::SEND_STATUS_SENT,
-                    'send_error' => null,
-                ]);
+                ->update(['send_status' => EmailVerificationCode::SEND_STATUS_SKIPPED]);
         } finally {
             try {
+                // Owner-token release: never force-releases another worker's lock.
                 $lock->release();
             } catch (Throwable) {
                 // TTL expiry is the backstop for a failed release.
@@ -120,11 +158,12 @@ class SendEmailOtpJob implements ShouldBeEncrypted, ShouldQueue
 
     /**
      * Atomically claim the record (queued → sending) after re-validating it,
-     * all inside one SHORT transaction. Returns false when the job must not
-     * send: obsolete records are marked skipped, records claimed by another
-     * worker are simply left alone.
+     * all inside one SHORT transaction with a bounded row-lock wait. Returns
+     * the REMAINING validity in whole minutes (≥1) when the send may proceed,
+     * or null when it must not: obsolete records are marked skipped, records
+     * claimed by another worker are simply left alone.
      */
-    private function claim(): bool
+    private function claim(): ?int
     {
         // First attempt claims from `queued` only — two workers handed the
         // same job can never both pass the conditional update. A RETRY of
@@ -136,12 +175,14 @@ class SendEmailOtpJob implements ShouldBeEncrypted, ShouldQueue
         }
 
         return DB::transaction(function () use ($claimableFrom) {
+            DatabaseLockTimeout::applyLocal();
+
             $record = EmailVerificationCode::whereKey($this->codeId)
                 ->lockForUpdate()
                 ->first();
 
             if ($record === null || ! in_array($record->send_status, $claimableFrom, true)) {
-                return false;
+                return null;
             }
 
             $user = $record->user()->first();
@@ -165,12 +206,18 @@ class SendEmailOtpJob implements ShouldBeEncrypted, ShouldQueue
                     ->whereIn('send_status', $claimableFrom)
                     ->update(['send_status' => EmailVerificationCode::SEND_STATUS_SKIPPED]);
 
-                return false;
+                return null;
             }
 
-            return EmailVerificationCode::whereKey($this->codeId)
+            $claimed = EmailVerificationCode::whereKey($this->codeId)
                 ->whereIn('send_status', $claimableFrom)
                 ->update(['send_status' => EmailVerificationCode::SEND_STATUS_SENDING]) === 1;
+            if (! $claimed) {
+                return null;
+            }
+
+            // Advertise only the validity the code ACTUALLY still has.
+            return max(1, (int) floor(now()->diffInSeconds($record->expires_at, false) / 60));
         });
     }
 

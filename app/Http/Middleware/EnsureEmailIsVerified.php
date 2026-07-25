@@ -30,6 +30,10 @@ class EnsureEmailIsVerified
             || $user->email_verified_at !== null
             || $user->is_admin
             || ! $verification->isRequiredOnRegister()
+            // Accounts created while verification was disabled/optional
+            // registered under a policy that never asked them to verify —
+            // enabling "required" later must not retroactively lock them out.
+            || $verification->isGrandfathered($user)
         ) {
             return $next($request);
         }

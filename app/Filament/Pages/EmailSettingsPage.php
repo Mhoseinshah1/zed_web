@@ -154,6 +154,14 @@ class EmailSettingsPage extends Page implements HasActions, HasForms
             return;
         }
 
+        // Record every OFF → ON transition of required mode: accounts created
+        // BEFORE this moment registered under a policy that never asked them
+        // to verify, and the middleware grandfathers them by this timestamp.
+        $wasRequired = filter_var(SiteSetting::get('email_verification_required_on_register', false), FILTER_VALIDATE_BOOLEAN);
+        if ($requireOnRegister && ! $wasRequired) {
+            SiteSetting::set('email_verification_required_since', now()->toIso8601String());
+        }
+
         SiteSetting::set('email_verification_enabled', ! empty($data['email_verification_enabled']) ? 'true' : 'false');
         SiteSetting::set('email_verification_required_on_register', $requireOnRegister ? 'true' : 'false');
         SiteSetting::set('email_otp_ttl_minutes', (int) ($data['email_otp_ttl_minutes'] ?? EmailVerificationService::CODE_TTL_MINUTES));

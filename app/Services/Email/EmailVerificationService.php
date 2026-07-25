@@ -6,10 +6,13 @@ use App\Jobs\SendEmailOtpJob;
 use App\Models\EmailVerificationCode;
 use App\Models\SiteSetting;
 use App\Models\User;
+use App\Support\DatabaseLockTimeout;
+use App\Support\EmailUniqueViolationProbe;
 use App\Support\MailFailure;
 use Aws\Ses\SesClient;
 use Illuminate\Auth\Events\Verified;
 use Illuminate\Contracts\Cache\LockTimeoutException;
+use Illuminate\Database\QueryException;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
@@ -75,19 +78,65 @@ class EmailVerificationService
             && $this->hasVerifiedMailTest();
     }
 
+    /**
+     * When "required on register" was last ENABLED. Users whose accounts
+     * predate this moment registered under a policy that never asked them to
+     * verify — enabling the policy later must not retroactively lock that
+     * whole cohort out (the one-time migration only covers accounts that
+     * existed at deployment).
+     */
+    public function requiredSince(): ?Carbon
+    {
+        $raw = (string) SiteSetting::get('email_verification_required_since', '');
+        if ($raw === '') {
+            return null;
+        }
+
+        try {
+            return Carbon::parse($raw);
+        } catch (Throwable) {
+            return null;
+        }
+    }
+
+    /**
+     * Grandfathered = created BEFORE required mode was (re-)enabled. With no
+     * recorded timestamp nobody is grandfathered — enforcement stays exactly
+     * as configured (the admin page records the timestamp on every
+     * off → on transition).
+     */
+    public function isGrandfathered(User $user): bool
+    {
+        $since = $this->requiredSince();
+
+        return $since !== null
+            && $user->created_at !== null
+            && $user->created_at->lt($since);
+    }
+
     // ── Transport-test proof ─────────────────────────────────────────────────
 
     /**
-     * A deterministic hash of the NON-SECRET operational mail configuration:
-     * mailer name, resolved transport graph, SMTP host/port/scheme/encryption
-     * + whether a username is present (never its value), sendmail path, SES
-     * region, Mailgun domain, and the From identity. Passwords, API keys,
-     * tokens, usernames and DSNs are NEVER part of the input.
+     * A deterministic hash of the CURRENT mail configuration, combining:
+     *
+     *  1. the non-secret OPERATIONAL fingerprint — mailer name, resolved
+     *     transport graph, SMTP host/port/scheme/encryption + whether a
+     *     username is present, sendmail path, SES region, Mailgun domain,
+     *     From identity; and
+     *  2. an APP_KEY-keyed HMAC DIGEST of the credential material used by the
+     *     effective transports (SMTP username/password/MAIL_URL, SES
+     *     key/secret/token, Postmark/Resend keys, Mailgun secret) — so a
+     *     rotated or mistyped credential invalidates the stored proof, while
+     *     no plaintext credential (and nothing reversible or unkeyed) is ever
+     *     persisted, logged, or displayed. The HMAC input exists in memory
+     *     only; only the final combined hash is stored. Rotating APP_KEY
+     *     therefore also invalidates old proofs safely.
      */
     public function mailConfigFingerprint(): string
     {
         $default = (string) config('mail.default');
         $transports = $this->effectiveTransports($default) ?? [];
+        ksort($transports);
 
         $input = [
             'default' => $default,
@@ -123,7 +172,64 @@ class EmailVerificationService
             };
         }
 
+        $input['secret_digest'] = $this->secretConfigDigest($transports);
+
         return hash('sha256', (string) json_encode($input));
+    }
+
+    /**
+     * Keyed, non-reversible digest of the credential material the effective
+     * transports actually use. The canonical input distinguishes null / empty
+     * / present values, carries current secret values IN MEMORY ONLY, and is
+     * reduced to a single HMAC keyed by an APP_KEY-derived key — never stored,
+     * logged, or returned anywhere except folded into the overall fingerprint.
+     *
+     * @param  array<string,string>  $transports  mailer name ⇒ transport
+     */
+    private function secretConfigDigest(array $transports): string
+    {
+        $material = [];
+
+        foreach ($transports as $mailerName => $transport) {
+            $material[$mailerName] = match ($transport) {
+                'smtp' => [
+                    'username' => $this->secretComponent(config("mail.mailers.{$mailerName}.username")),
+                    'password' => $this->secretComponent(config("mail.mailers.{$mailerName}.password")),
+                    // MAIL_URL can embed user:pass@host credentials.
+                    'url' => $this->secretComponent(config("mail.mailers.{$mailerName}.url")),
+                ],
+                'ses', 'ses-v2' => [
+                    'key' => $this->secretComponent(config('services.ses.key')),
+                    'secret' => $this->secretComponent(config('services.ses.secret')),
+                    'token' => $this->secretComponent(config('services.ses.token')),
+                ],
+                'postmark' => ['key' => $this->secretComponent(config('services.postmark.key'))],
+                'resend' => ['key' => $this->secretComponent(config('services.resend.key'))],
+                'mailgun' => ['secret' => $this->secretComponent(config('services.mailgun.secret'))],
+                // sendmail/log/array carry no credentials.
+                default => [],
+            };
+        }
+        ksort($material);
+
+        // Derive the HMAC key from APP_KEY (never use APP_KEY directly), so
+        // an APP_KEY rotation invalidates old proofs by design.
+        $derivedKey = hash_hmac('sha256', 'zedproxy.email-mail-test-proof.v1', (string) config('app.key'));
+
+        return hash_hmac('sha256', (string) json_encode($material), $derivedKey);
+    }
+
+    /** Canonical null/empty/present marker; present carries the raw value (memory only). */
+    private function secretComponent(mixed $value): array
+    {
+        if ($value === null) {
+            return ['state' => 'null'];
+        }
+        if ((string) $value === '') {
+            return ['state' => 'empty'];
+        }
+
+        return ['state' => 'present', 'value' => (string) $value];
     }
 
     /** Persist the proof AFTER a transport accepted the dedicated test email. */
@@ -323,13 +429,14 @@ class EmailVerificationService
     public function resendCooldownRemaining(User $user): int
     {
         // Terminal obsolete records (failed dispatch/delivery, superseded and
-        // skipped) never attempted a real delivery the user could act on —
-        // they must not hold the cooldown against an immediate retry.
+        // skipped) left the user with nothing they can act on — they must not
+        // hold the cooldown against an immediate retry.
         $latest = EmailVerificationCode::where('user_id', $user->id)
             ->where('email', $user->email)
             ->whereNull('used_at')
             ->whereNotIn('send_status', [
                 EmailVerificationCode::SEND_STATUS_FAILED,
+                EmailVerificationCode::SEND_STATUS_DISPATCH_FAILED,
                 EmailVerificationCode::SEND_STATUS_SKIPPED,
             ])
             ->latest('id')
@@ -349,11 +456,13 @@ class EmailVerificationService
             $q->where('user_id', $user->id)->orWhere('email', $user->email);
         })
             ->where('created_at', '>=', now()->subDay())
-            // Failed and skipped records never resulted in an attempted real
-            // delivery — counting them would let queue outages or superseded
-            // codes burn the user's daily OTP allowance.
+            // Only records that never resulted in an attempted real delivery
+            // are excluded from the cap: dispatch failures (never queued) and
+            // skipped/superseded codes. DELIVERY failures made up to three
+            // real transport attempts and DO count — otherwise repeated
+            // transport failures could generate unlimited email batches.
             ->whereNotIn('send_status', [
-                EmailVerificationCode::SEND_STATUS_FAILED,
+                EmailVerificationCode::SEND_STATUS_DISPATCH_FAILED,
                 EmailVerificationCode::SEND_STATUS_SKIPPED,
             ])
             ->count() >= $this->dailyCap();
@@ -385,45 +494,58 @@ class EmailVerificationService
 
         // Serialize issuance per user — bounded cache lock first, then the DB
         // row lock (consistent ordering: cache lock → user row → code rows).
-        $outcome = $this->withUserLock($user->id, function () use ($user, $meta) {
-            return DB::transaction(function () use ($user, $meta) {
-                // The LOCKED row is the single source of truth from here on —
-                // the caller's model may carry a stale email (e.g. a
-                // concurrent changeAddress committed in between).
-                $lockedUser = User::whereKey($user->id)->lockForUpdate()->first();
-                if ($lockedUser === null) {
-                    return ['error' => 'کاربر یافت نشد. دوباره وارد حساب شوید.', 'status' => 'error'];
-                }
+        try {
+            $outcome = $this->withUserLock($user->id, function () use ($user, $meta) {
+                return DB::transaction(function () use ($user, $meta) {
+                    // Bound the ROW-lock wait too: rows can be held by
+                    // transactions outside our cache-lock protocol.
+                    DatabaseLockTimeout::applyLocal();
 
-                if (! $this->canResend($lockedUser)) {
-                    return ['error' => 'برای ارسال مجدد کد کمی صبر کنید.', 'status' => 'rate_limited'];
-                }
-                if ($this->reachedDailyCap($lockedUser)) {
-                    return ['error' => 'تعداد درخواست کد تایید در شبانه‌روز به حداکثر رسیده است. لطفاً فردا دوباره تلاش کنید.', 'status' => 'rate_limited'];
-                }
+                    // The LOCKED row is the single source of truth from here on —
+                    // the caller's model may carry a stale email (e.g. a
+                    // concurrent changeAddress committed in between).
+                    $lockedUser = User::whereKey($user->id)->lockForUpdate()->first();
+                    if ($lockedUser === null) {
+                        return ['error' => 'کاربر یافت نشد. دوباره وارد حساب شوید.', 'status' => 'error'];
+                    }
 
-                // Single active code: invalidate every previous unused code first.
-                $this->invalidateCodes($lockedUser);
+                    if (! $this->canResend($lockedUser)) {
+                        return ['error' => 'برای ارسال مجدد کد کمی صبر کنید.', 'status' => 'rate_limited'];
+                    }
+                    if ($this->reachedDailyCap($lockedUser)) {
+                        return ['error' => 'تعداد درخواست کد تایید در شبانه‌روز به حداکثر رسیده است. لطفاً فردا دوباره تلاش کنید.', 'status' => 'rate_limited'];
+                    }
 
-                $code = (string) random_int(100000, 999999);
+                    // Single active code: invalidate every previous unused code first.
+                    $this->invalidateCodes($lockedUser);
 
-                // Recorded as QUEUED up front: the sync driver (and a fast Redis
-                // worker) can run the job before this method resumes, and the
-                // job's terminal `sent` state must never be overwritten.
-                $record = EmailVerificationCode::create([
-                    'user_id' => $lockedUser->id,
-                    'email' => $lockedUser->email,
-                    'code_hash' => Hash::make($code),
-                    'expires_at' => now()->addMinutes($this->ttlMinutes()),
-                    'attempts' => 0,
-                    'send_status' => EmailVerificationCode::SEND_STATUS_QUEUED,
-                    'ip_address' => $meta['ip'] ?? null,
-                    'user_agent' => $meta['user_agent'] ?? null,
-                ]);
+                    $code = (string) random_int(100000, 999999);
 
-                return ['record' => $record, 'code' => $code];
+                    // Recorded as QUEUED up front: the sync driver (and a fast Redis
+                    // worker) can run the job before this method resumes, and the
+                    // job's terminal `sent` state must never be overwritten.
+                    $record = EmailVerificationCode::create([
+                        'user_id' => $lockedUser->id,
+                        'email' => $lockedUser->email,
+                        'code_hash' => Hash::make($code),
+                        'expires_at' => now()->addMinutes($this->ttlMinutes()),
+                        'attempts' => 0,
+                        'send_status' => EmailVerificationCode::SEND_STATUS_QUEUED,
+                        'ip_address' => $meta['ip'] ?? null,
+                        'user_agent' => $meta['user_agent'] ?? null,
+                    ]);
+
+                    return ['record' => $record, 'code' => $code];
+                });
             });
-        });
+        } catch (QueryException $e) {
+            // The bounded row-lock wait fired: controlled busy semantics,
+            // identical to cache-lock contention. Anything else stays fatal.
+            if (! DatabaseLockTimeout::isLockTimeout($e)) {
+                throw $e;
+            }
+            $outcome = null;
+        }
 
         if ($outcome === null) {
             return ['status' => 'busy', 'message' => self::BUSY_MESSAGE, 'email_sent' => false];
@@ -449,7 +571,7 @@ class EmailVerificationService
             // the stored error is a SANITIZED category — raw transport/queue
             // exception text can echo credentials.
             $record->forceFill([
-                'send_status' => EmailVerificationCode::SEND_STATUS_FAILED,
+                'send_status' => EmailVerificationCode::SEND_STATUS_DISPATCH_FAILED,
                 'send_error' => MailFailure::summarize('queue dispatch failed', $e),
                 'used_at' => now(),
             ])->save();
@@ -520,58 +642,67 @@ class EmailVerificationService
         // written in the SAME transaction — so a racing address change can
         // never end with the new, unproven address marked verified by a code
         // issued to the old one.
-        $outcome = $this->withUserLock($user->id, fn () => DB::transaction(function () use ($user, $code) {
-            $lockedUser = User::whereKey($user->id)->lockForUpdate()->first();
-            if ($lockedUser === null) {
-                return ['status' => 'error', 'message' => 'کد تایید یافت نشد. یک کد جدید درخواست کنید.'];
+        try {
+            $outcome = $this->withUserLock($user->id, fn () => DB::transaction(function () use ($user, $code) {
+                DatabaseLockTimeout::applyLocal();
+
+                $lockedUser = User::whereKey($user->id)->lockForUpdate()->first();
+                if ($lockedUser === null) {
+                    return ['status' => 'error', 'message' => 'کد تایید یافت نشد. یک کد جدید درخواست کنید.'];
+                }
+
+                $record = EmailVerificationCode::where('user_id', $lockedUser->id)
+                    ->where('email', $lockedUser->email)
+                    ->whereNull('used_at')
+                    ->latest('id')
+                    ->lockForUpdate()
+                    ->first();
+
+                if (! $record) {
+                    return ['status' => 'error', 'message' => 'کد تایید یافت نشد. یک کد جدید درخواست کنید.'];
+                }
+
+                if ($record->isExpired()) {
+                    return ['status' => 'expired', 'message' => 'کد تایید منقضی شده است. یک کد جدید درخواست کنید.'];
+                }
+
+                if ($record->attempts >= $this->maxAttempts()) {
+                    return ['status' => 'too_many_attempts', 'message' => 'تعداد تلاش‌ها بیش از حد مجاز است. یک کد جدید درخواست کنید.'];
+                }
+
+                $record->increment('attempts');
+
+                if (! Hash::check($code, $record->code_hash)) {
+                    return ['status' => 'invalid', 'message' => 'کد تایید اشتباه است.'];
+                }
+
+                // Claim the single-use code: only one request can flip used_at.
+                $claimed = EmailVerificationCode::whereKey($record->id)
+                    ->whereNull('used_at')
+                    ->update(['used_at' => now()]);
+                if ($claimed !== 1) {
+                    return ['status' => 'error', 'message' => 'کد تایید یافت نشد. یک کد جدید درخواست کنید.'];
+                }
+                $this->invalidateCodes($lockedUser);
+
+                $newlyVerified = false;
+                if ($lockedUser->email_verified_at === null) {
+                    $lockedUser->forceFill(['email_verified_at' => now()])->save();
+                    $newlyVerified = true;
+                }
+
+                return [
+                    'status' => 'verified',
+                    'message' => 'ایمیل شما با موفقیت تایید شد.',
+                    'newly_verified' => $newlyVerified,
+                ];
+            }));
+        } catch (QueryException $e) {
+            if (! DatabaseLockTimeout::isLockTimeout($e)) {
+                throw $e;
             }
-
-            $record = EmailVerificationCode::where('user_id', $lockedUser->id)
-                ->where('email', $lockedUser->email)
-                ->whereNull('used_at')
-                ->latest('id')
-                ->lockForUpdate()
-                ->first();
-
-            if (! $record) {
-                return ['status' => 'error', 'message' => 'کد تایید یافت نشد. یک کد جدید درخواست کنید.'];
-            }
-
-            if ($record->isExpired()) {
-                return ['status' => 'expired', 'message' => 'کد تایید منقضی شده است. یک کد جدید درخواست کنید.'];
-            }
-
-            if ($record->attempts >= $this->maxAttempts()) {
-                return ['status' => 'too_many_attempts', 'message' => 'تعداد تلاش‌ها بیش از حد مجاز است. یک کد جدید درخواست کنید.'];
-            }
-
-            $record->increment('attempts');
-
-            if (! Hash::check($code, $record->code_hash)) {
-                return ['status' => 'invalid', 'message' => 'کد تایید اشتباه است.'];
-            }
-
-            // Claim the single-use code: only one request can flip used_at.
-            $claimed = EmailVerificationCode::whereKey($record->id)
-                ->whereNull('used_at')
-                ->update(['used_at' => now()]);
-            if ($claimed !== 1) {
-                return ['status' => 'error', 'message' => 'کد تایید یافت نشد. یک کد جدید درخواست کنید.'];
-            }
-            $this->invalidateCodes($lockedUser);
-
-            $newlyVerified = false;
-            if ($lockedUser->email_verified_at === null) {
-                $lockedUser->forceFill(['email_verified_at' => now()])->save();
-                $newlyVerified = true;
-            }
-
-            return [
-                'status' => 'verified',
-                'message' => 'ایمیل شما با موفقیت تایید شد.',
-                'newly_verified' => $newlyVerified,
-            ];
-        }));
+            $outcome = null;
+        }
 
         if ($outcome === null) {
             return ['status' => 'busy', 'message' => self::BUSY_MESSAGE];
@@ -589,32 +720,51 @@ class EmailVerificationService
 
     /**
      * Atomically switch the user to a NEW (already-validated, normalized)
-     * address: verification restarts from zero and every previous code dies.
-     * Serialized by the same per-user lock as issuance, verification and
-     * in-flight delivery — a code issued to the old mailbox can never mark
-     * the new address verified, and a job mid-send blocks this briefly.
+     * address: every previous code dies, and the verification timestamp is
+     * set per $markVerified (null = user self-service flow → unverified;
+     * bool = trusted admin's explicit choice). Serialized by the same
+     * per-user lock as issuance, verification and in-flight delivery — a
+     * code issued to the old mailbox can never mark the new address
+     * verified, and a job mid-SMTP-send blocks this briefly.
      *
-     * Returns false when the lock could not be acquired (caller shows a retry
-     * message and changes NOTHING).
+     * Returns false on lock contention (cache OR bounded row-lock timeout):
+     * the caller shows a retry message and NOTHING changed. A lost
+     * email-uniqueness race (the DB index is the final authority) becomes a
+     * normal ValidationException on $errorAttribute — the transaction rolled
+     * back, so the old address, its verification timestamp, and every
+     * existing OTP record are untouched; unrelated QueryExceptions rethrow.
      */
-    public function changeAddressTo(User $user, string $email): bool
-    {
+    public function changeAddressTo(
+        User $user,
+        string $email,
+        ?bool $markVerified = null,
+        string $errorAttribute = 'email',
+    ): bool {
         $email = strtolower(trim($email));
 
-        $result = $this->withUserLock($user->id, fn () => DB::transaction(function () use ($user, $email) {
-            $lockedUser = User::whereKey($user->id)->lockForUpdate()->first();
-            if ($lockedUser === null) {
+        try {
+            $result = $this->withUserLock($user->id, fn () => DB::transaction(function () use ($user, $email, $markVerified) {
+                DatabaseLockTimeout::applyLocal();
+
+                $lockedUser = User::whereKey($user->id)->lockForUpdate()->first();
+                if ($lockedUser === null) {
+                    return false;
+                }
+
+                $this->invalidateCodes($lockedUser);
+                $lockedUser->forceFill([
+                    'email' => $email,
+                    'email_verified_at' => $markVerified === true ? now() : null,
+                ])->save();
+
+                return true;
+            }));
+        } catch (QueryException $e) {
+            if (DatabaseLockTimeout::isLockTimeout($e)) {
                 return false;
             }
-
-            $this->invalidateCodes($lockedUser);
-            $lockedUser->forceFill([
-                'email' => $email,
-                'email_verified_at' => null,
-            ])->save();
-
-            return true;
-        }));
+            EmailUniqueViolationProbe::translateOrRethrow($e, $errorAttribute);
+        }
 
         if ($result === true) {
             $user->refresh();

@@ -248,8 +248,9 @@ class EmailVerificationTest extends TestCase
 
         $this->assertSame('error', $result['status']);
         $this->assertFalse($result['email_sent']);
+        // DISPATCH failure ≠ delivery failure: no transport attempt happened.
         $this->assertSame(
-            EmailVerificationCode::SEND_STATUS_FAILED,
+            EmailVerificationCode::SEND_STATUS_DISPATCH_FAILED,
             EmailVerificationCode::first()->send_status,
         );
     }
