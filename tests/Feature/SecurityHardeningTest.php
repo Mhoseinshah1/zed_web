@@ -8,6 +8,7 @@ use App\Models\PaymentMethod;
 use App\Models\PaymentTransaction;
 use App\Models\User;
 use App\Models\WalletTransaction;
+use App\Services\Email\EmailVerificationService;
 use App\Services\WalletService;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -223,6 +224,41 @@ class SecurityHardeningTest extends TestCase
 
         $this->assertSame(1, User::whereRaw('lower(email) = ?', ['case@example.com'])->count());
         $this->assertSame('caseadmin2', User::whereRaw('lower(email) = ?', ['case@example.com'])->first()->username);
+    }
+
+    public function test_create_admin_update_respects_the_per_user_verification_lock(): void
+    {
+        $this->artisan('zedproxy:create-admin', [
+            '--username' => 'lockadmin', '--email' => 'lockadmin@example.com',
+            '--password' => 'secret1234',
+        ])->assertExitCode(0);
+        $user = User::where('username', 'lockadmin')->first();
+
+        // Another owner (an in-flight OTP delivery job) holds the per-user
+        // lock: the rerun must fail cleanly — never silently replace the
+        // address mid-send.
+        $lock = Cache::lock(
+            EmailVerificationService::userLockKey($user->id), 60,
+        );
+        $this->assertTrue($lock->get());
+        try {
+            $this->artisan('zedproxy:create-admin', [
+                '--username' => 'lockadmin', '--email' => 'moved@example.com',
+                '--password' => 'secret1234',
+            ])->assertExitCode(1);
+        } finally {
+            $lock->release();
+        }
+        $this->assertSame('lockadmin@example.com', $user->fresh()->email, 'address untouched under contention');
+
+        // Lock released → the same rerun succeeds through the guarded path.
+        $this->artisan('zedproxy:create-admin', [
+            '--username' => 'lockadmin', '--email' => 'moved@example.com',
+            '--password' => 'secret1234',
+        ])->assertExitCode(0);
+        $this->assertSame('moved@example.com', $user->fresh()->email);
+        $this->assertNotNull($user->fresh()->email_verified_at, 'command semantics: admin stays verified');
+        $this->assertTrue((bool) $user->fresh()->is_admin);
     }
 
     public function test_admin_panel_can_still_toggle_is_admin(): void
