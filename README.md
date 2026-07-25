@@ -532,6 +532,16 @@ Expected response:
 }
 ```
 
+`/health` and `/health/live` are **stateless**: they are registered outside the
+`web` middleware group (`routes/health.php` via `bootstrap/app.php`), so they
+never start a session or set session / `XSRF-TOKEN` cookies — the atomic deployer
+hits them every few seconds through the loopback vhost, and uptime monitors hit
+them constantly. Only rate limiting and the non-indexable `X-Robots-Tag` header
+apply, and the payload is safe booleans only (never exception text, paths, or
+secrets). During a deployment these endpoints are validated over the internal
+loopback vhost (`http://127.0.0.1:18080` → `current/public`), independent of
+Cloudflare / public TLS. See `docs/deployment.md` → *Two-phase readiness*.
+
 ## Useful commands
 
 ```bash

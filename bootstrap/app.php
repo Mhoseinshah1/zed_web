@@ -7,12 +7,18 @@ use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
 use Illuminate\Http\Middleware\TrustProxies;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Route;
 
 return Application::configure(basePath: dirname(__DIR__))
     ->withRouting(
         web: __DIR__.'/../routes/web.php',
         commands: __DIR__.'/../routes/console.php',
         health: '/up',
+        // Stateless health probes — registered OUTSIDE the `web` group so they
+        // never start a session or set session/XSRF cookies (see routes/health.php).
+        then: function (): void {
+            Route::group([], __DIR__.'/../routes/health.php');
+        },
     )
     ->withMiddleware(function (Middleware $middleware): void {
         // Trust only the reverse proxies configured in config/proxies.php

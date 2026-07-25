@@ -132,10 +132,14 @@ time, result, migration status, health). A machine-readable state file lives at
    current release untouched.
 5. **Atomic activation**: maintenance mode → pause workers → run migrations →
    **atomic symlink switch** → reload PHP-FPM → `nginx -t` → reload Nginx →
-   restart workers → readiness checks → exit maintenance only on success.
-6. **Health** — `/health`, `/health/live`, homepage, `/login`, plus infra
-   (`zedproxy:health`) and scheduler (`schedule:list`). A failed required check
-   fails the deployment; the success flag is never set after a failed check.
+   restart workers → **Phase A internal readiness (still in maintenance)** →
+   **`php artisan up`** (verified: maintenance flag actually cleared) →
+   **Phase B public HTTP readiness** → success only if every phase passed.
+6. **Two-phase health** — see *Two-phase readiness* below. Phase A runs the
+   infra/CLI/service checks that do **not** need a public application response
+   (safe while the app returns a maintenance `503`); only after the app is
+   brought online does Phase B hit the public HTTP endpoints. A failed required
+   check fails the deployment; the success flag is never set after a failed check.
 
 ## Migration policy
 
@@ -229,16 +233,71 @@ executed the legacy base deployer with the original `.` repository fallback. On
 a first legacy cutover the previous wrappers are snapshotted and restored if the
 activation fails.
 
-### Expanded readiness gate
+### Two-phase readiness (maintenance-safe)
 
-After activation the deployer verifies (any failure → rollback): `/health`,
-`/health/live`, homepage, `/login`; the `current` symlink exists and resolves to
-the expected release id; the manifest SHA equals the deployed `git HEAD`; the
-Nginx root, Supervisor command, and scheduler cron all go through `current/`; the
-worker group is **running**; `php current/artisan schedule:list` succeeds; the
-command wrappers resolve `current/`; and PostgreSQL + Redis are reachable. The
-deployment is **never** reported successful while Queue or Scheduler still runs
-legacy code.
+Readiness is split so a maintenance-mode `503` can never be mistaken for an
+unhealthy release (the bug that previously caused false rollbacks):
+
+- **Phase A — internal readiness (runs while still in maintenance):** the
+  `current` symlink exists and resolves to the expected release id; the manifest
+  SHA equals the deployed `git HEAD`; `nginx -t`; the Nginx root, Supervisor
+  command, and scheduler cron all go through `current/`; the worker group is
+  **running**; `php current/artisan schedule:list` succeeds; the command
+  wrappers resolve `current/`; PostgreSQL + Redis are reachable; shared storage
+  is writable; `artisan`, `public/index.php`, and the Vite `public/build/manifest.json`
+  exist; and a **bounded** `php artisan zedproxy:health --json`
+  (`ZPD_HEALTH_CLI_TIMEOUT`, default 20s) passes. None of these needs a public
+  HTTP response, so they run truthfully while the app is fenced.
+- **`php artisan up`:** the app is brought online and the maintenance flag
+  (`storage/framework/maintenance.php`) is verified **actually cleared** — a
+  stuck maintenance state fails activation. `artisan up` is never masked by
+  `|| true`.
+- **Phase B — public HTTP readiness (only after `up`):** `/health`,
+  `/health/live`, homepage, `/login`. If Phase B fails, the failed release is put
+  **back** into maintenance before the caller rolls back, so it stops serving.
+
+The deployment is **never** reported successful while Queue or Scheduler still
+runs legacy code, nor while the app is still in maintenance.
+
+### Internal loopback health vhost
+
+Phase B is validated against an internal Nginx vhost bound to **loopback only**
+(`127.0.0.1:18080` → `current/public`), so deployment health never depends on
+Cloudflare, public DNS, public TLS, or the public vhost. The installer creates
+`/etc/nginx/conf.d/zedproxy-local-health.conf`; the deployer **repairs** it on
+every run (validated with `nginx -t`, restored on failure) and writes
+`ZPD_HEALTH_URL=http://127.0.0.1:18080` into `deploy.env`. Every `listen`
+directive is asserted loopback — a config that exposes the port on a public
+interface is rejected and repaired. A custom `ZPD_HEALTH_URL` is preserved. No
+`curl -k` / TLS-skip is used anywhere.
+
+### Honest migration-state reporting
+
+`artisan migrate --force` output (which is **not** localized) is parsed into one
+of `not_run | none_pending | applied | failed`, recorded in the manifest. The DB
+backup warning and «مهاجرت‌های دیتابیس نیاز به بررسی دارند» notice appear **only
+when a migration actually ran** (`applied`) — a deploy that changed nothing no
+longer prints a misleading "check your database backup" message. The backup is
+always preserved regardless.
+
+### Bounded, non-interactive tool-version probes
+
+Informational toolchain metadata (git tag, php/composer/node/npm versions) is
+collected through `dep_probe_version`: every probe is wrapped in
+`timeout ${ZPD_PROBE_TIMEOUT}s` (default 5s), reads stdin from `/dev/null`, and
+runs non-interactively (`COMPOSER_NO_INTERACTION=1`, `GIT_TERMINAL_PROMPT=0`, …),
+returning `unknown` on any failure/timeout/malformed output. The whole collection
+stage is additionally bounded by a global `ZPD_META_TIMEOUT` (default 30s) and
+logged (`Collecting release metadata…` / `Release metadata collected.`), so a
+hung `composer --version` can **never** freeze the terminal or block activation.
+
+### Interrupt safety
+
+A `SIGINT`/`SIGTERM` during a deploy records the current stage, brings the active
+release **out of maintenance** (bounded `artisan up`), restarts the worker group,
+releases the deploy lock, and exits **non-zero** — an interrupted deploy is never
+reported as success and never leaves the app stuck in maintenance or with stopped
+workers.
 
 ### Strict updater ref (`update.sh`)
 
@@ -253,13 +312,17 @@ to the default branch.
 ## Configuration (env)
 
 Loaded from `/etc/zedproxy/deploy.env` (non-secret) or the environment:
-`ZPD_BASE`, `ZPD_REPO_URL`, `ZPD_REF`, `ZPD_HEALTH_URL`, `ZPD_KEEP_RELEASES`,
-`ZPD_MIN_DISK_MB`. Additional runtime paths: `ZPD_LOCK_FILE`, `ZPD_LOG_DIR`,
-`ZPD_BACKUP_DIR`, `ZPD_STATE_FILE`. Test/dev only: `ZPD_ALLOW_LOCAL_REPO=1`
-(permit an absolute local repo path), `ZPD_ALLOW_NOGIT=1` (permit a `-nogit`
-release id in fixtures). Injectable command names (`ZPD_COMPOSER`, `ZPD_NPM`,
-`ZPD_PHP`, `ZPD_PG_DUMP`, `ZPD_SYSTEMCTL`, `ZPD_NGINX`, `ZPD_SUPERVISORCTL`,
-`ZPD_CURL`, `ZPD_GIT`) and config-file paths (`ZPD_NGINX_CONF`,
+`ZPD_BASE`, `ZPD_REPO_URL`, `ZPD_REF`, `ZPD_HEALTH_URL` (default the loopback
+`http://127.0.0.1:18080`), `ZPD_KEEP_RELEASES`, `ZPD_MIN_DISK_MB`. Timeouts:
+`ZPD_PROBE_TIMEOUT` (per version probe, 5s), `ZPD_META_TIMEOUT` (metadata stage,
+30s), `ZPD_HEALTH_CLI_TIMEOUT` (`zedproxy:health`, 20s). Loopback health vhost:
+`ZPD_LOCAL_HEALTH_CONF`, `ZPD_LOCAL_HEALTH_PORT` (18080), `ZPD_FPM_SOCK`.
+Additional runtime paths: `ZPD_LOCK_FILE`, `ZPD_LOG_DIR`, `ZPD_BACKUP_DIR`,
+`ZPD_STATE_FILE`. Test/dev only: `ZPD_ALLOW_LOCAL_REPO=1` (permit an absolute
+local repo path), `ZPD_ALLOW_NOGIT=1` (permit a `-nogit` release id in fixtures).
+Injectable command names (`ZPD_COMPOSER`, `ZPD_NPM`, `ZPD_NODE`, `ZPD_PHP`,
+`ZPD_PG_DUMP`, `ZPD_SYSTEMCTL`, `ZPD_NGINX`, `ZPD_SUPERVISORCTL`, `ZPD_CURL`,
+`ZPD_PSQL`, `ZPD_REDIS_CLI`, `ZPD_GIT`) and config-file paths (`ZPD_NGINX_CONF`,
 `ZPD_SUPERVISOR_CONF`, `ZPD_SCHED_CRON`, `ZPD_DEPLOY_ENV`) let the shell tests
 drive every step against temporary files.
 
@@ -278,14 +341,28 @@ cause is printed above it (redacted). Common cases:
 
 ## Tests
 
-`bash tests/deploy/run-tests.sh` runs 100+ scenarios using **real temporary git
+`bash tests/deploy/run-tests.sh` runs 140+ scenarios using **real temporary git
 repositories** (a local bare "remote" with `main`, commits, a lightweight tag,
-and an annotated tag) plus mocked non-git system commands. It exercises real
-`git clone` / `ls-remote` / `checkout` / `rev-parse`, repository/ref resolution,
-rejection of the `.` fallback, deploy.env round-trips, exact-SHA release ids
-(never `nogit`), redacted git errors, deploy-from-arbitrary-CWD, first legacy
-cutover (success + failure→legacy restore), normal update + rollback, public
-storage links, clone/build failure isolation, and lock contention. The
-production GitHub repository is never contacted. `bash tests/installer/run-tests.sh`
-adds static assertions that the installer builds the atomic layout and points
-Nginx/Supervisor/scheduler at `current`.
+and an annotated tag) plus mocked non-git system commands — including mocks that
+**hang, read stdin, exit non-zero, delay, or emit malformed output**, a
+maintenance-aware `php` mock (`artisan down/up` toggles the real
+`storage/framework/maintenance.php` flag), and a maintenance-aware `curl` mock
+(returns `503` exactly while the served release is in maintenance). It exercises
+real `git clone` / `ls-remote` / `checkout` / `rev-parse`; repository/ref
+resolution and rejection of the `.` fallback; bounded non-interactive probes
+(hang/stdin/non-zero/malformed → `unknown`, global metadata deadline); honest
+migration-state reporting (`none_pending`/`applied`/`failed`, no false DB
+warning); bounded CLI health (timeout/component failure); the loopback health
+vhost (create/repair/loopback-only/port-18080/custom-URL preservation);
+**internal readiness passing in maintenance while `/health` returns 503**;
+**`artisan up` before the public HTTP check** (stuck-maintenance and HTTP-failure
+both fence the release and fail activation, never falsely succeeding on HTTP);
+rollback that brings the previous release up **before** verifying it; interrupt
+recovery (exit maintenance, non-zero exit, lock released); first legacy cutover
+(success + failure→legacy restore); normal update + rollback; and clone/build
+failure isolation. The production GitHub repository is never contacted.
+`bash tests/installer/run-tests.sh` adds static assertions that the installer
+builds the atomic layout and points Nginx/Supervisor/scheduler at `current`. The
+CI **Shell Tests** job additionally asserts, by static analysis, that no
+unbounded `composer --version` exists and that `artisan up` precedes the public
+HTTP readiness check in `dep_activate`.

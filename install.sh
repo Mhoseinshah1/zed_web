@@ -1705,6 +1705,23 @@ fi
 
 ok "Nginx configured for: ${DOMAIN}"
 
+# ─── Internal loopback health virtual host (127.0.0.1:18080) ─────────────────
+# Deployment health is validated against this LOOPBACK-only vhost so the updater
+# never depends on Cloudflare, public DNS, public TLS, or the public vhost. It
+# serves current/public through index.php and is never bound to a public
+# interface. An intentional custom ZP_HEALTH_URL is preserved further below.
+log "Configuring internal loopback health vhost..."
+LOCAL_HEALTH_CONF="$(zpd_local_health_conf_path)"
+zpd_local_health_conf_content "${ZPD_BASE}" "${PHP_FPM_SOCK}" > "$LOCAL_HEALTH_CONF"
+if nginx -t 2>/dev/null; then
+    systemctl reload nginx 2>/dev/null || systemctl restart nginx
+    ok "Local health vhost active on 127.0.0.1:$(zpd_local_health_port) (loopback only)"
+else
+    warn "Local health vhost failed nginx -t; removing it (deployment health may fall back to the public host)."
+    rm -f "$LOCAL_HEALTH_CONF"
+    nginx -t >/dev/null 2>&1 && systemctl reload nginx 2>/dev/null || true
+fi
+
 # ─── Queue worker (Supervisor) ───────────────────────────────────────────────
 log "Configuring queue worker..."
 cat > /etc/supervisor/conf.d/zedproxy-worker.conf <<SUPERVISOR
@@ -1738,7 +1755,7 @@ zpd_write_deploy_env "$DEPLOY_ENV_FILE" \
     "ZPD_BASE=${ZPD_BASE}" \
     "ZPD_REPO_URL=${ZPD_REPO_URL:-$REPO_URL}" \
     "ZPD_REF=${ZPD_REF:-${INSTALL_REF:-$BRANCH}}" \
-    "ZPD_HEALTH_URL=${ZPD_HEALTH_URL:-http://127.0.0.1}" \
+    "ZPD_HEALTH_URL=${ZPD_HEALTH_URL:-$(zpd_local_health_url)}" \
     || warn "Could not write ${DEPLOY_ENV_FILE}"
 ok "Deployment configuration written (repo/ref/base/health — no secrets)"
 
