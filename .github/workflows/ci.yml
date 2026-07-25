@@ -187,13 +187,19 @@ jobs:
       - name: Order idempotency + real-concurrency (PostgreSQL)
         run: php artisan test --testsuite=Feature --filter='OrderIdempotencyTest|OrderIdempotencyPgTest'
 
-      - name: Email OTP registration + concurrency (PostgreSQL)
+      - name: Email OTP registration + verification flows (PostgreSQL)
+        # Default array cache store: each test gets a FRESH rate-limiter
+        # state. (A shared Redis store here would let the per-IP registration
+        # and verification throttles accumulate across tests into 429s.)
+        run: php artisan test --testsuite=Feature --filter='EmailVerificationTest|EmailVerificationHardeningTest|EmailMailTestProofTest'
+
+      - name: Email OTP real concurrency (PostgreSQL + Redis locks)
         # Real Redis-backed Cache::lock so the bounded per-user serialization
         # lock is exercised ACROSS the forked worker processes, on top of the
         # PostgreSQL row locks (EmailConcurrencyPgTest skips on SQLite).
         env:
           CACHE_STORE: redis
-        run: php artisan test --testsuite=Feature --filter='EmailConcurrencyPgTest|EmailVerificationTest|EmailVerificationHardeningTest|EmailMailTestProofTest'
+        run: php artisan test --testsuite=Feature --filter='EmailConcurrencyPgTest'
 
       - name: Scheduler locking + Redis-outage resilience
         run: php artisan test --testsuite=Feature --filter='SchedulerTest'

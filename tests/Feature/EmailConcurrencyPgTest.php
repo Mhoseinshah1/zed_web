@@ -8,6 +8,7 @@ use App\Models\User;
 use App\Services\Email\EmailVerificationService;
 use App\Support\EmailUniqueViolationProbe;
 use Illuminate\Database\QueryException;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Tests\TestCase;
@@ -38,6 +39,13 @@ class EmailConcurrencyPgTest extends TestCase
         }
 
         $this->cleanup();
+        // The CI step runs this suite against REAL Redis: flush leftover
+        // locks/limiter state so earlier steps (or aborted runs) can't leak in.
+        try {
+            Cache::flush();
+        } catch (\Throwable) {
+            // Cache backend unavailable locally — the tests still hold via DB locks.
+        }
         SiteSetting::set('email_verification_enabled', 'true');
     }
 
@@ -62,6 +70,15 @@ class EmailConcurrencyPgTest extends TestCase
             if ($pid === 0) {
                 DB::purge();
                 DB::reconnect();
+                // A forked child also inherits the parent's Redis socket —
+                // two processes on one connection corrupt the protocol, so
+                // drop cache/redis connections and let them lazily reconnect.
+                try {
+                    app('cache')->forgetDriver((string) config('cache.default'));
+                    app('redis')->purge();
+                } catch (\Throwable) {
+                    // Array store locally — nothing to purge.
+                }
                 try {
                     exit((int) $work($i));
                 } catch (\Throwable) {
