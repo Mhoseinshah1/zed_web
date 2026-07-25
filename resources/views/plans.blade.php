@@ -54,7 +54,7 @@
     <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
         @foreach($plans as $plan)
         <div x-show="cat === 'all' || cat === '{{ $plan->category_id }}'" x-transition>
-            @include('partials.plan-card', ['plan' => $plan])
+            @include('partials.plan-card', ['plan' => $plan, 'withAnchor' => true])
         </div>
         @endforeach
     </div>

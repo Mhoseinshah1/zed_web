@@ -169,24 +169,48 @@ class SchemaBuilder
             return null;
         }
 
+        // Stable per-plan URLs: /plans#plan-{slug} — the fragment target is the
+        // card anchor emitted ONLY on /plans (plans.slug is DB-unique). No
+        // /plans/{slug} detail route exists, and this PR does not add one.
+        $plansUrl = $this->seo->absoluteUrl('/plans');
+        // Product image fallback = the validated default OG image; omitted
+        // entirely when unset (never an empty string, never a fake image).
+        $image = $this->seo->absoluteUrl(SeoSettings::defaultOgImage());
+        // Optional, operator-configured and validated; absent by default.
+        $validUntil = SeoSettings::offerPriceValidUntil();
+
         $elements = [];
         $pos = 1;
         foreach ($plans as $plan) {
+            $url = $plansUrl.'#plan-'.$plan->slug;
             $product = [
                 '@type' => 'Product',
                 'name' => (string) $plan->name,
+                'url' => $url,
+                'sku' => (string) $plan->slug,
             ];
             if (filled($plan->description ?? null)) {
                 $product['description'] = $this->htmlToText((string) $plan->description);
             }
-            // Offer only with real price data (Toman → IRR currency).
+            if ($image !== '') {
+                $product['image'] = $image;
+            }
+            // Offer only with real price data. The visible price is تومان;
+            // schema.org has no Toman code, so we emit Rial: 1 Toman == 10
+            // Rial exactly (price_toman * 10, integer — no rounding drift).
             if (($plan->price_toman ?? 0) > 0) {
-                $product['offers'] = [
+                $offer = [
                     '@type' => 'Offer',
-                    'price' => (string) ((int) $plan->price_toman * 10), // Toman → Rial
+                    'url' => $url,
+                    'price' => (string) ((int) $plan->price_toman * 10), // Toman → Rial (exact 10×)
                     'priceCurrency' => 'IRR',
                     'availability' => 'https://schema.org/InStock',
+                    'itemCondition' => 'https://schema.org/NewCondition',
                 ];
+                if ($validUntil !== '') {
+                    $offer['priceValidUntil'] = $validUntil;
+                }
+                $product['offers'] = $offer;
             }
             $elements[] = ['@type' => 'ListItem', 'position' => $pos++, 'item' => $product];
         }

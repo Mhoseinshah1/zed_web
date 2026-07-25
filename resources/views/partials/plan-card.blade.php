@@ -14,7 +14,10 @@
         : 'mt-8 w-full text-center bg-gray-800 hover:bg-gray-700 text-white font-semibold py-3 rounded-xl transition border border-gray-700 cursor-pointer';
 @endphp
 
-<div class="{{ $cardClass }}">
+{{-- The fragment anchor is OPT-IN (plans.blade.php only): the Product schema
+     URLs point at /plans#plan-{slug}, and the homepage (which includes this
+     card too) must not carry duplicate anchor targets for the same plans. --}}
+<div @if(!empty($withAnchor)) id="plan-{{ $plan->slug }}" @endif class="{{ $cardClass }}">
     @if($plan->badge)
     <div class="absolute -top-4 right-1/2 translate-x-1/2">
         <span class="bg-yellow-400 text-gray-900 text-xs font-bold px-4 py-1.5 rounded-full whitespace-nowrap">{{ $plan->badge }}</span>

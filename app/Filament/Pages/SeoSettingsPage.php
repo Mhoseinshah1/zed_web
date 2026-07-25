@@ -96,6 +96,16 @@ class SeoSettingsPage extends Page implements HasForms
                 Forms\Components\TextInput::make('seo_google_analytics_id')->label('شناسه Google Analytics')->placeholder('G-XXXXXXX')->maxLength(40)
                     ->regex('/^G-[A-Z0-9]{4,20}$/')
                     ->validationMessages(['regex' => 'شناسه باید به شکل G-XXXXXXXXXX باشد (حروف بزرگ و ارقام).']),
+                Forms\Components\TextInput::make('seo_offer_price_valid_until')
+                    ->label('تاریخ اعتبار قیمت پلن‌ها (priceValidUntil)')
+                    ->placeholder('YYYY-MM-DD')
+                    ->maxLength(10)
+                    ->rules(['nullable', 'date_format:Y-m-d', 'after_or_equal:today'])
+                    ->validationMessages([
+                        'date_format' => 'تاریخ باید میلادی و به شکل YYYY-MM-DD باشد (مثلاً 2026-12-31).',
+                        'after_or_equal' => 'تاریخ اعتبار قیمت نباید گذشته باشد.',
+                    ])
+                    ->helperText('اختیاری — فقط در صورت تنظیم و معتبر بودن، در اسکیمای Offer پلن‌ها درج می‌شود. خالی بگذارید تا حذف شود؛ تاریخ گذشته یا نامعتبر نمایش داده نمی‌شود.'),
             ])->columns(3),
         ])->statePath('data');
     }
