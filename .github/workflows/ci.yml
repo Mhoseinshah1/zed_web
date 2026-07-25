@@ -423,7 +423,7 @@ jobs:
           for fn in dep_probe_version dep_collect_metadata dep_tool_versions; do
             grep -q "$fn" "$dep" || { echo "::error::deploy.sh missing ${fn} (bounded metadata)."; exit 1; }
           done
-          grep -Eq 'timeout[[:space:]]+"?\$\{ZPD_PROBE_TIMEOUT' "$dep" \
+          grep -Eq 'timeout[[:space:]]+(-k[[:space:]]+"?\$\{ZPD_KILL_GRACE\}"?[[:space:]]+)?"?\$\{ZPD_PROBE_TIMEOUT' "$dep" \
             || { echo '::error::dep_probe_version is not wrapped in a timeout.'; exit 1; }
           grep -q '</dev/null' "$dep" \
             || { echo '::error::probes do not redirect stdin from /dev/null (could block on input).'; exit 1; }
@@ -733,6 +733,51 @@ jobs:
             && grep -q 'snapshot_schema_version' scripts/lib/deploy-lib.sh \
             || { echo '::error::committed fresh-snapshot protocol missing.'; exit 1; }
           echo 'Prompt-22 behavioral coverage and invariants hold.'
+
+      - name: Assert fail-closed discovery, strict worker status, atomic snapshots, and probe hygiene (Prompt 23)
+        run: |
+          set -euo pipefail
+          log=deploy-tests.log
+          # ── BEHAVIORAL evidence from this job's own run.
+          for line in \
+            'list-unit-files failure blocks reconciliation' \
+            'list-timers failure blocks reconciliation' \
+            'systemctl cat failure blocks reconciliation' \
+            'list-unit-files timeout blocks reconciliation' \
+            'malformed list-unit-files output blocks reconciliation' \
+            'unexpected list-unit-files rc makes timer existence UNKNOWN' \
+            'rc=1 with unrelated output rejects the fence' \
+            'rc=3 with an error message rejects the fence' \
+            'rc=0 with UNRELATED programs only never proves absence' \
+            'mixed STOPPED and RUNNING lines reject the fence' \
+            'failed SNAPSHOT.json write fails the snapshot' \
+            'restore refuses the interrupted .tmp snapshot' \
+            'restore refuses an old snapshot schema' \
+            'restore fails on a snapshot hash mismatch' \
+            'metadata probe works WITHOUT COMPOSER_ALLOW_SUPERUSER' \
+            'unknown migration reported as INDETERMINATE' \
+            'WorkingDirectory + relative artisan systemd unit blocks' \
+            'manual legacy rollback succeeds without DEP_SNAPSHOT_DIR' \
+            'metadata-only repair succeeds despite broken wrappers (scoped capture)' \
+            'state repair refuses a non-canonical current target' \
+            'state symlink target preserved'; do
+            grep -F "ok   - " "$log" | grep -qF "$line" \
+              || { echo "::error::Prompt-23 behavioral test did not pass: ${line}"; exit 1; }
+          done
+          # ── Static invariants.
+          dep=scripts/deploy/deploy.sh
+          grep -q 'DISCOVERY_ERROR' "$dep" \
+            || { echo '::error::structured discovery-status records missing.'; exit 1; }
+          if awk '/^dep_probe_version\(\)/{f=1} f&&/^}/{f=0} f' "$dep" | grep -q 'COMPOSER_ALLOW_SUPERUSER'; then
+            echo '::error::metadata probe still enables root Composer plugins.'; exit 1
+          fi
+          grep -q 'snapshot_complete=false' "$dep" && grep -q 'snapshot_complete=true' "$dep" \
+            || { echo '::error::operational snapshot commit protocol missing.'; exit 1; }
+          if awk '/^dep_snapshot_operational_config\(\)/{f=1} f&&/^}/{f=0} f' "$dep" \
+               | grep -E 'chmod (700|600)' | grep -E '\|\| true'; then
+            echo '::error::snapshot directory/map protection is still best-effort.'; exit 1
+          fi
+          echo 'Prompt-23 fail-closed discovery, worker-status, snapshot, and probe invariants hold.'
 
       # ── Supply-chain verification (authoritative home; formerly the separate
       #    supply-chain.yml workflow, folded in here to remove duplicate jobs). ──

@@ -173,7 +173,15 @@ zrp_backup_metadata() {
     : > "${snap}/meta/absent.list" || return 1
     if [ -f "$st" ]; then
         printf '1\n' > "${snap}/meta/state.existed" || return 1
-        cp -a "$st" "${snap}/meta/state.json" 2>/dev/null || return 1
+        # A symlinked state path keeps its TYPE: record the link target so the
+        # restore recreates the symlink instead of flattening it to a regular
+        # file (content still restored through to the target).
+        if [ -L "$st" ]; then
+            readlink "$st" > "${snap}/meta/state.link" 2>/dev/null || return 1
+        else
+            rm -f "${snap}/meta/state.link" 2>/dev/null || true
+        fi
+        cp "$st" "${snap}/meta/state.json" 2>/dev/null || return 1
         cmp -s "$st" "${snap}/meta/state.json" || return 1
         stat -c '%a %u %g' "$st" > "${snap}/meta/state.stat" 2>/dev/null || return 1
     else
@@ -209,6 +217,15 @@ zrp_restore_metadata() {
         rm -f "$st" 2>/dev/null || rc=1
         [ -e "$st" ] && { echo "restore: ${st} still exists (created by the failed repair)" >&2; rc=1; }
     elif [ -f "${snap}/meta/state.json" ]; then
+        if [ -f "${snap}/meta/state.link" ]; then
+            # Recreate the ORIGINAL symlink type/target, then restore content
+            # through it to the target.
+            rm -f "$st" 2>/dev/null || rc=1
+            ln -s "$(cat "${snap}/meta/state.link")" "$st" 2>/dev/null \
+                || { echo "restore: could not recreate the state symlink" >&2; rc=1; }
+            [ "$(readlink "$st" 2>/dev/null)" = "$(cat "${snap}/meta/state.link")" ] \
+                || { echo "restore: state symlink target differs from the recorded value" >&2; rc=1; }
+        fi
         if ! cp "${snap}/meta/state.json" "$st" 2>/dev/null || ! cmp -s "${snap}/meta/state.json" "$st"; then
             echo "restore: state file was not restored exactly" >&2; rc=1
         else
@@ -320,11 +337,31 @@ zrp_apply() {
         ZRP_OP_TOUCHED=1
     fi
 
-    # Snapshot EVERY potentially modified resource BEFORE changing anything.
-    snap="$(dep_snapshot_operational_config "repair-$(date -u +%Y%m%d%H%M%S)")" \
-        || { echo "could not create repair backup snapshot" >&2; return 1; }
-    zrp_backup_metadata "$snap" \
-        || { echo "could not back up manifests/state into ${snap}" >&2; return 1; }
+    # Snapshot ONLY the resources of the SELECTED components before changing
+    # anything — a targeted repair must not fail because an UNRELATED resource
+    # (broken wrappers, unreadable service config, uncopyable manifest) cannot
+    # be captured, and a metadata-only repair captures no operational config.
+    local cap_scope=""
+    [ "$ZRP_C_NGINX" = "1" ] && cap_scope="$cap_scope nginx"
+    [ "$ZRP_C_SUPER" = "1" ] && cap_scope="$cap_scope supervisor"
+    [ "$ZRP_C_SCHED" = "1" ] && cap_scope="$cap_scope scheduler"
+    [ "$ZRP_C_WRAP"  = "1" ] && cap_scope="$cap_scope wrappers"
+    [ "$ZRP_C_HV"    = "1" ] && cap_scope="$cap_scope hv"
+    cap_scope="${cap_scope# }"
+    if [ -n "$cap_scope" ]; then
+        snap="$(dep_snapshot_operational_config "repair-$(date -u +%Y%m%d%H%M%S)" "$cap_scope")" \
+            || { echo "could not create repair backup snapshot" >&2; return 1; }
+    else
+        # Metadata-only repair: a plain protected directory for the metadata
+        # transaction — no operational resources are captured or restored.
+        snap="$(zpd_snapshots_dir)/repair-$(date -u +%Y%m%d%H%M%S)-meta"
+        mkdir -p "$snap" 2>/dev/null || { echo "could not create repair backup snapshot" >&2; return 1; }
+        chmod 700 "$snap" 2>/dev/null || true
+    fi
+    if [ "$ZRP_C_MAN" = "1" ] || [ "$ZRP_C_STATE" = "1" ]; then
+        zrp_backup_metadata "$snap" \
+            || { echo "could not back up manifests/state into ${snap}" >&2; return 1; }
+    fi
     echo "backup snapshot: ${snap}"
 
     local components="nginx:${ZRP_C_NGINX},super:${ZRP_C_SUPER},sched:${ZRP_C_SCHED},wrap:${ZRP_C_WRAP},hv:${ZRP_C_HV},man:${ZRP_C_MAN},state:${ZRP_C_STATE}"

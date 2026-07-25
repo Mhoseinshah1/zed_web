@@ -46,6 +46,12 @@ cat > "${MOCKBIN}/composer" <<'EOF'
 # MOCK_COMPOSER_REQUIRE_SUPERUSER=1 it behaves like real Composer running as
 # root: it fails unless COMPOSER_ALLOW_SUPERUSER=1 is set in its environment
 # (proving the deployer's composer-root policy is deterministic).
+# MOCK_COMPOSER_FORBID_SUPERUSER=1 → fail if the caller exported
+# COMPOSER_ALLOW_SUPERUSER (proves metadata probes never enable root plugins).
+if [ "${MOCK_COMPOSER_FORBID_SUPERUSER:-0}" = "1" ] && [ "${COMPOSER_ALLOW_SUPERUSER:-0}" = "1" ]; then
+  echo "COMPOSER_ALLOW_SUPERUSER leaked into a metadata probe" >&2
+  exit 1
+fi
 case "$*" in
   *--version*) echo "Composer version 2.8.1 2024-10-01 12:00:00"; exit 0 ;;
 esac
@@ -155,11 +161,18 @@ case "${1:-}" in
     esac
     exit 0 ;;
   list-unit-files)
+    [ "${MOCK_LUF_HANG:-0}" = "1" ] && sleep 60
+    [ "${MOCK_LUF_MALFORMED:-0}" = "1" ] && echo "### corrupted table row ###"
     # A companion timer is "known to systemd" only when MOCK_TIMER_LISTED=1.
     case "${2:-}" in
-      *.timer) [ "${MOCK_TIMER_LISTED:-0}" = "1" ] && echo "${2} ${MOCK_TIMER_ENABLED:-enabled}" ;;
+      *.timer)  [ "${MOCK_TIMER_LISTED:-0}" = "1" ] && echo "${2} ${MOCK_TIMER_ENABLED:-enabled}" ;;
+      --type*)  [ "${MOCK_TIMER_LISTED:-0}" = "1" ] && echo "zp-sched.timer ${MOCK_TIMER_ENABLED:-enabled}" ;;
     esac
-    exit 0 ;;
+    exit ${MOCK_LUF_RC:-0} ;;
+  list-timers)
+    exit ${MOCK_LT_RC:-0} ;;
+  cat)
+    exit ${MOCK_CAT_RC:-0} ;;
 esac
 exit ${MOCK_SYSTEMCTL_RC:-0}
 EOF
@@ -2113,7 +2126,7 @@ rm -rf "$BASE"
 # Z3. The cron backup script removes an incomplete dump on failure/timeout
 #     (static invariant — the script is exercised against the real repo .env
 #     only in production).
-assert_true bash -c "grep -q 'rm -f \"\$BACKUP_DIR/\$FILENAME\"' '$REPO_ROOT/scripts/backup.sh'"
+assert_true bash -c "grep -q 'rm -f \"\$TMPFILE\"' '$REPO_ROOT/scripts/backup.sh'"
 assert_true bash -c "grep -qE 'if ! PGPASSWORD' '$REPO_ROOT/scripts/backup.sh'"
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -2167,7 +2180,7 @@ assert_eq "$(zpd_manifest_get "${BASE}/releases/${attempted}/RELEASE_MANIFEST.js
 unset MOCK_LOG; rm -rf "$BASE" "$(dirname "$SRC_BARE")"
 
 # W2b. A fence rejecting FATAL/BACKOFF/malformed states (unit-level).
-new_base
+new_base; setup_atomic_service_configs
 ( MOCK_SUP_STATUS='zedproxy-worker:x   FATAL   Exited too quickly' ZPD_WORKER_STOP_TIMEOUT=4 dep_stop_workers >/dev/null 2>&1 ); \
   assert_rc 1 "$?" "FATAL worker state rejects the fence"
 ( MOCK_SUP_STATUS='zedproxy-worker:x   BACKOFF   restarting' ZPD_WORKER_STOP_TIMEOUT=4 dep_stop_workers >/dev/null 2>&1 ); \
@@ -2290,6 +2303,218 @@ snapdir="$(zpd_legacy_snapshot_dir)"
 zpd_write_manifest "${snapdir}/marker.json" "snapshot_schema_version=1" "snapshot_complete=true"
 assert_false zpd_legacy_rollback_valid
 ( zpd_restore_legacy_rollback >/dev/null 2>&1 ); assert_rc 1 "$?" "restore refuses an old-schema snapshot"
+rm -rf "$BASE"
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Prompt 23 — remaining fail-closed defects
+# ═════════════════════════════════════════════════════════════════════════════
+
+echo "-- P23: scheduler DISCOVERY itself is fail-closed --"
+
+# V1. Discovery-command failures block BEFORE the canonical cron is written:
+#     list-unit-files rc=1, list-timers rc=1, systemctl cat rc=1,
+#     list-unit-files timeout, malformed output.
+new_base; sha="$(mk_release_git 20260101000000-aaaaaaaaaaaa)"; zpd_switch_current 20260101000000-aaaaaaaaaaaa
+setup_atomic_service_configs; rm -f "$ZPD_SCHED_CRON"
+( MOCK_LUF_RC=1 dep_reconcile_scheduler "$BASE" >/dev/null 2>&1 ); \
+  assert_rc 1 "$?" "list-unit-files failure blocks reconciliation"
+assert_false test -f "$ZPD_SCHED_CRON"
+( MOCK_LT_RC=1 dep_reconcile_scheduler "$BASE" >/dev/null 2>&1 ); \
+  assert_rc 1 "$?" "list-timers failure blocks reconciliation"
+assert_false test -f "$ZPD_SCHED_CRON"
+rm -f "$ZPD_SCHED_CRON"
+( MOCK_TIMER_LISTED=1 MOCK_CAT_RC=1 dep_reconcile_scheduler "$BASE" >/dev/null 2>&1 ); \
+  assert_rc 1 "$?" "systemctl cat failure blocks reconciliation"
+assert_false test -f "$ZPD_SCHED_CRON"
+rm -f "$ZPD_SCHED_CRON"
+t0=$SECONDS
+( MOCK_LUF_HANG=1 ZPD_SVC_TIMEOUT=1 ZPD_KILL_GRACE=1 dep_reconcile_scheduler "$BASE" >/dev/null 2>&1 ); rc=$?
+elapsed=$((SECONDS - t0))
+assert_rc 1 "$rc" "list-unit-files timeout blocks reconciliation"
+assert_true test "$elapsed" -lt 30
+assert_false test -f "$ZPD_SCHED_CRON"
+rm -f "$ZPD_SCHED_CRON"
+( MOCK_LUF_MALFORMED=1 dep_reconcile_scheduler "$BASE" >/dev/null 2>&1 ); \
+  assert_rc 1 "$?" "malformed list-unit-files output blocks reconciliation"
+assert_false test -f "$ZPD_SCHED_CRON"
+# A timer that systemd reports with an unexpected error is UNKNOWN, not absent.
+( MOCK_TIMER_LISTED=1 MOCK_LUF_RC=4 _dep_systemd_timer_exists zp.timer >/dev/null 2>&1 ); \
+  assert_rc 2 "$?" "unexpected list-unit-files rc makes timer existence UNKNOWN"
+# Healthy discovery still reconciles.
+( dep_reconcile_scheduler "$BASE" >/dev/null 2>&1 ); assert_rc 0 "$?" "healthy discovery reconciles"
+rm -rf "$BASE"
+
+echo "-- P23: every unverified Supervisor worker status is rejected --"
+
+# V2. Unverified status responses never pass the fence.
+new_base; setup_atomic_service_configs
+( MOCK_SUP_STATUS='other-prog   RUNNING   pid 5' MOCK_SUP_STATUS_RC=1 ZPD_WORKER_STOP_TIMEOUT=4 dep_stop_workers >/dev/null 2>&1 ); \
+  assert_rc 1 "$?" "rc=1 with unrelated output rejects the fence"
+( MOCK_SUP_STATUS='error: could not contact supervisord' MOCK_SUP_STATUS_RC=3 ZPD_WORKER_STOP_TIMEOUT=4 dep_stop_workers >/dev/null 2>&1 ); \
+  assert_rc 1 "$?" "rc=3 with an error message rejects the fence"
+( MOCK_SUP_STATUS='other-prog   RUNNING   pid 5' ZPD_WORKER_STOP_TIMEOUT=4 dep_stop_workers >/dev/null 2>&1 ); \
+  assert_rc 1 "$?" "rc=0 with UNRELATED programs only never proves absence"
+( MOCK_SUP_STATUS='' ZPD_WORKER_STOP_TIMEOUT=4 dep_stop_workers >/dev/null 2>&1 ); \
+  assert_rc 1 "$?" "empty status output rejects the fence"
+( MOCK_SUP_STATUS=$'zedproxy-worker:a   STOPPED   Jul 25\nzedproxy-worker:b   RUNNING   pid 9' ZPD_WORKER_STOP_TIMEOUT=4 dep_stop_workers >/dev/null 2>&1 ); \
+  assert_rc 1 "$?" "mixed STOPPED and RUNNING lines reject the fence"
+( MOCK_SUP_STATUS='zedproxy-worker: ERROR (no such group)' dep_stop_workers >/dev/null 2>&1 ); \
+  assert_rc 0 "$?" "explicit no-such-group response is POSITIVE absence"
+rm -f "$ZPD_SUPERVISOR_CONF"
+( MOCK_SUP_STATUS='ignored' dep_stop_workers >/dev/null 2>&1 ); \
+  assert_rc 0 "$?" "no managed worker config (verified fact) — nothing to fence"
+rm -rf "$BASE"
+
+echo "-- P23: operational snapshot commit is atomic and required --"
+
+# V3a. A failed SNAPSHOT.json write can never yield success, and the leftover
+#      temporary directory is refused by restore.
+new_base; sha="$(mk_release_git 20260101000000-aaaaaaaaaaaa)"; zpd_switch_current 20260101000000-aaaaaaaaaaaa
+setup_atomic_service_configs; zpw_install_wrappers >/dev/null 2>&1
+(
+  eval "$(declare -f zpd_write_manifest | sed '1s/zpd_write_manifest/zpd_orig_write_manifest/')"
+  zpd_write_manifest() { case "$1" in *SNAPSHOT.json) return 1 ;; esac; zpd_orig_write_manifest "$@"; }
+  dep_snapshot_operational_config manifest-fail >/dev/null 2>&1
+); assert_rc 1 "$?" "failed SNAPSHOT.json write fails the snapshot"
+assert_false test -d "${BASE}/shared/deploy/snapshots/manifest-fail"          # never committed
+( dep_restore_operational_snapshot "${BASE}/shared/deploy/snapshots/manifest-fail.tmp" >/dev/null 2>&1 ); \
+  assert_rc 1 "$?" "restore refuses the interrupted .tmp snapshot"
+
+# V3b. A committed snapshot carries schema + complete=true and restores.
+snap="$(dep_snapshot_operational_config commit-test)"
+case "$snap" in *.tmp) bad "committed snapshot path still .tmp" ;; *) ok "committed snapshot path is final" ;; esac
+assert_eq "$(zpd_manifest_get "${snap}/SNAPSHOT.json" snapshot_complete)" "true" "snapshot committed complete=true"
+assert_eq "$(zpd_manifest_get "${snap}/SNAPSHOT.json" snapshot_schema_version)" "2" "snapshot records schema version"
+( dep_restore_operational_snapshot "$snap" >/dev/null 2>&1 ); assert_rc 0 "$?" "committed snapshot restores"
+
+# V3c. Old schema, missing inventory, and hash mismatch are all refused/failed.
+zpd_write_manifest "${snap}/SNAPSHOT.json" "snapshot_schema_version=1" "snapshot_complete=true"
+( dep_restore_operational_snapshot "$snap" >/dev/null 2>&1 ); \
+  assert_rc 1 "$?" "restore refuses an old snapshot schema"
+snap2="$(dep_snapshot_operational_config inv-miss)"
+rm -f "${snap2}/inventory.tsv"
+( dep_restore_operational_snapshot "$snap2" >/dev/null 2>&1 ); \
+  assert_rc 1 "$?" "restore refuses a snapshot without its inventory"
+snap3="$(dep_snapshot_operational_config hash-test)"
+printf 'TAMPERED\n' > "${snap3}/nginx.snap"
+( dep_restore_operational_snapshot "$snap3" >/dev/null 2>&1 ); \
+  assert_rc 1 "$?" "restore fails on a snapshot hash mismatch"
+rm -rf "$BASE"
+
+echo "-- P23: metadata probes never enable root Composer plugins --"
+
+# V4. dep_probe_version must NOT export COMPOSER_ALLOW_SUPERUSER (the mock
+#     fails if it leaks) — and still stays bounded + non-interactive.
+assert_eq "$(MOCK_COMPOSER_FORBID_SUPERUSER=1 dep_probe_version "$ZPD_COMPOSER" --version --no-ansi)" "2.8.1" \
+  "metadata probe works WITHOUT COMPOSER_ALLOW_SUPERUSER"
+if declare -f dep_probe_version | grep -q COMPOSER_ALLOW_SUPERUSER; then
+  bad "dep_probe_version still exports COMPOSER_ALLOW_SUPERUSER"
+else
+  ok "dep_probe_version does not export COMPOSER_ALLOW_SUPERUSER"
+fi
+if declare -f dep_probe_version | grep -q COMPOSER_NO_INTERACTION; then
+  ok "dep_probe_version stays non-interactive"
+else
+  bad "dep_probe_version lost COMPOSER_NO_INTERACTION"
+fi
+# Root safety failure degrades to "unknown" — metadata never blocks.
+probe_fail_dir="$(mktemp -d)"
+printf '#!/usr/bin/env bash\nexit 1\n' > "${probe_fail_dir}/composer"; chmod +x "${probe_fail_dir}/composer"
+assert_eq "$(dep_probe_version "${probe_fail_dir}/composer" --version)" "unknown" "probe failure yields unknown (never blocks)"
+rm -rf "$probe_fail_dir"
+
+echo "-- Codex round 4 (unknown-migration guidance, split scheduler forms, manual rollback, scoped capture, state canonicalization) --"
+
+# U1. A timed-out migration stays INDETERMINATE in the rollback guidance —
+#     never "no migrations ran"; the operator is pointed at the backup.
+new_base; mk_source_repo
+psha="$(mk_release_git 20260101000000-aaaaaaaaaaaa)"; zpd_switch_current 20260101000000-aaaaaaaaaaaa
+setup_atomic_service_configs; zpw_install_wrappers >/dev/null 2>&1
+export ZPD_REPO_URL="$SRC_BARE" ZPD_REF=main
+out="$(MOCK_MIGRATE_MODE=hang ZPD_MIGRATION_TIMEOUT=1 MOCK_HTTP_CODE=200 dep_main 2>&1)"; rc=$?
+assert_rc 1 "$rc" "deploy with hung migration fails"
+printf '%s' "$out" | grep -qi 'may be partially migrated' \
+  && ok "unknown migration reported as INDETERMINATE" || bad "unknown migration guidance missing"
+printf '%s' "$out" | grep -q 'DB backup:' \
+  && ok "operator directed to the DB backup" || bad "backup pointer missing for unknown migration"
+unset ZPD_REPO_URL ZPD_REF; rm -rf "$BASE" "$(dirname "$SRC_BARE")"
+
+# U2. Split scheduler forms are discovered: WorkingDirectory=<base> + relative
+#     ExecStart (systemd), and directory=<base> + relative command (Supervisor).
+new_base; sha="$(mk_release_git 20260101000000-aaaaaaaaaaaa)"; zpd_switch_current 20260101000000-aaaaaaaaaaaa
+setup_atomic_service_configs; rm -f "$ZPD_SCHED_CRON"
+printf '[Service]\nWorkingDirectory=%s\nExecStart=/usr/bin/php artisan schedule:run\n' "$BASE" > "${BASE}/systemd/split.service"
+( dep_reconcile_scheduler "$BASE" >/dev/null 2>&1 ); \
+  assert_rc 1 "$?" "WorkingDirectory + relative artisan systemd unit blocks"
+rm -f "${BASE}/systemd/split.service" "$ZPD_SCHED_CRON"
+printf '[program:zp-split]\ndirectory=%s\ncommand=php artisan schedule:run\n' "$BASE" > "${BASE}/supervisor.d/split.conf"
+( dep_reconcile_scheduler "$BASE" >/dev/null 2>&1 ); \
+  assert_rc 1 "$?" "directory + relative command Supervisor stanza blocks"
+rm -f "${BASE}/supervisor.d/split.conf" "$ZPD_SCHED_CRON"
+# A foreign working directory with a relative artisan stays undetected (not ours).
+printf '[Service]\nWorkingDirectory=/other/app\nExecStart=/usr/bin/php artisan schedule:run\n' > "${BASE}/systemd/foreign.service"
+( dep_reconcile_scheduler "$BASE" >/dev/null 2>&1 ); \
+  assert_rc 0 "$?" "foreign WorkingDirectory unit does not block"
+rm -rf "$BASE"
+
+# U3. MANUAL legacy rollback (fresh process, DEP_SNAPSHOT_DIR unset) restores
+#     stripped cron sources via the committed last-op-snapshot pointer.
+new_base; make_legacy_base; setup_legacy_service_configs
+printf '* * * * * root cd %s && php artisan schedule:run\n' "$BASE" > "$ZPD_ETC_CRONTAB"
+zpd_save_legacy_rollback "$BASE" "$ZPD_NGINX_CONF" "$ZPD_SUPERVISOR_CONF" "$ZPD_SCHED_CRON"
+dep_snapshot_operational_config manual-rb-test >/dev/null      # commits + writes the pointer
+: > "$ZPD_ETC_CRONTAB"                                          # reconciliation stripped it
+( DEP_SNAPSHOT_DIR= MOCK_HTTP_CODE=200 dep_first_cutover_rollback "$BASE" php8.3-fpm >/dev/null 2>&1 ); rc=$?
+assert_rc 0 "$rc" "manual legacy rollback succeeds without DEP_SNAPSHOT_DIR"
+assert_true bash -c "grep -q 'schedule:run' '$ZPD_ETC_CRONTAB'"
+rm -rf "$BASE"
+
+# U4. Deployment output is PERSISTED under the log dir — the doctor bundle's
+#     log collection has a real source after a failed update.
+new_base; mk_source_repo; setup_atomic_service_configs
+export ZPD_REPO_URL="$SRC_BARE" ZPD_REF=main
+( MOCK_NPM_CI_RC=1 MOCK_HTTP_CODE=200 dep_main >/dev/null 2>&1 )
+assert_true bash -c "ls ${BASE}/logs/deploy-*.log >/dev/null 2>&1"
+assert_true bash -c "grep -q 'ERROR' ${BASE}/logs/deploy-*.log"
+unset ZPD_REPO_URL ZPD_REF; rm -rf "$BASE" "$(dirname "$SRC_BARE")"
+
+# U5. State reconciliation refuses a `current` that resolves OUTSIDE releases/
+#     even when its basename matches a real release id.
+new_base; sha="$(mk_release_git 20260101000000-aaaaaaaaaaaa)"
+mkdir -p "${BASE}/evil/20260101000000-aaaaaaaaaaaa"
+ln -sfn "${BASE}/evil/20260101000000-aaaaaaaaaaaa" "${BASE}/current"
+( dep_reconcile_state >/dev/null 2>&1 ); \
+  assert_rc 1 "$?" "state repair refuses a non-canonical current target"
+assert_false test -f "$ZPD_STATE_FILE"
+rm -rf "$BASE"
+
+# U6. Repair backups are SCOPED: an unrelated broken wrapper library no longer
+#     aborts a metadata-only or nginx-only repair.
+new_base; sha="$(mk_release_git 20260101000000-aaaaaaaaaaaa)"; zpd_switch_current 20260101000000-aaaaaaaaaaaa
+setup_atomic_service_configs; zpw_install_wrappers >/dev/null 2>&1
+rm -f "${ZPD_WRAPPER_LIB}/bootstrap.sh"; mkdir -p "${ZPD_WRAPPER_LIB}/bootstrap.sh/x"   # wrapper capture would fail
+( MOCK_HTTP_CODE=200 zrp_main --apply --state >/dev/null 2>&1 ); \
+  assert_rc 0 "$?" "metadata-only repair succeeds despite broken wrappers (scoped capture)"
+( MOCK_HTTP_CODE=200 zrp_main --apply --nginx >/dev/null 2>&1 ); \
+  assert_rc 0 "$?" "nginx-only repair succeeds despite broken wrappers (scoped capture)"
+rm -rf "${ZPD_WRAPPER_LIB}/bootstrap.sh"
+rm -rf "$BASE"
+
+# U7. The cron backup publishes atomically to a collision-free name (static).
+assert_true bash -c "grep -q 'TMPFILE=' '$REPO_ROOT/scripts/backup.sh'"
+assert_true bash -c "grep -q 'mv \"\$TMPFILE\" \"\$FINAL\"' '$REPO_ROOT/scripts/backup.sh'"
+
+# U8. A SYMLINKED state file keeps its type through a failed repair restore.
+new_base; sha="$(mk_release_git 20260101000000-aaaaaaaaaaaa)"; zpd_switch_current 20260101000000-aaaaaaaaaaaa
+setup_atomic_service_configs; zpw_install_wrappers >/dev/null 2>&1
+mkdir -p "$(dirname "$ZPD_STATE_FILE")"
+printf '{"sentinel":"symlinked-state"}\n' > "${BASE}/state-real.json"
+ln -s "${BASE}/state-real.json" "$ZPD_STATE_FILE"
+( MOCK_HTTP_CODE=500 zrp_main --apply >/dev/null 2>&1 ); rc=$?
+assert_rc 1 "$rc" "repair fails at the HTTP gate (symlinked state)"
+assert_true test -L "$ZPD_STATE_FILE"
+assert_eq "$(readlink "$ZPD_STATE_FILE")" "${BASE}/state-real.json" "state symlink target preserved"
+assert_true bash -c "grep -q 'symlinked-state' '${BASE}/state-real.json'"
 rm -rf "$BASE"
 
 rm -rf "$MOCKBIN"

@@ -96,9 +96,14 @@ ZPD_ARTISAN_TIMEOUT="${ZPD_ARTISAN_TIMEOUT:-300}"
 ZPD_MIGRATION_TIMEOUT="${ZPD_MIGRATION_TIMEOUT:-1800}"
 ZPD_MAINTENANCE_TIMEOUT="${ZPD_MAINTENANCE_TIMEOUT:-60}"
 
-dep_log()  { printf '[%s] %s\n' "$(date -u +%H:%M:%S)" "$*"; }
-dep_warn() { printf '[%s] WARN: %s\n' "$(date -u +%H:%M:%S)" "$*" >&2; }
-dep_err()  { printf '[%s] ERROR: %s\n' "$(date -u +%H:%M:%S)" "$*" >&2; }
+# Every dep_log/warn/err line is ALSO appended to the per-run deployment log
+# under the log dir (when writable) so the doctor's diagnostic bundle always
+# contains the execution output that explains a failure.
+DEP_LOG_FILE="${DEP_LOG_FILE:-}"
+_dep_logline() { [ -z "${DEP_LOG_FILE:-}" ] || printf '%s\n' "$1" >> "$DEP_LOG_FILE" 2>/dev/null || true; }
+dep_log()  { local m; m="[$(date -u +%H:%M:%S)] $*"; printf '%s\n' "$m"; _dep_logline "$m"; }
+dep_warn() { local m; m="[$(date -u +%H:%M:%S)] WARN: $*"; printf '%s\n' "$m" >&2; _dep_logline "$m"; }
+dep_err()  { local m; m="[$(date -u +%H:%M:%S)] ERROR: $*"; printf '%s\n' "$m" >&2; _dep_logline "$m"; }
 dep_debug(){ [ "${ZPD_DEBUG:-0}" = "1" ] && printf '[%s] DEBUG: %s\n' "$(date -u +%H:%M:%S)" "$*" >&2 || true; }
 
 # dep_svc CMD ARGS... — run a service-control command BOUNDED and non-interactive
@@ -190,6 +195,28 @@ dep_fail() {
         || dep_warn "could not write the central failure event"
     dep_failure_bundle
     return 1
+}
+
+# _dep_report_migration_state STATE RELEASE_ID — HONEST operator guidance after
+# a rollback: `applied` → the DB changed (point at the backup); `unknown`
+# (timed-out migration) → the DB state is INDETERMINATE — never claim nothing
+# ran; direct the operator to verify and to the backup; anything else → no
+# migrations ran.
+_dep_report_migration_state() {
+    local state="$1" id="$2"
+    case "$state" in
+        applied)
+            dep_warn "$(zpd_msg_migrate_applied)"
+            dep_warn "DB backup: $(zpd_backup_dir)/${id}/db.dump"
+            ;;
+        unknown)
+            dep_warn "migration state UNKNOWN: the migration timed out mid-run — the database may be partially migrated"
+            dep_warn "verify the schema manually; DB backup: $(zpd_backup_dir)/${id}/db.dump"
+            ;;
+        *)
+            dep_log "$(zpd_msg_migrate_none)"
+            ;;
+    esac
 }
 
 # ── Preflight ────────────────────────────────────────────────────────────────
@@ -313,15 +340,20 @@ dep_build() {
 # dep_probe_version CMD [ARGS...]
 #
 # Run an external version command SAFELY for informational metadata:
-#   - bounded by `timeout ${ZPD_PROBE_TIMEOUT}s` (a hung Composer can never block)
+#   - bounded by `timeout -k` (TERM then KILL — a hung Composer can never block)
 #   - stdin from /dev/null (never reads the terminal → never "waits for input")
 #   - non-interactive env (COMPOSER_NO_INTERACTION=1, GIT_TERMINAL_PROMPT=0, …)
+#   - COMPOSER_ALLOW_SUPERUSER is deliberately NOT set: a metadata-only probe
+#     must never enable Composer plugins as root — Composer's root safety
+#     defaults stay in force, and any resulting failure simply yields
+#     "unknown" (metadata never blocks activation). The superuser override
+#     exists ONLY inside the build subshell where plugins are actually needed.
 # Prints the first version-like token (e.g. 2.8.1) or "unknown" on any
 # failure/timeout/malformed output. NEVER fails, blocks, or exposes secrets.
 dep_probe_version() {
     local out
     out="$(timeout -k "${ZPD_KILL_GRACE}" "${ZPD_PROBE_TIMEOUT}s" env \
-            COMPOSER_NO_INTERACTION=1 COMPOSER_ALLOW_SUPERUSER=1 \
+            COMPOSER_NO_INTERACTION=1 \
             GIT_TERMINAL_PROMPT=0 CI=1 DEBIAN_FRONTEND=noninteractive \
             "$@" </dev/null 2>/dev/null)" || { printf 'unknown'; return 0; }
     out="$(printf '%s' "$out" | grep -oE '[0-9]+\.[0-9]+(\.[0-9]+)?' | head -n1)"
@@ -771,23 +803,36 @@ dep_supervisor_group_running() {
 }
 
 # _dep_workers_stopped GROUP — 0 only when every managed worker process is
-# POSITIVELY verified STOPPED/EXITED (or the group is absent entirely). A
-# status timeout, empty output for a still-configured group, or any line whose
-# state token is not STOPPED/EXITED (RUNNING, STARTING, BACKOFF, FATAL,
-# unknown, malformed) returns non-zero — never "assumed stopped".
+# POSITIVELY verified STOPPED/EXITED, or the group is POSITIVELY absent.
+# Fail-closed on every unverified case:
+#   - a status timeout is never "stopped"
+#   - an unexpected exit status (anything other than 0, or supervisorctl's
+#     documented rc 3 accompanied by parseable group lines) is failure
+#   - empty output is failure
+#   - a malformed group line (no recognizable state token) is failure
+#   - "group absent" is accepted ONLY from supervisorctl's explicit
+#     "no such group/process" response for OUR group — unrelated program
+#     output never proves the worker group absent
 _dep_workers_stopped() {
     local group="$1" out rc lines bad
-    out="$(dep_svc "$ZPD_SUPERVISORCTL" status 2>/dev/null)"; rc=$?
-    [ "$rc" -eq 124 ] || [ "$rc" -eq 137 ] && return 1     # timeout → NOT verified
-    lines="$(printf '%s\n' "$out" | grep -F "${group}:" || true)"
+    out="$(dep_svc "$ZPD_SUPERVISORCTL" status "${group}:*" 2>/dev/null)"; rc=$?
+    if [ "$rc" -eq 124 ] || [ "$rc" -eq 137 ]; then return 1; fi   # timeout → NOT verified
+    [ -n "$out" ] || return 1                                       # empty → NOT verified
+    lines="$(printf '%s\n' "$out" | grep -F "${group}:" | grep -viE 'no such (group|process)' || true)"
     if [ -z "$lines" ]; then
-        # No processes for the group. Distinguish "group absent" (nothing to
-        # fence — ok) from "status produced nothing at all" (unknown — fail).
-        [ -n "$out" ] && return 0
+        # POSITIVE absence only: supervisord explicitly reports our group as
+        # not existing. Anything else (unrelated programs, error text) is
+        # unverified.
+        printf '%s\n' "$out" | grep -qiE "(${group}[^[:space:]]*:?[[:space:]]*)?ERROR \(no such (group|process)\)|no such (group|process): ?${group}" \
+            && return 0
         return 1
     fi
+    # Every managed line must carry a positively recognized stopped state.
     bad="$(printf '%s\n' "$lines" | awk '{print ($2 == "" ? "MALFORMED" : $2)}' | grep -vcE '^(STOPPED|EXITED)$' || true)"
-    [ "${bad:-1}" -eq 0 ]
+    [ "${bad:-1}" -eq 0 ] || return 1
+    # supervisorctl exits 0, or 3 when reporting non-running processes — both
+    # are expected here; any other exit status is an unverified daemon state.
+    [ "$rc" -eq 0 ] || [ "$rc" -eq 3 ]
 }
 
 # dep_stop_workers — REQUIRED worker fencing before migrations. The stop
@@ -798,6 +843,12 @@ _dep_workers_stopped() {
 dep_stop_workers() {
     local group waited=0 max="${ZPD_WORKER_STOP_TIMEOUT:-60}"
     group="$(zpd_supervisor_worker_group)"
+    # Prior VERIFIED configuration fact: with no managed Supervisor worker
+    # config on this host there is no worker group to fence.
+    if [ ! -f "$(zpd_supervisor_conf_path)" ]; then
+        dep_log "worker fencing: no managed Supervisor worker config — nothing to fence"
+        return 0
+    fi
     if ! dep_svc "$ZPD_SUPERVISORCTL" stop "${group}:*" >/dev/null 2>&1; then
         dep_err "worker fencing: supervisorctl stop failed"
         return 1
@@ -924,7 +975,10 @@ _dep_snap_add() {
         return 0
     fi
     if [ -f "$path" ]; then
-        snap="${dir}/$(basename "$path").snap"
+        # COMPONENT-derived, DIRECTORY-RELATIVE snapshot name: unique even when
+        # two managed paths share a basename, and stable across the snapshot
+        # directory's atomic tmp→final rename.
+        snap="${dir}/${comp}.snap"
         cp -a "$path" "$snap" 2>/dev/null || return 1
         cmp -s "$path" "$snap"            || return 1
         sha="$(sha256sum "$snap" 2>/dev/null | awk '{print $1}')"
@@ -932,20 +986,57 @@ _dep_snap_add() {
         mode="$(stat -c '%a' "$path" 2>/dev/null)" || return 1
         uid="$(stat -c '%u' "$path" 2>/dev/null)"  || return 1
         gid="$(stat -c '%g' "$path" 2>/dev/null)"  || return 1
-        printf '%s\t%s\tfile\t%s\t%s\t%s\t%s\t%s\t1\n' "$comp" "$path" "$snap" "$sha" "$mode" "$uid" "$gid" >> "$inv" || return 1
+        printf '%s\t%s\tfile\t%s\t%s\t%s\t%s\t%s\t1\n' "$comp" "$path" "${comp}.snap" "$sha" "$mode" "$uid" "$gid" >> "$inv" || return 1
         return 0
     fi
     printf '%s\t%s\tabsent\t-\t-\t-\t-\t-\t0\n' "$comp" "$path" >> "$inv" || return 1
     return 0
 }
 
+# dep_op_snapshot_schema — schema version of the operational-snapshot layout.
+dep_op_snapshot_schema() { printf '2'; }
+
+# _dep_op_snapshot_verified DIR — re-verify EVERY inventory record (snapshot
+# copy present + SHA-256 matches the recorded fingerprint) and every captured
+# scheduler source before the snapshot may be committed or restored from.
+_dep_op_snapshot_verified() {
+    local dir="$1" comp path type snapref sha mode uid gid existed have
+    [ -f "${dir}/inventory.tsv" ] || return 1
+    while IFS=$'\t' read -r comp path type snapref sha mode uid gid existed; do
+        [ -n "$comp" ] || continue
+        [ "$type" = "file" ] || continue
+        case "$snapref" in /*) ;; *) snapref="${dir}/${snapref}" ;; esac
+        [ -s "$snapref" ] || return 1
+        have="$(sha256sum "$snapref" 2>/dev/null | awk '{print $1}')"
+        [ -n "$have" ] && [ "$have" = "$sha" ] || return 1
+    done < "${dir}/inventory.tsv"
+    local idx spath smode sowner sexisted
+    if [ -f "${dir}/sched-sources/sources.map" ]; then
+        while IFS=$'\t' read -r idx spath smode sowner sexisted; do
+            [ -n "$idx" ] || continue
+            [ "$sexisted" = "1" ] || continue
+            [ -s "${dir}/sched-sources/src-${idx}" ] || return 1
+        done < "${dir}/sched-sources/sources.map"
+    fi
+    return 0
+}
+
 dep_snapshot_operational_config() {
-    local id="$1" dir n=0
-    dir="$(zpd_snapshots_dir)/${id}"
-    while [ -e "$dir" ]; do n=$((n + 1)); dir="$(zpd_snapshots_dir)/${id}.${n}"; done
+    local id="$1" scope="${2:-all}" final dir n=0
+    [ "$scope" = "all" ] && scope="nginx supervisor scheduler wrappers hv env"
+    final="$(zpd_snapshots_dir)/${id}"
+    while [ -e "$final" ] || [ -e "${final}.tmp" ]; do n=$((n + 1)); final="$(zpd_snapshots_dir)/${id}.${n}"; done
+    # TRANSACTIONAL: everything is captured into a temporary directory and
+    # only an atomically renamed, fully verified snapshot (snapshot_complete=
+    # true) is ever returned. Directory protection is REQUIRED, not
+    # best-effort (root ownership is asserted only when running as root —
+    # the test harness runs unprivileged).
+    dir="${final}.tmp"
     mkdir -p "$dir" 2>/dev/null || return 1
-    chmod 700 "$dir" 2>/dev/null || true
-    chown 0:0 "$dir" 2>/dev/null || true
+    chmod 700 "$dir" 2>/dev/null || { dep_err "snapshot: could not protect ${dir} (chmod 700)"; return 1; }
+    if [ "$(id -u)" = "0" ]; then
+        chown 0:0 "$dir" 2>/dev/null || { dep_err "snapshot: could not chown ${dir} to root"; return 1; }
+    fi
     # MANIFEST-DRIVEN INVENTORY: every managed resource is recorded with its
     # component, absolute path, resource type (file|symlink|absent), snapshot
     # path (or symlink target), SHA-256, mode, uid, and gid. The copies keep
@@ -953,31 +1044,48 @@ dep_snapshot_operational_config() {
     # recorded values as the restoration source. Confidentiality comes from
     # the 0700 root-owned snapshot directory, never from mutating the copies.
     # ANY capture error fails the snapshot (never a silent partial snapshot).
+    # CAPTURE IS COMPONENT-SCOPED: a targeted repair snapshots only the
+    # resources of its selected components, so an unrelated broken resource
+    # (e.g. an unreadable wrapper library during a --state repair) can never
+    # abort a repair that would not touch it.
     : > "${dir}/inventory.tsv" || return 1
-    if ! _dep_snap_add "$dir" nginx      "$(zpd_nginx_conf_path)" \
-       || ! _dep_snap_add "$dir" hv         "$(zpd_local_health_conf_path)" \
-       || ! _dep_snap_add "$dir" supervisor "$(zpd_supervisor_conf_path)" \
-       || ! _dep_snap_add "$dir" scheduler  "$(zpd_scheduler_cron_path)" \
-       || ! _dep_snap_add "$dir" env        "$(zpd_deploy_env_file)"; then
-        dep_err "snapshot: could not capture a managed resource"
-        return 1
-    fi
+    local _c _p
+    for _c in nginx hv supervisor scheduler env; do
+        case " $scope " in *" $_c "*) ;; *) continue ;; esac
+        case "$_c" in
+            nginx)      _p="$(zpd_nginx_conf_path)" ;;
+            hv)         _p="$(zpd_local_health_conf_path)" ;;
+            supervisor) _p="$(zpd_supervisor_conf_path)" ;;
+            scheduler)  _p="$(zpd_scheduler_cron_path)" ;;
+            env)        _p="$(zpd_deploy_env_file)" ;;
+        esac
+        _dep_snap_add "$dir" "$_c" "$_p" \
+            || { dep_err "snapshot: could not capture ${_c} (${_p})"; return 1; }
+    done
     # Wrapper commands + the wrapper bootstrap library — REQUIRED, verified
     # capture (zpw_backup_wrappers is fail-closed), never best-effort.
-    if declare -F zpw_backup_wrappers >/dev/null 2>&1; then
-        if ! zpw_backup_wrappers "${dir}/wrappers" >/dev/null 2>&1; then
-            dep_err "snapshot: wrapper capture failed"
-            return 1
+    case " $scope " in *" wrappers "*)
+        if declare -F zpw_backup_wrappers >/dev/null 2>&1; then
+            if ! zpw_backup_wrappers "${dir}/wrappers" >/dev/null 2>&1; then
+                dep_err "snapshot: wrapper capture failed"
+                return 1
+            fi
         fi
-    fi
+        ;;
+    esac
     # Discover + capture every scheduler source reconciliation may touch.
     # sources.map: <index> TAB <absolute path> TAB <mode> TAB <uid:gid> TAB <existed 0|1>
     local base src map n_src=0
     base="$(zpd_base)"
+    case " $scope " in *" scheduler "*) ;; *)
+        base=""   # scheduler not selected → no cron-source capture needed
+        ;;
+    esac
+    if [ -n "$base" ]; then
     mkdir -p "${dir}/sched-sources" 2>/dev/null || return 1
     map="${dir}/sched-sources/sources.map"
     : > "$map" || return 1
-    chmod 600 "$map" 2>/dev/null || true
+    chmod 600 "$map" 2>/dev/null || { dep_err "snapshot: could not protect the scheduler map (chmod 600)"; return 1; }
     while IFS= read -r src; do
         [ -n "$src" ] || continue
         n_src=$((n_src + 1))
@@ -989,12 +1097,35 @@ dep_snapshot_operational_config() {
             printf '%s\t%s\t\t\t0\n' "$n_src" "$src" >> "$map" || return 1
         fi
     done < <(dep_scheduler_scan "$base" | sed -n 's/^OURS //p' | sort -u)
+    fi
+    # REQUIRED manifest: snapshot_complete=false first, then re-verify every
+    # artifact/hash record, then flip to snapshot_complete=true and COMMIT via
+    # atomic rename. A failed manifest write can never yield "success".
     zpd_write_manifest "${dir}/SNAPSHOT.json" \
         "release_id=${id}" "created_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+        "snapshot_schema_version=$(dep_op_snapshot_schema)" "snapshot_complete=false" \
         "nginx_conf=$(zpd_nginx_conf_path)" "local_health_conf=$(zpd_local_health_conf_path)" \
         "supervisor_conf=$(zpd_supervisor_conf_path)" "scheduler_cron=$(zpd_scheduler_cron_path)" \
-        "deploy_env=$(zpd_deploy_env_file)" "scheduler_sources=${n_src}"
-    printf '%s' "$dir"
+        "deploy_env=$(zpd_deploy_env_file)" "scheduler_sources=${n_src}" \
+        || { dep_err "snapshot: could not write SNAPSHOT.json"; return 1; }
+    _dep_op_snapshot_verified "$dir" \
+        || { dep_err "snapshot: captured artifacts failed verification"; return 1; }
+    zpd_write_manifest "${dir}/SNAPSHOT.json" \
+        "release_id=${id}" "created_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+        "snapshot_schema_version=$(dep_op_snapshot_schema)" "snapshot_complete=true" \
+        "nginx_conf=$(zpd_nginx_conf_path)" "local_health_conf=$(zpd_local_health_conf_path)" \
+        "supervisor_conf=$(zpd_supervisor_conf_path)" "scheduler_cron=$(zpd_scheduler_cron_path)" \
+        "deploy_env=$(zpd_deploy_env_file)" "scheduler_sources=${n_src}" \
+        || { dep_err "snapshot: could not commit SNAPSHOT.json"; return 1; }
+    mv -T "$dir" "$final" 2>/dev/null || { dep_err "snapshot: atomic commit failed"; return 1; }
+    # Atomic pointer to the most recent COMMITTED activation snapshot — a
+    # MANUAL legacy rollback in a fresh process (zedproxy-rollback) reads this
+    # to restore the cron sources the reconciliation stripped.
+    printf '%s\n' "$final" > "$(zpd_snapshots_dir)/last-op-snapshot.ptr.tmp" \
+        || { dep_err "snapshot: could not record the snapshot pointer"; return 1; }
+    mv -f "$(zpd_snapshots_dir)/last-op-snapshot.ptr.tmp" "$(zpd_snapshots_dir)/last-op-snapshot.ptr" \
+        || { dep_err "snapshot: could not commit the snapshot pointer"; return 1; }
+    printf '%s' "$final"
 }
 
 # dep_restore_operational_snapshot SNAP_DIR — put back every snapshotted file
@@ -1012,6 +1143,17 @@ dep_snapshot_operational_config() {
 dep_restore_operational_snapshot() {
     local dir="$1" scope="${2:-all}" rc=0
     [ -d "$dir" ] || { dep_err "restore: snapshot ${dir} missing"; return 1; }
+    # Only a COMMITTED, current-schema snapshot may drive a restore: an
+    # interrupted `.tmp` directory, a snapshot without its committed manifest,
+    # snapshot_complete!=true, or an old/unknown schema version is refused.
+    case "$dir" in *.tmp) dep_err "restore: refusing an uncommitted (.tmp) snapshot"; return 1 ;; esac
+    local snapman="${dir}/SNAPSHOT.json"
+    [ -f "$snapman" ] \
+        || { dep_err "restore: snapshot manifest missing — refusing an unverified snapshot"; return 1; }
+    [ "$(zpd_manifest_get "$snapman" snapshot_complete 2>/dev/null)" = "true" ] \
+        || { dep_err "restore: refusing an incomplete snapshot (snapshot_complete != true)"; return 1; }
+    [ "$(zpd_manifest_get "$snapman" snapshot_schema_version 2>/dev/null)" = "$(dep_op_snapshot_schema)" ] \
+        || { dep_err "restore: refusing an old/unknown snapshot schema"; return 1; }
     # SCOPE is a space-separated component list (nginx, supervisor, scheduler,
     # wrappers, hv) or `all`. Only the selected components are restored and
     # only their services reloaded — a wrappers-only or scheduler-only failure
@@ -1023,12 +1165,14 @@ dep_restore_operational_snapshot() {
     # type/target recreated, and explicitly-absent resources removed (verified
     # gone). deploy.env is a managed resource like any other.
     local inv="${dir}/inventory.tsv" comp path type snapref sha mode uid gid existed have
-    if [ -f "$inv" ]; then
+    [ -f "$inv" ] || { dep_err "restore: snapshot inventory missing — refusing"; return 1; }
+    {
         while IFS=$'\t' read -r comp path type snapref sha mode uid gid existed; do
             [ -n "$comp" ] && [ -n "$path" ] || continue
             case " $scope " in *" $comp "*) ;; *) continue ;; esac
             case "$type" in
                 file)
+                    case "$snapref" in /*) ;; *) snapref="${dir}/${snapref}" ;; esac
                     if ! cp -a "$snapref" "$path" 2>/dev/null || ! cmp -s "$snapref" "$path"; then
                         dep_err "restore: could not restore ${path} exactly"; rc=1; continue
                     fi
@@ -1054,25 +1198,7 @@ dep_restore_operational_snapshot() {
                     ;;
             esac
         done < "$inv"
-    else
-        # Pre-inventory snapshot (older layout): basename-derived restore.
-        local f dest managed=""
-        case " $scope " in *" nginx "*)      managed="$managed $(zpd_nginx_conf_path)" ;; esac
-        case " $scope " in *" hv "*)         managed="$managed $(zpd_local_health_conf_path)" ;; esac
-        case " $scope " in *" supervisor "*) managed="$managed $(zpd_supervisor_conf_path)" ;; esac
-        case " $scope " in *" scheduler "*)  managed="$managed $(zpd_scheduler_cron_path)" ;; esac
-        for dest in $managed; do
-            f="${dir}/$(basename "$dest").snap"
-            if [ -f "$f" ]; then
-                if ! cp -a "$f" "$dest" 2>/dev/null || ! cmp -s "$f" "$dest"; then
-                    dep_err "restore: could not restore ${dest} exactly"; rc=1; continue
-                fi
-            else
-                rm -f "$dest" 2>/dev/null || { dep_err "restore: could not remove ${dest}"; rc=1; }
-                [ -e "$dest" ] && { dep_err "restore: ${dest} still exists (was created by the failed transaction)"; rc=1; }
-            fi
-        done
-    fi
+    }
     case " $scope " in *" wrappers "*)
         if declare -F zpw_restore_wrappers >/dev/null 2>&1 && [ -d "${dir}/wrappers" ]; then
             zpw_restore_wrappers "${dir}/wrappers" || { dep_err "restore: wrapper restore failed"; rc=1; }
@@ -1197,6 +1323,26 @@ dep_scheduler_scan() {
     return 0
 }
 
+# _dep_sched_text_is_ours OURS_RE ESC_BASE — does the unit/stanza text on
+# STDIN execute OUR scheduler? Matches either the single-line form (artisan
+# path under the base) or the standard SPLIT form: a WorkingDirectory=<base>
+# (or directory=<base>) declaration combined with a RELATIVE
+# `php artisan schedule:run` ExecStart/command.
+_dep_sched_text_is_ours() {
+    local re="$1" esc="$2" text
+    text="$(cat)"
+    if printf '%s\n' "$text" | grep -E 'artisan[[:space:]]+schedule:run' \
+        | grep -vE '^[[:space:]]*#' | grep -E "$re" >/dev/null; then
+        return 0
+    fi
+    printf '%s\n' "$text" \
+        | grep -qE "^[[:space:]]*(WorkingDirectory|directory)[[:space:]]*=[[:space:]]*${esc}/?[[:space:]]*\$" \
+        || return 1
+    printf '%s\n' "$text" | grep -E '^[[:space:]]*(ExecStart[^=]*|command)[[:space:]]*=' \
+        | grep -vE '^[[:space:]]*#' \
+        | grep -qE '(^|[[:space:]=/])php[[:space:]]+artisan[[:space:]]+schedule:run'
+}
+
 # _dep_systemd_unit_state UNIT — print "enabled-state/active-state" for a unit
 # (both queries bounded; unknown when systemctl is unavailable).
 _dep_systemd_unit_state() {
@@ -1254,8 +1400,9 @@ _dep_supervisor_effective_files() {
 #   SYSTEMD <unit-file-or-name> (<enabled-state>/<active-state>)
 #   SUPERVISOR <conf-file>
 dep_scheduler_scan_noncron() {
-    local base="$1" re
+    local base="$1" re esc
     re="$(zpd_scheduler_ours_re "$base")"
+    esc="$(printf '%s' "$base" | sed 's/[][\.*^$(){}?+|]/\\&/g')"
     {
         local d f unit
         # 1. Every systemd unit load tree, including drop-ins.
@@ -1263,7 +1410,7 @@ dep_scheduler_scan_noncron() {
             [ -d "$d" ] || continue
             for f in "$d"/*.timer "$d"/*.service "$d"/*.timer.d/*.conf "$d"/*.service.d/*.conf; do
                 [ -f "$f" ] || continue
-                if grep -E 'artisan[[:space:]]+schedule:run' "$f" 2>/dev/null | grep -vE '^[[:space:]]*#' | grep -E "$re" >/dev/null; then
+                if _dep_sched_text_is_ours "$re" "$esc" < "$f"; then
                     unit="$(basename "$f")"
                     case "$f" in
                         *.d/*.conf) unit="$(basename "$(dirname "$f")")"; unit="${unit%.d}" ;;
@@ -1273,39 +1420,80 @@ dep_scheduler_scan_noncron() {
             done
         done < <(zpd_systemd_unit_dirs)
         # 2. Units systemd itself knows about (generators, aliases, masked
-        #    overrides), rendered via bounded read-only `systemctl cat`.
+        #    overrides) — with FAIL-CLOSED discovery status. Every systemctl
+        #    query's exit status is captured DIRECTLY (never lost inside a
+        #    pipeline or process substitution): a timeout, an unavailable
+        #    systemctl, an unexpected failure, or malformed output emits a
+        #    blocking `DISCOVERY_ERROR <kind> <detail>` record instead of
+        #    silently shrinking the discovered set. The reconciler treats any
+        #    DISCOVERY_ERROR as an active conflict and stops BEFORE writing
+        #    the canonical cron.
+        local luf_out luf_rc lt_out lt_rc units cat_out cat_rc bad
+        luf_out="$(dep_svc "$ZPD_SYSTEMCTL" list-unit-files --type=timer --type=service --no-legend --no-pager 2>/dev/null)"; luf_rc=$?
+        case "$luf_rc" in
+            0) ;;
+            124|137) printf 'DISCOVERY_ERROR timed_out systemctl-list-unit-files\n' ;;
+            126|127) printf 'DISCOVERY_ERROR unavailable systemctl\n' ;;
+            *)       printf 'DISCOVERY_ERROR failed systemctl-list-unit-files rc=%s\n' "$luf_rc" ;;
+        esac
+        # With --type filters + --no-legend every non-empty line's first token
+        # must name a .timer/.service unit — anything else is malformed.
+        bad="$(printf '%s\n' "$luf_out" | awk 'NF > 0 {print $1}' | grep -vcE '\.(timer|service)$' || true)"
+        [ "${bad:-0}" -ne 0 ] && printf 'DISCOVERY_ERROR malformed systemctl-list-unit-files\n'
+        lt_out="$(dep_svc "$ZPD_SYSTEMCTL" list-timers --all --no-legend --no-pager 2>/dev/null)"; lt_rc=$?
+        case "$lt_rc" in
+            0) ;;
+            124|137) printf 'DISCOVERY_ERROR timed_out systemctl-list-timers\n' ;;
+            126|127) printf 'DISCOVERY_ERROR unavailable systemctl\n' ;;
+            *)       printf 'DISCOVERY_ERROR failed systemctl-list-timers rc=%s\n' "$lt_rc" ;;
+        esac
+        units="$( { printf '%s\n' "$luf_out" | awk 'NF > 0 {print $1}'; \
+                    printf '%s\n' "$lt_out" | awk '{for (i = 1; i <= NF; i++) if ($i ~ /\.timer$/) print $i}'; } \
+                  | grep -E '\.(timer|service)$' | sort -u )"
         while IFS= read -r unit; do
             [ -n "$unit" ] || continue
-            if dep_svc "$ZPD_SYSTEMCTL" cat "$unit" 2>/dev/null \
-                | grep -E 'artisan[[:space:]]+schedule:run' \
-                | grep -vE '^[[:space:]]*#' | grep -E "$re" >/dev/null; then
+            cat_out="$(dep_svc "$ZPD_SYSTEMCTL" cat "$unit" 2>/dev/null)"; cat_rc=$?
+            case "$cat_rc" in
+                0) ;;
+                124|137) printf 'DISCOVERY_ERROR timed_out systemctl-cat-%s\n' "$unit"; continue ;;
+                *)       printf 'DISCOVERY_ERROR failed systemctl-cat-%s rc=%s\n' "$unit" "$cat_rc"; continue ;;
+            esac
+            if printf '%s\n' "$cat_out" | _dep_sched_text_is_ours "$re" "$esc"; then
                 printf 'SYSTEMD %s (%s)\n' "$unit" "$(_dep_systemd_unit_state "$unit")"
             fi
-        done < <(
-            {
-                dep_svc "$ZPD_SYSTEMCTL" list-unit-files --type=timer --type=service --no-legend --no-pager 2>/dev/null | awk '{print $1}'
-                dep_svc "$ZPD_SYSTEMCTL" list-timers --all --no-legend --no-pager 2>/dev/null | awk '{for (i = 1; i <= NF; i++) if (a = $i) if (a ~ /\.timer$/) print a}'
-            } | grep -E '\.(timer|service)$' | sort -u
-        )
+        done <<< "$units"
         # 3. Effective Supervisor programs: each [program:*] STANZA is
         #    evaluated independently — the stanza whose command executes our
         #    scheduler is reported with ITS OWN program name and autostart
         #    setting (an unrelated program's autostart=false earlier in the
         #    same file must not mask an autostarted scheduler stanza). Lines:
         #    SUPERVISOR <conf-file> (<program>/<autostart>)
-        local prog auto
+        local prog auto stanzas awk_rc
         while IFS= read -r f; do
             [ -f "$f" ] || continue
-            while IFS=$'\t' read -r prog auto; do
-                [ -n "$prog" ] || continue
-                printf 'SUPERVISOR %s (%s/%s)\n' "$f" "$prog" "$auto"
-            done < <(ZPD_OURS_RE="$re" awk '
-                function flush() { if (m) print name "\t" auto; m = 0 }
+            # Per-file stanza extraction with its exit status captured — a
+            # failed parse is a blocking discovery error, never an empty set.
+            stanzas="$(ZPD_OURS_RE="$re" ZPD_BASE_RE="$esc" awk '
+                function flush() { if (m || (dirok && relm)) print name "\t" auto; m = 0; dirok = 0; relm = 0 }
                 /^\[program:/ { flush(); name = $0; sub(/^\[program:/, "", name); sub(/\].*/, "", name); auto = "true"; next }
                 /^\[/         { flush(); name = "" }
                 name != "" && /^[ \t]*autostart[ \t]*=[ \t]*[Ff][Aa][Ll][Ss][Ee]/ { auto = "false" }
-                name != "" && /^[ \t]*command[ \t]*=/ && $0 ~ ENVIRON["ZPD_OURS_RE"] { m = 1 }
-                END { flush() }' "$f" 2>/dev/null)
+                name != "" && /^[ \t]*directory[ \t]*=/ {
+                    if ($0 ~ ("^[ \t]*directory[ \t]*=[ \t]*" ENVIRON["ZPD_BASE_RE"] "/?[ \t]*$")) dirok = 1
+                }
+                name != "" && /^[ \t]*command[ \t]*=/ {
+                    if ($0 ~ ENVIRON["ZPD_OURS_RE"]) m = 1
+                    else if ($0 ~ /^[ \t]*command[ \t]*=[ \t]*php[ \t]+artisan[ \t]+schedule:run/) relm = 1
+                }
+                END { flush() }' "$f" 2>/dev/null)"; awk_rc=$?
+            if [ "$awk_rc" -ne 0 ]; then
+                printf 'DISCOVERY_ERROR failed supervisor-parse-%s rc=%s\n' "$f" "$awk_rc"
+                continue
+            fi
+            while IFS=$'\t' read -r prog auto; do
+                [ -n "$prog" ] || continue
+                printf 'SUPERVISOR %s (%s/%s)\n' "$f" "$prog" "$auto"
+            done <<< "$stanzas"
         done < <(_dep_supervisor_effective_files)
     } | sort -u
     return 0
@@ -1353,6 +1541,11 @@ dep_scheduler_filter_active() {
     while IFS= read -r line; do
         [ -n "$line" ] || continue
         case "$line" in
+            DISCOVERY_ERROR\ *)
+                # Discovery itself failed/timed out/was malformed — the source
+                # set is UNVERIFIED, which always blocks reconciliation.
+                printf '%s\n' "$line"
+                ;;
             SUPERVISOR\ *)
                 state="${line##*\(}"; state="${state%\)}"
                 prog="${state%%/*}"; auto="${state##*/}"
@@ -1421,7 +1614,16 @@ _dep_systemd_timer_exists() {
     local t="$1" out rc
     out="$(dep_svc "$ZPD_SYSTEMCTL" list-unit-files "$t" --no-legend --no-pager 2>/dev/null)"; rc=$?
     if [ "$rc" -eq 124 ] || [ "$rc" -eq 137 ]; then return 2; fi
-    [ -n "$out" ]
+    if [ -n "$out" ]; then
+        # Listed output with an unexpected exit status is UNKNOWN, not proof.
+        [ "$rc" -eq 0 ] || return 2
+        return 0
+    fi
+    # Empty output: only systemctl's RECOGNIZED no-match results (rc 0, or its
+    # documented rc 1 for zero matching unit files) positively mean "absent".
+    # Any other failure is UNKNOWN — never silently "timer absent".
+    if [ "$rc" -le 1 ]; then return 1; fi
+    return 2
 }
 
 # dep_scheduler_active_conflicts BASE — the ACTIVE non-cron scheduler sources
@@ -1762,9 +1964,15 @@ dep_first_cutover_rollback() {
     # sources are recorded in the per-activation operational snapshot — put
     # them back (scheduler scope only, after `current` is dropped so no check
     # runs against the failed release) so the restored legacy application
-    # never comes back with its scheduler silently disabled.
-    if [ -n "${DEP_SNAPSHOT_DIR:-}" ] && [ -d "$DEP_SNAPSHOT_DIR" ]; then
-        dep_restore_operational_snapshot "$DEP_SNAPSHOT_DIR" scheduler \
+    # never comes back with its scheduler silently disabled. A MANUAL rollback
+    # (zedproxy-rollback in a fresh process, DEP_SNAPSHOT_DIR unset) uses the
+    # committed last-op-snapshot pointer instead.
+    local op_snap="${DEP_SNAPSHOT_DIR:-}"
+    if [ -z "$op_snap" ] && [ -f "$(zpd_snapshots_dir)/last-op-snapshot.ptr" ]; then
+        op_snap="$(cat "$(zpd_snapshots_dir)/last-op-snapshot.ptr" 2>/dev/null)"
+    fi
+    if [ -n "$op_snap" ] && [ -d "$op_snap" ]; then
+        dep_restore_operational_snapshot "$op_snap" scheduler \
             || { dep_err "rollback: could not restore the pre-cutover scheduler sources"; return 1; }
     fi
     # SEMANTIC verification of the restored configuration — the rollback is
@@ -1973,6 +2181,18 @@ dep_reconcile_state() {
     local override="${1:-}"
     local active manifest sha ref repo result mig source="manifest"
     active="$(zpd_current_release)"
+    if [ -n "$active" ]; then
+        # `current` must resolve EXACTLY to the selected child of releases/ —
+        # a symlink pointing outside releases/ (whose basename merely matches
+        # a release id) must never drive a state repair.
+        local canon releases_canon
+        canon="$(readlink -f "$(zpd_current_link)" 2>/dev/null)"             || { dep_warn "state: current target unreadable — not repairing state"; return 1; }
+        releases_canon="$(cd "$(zpd_releases_dir)" 2>/dev/null && pwd -P)"             || { dep_warn "state: releases dir unreadable — not repairing state"; return 1; }
+        if [ "$canon" != "${releases_canon}/${active}" ]; then
+            dep_warn "state: current resolves to ${canon}, not releases/${active} — not repairing state"
+            return 1
+        fi
+    fi
     if [ -z "$active" ]; then
         zpd_write_manifest "$(zpd_state_file)" \
             "active_release=none" "result=${override:-unknown}" \
@@ -2120,6 +2340,15 @@ dep_main() {
     base="$(zpd_base)"; shared="$(zpd_shared_dir)"; releases="$(zpd_releases_dir)"
     lockfile="$(zpd_lock_file)"
     mkdir -p "$(zpd_log_dir)" "$releases" "$shared" 2>/dev/null || true
+    # Per-run deployment log (600) — the source the diagnostic bundle collects.
+    if [ -z "${DEP_LOG_FILE:-}" ]; then
+        DEP_LOG_FILE="$(zpd_log_dir)/deploy-$(date -u +%Y%m%d%H%M%S).log"
+        if : > "$DEP_LOG_FILE" 2>/dev/null; then
+            chmod 600 "$DEP_LOG_FILE" 2>/dev/null || true
+        else
+            DEP_LOG_FILE=""
+        fi
+    fi
 
     ver="$("$ZPD_PHP" -r 'echo PHP_MAJOR_VERSION.".".PHP_MINOR_VERSION;' 2>/dev/null || echo 8.3)"
     fpm="php${ver}-fpm"
@@ -2336,9 +2565,11 @@ dep_main() {
         || dep_warn "could not write the central failure event"
 
     # Migration-state for the manifest: on a migrate-stage failure the DB change
-    # is `failed`; otherwise it reflects whether Artisan actually applied anything.
+    # is `failed` — unless the migration TIMED OUT, in which case the DB state
+    # is honestly `unknown` and must stay indeterminate everywhere (manifest
+    # AND operator guidance).
     local mig_state="$DEP_MIGRATION_STATUS"
-    [ "$rc" -eq 30 ] && mig_state="failed"
+    [ "$rc" -eq 30 ] && [ "$mig_state" != "unknown" ] && mig_state="failed"
 
     # First legacy→release cutover with no previous release: restore the legacy
     # application (its Nginx/Supervisor/scheduler config + drop `current`).
@@ -2347,7 +2578,7 @@ dep_main() {
         local rb_result="failed"
         if dep_first_cutover_rollback "$base" "$fpm"; then
             rb_result="success"
-            [ "$mig_state" = "applied" ] && { dep_warn "$(zpd_msg_migrate_applied)"; dep_warn "DB backup: $(zpd_backup_dir)/${id}/db.dump"; } || dep_log "$(zpd_msg_migrate_none)"
+            _dep_report_migration_state "$mig_state" "$id"
             dep_log "$(zpd_msg_legacy_restored)"
         else
             dep_err "legacy application could not be restored to a healthy state"
@@ -2396,12 +2627,7 @@ dep_main() {
     dep_reconcile_state "failed" || dep_warn "state update failed"
 
     if [ "$rb_result" = "success" ]; then
-        if [ "$mig_state" = "applied" ]; then
-            dep_warn "$(zpd_msg_migrate_applied)"
-            dep_warn "DB backup: $(zpd_backup_dir)/${id}/db.dump"
-        else
-            dep_log "$(zpd_msg_migrate_none)"
-        fi
+        _dep_report_migration_state "$mig_state" "$id"
         dep_log "$(zpd_msg_rolled_back)"
         dep_log "$(zpd_msg_previous_active)"
     else
