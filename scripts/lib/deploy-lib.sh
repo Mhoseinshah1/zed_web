@@ -718,6 +718,7 @@ zpd_has_legacy_rollback() { [ -f "$(zpd_legacy_marker_file)" ]; }
 # re-capture before relying on the snapshot as a first-cutover rollback path.
 zpd_legacy_rollback_valid() {
     local marker dir map name path mode owner existed
+    local seen_nginx=0 seen_super=0 seen_sched=0 seen_lh=0
     marker="$(zpd_legacy_marker_file)"
     [ -f "$marker" ] || return 1
     dir="$(dirname "$marker")"
@@ -728,8 +729,18 @@ zpd_legacy_rollback_valid() {
         if [ "$existed" = "1" ]; then
             [ -s "${dir}/${name}.legacy" ] && [ -r "${dir}/${name}.legacy" ] || return 1
         fi
+        case "$name" in
+            nginx)       seen_nginx=1 ;;
+            supervisor)  seen_super=1 ;;
+            scheduler)   seen_sched=1 ;;
+            localhealth) seen_lh=1 ;;
+        esac
     done < "$map"
-    return 0
+    # An empty or TRUNCATED map (e.g. a recapture that failed mid-write while
+    # an older marker survived) must never pass: every managed source needs a
+    # recorded entry — existing artifact or explicit recorded absence.
+    [ "$seen_nginx" = "1" ] && [ "$seen_super" = "1" ] \
+        && [ "$seen_sched" = "1" ] && [ "$seen_lh" = "1" ]
 }
 
 # zpd_restore_legacy_rollback — restore the snapshotted nginx/supervisor/cron

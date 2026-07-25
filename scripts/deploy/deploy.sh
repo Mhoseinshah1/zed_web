@@ -1157,30 +1157,28 @@ dep_scheduler_scan_noncron() {
                 dep_svc "$ZPD_SYSTEMCTL" list-timers --all --no-legend --no-pager 2>/dev/null | awk '{for (i = 1; i <= NF; i++) if (a = $i) if (a ~ /\.timer$/) print a}'
             } | grep -E '\.(timer|service)$' | sort -u
         )
-        # 3. Effective Supervisor programs (any command= executing our schedule:run).
+        # 3. Effective Supervisor programs: each [program:*] STANZA is
+        #    evaluated independently — the stanza whose command executes our
+        #    scheduler is reported with ITS OWN program name and autostart
+        #    setting (an unrelated program's autostart=false earlier in the
+        #    same file must not mask an autostarted scheduler stanza). Lines:
+        #    SUPERVISOR <conf-file> (<program>/<autostart>)
+        local prog auto
         while IFS= read -r f; do
             [ -f "$f" ] || continue
-            if grep -E '^[[:space:]]*command[[:space:]]*=' "$f" 2>/dev/null | grep -E "$re" >/dev/null; then
-                printf 'SUPERVISOR %s\n' "$f"
-            fi
+            while IFS=$'\t' read -r prog auto; do
+                [ -n "$prog" ] || continue
+                printf 'SUPERVISOR %s (%s/%s)\n' "$f" "$prog" "$auto"
+            done < <(ZPD_OURS_RE="$re" awk '
+                function flush() { if (m) print name "\t" auto; m = 0 }
+                /^\[program:/ { flush(); name = $0; sub(/^\[program:/, "", name); sub(/\].*/, "", name); auto = "true"; next }
+                /^\[/         { flush(); name = "" }
+                name != "" && /^[ \t]*autostart[ \t]*=[ \t]*[Ff][Aa][Ll][Ss][Ee]/ { auto = "false" }
+                name != "" && /^[ \t]*command[ \t]*=/ && $0 ~ ENVIRON["ZPD_OURS_RE"] { m = 1 }
+                END { flush() }' "$f" 2>/dev/null)
         done < <(_dep_supervisor_effective_files)
     } | sort -u
     return 0
-}
-
-# _dep_supervisor_program_active CONF — is the Supervisor program defined in
-# CONF active? autostart defaults to true, so any stanza without an explicit
-# `autostart=false` is active (supervisord will run it). With autostart=false
-# the program is active only when the daemon reports it RUNNING/STARTING right
-# now (bounded query; an unparseable stanza stays conservatively active).
-_dep_supervisor_program_active() {
-    local f="$1" prog
-    if ! grep -qiE '^[[:space:]]*autostart[[:space:]]*=[[:space:]]*false' "$f" 2>/dev/null; then
-        return 0
-    fi
-    prog="$(sed -n 's/^\[program:\([^]]*\)\].*/\1/p' "$f" 2>/dev/null | head -n1)"
-    [ -n "$prog" ] || return 0
-    dep_svc "$ZPD_SUPERVISORCTL" status "$prog" 2>/dev/null | grep -qE 'RUNNING|STARTING'
 }
 
 # _dep_systemd_state_is_active "en/ac" — is a recorded enabled/active state pair
@@ -1195,16 +1193,23 @@ _dep_systemd_state_is_active() {
 # running/activating or enabled — or, for a `.service` (the standard
 # foo.timer→foo.service arrangement puts `schedule:run` only in the service,
 # which reports static/inactive between invocations), when its COMPANION
-# `.timer` is enabled/active. A Supervisor program is active unless it is
-# autostart=false AND not currently running. Everything else is an INACTIVE
-# leftover: a cleanup candidate, not a live duplicate.
+# `.timer` is enabled/active. A Supervisor STANZA is active unless it declares
+# autostart=false AND the daemon does not report that program RUNNING/STARTING
+# right now. Everything else is an INACTIVE leftover: a cleanup candidate, not
+# a live duplicate.
 dep_scheduler_filter_active() {
-    local line state f unit
+    local line state f unit prog auto
     while IFS= read -r line; do
         [ -n "$line" ] || continue
         case "$line" in
             SUPERVISOR\ *)
-                _dep_supervisor_program_active "${line#SUPERVISOR }" && printf '%s\n' "$line"
+                state="${line##*\(}"; state="${state%\)}"
+                prog="${state%%/*}"; auto="${state##*/}"
+                if [ "$auto" != "false" ]; then
+                    printf '%s\n' "$line"
+                elif dep_svc "$ZPD_SUPERVISORCTL" status "$prog" 2>/dev/null | grep -qE 'RUNNING|STARTING'; then
+                    printf '%s\n' "$line"
+                fi
                 ;;
             SYSTEMD\ *)
                 state="${line##*\(}"; state="${state%\)}"

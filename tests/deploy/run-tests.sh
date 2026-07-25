@@ -2054,6 +2054,39 @@ assert_eq "$(cat "$ZPD_NGINX_CONF")" "BROKEN-NGINX" "wrappers-only restore did n
 assert_true zpd_nginx_root_ok "$ZPD_NGINX_CONF" "$BASE"
 rm -rf "$BASE"
 
+echo "-- Codex round 3 (per-stanza supervisor, truncated map, backup dump removal) --"
+
+# Z1. Multi-stanza Supervisor file: an unrelated first program with
+#     autostart=false must NOT mask an autostarted ZedProxy scheduler stanza.
+new_base; sha="$(mk_release_git 20260101000000-aaaaaaaaaaaa)"; zpd_switch_current 20260101000000-aaaaaaaaaaaa
+setup_atomic_service_configs; rm -f "$ZPD_SCHED_CRON"
+printf '[program:unrelated]\ncommand=/bin/sleep 1\nautostart=false\n\n[program:zp-sched]\ncommand=php %s/current/artisan schedule:run\n' "$BASE" \
+    > "${BASE}/supervisor.d/multi.conf"
+( MOCK_SUP_STATUS='unrelated   STOPPED   Not started' dep_reconcile_scheduler "$BASE" >/dev/null 2>&1 ); \
+  assert_rc 1 "$?" "autostarted scheduler stanza blocks despite unrelated autostart=false stanza"
+# The scheduler stanza itself autostart=false + stopped → inactive leftover.
+printf '[program:zp-sched]\ncommand=php %s/current/artisan schedule:run\nautostart=false\n' "$BASE" \
+    > "${BASE}/supervisor.d/multi.conf"
+( MOCK_SUP_STATUS='zp-sched   STOPPED   Not started' dep_reconcile_scheduler "$BASE" >/dev/null 2>&1 ); \
+  assert_rc 0 "$?" "per-stanza: the scheduler stanza's OWN autostart=false decides"
+rm -rf "$BASE"
+
+# Z2. A TRUNCATED legacy-files.map (missing a managed-source record) is not a
+#     valid rollback path.
+new_base; make_legacy_base; setup_legacy_service_configs
+zpd_save_legacy_rollback "$BASE" "$ZPD_NGINX_CONF" "$ZPD_SUPERVISOR_CONF" "$ZPD_SCHED_CRON"
+assert_true zpd_legacy_rollback_valid
+grep -v '^scheduler	' "${BASE}/shared/deploy/legacy-files.map" > "${BASE}/map.tmp" \
+  && mv "${BASE}/map.tmp" "${BASE}/shared/deploy/legacy-files.map"
+assert_false zpd_legacy_rollback_valid
+rm -rf "$BASE"
+
+# Z3. The cron backup script removes an incomplete dump on failure/timeout
+#     (static invariant — the script is exercised against the real repo .env
+#     only in production).
+assert_true bash -c "grep -q 'rm -f \"\$BACKUP_DIR/\$FILENAME\"' '$REPO_ROOT/scripts/backup.sh'"
+assert_true bash -c "grep -qE 'if ! PGPASSWORD' '$REPO_ROOT/scripts/backup.sh'"
+
 rm -rf "$MOCKBIN"
 echo ""
 echo "== results: ${PASS} passed, ${FAIL} failed =="
