@@ -928,6 +928,108 @@ nginx_before="$(cat "$ZPD_NGINX_CONF")"
 assert_eq "$(cat "$ZPD_NGINX_CONF")" "$nginx_before" "config restored after failed validation"
 rm -rf "$BASE"
 
+# RB8. `try_files $uri =404;` (and any wrong fallback) is NORMALIZED in place,
+#      not failed — this was the PR #72 defect where reconciliation failed
+#      permanently instead of healing.
+new_base
+cat > "$ZPD_NGINX_CONF" <<EOF
+server {
+    listen 80;
+    root ${BASE}/current/public;
+    location = /robots.txt {
+        access_log off;
+        try_files \$uri =404;
+    }
+}
+EOF
+assert_false zpd_nginx_robots_ok "$ZPD_NGINX_CONF"
+assert_true  zpd_nginx_rewrite_robots "$ZPD_NGINX_CONF"
+assert_true  zpd_nginx_robots_ok "$ZPD_NGINX_CONF"
+assert_eq "$(grep -c 'try_files' "$ZPD_NGINX_CONF")" "1" "wrong fallback replaced, not duplicated"
+assert_true bash -c "grep -q 'try_files \$uri /index.php?\$query_string;' '$ZPD_NGINX_CONF'"
+assert_false bash -c "grep -q '=404' '$ZPD_NGINX_CONF'"
+rm -rf "$BASE"
+
+# RB9. Single-line block with a wrong /index.php fallback is normalized too.
+new_base
+printf 'server {\n  listen 80;\n  root %s/current/public;\n  location = /robots.txt  { access_log off; try_files $uri /index.php; }\n}\n' "$BASE" > "$ZPD_NGINX_CONF"
+assert_false zpd_nginx_robots_ok "$ZPD_NGINX_CONF"
+assert_true  zpd_nginx_rewrite_robots "$ZPD_NGINX_CONF"
+assert_true  zpd_nginx_robots_ok "$ZPD_NGINX_CONF"
+rm -rf "$BASE"
+
+# RB10. A MULTI-LINE favicon block: the fresh robots block must be inserted
+#       AFTER its closing brace, never inside it.
+new_base
+cat > "$ZPD_NGINX_CONF" <<EOF
+server {
+    listen 80;
+    root ${BASE}/current/public;
+    location = /favicon.ico {
+        access_log off;
+        log_not_found off;
+    }
+    location / { try_files \$uri \$uri/ /index.php?\$query_string; }
+}
+EOF
+assert_true zpd_nginx_rewrite_robots "$ZPD_NGINX_CONF"
+assert_true zpd_nginx_robots_ok "$ZPD_NGINX_CONF"
+# The favicon block is intact and closed BEFORE the robots block starts.
+fav_close="$(grep -n '^    }' "$ZPD_NGINX_CONF" | head -1 | cut -d: -f1)"
+robots_open="$(grep -n 'location = /robots.txt' "$ZPD_NGINX_CONF" | cut -d: -f1)"
+assert_true test "$fav_close" -lt "$robots_open"
+assert_eq "$(awk '/location = \/favicon\.ico/,/}/' "$ZPD_NGINX_CONF" | grep -c 'robots')" "0" "robots block NOT inserted inside the favicon block"
+rm -rf "$BASE"
+
+# RB11. An UNCLOSED robots block is rejected by predicate AND mutator, without
+#       mutation (PR #72 predicate wrongly returned success here).
+new_base
+printf 'server {\n  listen 80;\n  root %s/current/public;\n  location = /robots.txt {\n      access_log off;\n' "$BASE" > "$ZPD_NGINX_CONF"
+broken="$(cat "$ZPD_NGINX_CONF")"
+assert_false zpd_nginx_robots_ok "$ZPD_NGINX_CONF"
+( zpd_nginx_rewrite_robots "$ZPD_NGINX_CONF" >/dev/null 2>&1 ); assert_rc 1 "$?" "unclosed robots block refused"
+assert_eq "$(cat "$ZPD_NGINX_CONF")" "$broken" "unclosed block: file NOT mutated"
+rm -rf "$BASE"
+
+# RB12. DUPLICATE exact-match robots blocks in ONE server block (an nginx
+#       config error) are rejected fail-closed; a regex robots location is
+#       never silently modified either.
+new_base
+printf 'server {\n  root %s/current/public;\n  location = /robots.txt  { access_log off; }\n  location = /robots.txt  { access_log off; }\n}\n' "$BASE" > "$ZPD_NGINX_CONF"
+dup_before="$(cat "$ZPD_NGINX_CONF")"
+assert_false zpd_nginx_robots_ok "$ZPD_NGINX_CONF"
+( zpd_nginx_rewrite_robots "$ZPD_NGINX_CONF" >/dev/null 2>&1 ); assert_rc 1 "$?" "duplicate robots blocks refused"
+assert_eq "$(cat "$ZPD_NGINX_CONF")" "$dup_before" "duplicate blocks: file NOT mutated"
+printf 'server {\n  root %s/current/public;\n  location ~ ^/robots { deny all; }\n}\n' "$BASE" > "$ZPD_NGINX_CONF"
+regex_before="$(cat "$ZPD_NGINX_CONF")"
+out="$(zpd_nginx_rewrite_robots "$ZPD_NGINX_CONF" 2>&1)"; rc=$?
+assert_rc 1 "$rc" "regex robots location refused"
+printf '%s' "$out" | grep -q 'unsupported regex' && ok "regex refusal is diagnosed" || bad "regex refusal not diagnosed"
+assert_eq "$(cat "$ZPD_NGINX_CONF")" "$regex_before" "regex layout: file NOT mutated"
+rm -rf "$BASE"
+
+# RB13. Mode AND ownership are preserved through a repair (fail-closed
+#       metadata handling, same-directory atomic temp file).
+new_base
+printf 'server {\n  listen 80;\n  root %s/current/public;\n  location = /robots.txt  { access_log off; log_not_found off; }\n}\n' "$BASE" > "$ZPD_NGINX_CONF"
+chmod 640 "$ZPD_NGINX_CONF"
+meta_before="$(stat -c '%a %u:%g' "$ZPD_NGINX_CONF")"
+assert_true zpd_nginx_rewrite_robots "$ZPD_NGINX_CONF"
+assert_eq "$(stat -c '%a %u:%g' "$ZPD_NGINX_CONF")" "$meta_before" "mode and ownership preserved after repair"
+assert_eq "$(ls "$(dirname "$ZPD_NGINX_CONF")"/.zpd-nginx.* 2>/dev/null | wc -l)" "0" "no temp file left behind"
+rm -rf "$BASE"
+
+# RB14. A temp-file or metadata failure aborts WITHOUT touching the original
+#       (fail-closed commit; tests run as root, so simulate via overrides).
+new_base
+printf 'server {\n  root %s/current/public;\n  location = /robots.txt  { access_log off; }\n}\n' "$BASE" > "$ZPD_NGINX_CONF"
+ro_before="$(cat "$ZPD_NGINX_CONF")"
+( zpd_nginx_mktemp() { return 1; }; zpd_nginx_rewrite_robots "$ZPD_NGINX_CONF" >/dev/null 2>&1 ); assert_rc 1 "$?" "temp-file creation failure → repair fails"
+assert_eq "$(cat "$ZPD_NGINX_CONF")" "$ro_before" "original untouched when the temp file cannot be created"
+( zpd_nginx_commit_file() { rm -f "$2"; return 1; }; zpd_nginx_rewrite_robots "$ZPD_NGINX_CONF" >/dev/null 2>&1 ); assert_rc 1 "$?" "metadata/commit failure → repair fails"
+assert_eq "$(cat "$ZPD_NGINX_CONF")" "$ro_before" "original untouched when metadata preservation fails"
+rm -rf "$BASE"
+
 # RB7. repair --scan reports the robots drift (read-only), --apply --nginx fixes it.
 new_base; sha="$(mk_release_git 20260101000000-aaaaaaaaaaaa)"; zpd_switch_current 20260101000000-aaaaaaaaaaaa
 setup_atomic_service_configs

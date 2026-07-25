@@ -381,76 +381,191 @@ zpd_nginx_root_ok() {
 }
 
 # -----------------------------------------------------------------------------
+# Shared transactional writer for every nginx mutator (robots / www / gzip).
+#
+# zpd_nginx_mktemp CONF   — create the temp file IN THE TARGET DIRECTORY so the
+#                           final rename is atomic (same filesystem — a bare
+#                           /tmp mktemp would make `mv` a non-atomic copy).
+# zpd_nginx_commit_file CONF TMP — copy mode+ownership from CONF to TMP
+#                           FAIL-CLOSED (a stat/chmod/chown failure aborts and
+#                           leaves CONF untouched), then atomically rename.
+# -----------------------------------------------------------------------------
+zpd_nginx_mktemp() {
+    mktemp "$(dirname "$1")/.zpd-nginx.XXXXXX"
+}
+
+zpd_nginx_commit_file() {
+    local conf="$1" tmp="$2" mode owner
+    mode="$(stat -c '%a' "$conf")" || { rm -f "$tmp"; return 1; }
+    owner="$(stat -c '%u:%g' "$conf")" || { rm -f "$tmp"; return 1; }
+    chmod "$mode" "$tmp" || { rm -f "$tmp"; return 1; }
+    chown "$owner" "$tmp" || { rm -f "$tmp"; return 1; }
+    mv -f "$tmp" "$conf" || { rm -f "$tmp"; return 1; }
+}
+
+# -----------------------------------------------------------------------------
 # zpd_nginx_robots_ok CONF
 #
 # Return 0 iff the config contains a `location = /robots.txt` block AND every
-# such block carries the Laravel front-controller fallback (try_files …
-# /index.php). robots.txt is DYNAMIC (RobotsController) and no static file
-# exists — a static-only block would terminate `/robots.txt` with a hard 404,
-# which crawlers treat as "no robots.txt" (every Disallow + the Sitemap line
-# silently ignored). error_page 404 does NOT rescue this: without `=` nginx
-# keeps the 404 status and only takes the body from Laravel.
+# such block carries EXACTLY the Laravel front-controller fallback
+# `try_files $uri /index.php?$query_string;`. robots.txt is DYNAMIC
+# (RobotsController) and no static file exists — a static-only block (or a
+# `try_files $uri =404;`) terminates `/robots.txt` with a hard 404, which
+# crawlers treat as "no robots.txt". error_page 404 does NOT rescue this:
+# without `=` nginx keeps the 404 status and only takes the body from Laravel.
+#
+# Conservative parsing: an UNCLOSED robots block, a wrong/missing fallback, or
+# DUPLICATE exact-match robots blocks inside one server block (an nginx config
+# error) all fail the predicate.
 # -----------------------------------------------------------------------------
 zpd_nginx_robots_ok() {
     local conf="$1"
     [ -f "$conf" ] || return 1
     grep -q 'location = /robots.txt' "$conf" || return 1
     awk '
-        /location = \/robots\.txt/ { inb = 1; ok = 0; depth = 0 }
-        inb {
-            if ($0 ~ /try_files[^;]*\/index\.php/) ok = 1
-            depth += gsub(/{/, "{")
-            depth -= gsub(/}/, "}")
-            if (depth <= 0 && $0 ~ /}/) { if (!ok) bad = 1; inb = 0 }
+        BEGIN { sdepth = 0; server = 0; bad = 0; inb = 0 }
+        {
+            if (!inb && $0 ~ /location = \/robots\.txt/) {
+                inb = 1; ok = 0; depth = 0
+                nrobots[server]++
+                if (nrobots[server] > 1) bad = 1        # duplicate exact location
+            }
+            if (inb) {
+                if ($0 ~ /try_files/) {
+                    if ($0 ~ /try_files[[:space:]]+\$uri[[:space:]]+\/index\.php\?\$query_string;/) ok = 1
+                    else bad = 1                        # wrong fallback (e.g. =404)
+                }
+                depth += gsub(/{/, "{") - gsub(/}/, "}")
+                if (depth <= 0 && $0 ~ /}/) { if (!ok) bad = 1; inb = 0 }
+            } else {
+                prev = sdepth
+                sdepth += gsub(/{/, "{") - gsub(/}/, "}")
+                if (prev == 0 && sdepth > 0) server++   # entered a new server block
+            }
         }
-        END { exit (bad ? 1 : 0) }
+        END { if (inb) bad = 1; exit (bad ? 1 : 0) }    # unclosed block → fail
     ' "$conf"
+}
+
+# -----------------------------------------------------------------------------
+# zpd_nginx_robots_repairable CONF
+#
+# Fail-closed gate for the mutator: layouts we cannot repair without guessing
+# are REPORTED and refused, never silently modified — a regex/prefix robots
+# location, an unclosed robots block, or duplicate exact-match robots blocks
+# inside the same server block.
+# -----------------------------------------------------------------------------
+zpd_nginx_robots_repairable() {
+    local conf="$1"
+    if grep -Eq 'location[[:space:]]+(~\*?|\^~)[^{]*robots' "$conf"; then
+        echo "nginx robots: unsupported regex/prefix robots location found — refusing to modify (adjust the config manually)" >&2
+        return 1
+    fi
+    awk '
+        BEGIN { sdepth = 0; server = 0; bad = 0; inb = 0 }
+        {
+            if (!inb && $0 ~ /location = \/robots\.txt/) {
+                inb = 1; depth = 0
+                nrobots[server]++
+                if (nrobots[server] > 1) bad = 1
+            }
+            if (inb) {
+                depth += gsub(/{/, "{") - gsub(/}/, "}")
+                if (depth <= 0 && $0 ~ /}/) inb = 0
+            } else {
+                prev = sdepth
+                sdepth += gsub(/{/, "{") - gsub(/}/, "}")
+                if (prev == 0 && sdepth > 0) server++
+            }
+        }
+        END { exit ((bad || inb) ? 1 : 0) }
+    ' "$conf" || {
+        echo "nginx robots: malformed robots.txt location (unclosed or duplicated in one server block) — refusing to modify" >&2
+        return 1
+    }
 }
 
 # -----------------------------------------------------------------------------
 # zpd_nginx_rewrite_robots CONF
 #
-# Idempotent mutator for the robots.txt location (companion of
-# zpd_nginx_rewrite_root). Handles three states:
-#   a) block present WITHOUT try_files → patch the fallback into the block
-#   b) block absent entirely           → insert it after the favicon block
-#      (fallback anchor: the first `root …;` line when no favicon block exists)
-#   c) block already correct           → no-op, return 0
-# Only the robots.txt location is ever touched — certbot-managed
-# ssl_certificate / listen 443 lines are never modified. Safe to re-run: a
-# second invocation on a repaired file is a byte-identical no-op.
+# Idempotent, conservative mutator for the robots.txt location (companion of
+# zpd_nginx_rewrite_root). States handled:
+#   a) block present with a wrong/missing fallback → NORMALIZED in place to
+#      `try_files $uri /index.php?$query_string;` (single-line legacy and
+#      multi-line forms both handled; `try_files $uri =404;` is normalized,
+#      not failed)
+#   b) block absent entirely → a fresh block is inserted after the favicon
+#      location — skipping over a complete MULTI-LINE favicon block — or after
+#      the first `root …;` line when no favicon block exists
+#   c) block already correct → no-op, return 0, byte-identical
+# Unsupported layouts (regex robots locations, unclosed/duplicate blocks) are
+# refused fail-closed with a diagnostic. Certbot-managed ssl_certificate /
+# listen 443 lines are never modified. The temp file is created in the target
+# directory and committed with fail-closed mode/ownership preservation.
 # -----------------------------------------------------------------------------
 zpd_nginx_rewrite_robots() {
     local conf="$1" tmp
-    [ -f "$conf" ] || return 1
+    [ -f "$conf" ] || { echo "nginx robots: config missing: ${conf}" >&2; return 1; }
     zpd_nginx_robots_ok "$conf" && return 0
-    tmp="$(mktemp)" || return 1
+    zpd_nginx_robots_repairable "$conf" || return 1
+    tmp="$(zpd_nginx_mktemp "$conf")" || return 1
     if grep -q 'location = /robots.txt' "$conf"; then
-        # a) patch every robots block that lacks the fallback (single-line
-        #    legacy form and multi-line form both handled).
+        # a) normalize every exact-match robots block to the canonical fallback.
         awk '
-            /location = \/robots\.txt/ && $0 !~ /try_files/ {
+            !inb && /location = \/robots\.txt/ {
                 if ($0 ~ /}/) {
-                    sub(/}[^}]*$/, "try_files $uri /index.php?$query_string; }")
+                    # single-line legacy block
+                    if ($0 ~ /try_files[^;]*;/)
+                        sub(/try_files[^;]*;/, "try_files $uri /index.php?$query_string;")
+                    else
+                        sub(/}[^}]*$/, "try_files $uri /index.php?$query_string; }")
                     print; next
                 }
-                inb = 1; print; next
+                inb = 1; seen = 0; print; next
             }
-            inb && /try_files/ { seen = 1 }
+            inb && /try_files/ {
+                indent = $0; sub(/[^ \t].*$/, "", indent)
+                print indent "try_files $uri /index.php?$query_string;"
+                seen = 1; next
+            }
             inb && /}/ {
                 if (!seen) print "        try_files $uri /index.php?$query_string;"
-                inb = 0; seen = 0; print; next
+                inb = 0; print; next
+            }
+            { print }
+        ' "$conf" > "$tmp" || { rm -f "$tmp"; return 1; }
+    elif grep -q 'location = /favicon.ico' "$conf"; then
+        # b) insert AFTER the favicon block's closing brace (a multi-line
+        #    favicon block must be skipped, never split).
+        awk '
+            function emit_robots() {
+                print "    location = /robots.txt {"
+                print "        access_log off;"
+                print "        log_not_found off;"
+                print "        try_files $uri /index.php?$query_string;"
+                print "    }"
+                done = 1
+            }
+            !done && infav {
+                d += gsub(/{/, "{") - gsub(/}/, "}")
+                print
+                if (d <= 0 && $0 ~ /}/) { infav = 0; emit_robots() }
+                next
+            }
+            !done && /location = \/favicon\.ico/ {
+                d = gsub(/{/, "{") - gsub(/}/, "}")
+                print
+                if (d <= 0 && $0 ~ /}/) emit_robots()
+                else infav = 1
+                next
             }
             { print }
         ' "$conf" > "$tmp" || { rm -f "$tmp"; return 1; }
     else
-        # b) insert a fresh block after the favicon location (or, when absent,
-        #    after the first `root …;` line so minimal configs still work).
-        local anchor='location = \/favicon\.ico'
-        grep -q 'location = /favicon.ico' "$conf" || anchor='^[[:space:]]*root[[:space:]]'
-        awk -v anchor="$anchor" '
+        # b-fallback) no favicon anchor: insert after the first `root …;` line.
+        awk '
             { print }
-            !done && $0 ~ anchor {
+            !done && /^[[:space:]]*root[[:space:]]/ {
                 print "    location = /robots.txt {"
                 print "        access_log off;"
                 print "        log_not_found off;"
@@ -460,9 +575,7 @@ zpd_nginx_rewrite_robots() {
             }
         ' "$conf" > "$tmp" || { rm -f "$tmp"; return 1; }
     fi
-    chmod --reference="$conf" "$tmp" 2>/dev/null || true
-    chown --reference="$conf" "$tmp" 2>/dev/null || true
-    mv -f "$tmp" "$conf" || { rm -f "$tmp"; return 1; }
+    zpd_nginx_commit_file "$conf" "$tmp" || return 1
     zpd_nginx_robots_ok "$conf"
 }
 

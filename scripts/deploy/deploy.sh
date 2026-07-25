@@ -880,17 +880,29 @@ dep_stop_workers() {
 
 # dep_cutover_nginx BASE — backup, rewrite root → current/public, verify, and
 # `nginx -t`; restore the previous config and fail on any error.
+# dep_restore_precutover_nginx CONF — restore the pre-cutover backup (content +
+# mode + ownership via cp -a) and VERIFY the restoration byte-for-byte. The
+# original failure context is reported by the caller; this only restores.
+dep_restore_precutover_nginx() {
+    local conf="$1"
+    cp -a "${conf}.zpd-precutover" "$conf" 2>/dev/null \
+        || { dep_err "nginx restore FAILED: ${conf}.zpd-precutover could not be copied back"; return 1; }
+    cmp -s "${conf}.zpd-precutover" "$conf" \
+        || { dep_err "nginx restore VERIFICATION failed: restored file differs from the backup"; return 1; }
+    return 0
+}
+
 dep_cutover_nginx() {
     local base="$1" conf; conf="$(zpd_nginx_conf_path)"
     [ -f "$conf" ] || { dep_err "nginx config missing: ${conf}"; return 1; }
     cp -a "$conf" "${conf}.zpd-precutover" 2>/dev/null || true
-    zpd_nginx_rewrite_root "$conf" "$base" || { dep_err "$(zpd_msg_nginx_restored)"; cp -a "${conf}.zpd-precutover" "$conf" 2>/dev/null || true; return 1; }
+    zpd_nginx_rewrite_root "$conf" "$base" || { dep_err "$(zpd_msg_nginx_restored)"; dep_restore_precutover_nginx "$conf" || true; return 1; }
     # robots.txt must reach Laravel (dynamic RobotsController) — same
-    # precutover-backup + nginx -t + restore-on-failure flow as the root.
-    zpd_nginx_rewrite_robots "$conf" || { dep_err "$(zpd_msg_nginx_restored)"; cp -a "${conf}.zpd-precutover" "$conf" 2>/dev/null || true; return 1; }
+    # precutover-backup + nginx -t + verified-restore-on-failure flow as root.
+    zpd_nginx_rewrite_robots "$conf" || { dep_err "$(zpd_msg_nginx_restored)"; dep_restore_precutover_nginx "$conf" || true; return 1; }
     if ! zpd_nginx_root_ok "$conf" "$base" || ! zpd_nginx_robots_ok "$conf" || ! dep_validate_nginx; then
         dep_err "$(zpd_msg_nginx_restored)"
-        cp -a "${conf}.zpd-precutover" "$conf" 2>/dev/null || true
+        dep_restore_precutover_nginx "$conf" || true
         return 1
     fi
     return 0
