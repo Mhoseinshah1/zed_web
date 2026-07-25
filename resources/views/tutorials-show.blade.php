@@ -34,7 +34,10 @@
         @endif
 
         @if($img = cms_asset_url($tutorial->image))
-            <img src="{{ $img }}" alt="{{ $tutorial->title }}" class="rounded-xl w-full mb-6">
+            {{-- LCP candidate: never lazy; 16:9 space reserved (object-cover
+                 crops rather than distorts when the upload isn't 16:9). --}}
+            <img src="{{ $img }}" alt="{{ $tutorial->title }}" class="rounded-xl w-full mb-6 aspect-video object-cover"
+                 loading="eager" fetchpriority="high">
         @endif
 
         <div class="prose-content text-gray-300 leading-8 text-sm sm:text-base">

@@ -227,6 +227,15 @@ zdr_check_services() {
     zpd_nginx_root_ok "$(zpd_nginx_conf_path)" "$base" \
         && zdr_add "nginx_root" ok "current/public" \
         || zdr_add "nginx_root" fail "Nginx root is not on current/public"
+    zpd_nginx_robots_ok "$(zpd_nginx_conf_path)" \
+        && zdr_add "nginx_robots" ok "dynamic robots.txt fallback present" \
+        || zdr_add "nginx_robots" fail "robots.txt location missing the exact Laravel fallback (dynamic robots.txt would 404)"
+    zpd_nginx_www_ok "$(zpd_nginx_conf_path)" \
+        && zdr_add "nginx_www" ok "canonical www routing" \
+        || zdr_add "nginx_www" fail "www is served by the app block (should 301 to the apex)"
+    zpd_nginx_gzip_ok "$(zpd_nginx_conf_path)" \
+        && zdr_add "nginx_gzip" ok "gzip configured" \
+        || zdr_add "nginx_gzip" fail "gzip missing for CSS/JS/JSON/SVG/XML"
     zpd_local_health_conf_ok "$(zpd_local_health_conf_path)" "$base" \
         && zdr_add "local_health_vhost" ok "loopback :$(zpd_local_health_port)" \
         || zdr_add "local_health_vhost" fail "missing or not loopback-only"

@@ -381,76 +381,191 @@ zpd_nginx_root_ok() {
 }
 
 # -----------------------------------------------------------------------------
+# Shared transactional writer for every nginx mutator (robots / www / gzip).
+#
+# zpd_nginx_mktemp CONF   — create the temp file IN THE TARGET DIRECTORY so the
+#                           final rename is atomic (same filesystem — a bare
+#                           /tmp mktemp would make `mv` a non-atomic copy).
+# zpd_nginx_commit_file CONF TMP — copy mode+ownership from CONF to TMP
+#                           FAIL-CLOSED (a stat/chmod/chown failure aborts and
+#                           leaves CONF untouched), then atomically rename.
+# -----------------------------------------------------------------------------
+zpd_nginx_mktemp() {
+    mktemp "$(dirname "$1")/.zpd-nginx.XXXXXX"
+}
+
+zpd_nginx_commit_file() {
+    local conf="$1" tmp="$2" mode owner
+    mode="$(stat -c '%a' "$conf")" || { rm -f "$tmp"; return 1; }
+    owner="$(stat -c '%u:%g' "$conf")" || { rm -f "$tmp"; return 1; }
+    chmod "$mode" "$tmp" || { rm -f "$tmp"; return 1; }
+    chown "$owner" "$tmp" || { rm -f "$tmp"; return 1; }
+    mv -f "$tmp" "$conf" || { rm -f "$tmp"; return 1; }
+}
+
+# -----------------------------------------------------------------------------
 # zpd_nginx_robots_ok CONF
 #
 # Return 0 iff the config contains a `location = /robots.txt` block AND every
-# such block carries the Laravel front-controller fallback (try_files …
-# /index.php). robots.txt is DYNAMIC (RobotsController) and no static file
-# exists — a static-only block would terminate `/robots.txt` with a hard 404,
-# which crawlers treat as "no robots.txt" (every Disallow + the Sitemap line
-# silently ignored). error_page 404 does NOT rescue this: without `=` nginx
-# keeps the 404 status and only takes the body from Laravel.
+# such block carries EXACTLY the Laravel front-controller fallback
+# `try_files $uri /index.php?$query_string;`. robots.txt is DYNAMIC
+# (RobotsController) and no static file exists — a static-only block (or a
+# `try_files $uri =404;`) terminates `/robots.txt` with a hard 404, which
+# crawlers treat as "no robots.txt". error_page 404 does NOT rescue this:
+# without `=` nginx keeps the 404 status and only takes the body from Laravel.
+#
+# Conservative parsing: an UNCLOSED robots block, a wrong/missing fallback, or
+# DUPLICATE exact-match robots blocks inside one server block (an nginx config
+# error) all fail the predicate.
 # -----------------------------------------------------------------------------
 zpd_nginx_robots_ok() {
     local conf="$1"
     [ -f "$conf" ] || return 1
     grep -q 'location = /robots.txt' "$conf" || return 1
     awk '
-        /location = \/robots\.txt/ { inb = 1; ok = 0; depth = 0 }
-        inb {
-            if ($0 ~ /try_files[^;]*\/index\.php/) ok = 1
-            depth += gsub(/{/, "{")
-            depth -= gsub(/}/, "}")
-            if (depth <= 0 && $0 ~ /}/) { if (!ok) bad = 1; inb = 0 }
+        BEGIN { sdepth = 0; server = 0; bad = 0; inb = 0 }
+        {
+            if (!inb && $0 ~ /location = \/robots\.txt/) {
+                inb = 1; ok = 0; depth = 0
+                nrobots[server]++
+                if (nrobots[server] > 1) bad = 1        # duplicate exact location
+            }
+            if (inb) {
+                if ($0 ~ /try_files/) {
+                    if ($0 ~ /try_files[[:space:]]+\$uri[[:space:]]+\/index\.php\?\$query_string;/) ok = 1
+                    else bad = 1                        # wrong fallback (e.g. =404)
+                }
+                depth += gsub(/{/, "{") - gsub(/}/, "}")
+                if (depth <= 0 && $0 ~ /}/) { if (!ok) bad = 1; inb = 0 }
+            } else {
+                prev = sdepth
+                sdepth += gsub(/{/, "{") - gsub(/}/, "}")
+                if (prev == 0 && sdepth > 0) server++   # entered a new server block
+            }
         }
-        END { exit (bad ? 1 : 0) }
+        END { if (inb) bad = 1; exit (bad ? 1 : 0) }    # unclosed block → fail
     ' "$conf"
+}
+
+# -----------------------------------------------------------------------------
+# zpd_nginx_robots_repairable CONF
+#
+# Fail-closed gate for the mutator: layouts we cannot repair without guessing
+# are REPORTED and refused, never silently modified — a regex/prefix robots
+# location, an unclosed robots block, or duplicate exact-match robots blocks
+# inside the same server block.
+# -----------------------------------------------------------------------------
+zpd_nginx_robots_repairable() {
+    local conf="$1"
+    if grep -Eq 'location[[:space:]]+(~\*?|\^~)[^{]*robots' "$conf"; then
+        echo "nginx robots: unsupported regex/prefix robots location found — refusing to modify (adjust the config manually)" >&2
+        return 1
+    fi
+    awk '
+        BEGIN { sdepth = 0; server = 0; bad = 0; inb = 0 }
+        {
+            if (!inb && $0 ~ /location = \/robots\.txt/) {
+                inb = 1; depth = 0
+                nrobots[server]++
+                if (nrobots[server] > 1) bad = 1
+            }
+            if (inb) {
+                depth += gsub(/{/, "{") - gsub(/}/, "}")
+                if (depth <= 0 && $0 ~ /}/) inb = 0
+            } else {
+                prev = sdepth
+                sdepth += gsub(/{/, "{") - gsub(/}/, "}")
+                if (prev == 0 && sdepth > 0) server++
+            }
+        }
+        END { exit ((bad || inb) ? 1 : 0) }
+    ' "$conf" || {
+        echo "nginx robots: malformed robots.txt location (unclosed or duplicated in one server block) — refusing to modify" >&2
+        return 1
+    }
 }
 
 # -----------------------------------------------------------------------------
 # zpd_nginx_rewrite_robots CONF
 #
-# Idempotent mutator for the robots.txt location (companion of
-# zpd_nginx_rewrite_root). Handles three states:
-#   a) block present WITHOUT try_files → patch the fallback into the block
-#   b) block absent entirely           → insert it after the favicon block
-#      (fallback anchor: the first `root …;` line when no favicon block exists)
-#   c) block already correct           → no-op, return 0
-# Only the robots.txt location is ever touched — certbot-managed
-# ssl_certificate / listen 443 lines are never modified. Safe to re-run: a
-# second invocation on a repaired file is a byte-identical no-op.
+# Idempotent, conservative mutator for the robots.txt location (companion of
+# zpd_nginx_rewrite_root). States handled:
+#   a) block present with a wrong/missing fallback → NORMALIZED in place to
+#      `try_files $uri /index.php?$query_string;` (single-line legacy and
+#      multi-line forms both handled; `try_files $uri =404;` is normalized,
+#      not failed)
+#   b) block absent entirely → a fresh block is inserted after the favicon
+#      location — skipping over a complete MULTI-LINE favicon block — or after
+#      the first `root …;` line when no favicon block exists
+#   c) block already correct → no-op, return 0, byte-identical
+# Unsupported layouts (regex robots locations, unclosed/duplicate blocks) are
+# refused fail-closed with a diagnostic. Certbot-managed ssl_certificate /
+# listen 443 lines are never modified. The temp file is created in the target
+# directory and committed with fail-closed mode/ownership preservation.
 # -----------------------------------------------------------------------------
 zpd_nginx_rewrite_robots() {
     local conf="$1" tmp
-    [ -f "$conf" ] || return 1
+    [ -f "$conf" ] || { echo "nginx robots: config missing: ${conf}" >&2; return 1; }
     zpd_nginx_robots_ok "$conf" && return 0
-    tmp="$(mktemp)" || return 1
+    zpd_nginx_robots_repairable "$conf" || return 1
+    tmp="$(zpd_nginx_mktemp "$conf")" || return 1
     if grep -q 'location = /robots.txt' "$conf"; then
-        # a) patch every robots block that lacks the fallback (single-line
-        #    legacy form and multi-line form both handled).
+        # a) normalize every exact-match robots block to the canonical fallback.
         awk '
-            /location = \/robots\.txt/ && $0 !~ /try_files/ {
+            !inb && /location = \/robots\.txt/ {
                 if ($0 ~ /}/) {
-                    sub(/}[^}]*$/, "try_files $uri /index.php?$query_string; }")
+                    # single-line legacy block
+                    if ($0 ~ /try_files[^;]*;/)
+                        sub(/try_files[^;]*;/, "try_files $uri /index.php?$query_string;")
+                    else
+                        sub(/}[^}]*$/, "try_files $uri /index.php?$query_string; }")
                     print; next
                 }
-                inb = 1; print; next
+                inb = 1; seen = 0; print; next
             }
-            inb && /try_files/ { seen = 1 }
+            inb && /try_files/ {
+                indent = $0; sub(/[^ \t].*$/, "", indent)
+                print indent "try_files $uri /index.php?$query_string;"
+                seen = 1; next
+            }
             inb && /}/ {
                 if (!seen) print "        try_files $uri /index.php?$query_string;"
-                inb = 0; seen = 0; print; next
+                inb = 0; print; next
+            }
+            { print }
+        ' "$conf" > "$tmp" || { rm -f "$tmp"; return 1; }
+    elif grep -q 'location = /favicon.ico' "$conf"; then
+        # b) insert AFTER the favicon block's closing brace (a multi-line
+        #    favicon block must be skipped, never split).
+        awk '
+            function emit_robots() {
+                print "    location = /robots.txt {"
+                print "        access_log off;"
+                print "        log_not_found off;"
+                print "        try_files $uri /index.php?$query_string;"
+                print "    }"
+                done = 1
+            }
+            !done && infav {
+                d += gsub(/{/, "{") - gsub(/}/, "}")
+                print
+                if (d <= 0 && $0 ~ /}/) { infav = 0; emit_robots() }
+                next
+            }
+            !done && /location = \/favicon\.ico/ {
+                d = gsub(/{/, "{") - gsub(/}/, "}")
+                print
+                if (d <= 0 && $0 ~ /}/) emit_robots()
+                else infav = 1
+                next
             }
             { print }
         ' "$conf" > "$tmp" || { rm -f "$tmp"; return 1; }
     else
-        # b) insert a fresh block after the favicon location (or, when absent,
-        #    after the first `root …;` line so minimal configs still work).
-        local anchor='location = \/favicon\.ico'
-        grep -q 'location = /favicon.ico' "$conf" || anchor='^[[:space:]]*root[[:space:]]'
-        awk -v anchor="$anchor" '
+        # b-fallback) no favicon anchor: insert after the first `root …;` line.
+        awk '
             { print }
-            !done && $0 ~ anchor {
+            !done && /^[[:space:]]*root[[:space:]]/ {
                 print "    location = /robots.txt {"
                 print "        access_log off;"
                 print "        log_not_found off;"
@@ -460,9 +575,7 @@ zpd_nginx_rewrite_robots() {
             }
         ' "$conf" > "$tmp" || { rm -f "$tmp"; return 1; }
     fi
-    chmod --reference="$conf" "$tmp" 2>/dev/null || true
-    chown --reference="$conf" "$tmp" 2>/dev/null || true
-    mv -f "$tmp" "$conf" || { rm -f "$tmp"; return 1; }
+    zpd_nginx_commit_file "$conf" "$tmp" || return 1
     zpd_nginx_robots_ok "$conf"
 }
 
@@ -478,6 +591,385 @@ zpd_supervisor_rewrite() {
     [ -n "$base" ] || return 1
     sed -i "s#\(command=[^ ]* \)[^ ]*/artisan #\1${base}/current/artisan #g" "$conf"
     sed -i "s#stdout_logfile=.*#stdout_logfile=${base}/shared/storage/logs/worker.log#g" "$conf"
+}
+
+# -----------------------------------------------------------------------------
+# Canonical www→apex host routing (managed ZPD-WWW-REDIRECT block).
+#
+# Drift = an app-serving server block whose server_name lists BOTH the apex
+# and its www variant (the historical `server_name domain www.domain;`), which
+# serves the site with status 200 on two hosts. The mutator splits them:
+# www gets a minimal redirect server that (1) keeps serving
+# /.well-known/acme-challenge/ from the app webroot BEFORE the redirect (a
+# blanket :80 redirect silently breaks HTTP-01 renewals for www) and
+# (2) 301s everything else to the literal https://APEX$request_uri (never
+# $host — that would retain www). A `listen 443 ssl` www redirect is created
+# ONLY when the live certificate provably covers www (SAN check on the actual
+# file referenced by ssl_certificate) — a redirect cannot repair a failed TLS
+# handshake. Custom www-only server blocks an operator wrote are left alone.
+# -----------------------------------------------------------------------------
+
+# zpd_nginx_www_drift_domain CONF — print the apex when some server_name line
+# serves both APEX and www.APEX; empty otherwise.
+zpd_nginx_www_drift_domain() {
+    awk '
+        /^[[:space:]]*server_name[[:space:]]/ {
+            line = $0; sub(/;.*/, "", line)
+            n = split(line, t, /[[:space:]]+/)
+            apex = ""; www = ""
+            for (i = 1; i <= n; i++) {
+                if (t[i] == "" || t[i] == "server_name") continue
+                if (t[i] ~ /^www\./) www = substr(t[i], 5)
+                else if (apex == "") apex = t[i]
+            }
+            if (apex != "" && www == apex) { print apex; exit }
+        }
+    ' "$1"
+}
+
+# zpd_cert_covers_www CONF APEX — 0 iff the certificate file referenced by the
+# live config's ssl_certificate directive covers www.APEX (bounded SAN check
+# on the REAL file — never inferred from DNS or a certbot filename).
+zpd_cert_covers_www() {
+    local conf="$1" apex="$2" cert
+    cert="$(grep -m1 -E '^[[:space:]]*ssl_certificate[[:space:]]' "$conf" | awk '{print $2}' | tr -d ';')"
+    [ -n "$cert" ] && [ -f "$cert" ] || return 1
+    timeout -k 5 "${ZPD_SVC_TIMEOUT:-20}s" "${ZPD_OPENSSL:-openssl}" x509 -in "$cert" -noout -checkhost "www.${apex}" </dev/null 2>/dev/null \
+        | grep -q 'does match'
+}
+
+# zpd_nginx_expected_apex CONF — the canonical apex this config should serve.
+# Precedence: explicit ZPD_WWW_APEX (install.sh passes $DOMAIN) → the apex of a
+# combined `server_name apex www.apex` drift line → the first non-www,
+# non-placeholder server_name outside the managed block. Empty when the config
+# has no server_name at all (nothing to manage).
+zpd_nginx_expected_apex() {
+    local conf="$1" d
+    if [ -n "${ZPD_WWW_APEX:-}" ]; then printf '%s' "$ZPD_WWW_APEX"; return 0; fi
+    d="$(zpd_nginx_www_drift_domain "$conf")"
+    if [ -n "$d" ]; then printf '%s' "$d"; return 0; fi
+    awk '
+        /ZPD-WWW-REDIRECT-BEGIN/ { inm = 1 } /ZPD-WWW-REDIRECT-END/ { inm = 0; next }
+        !inm && /^[[:space:]]*server_name[[:space:]]/ {
+            line = $0; sub(/;.*/, "", line)
+            n = split(line, t, /[[:space:]]+/)
+            for (i = 1; i <= n; i++) {
+                if (t[i] == "" || t[i] == "server_name") continue
+                if (t[i] !~ /^www\./ && t[i] != "_" && t[i] != "localhost") { print t[i]; exit }
+            }
+        }
+    ' "$conf"
+}
+
+# zpd_nginx_www_unmanaged CONF APEX — 0 iff an OPERATOR-created www-only server
+# block exists outside our managed markers (a www.apex server_name that is not
+# a combined apex+www line). Such blocks are never modified automatically.
+zpd_nginx_www_unmanaged() {
+    awk -v apex="$2" '
+        /ZPD-WWW-REDIRECT-BEGIN/ { inm = 1 } /ZPD-WWW-REDIRECT-END/ { inm = 0; next }
+        !inm && /^[[:space:]]*server_name[[:space:]]/ {
+            line = $0; sub(/;.*/, "", line)
+            haswww = 0; hasapex = 0
+            n = split(line, t, /[[:space:]]+/)
+            for (i = 1; i <= n; i++) {
+                if (t[i] == "www." apex) haswww = 1
+                else if (t[i] == apex) hasapex = 1
+            }
+            if (haswww && !hasapex) found = 1
+        }
+        END { exit found ? 0 : 1 }
+    ' "$1"
+}
+
+# zpd_nginx_www_managed_segment CONF — print the managed segment (inclusive).
+zpd_nginx_www_managed_segment() {
+    awk '/ZPD-WWW-REDIRECT-BEGIN/ { f = 1 } f { print } /ZPD-WWW-REDIRECT-END/ { f = 0 }' "$1"
+}
+
+# zpd_nginx_www_ok CONF [APEX] — STATE-COMPLETE www predicate:
+#   - no server_name anywhere → nothing to manage → ok
+#   - combined apex+www server_name → drift
+#   - operator-created unmanaged www block → left alone → ok
+#   - otherwise a managed redirect block for EXACTLY www.APEX is REQUIRED
+#     (without one, www may hit the default server and return 200), with:
+#       * exact `server_name www.APEX;`
+#       * a structurally valid ACME exemption (^~ acme location with a root)
+#         appearing BEFORE the catch-all redirect
+#       * the exact `return 301 https://APEX$request_uri;`
+#       * a managed `listen 443 ssl` www block IFF the CURRENT certificate
+#         covers www — re-checked on every call, so coverage gained later
+#         demands the 443 block and coverage lost demands its removal.
+zpd_nginx_www_ok() {
+    local conf="$1" apex="${2:-}" seg aline rline
+    [ -f "$conf" ] || return 1
+    [ -n "$(zpd_nginx_www_drift_domain "$conf")" ] && return 1
+    [ -n "$apex" ] || apex="$(zpd_nginx_expected_apex "$conf")"
+    [ -n "$apex" ] || return 0
+    if zpd_nginx_www_unmanaged "$conf" "$apex"; then return 0; fi
+    grep -q 'ZPD-WWW-REDIRECT-BEGIN' "$conf" || return 1
+    seg="$(zpd_nginx_www_managed_segment "$conf")"
+    printf '%s\n' "$seg" | grep -qF "server_name www.${apex};" || return 1
+    printf '%s\n' "$seg" | grep -qF "return 301 https://${apex}\$request_uri;" || return 1
+    printf '%s\n' "$seg" | grep -qF 'location ^~ /.well-known/acme-challenge/' || return 1
+    # Structural ACME: the exemption block must carry a root directive…
+    printf '%s\n' "$seg" | awk '
+        /location \^~ \/\.well-known\/acme-challenge\// { f = 1 }
+        f && /^[[:space:]]*root[[:space:]]/ { ok = 1 }
+        f && /}/ { exit }
+        END { exit ok ? 0 : 1 }
+    ' || return 1
+    # …and appear BEFORE the catch-all redirect.
+    aline="$(printf '%s\n' "$seg" | grep -n 'acme-challenge' | head -1 | cut -d: -f1)"
+    rline="$(printf '%s\n' "$seg" | grep -nF "return 301 https://${apex}" | head -1 | cut -d: -f1)"
+    [ -n "$aline" ] && [ -n "$rline" ] && [ "$aline" -lt "$rline" ] || return 1
+    # 443 presence must MATCH current certificate coverage exactly.
+    if zpd_cert_covers_www "$conf" "$apex"; then
+        printf '%s\n' "$seg" | grep -q 'listen 443' || return 1
+    else
+        printf '%s\n' "$seg" | grep -q 'listen 443' && return 1
+    fi
+    return 0
+}
+
+# zpd_nginx_rewrite_www CONF [APEX] — regenerate the managed www routing to the
+# CURRENT desired state: drop www from combined app server_name lines, replace
+# any existing managed segment wholesale (normalizing wrong destinations,
+# hostnames, or a missing $request_uri), and emit the 443 www redirect iff the
+# certificate referenced by the LIVE config covers www right now — so coverage
+# gained later ADDS the 443 block and coverage lost REMOVES it. Deterministic
+# output → repeated runs on a correct config are byte-identical no-ops (the
+# predicate short-circuits). Operator-created unmanaged www blocks are never
+# touched (the predicate treats them as healthy, so we never get here).
+zpd_nginx_rewrite_www() {
+    local conf="$1" apex="${2:-}" webroot tmp
+    [ -f "$conf" ] || { echo "nginx www: config missing: ${conf}" >&2; return 1; }
+    zpd_nginx_www_ok "$conf" "$apex" && return 0
+    [ -n "$apex" ] || apex="$(zpd_nginx_expected_apex "$conf")"
+    if [ -z "$apex" ]; then
+        echo "nginx www: cannot determine the canonical apex domain — refusing to modify" >&2
+        return 1
+    fi
+    webroot="$(awk '
+        /ZPD-WWW-REDIRECT-BEGIN/ { inm = 1 } /ZPD-WWW-REDIRECT-END/ { inm = 0; next }
+        !inm && /^[[:space:]]*root[[:space:]]/ { print $2; exit }
+    ' "$conf" | tr -d ';')"
+    if [ -z "$webroot" ]; then
+        echo "nginx www: cannot determine the app webroot for the ACME exemption — refusing to modify" >&2
+        return 1
+    fi
+    if ! zpd_cert_covers_www "$conf" "$apex"; then
+        echo "nginx www: NOTE — the active certificate does not cover www.${apex}; only the :80 redirect is managed (no 443 www block)" >&2
+    fi
+    tmp="$(zpd_nginx_mktemp "$conf")" || return 1
+    # 1) Drop www.APEX from every server_name line and strip any existing
+    #    managed segment (it is regenerated below in its desired state).
+    awk -v apex="$apex" '
+        BEGIN { esc = apex; gsub(/\./, "\\.", esc) }
+        /ZPD-WWW-REDIRECT-BEGIN/ { inm = 1; next }
+        /ZPD-WWW-REDIRECT-END/   { inm = 0; next }
+        inm { next }
+        /^[[:space:]]*server_name[[:space:]]/ { gsub("[[:space:]]+www\\." esc, "") }
+        { print }
+    ' "$conf" > "$tmp" || { rm -f "$tmp"; return 1; }
+    # Drop a single trailing blank line left behind by segment removal so the
+    # regenerated output is byte-stable across runs.
+    if [ "$(tail -c 2 "$tmp" 2>/dev/null | head -c 1)" = "" ]; then
+        printf '%s\n' "$(cat "$tmp")" > "$tmp"
+    fi
+    # 2) Append the regenerated managed segment.
+    {
+        printf '\n# ZPD-WWW-REDIRECT-BEGIN (managed by ZedProxy deploy — canonical host routing)\n'
+        printf 'server {\n'
+        printf '    listen 80;\n'
+        printf '    server_name www.%s;\n' "$apex"
+        printf '    # HTTP-01 renewals for www must keep working: serve ACME challenges\n'
+        printf '    # from the app webroot BEFORE the catch-all redirect.\n'
+        printf '    location ^~ /.well-known/acme-challenge/ {\n'
+        printf '        root %s;\n' "$webroot"
+        printf '    }\n'
+        printf '    location / {\n'
+        printf '        return 301 https://%s$request_uri;\n' "$apex"
+        printf '    }\n'
+        printf '}\n'
+        if zpd_cert_covers_www "$conf" "$apex"; then
+            # Reuse the live cert paths, but strip trailing comments — the
+            # copied lines in OUR block are not certbot-managed.
+            local strip='s/[[:space:]]*#.*$//' sslc sslk sslinc ssldh
+            sslc="$(grep -m1 -E '^[[:space:]]*ssl_certificate[[:space:]]' "$conf" | sed "$strip")"
+            sslk="$(grep -m1 -E '^[[:space:]]*ssl_certificate_key[[:space:]]' "$conf" | sed "$strip")"
+            sslinc="$(grep -m1 -E '^[[:space:]]*include[[:space:]].*options-ssl' "$conf" | sed "$strip")"
+            ssldh="$(grep -m1 -E '^[[:space:]]*ssl_dhparam[[:space:]]' "$conf" | sed "$strip")"
+            printf 'server {\n'
+            printf '    listen 443 ssl;\n'
+            printf '    server_name www.%s;\n' "$apex"
+            [ -n "$sslc" ] && printf '%s\n' "$sslc"
+            [ -n "$sslk" ] && printf '%s\n' "$sslk"
+            [ -n "$sslinc" ] && printf '%s\n' "$sslinc"
+            [ -n "$ssldh" ] && printf '%s\n' "$ssldh"
+            printf '    return 301 https://%s$request_uri;\n' "$apex"
+            printf '}\n'
+        fi
+        printf '# ZPD-WWW-REDIRECT-END\n'
+    } >> "$tmp"
+    zpd_nginx_commit_file "$conf" "$tmp" || return 1
+    zpd_nginx_www_ok "$conf" "$apex"
+}
+
+# -----------------------------------------------------------------------------
+# Managed gzip directives (ZPD-GZIP block) for application-serving blocks.
+#
+# Ubuntu's default nginx gzips HTML only — CSS/JS/JSON/SVG/XML/sitemap were
+# served uncompressed. The managed segment enables gzip for text assets only:
+# no text/html (nginx compresses it implicitly; declaring it warns) and no
+# already-compressed formats (woff2/png/jpg/webp/…). Custom operator gzip
+# directives outside our markers are NEVER duplicated or modified — the config
+# is treated as operator-managed and left alone.
+# -----------------------------------------------------------------------------
+ZPD_GZIP_TYPES='text/css text/plain text/xml application/javascript application/json application/ld+json application/xml application/rss+xml image/svg+xml application/manifest+json'
+
+# zpd_nginx_gzip_managed_lines INDENT — print the canonical managed segment.
+zpd_nginx_gzip_managed_lines() {
+    local i="${1:-    }"
+    printf '%s# ZPD-GZIP-BEGIN (managed by ZedProxy deploy)\n' "$i"
+    printf '%sgzip on;\n' "$i"
+    printf '%sgzip_vary on;\n' "$i"
+    printf '%sgzip_comp_level 5;\n' "$i"
+    printf '%sgzip_min_length 1024;\n' "$i"
+    printf '%sgzip_types %s;\n' "$i" "$ZPD_GZIP_TYPES"
+    printf '%s# ZPD-GZIP-END\n' "$i"
+}
+
+# zpd_nginx_has_custom_gzip CONF — any gzip directive OUTSIDE our markers.
+zpd_nginx_has_custom_gzip() {
+    awk '
+        /ZPD-GZIP-BEGIN/ { inm = 1 }
+        /ZPD-GZIP-END/   { inm = 0; next }
+        !inm && /^[[:space:]]*gzip(_[a-z_]+)?[[:space:]]/ { found = 1 }
+        END { exit found ? 0 : 1 }
+    ' "$1"
+}
+
+# zpd_nginx_gzip_ok CONF — PER-BLOCK gzip predicate. Every application-serving
+# server block (one with a SERVER-LEVEL root directive, outside the managed www
+# redirect) must carry either the complete canonical managed segment — all five
+# directives exact: gzip on, gzip_vary on, gzip_comp_level 5, gzip_min_length
+# 1024, and the exact allowed gzip_types — or explicitly detected operator
+# gzip directives inside that block. A managed segment in ONE block never makes
+# ANOTHER app block healthy. File-level (http-context) operator gzip outside
+# any server block makes the whole file operator-managed. Unbalanced braces or
+# an unclosed managed segment are unsupported → fail (never silent success).
+zpd_nginx_gzip_ok() {
+    local conf="$1"
+    [ -f "$conf" ] || return 1
+    awk -v types="$ZPD_GZIP_TYPES" '
+        function braces(l,  c) { c = l; return gsub(/{/, "{", c) - gsub(/}/, "}", c) }
+        BEGIN { depth = 0; server = 0; bad = 0 }
+        /ZPD-WWW-REDIRECT-BEGIN/ { inwww = 1 }
+        /ZPD-WWW-REDIRECT-END/   { inwww = 0; depth += braces($0); next }
+        {
+            d0 = depth; depth += braces($0)
+            if (inwww) next
+            if (d0 == 0 && depth > 0) server++
+            if (server == 0) {
+                # http-context directives before any server block
+                if ($0 ~ /^[[:space:]]*gzip(_[a-z_]+)?[[:space:]]/) gcustom = 1
+                next
+            }
+            s = server
+            if (d0 == 1 && $0 ~ /^[[:space:]]*root[[:space:]]/) approot[s] = 1
+            if ($0 ~ /ZPD-GZIP-BEGIN/) { inseg = 1; seg[s] = 1 }
+            if (inseg) {
+                if ($0 ~ /^[[:space:]]*gzip on;$/)              g[s] = 1
+                if ($0 ~ /^[[:space:]]*gzip_vary on;$/)         v[s] = 1
+                if ($0 ~ /^[[:space:]]*gzip_comp_level 5;$/)    c[s] = 1
+                if ($0 ~ /^[[:space:]]*gzip_min_length 1024;$/) m[s] = 1
+                if ($0 ~ /^[[:space:]]*gzip_types /) {
+                    if (index($0, "gzip_types " types ";") > 0 \
+                        && $0 !~ /text\/html/ && $0 !~ /woff2/ \
+                        && $0 !~ /image\/(png|jpeg|webp|gif)/) t[s] = 1
+                }
+            } else if ($0 ~ /^[[:space:]]*gzip(_[a-z_]+)?[[:space:]]/) {
+                custom[s] = 1
+            }
+            if ($0 ~ /ZPD-GZIP-END/) inseg = 0
+        }
+        END {
+            if (depth != 0 || inseg) exit 1        # unsupported layout
+            if (gcustom) exit 0                    # operator-managed file-wide
+            for (s = 1; s <= server; s++) {
+                if (!approot[s]) continue
+                complete = (seg[s] && g[s] && v[s] && c[s] && m[s] && t[s])
+                if (!complete && !custom[s]) bad = 1
+            }
+            exit bad ? 1 : 0
+        }
+    ' "$conf"
+}
+
+zpd_nginx_rewrite_gzip() {
+    local conf="$1" tmp
+    [ -f "$conf" ] || { echo "nginx gzip: config missing: ${conf}" >&2; return 1; }
+    zpd_nginx_gzip_ok "$conf" && return 0
+    # Unsupported layouts (unbalanced braces / unclosed managed segment) are
+    # refused with a diagnostic — never silently modified.
+    if ! awk 'BEGIN{d=0} { l=$0; d += gsub(/{/,"{",l) - gsub(/}/,"}",l) } /ZPD-GZIP-BEGIN/{s=1} /ZPD-GZIP-END/{s=0} END{exit (d==0 && !s) ? 0 : 1}' "$conf"; then
+        echo "nginx gzip: unbalanced braces or unclosed managed segment — refusing to modify (fix the config manually)" >&2
+        return 1
+    fi
+    tmp="$(zpd_nginx_mktemp "$conf")" || return 1
+    # Pass 1 normalizes every existing managed segment to canonical content;
+    # pass 2 (two-scan awk) inserts the canonical segment after the first
+    # SERVER-LEVEL root of every app-serving block that has neither a managed
+    # segment nor operator gzip directives — never inside the managed www
+    # redirect-only block, and never duplicating operator configuration.
+    awk -v types="$ZPD_GZIP_TYPES" '
+        /ZPD-GZIP-BEGIN/ {
+            indent = $0; sub(/[^ \t].*$/, "", indent)
+            print indent "# ZPD-GZIP-BEGIN (managed by ZedProxy deploy)"
+            print indent "gzip on;"
+            print indent "gzip_vary on;"
+            print indent "gzip_comp_level 5;"
+            print indent "gzip_min_length 1024;"
+            print indent "gzip_types " types ";"
+            print indent "# ZPD-GZIP-END"
+            skip = 1; next
+        }
+        /ZPD-GZIP-END/ { skip = 0; next }
+        skip { next }
+        { print }
+    ' "$conf" > "${tmp}.n" || { rm -f "$tmp" "${tmp}.n"; return 1; }
+    awk -v types="$ZPD_GZIP_TYPES" '
+        function braces(l,  c) { c = l; return gsub(/{/, "{", c) - gsub(/}/, "}", c) }
+        NR == FNR {
+            # Scan 1: classify server blocks — skip any that already carry a
+            # managed segment or operator gzip, or live in the www markers.
+            if ($0 ~ /ZPD-WWW-REDIRECT-BEGIN/) w1 = 1
+            if ($0 ~ /ZPD-WWW-REDIRECT-END/)   w1 = 0
+            e0 = d1; d1 += braces($0)
+            if (e0 == 0 && d1 > 0) s1++
+            if (s1 > 0 && d1 > 0 && (w1 || $0 ~ /ZPD-GZIP-BEGIN/ || $0 ~ /^[[:space:]]*gzip(_[a-z_]+)?[[:space:]]/)) skip[s1] = 1
+            next
+        }
+        {
+            e0 = d2; d2 += braces($0)
+            if (e0 == 0 && d2 > 0) s2++
+            print
+            if (s2 > 0 && !skip[s2] && !done[s2] && e0 == 1 && $0 ~ /^[[:space:]]*root[[:space:]]/) {
+                indent = $0; sub(/[^ \t].*$/, "", indent)
+                print indent "# ZPD-GZIP-BEGIN (managed by ZedProxy deploy)"
+                print indent "gzip on;"
+                print indent "gzip_vary on;"
+                print indent "gzip_comp_level 5;"
+                print indent "gzip_min_length 1024;"
+                print indent "gzip_types " types ";"
+                print indent "# ZPD-GZIP-END"
+                done[s2] = 1
+            }
+        }
+    ' "${tmp}.n" "${tmp}.n" > "$tmp" || { rm -f "$tmp" "${tmp}.n"; return 1; }
+    rm -f "${tmp}.n"
+    zpd_nginx_commit_file "$conf" "$tmp" || return 1
+    zpd_nginx_gzip_ok "$conf"
 }
 
 # zpd_supervisor_ok CONF BASE — worker command runs current/artisan AND the

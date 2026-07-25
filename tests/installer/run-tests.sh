@@ -181,6 +181,29 @@ grep_has  'location = /robots\.txt \{'                       "$INSTALL_SH" "ngin
 grep_has  'try_files \\\$uri /index\.php\?\\\$query_string;' "$INSTALL_SH" "robots.txt location falls through to Laravel (dynamic robots)"
 grep_none 'location = /robots\.txt.*access_log.*\}'          "$INSTALL_SH" "no static-only single-line robots.txt block remains"
 
+# 21c. Required default records (terms/privacy/about pages, login/register
+#      noindex SEO records) are ensured on install AND on every deploy — the
+#      targeted command only, never the full DatabaseSeeder.
+grep_has  'zedproxy:seed-required-defaults' "$INSTALL_SH" "install.sh ensures required default records after migrations"
+grep_none 'artisan db:seed'                 "$INSTALL_SH" "install.sh never runs the full DatabaseSeeder"
+
+# 21d. Canonical host routing: the app block serves ONLY the apex; www lives
+#      in the managed redirect block with the ACME exemption BEFORE the 301 to
+#      the literal apex (never $host, which would retain www).
+grep_none 'server_name \$\{DOMAIN\} www\.\$\{DOMAIN\};' "$INSTALL_SH" "app server block no longer serves www"
+grep_has  'ZPD-WWW-REDIRECT-BEGIN'                      "$INSTALL_SH" "managed www redirect block generated"
+grep_has  'location \^~ /\.well-known/acme-challenge/'  "$INSTALL_SH" "www block serves ACME challenges before the redirect"
+grep_has  'return 301 https://\$\{DOMAIN\}\\\$request_uri;' "$INSTALL_SH" "www 301 targets the literal apex with the URI preserved"
+grep_none 'return 301 https://\$host'                   "$INSTALL_SH" "www redirect never uses \$host"
+grep_has  'ZPD_WWW_APEX="\$DOMAIN" zpd_nginx_rewrite_www' "$INSTALL_SH" "install.sh reconciles www against the NEW certificate after certbot"
+
+# 21e. Managed gzip: text assets compressed, no text/html (implicit), no
+#      already-compressed formats.
+grep_has  'ZPD-GZIP-BEGIN'   "$INSTALL_SH" "managed gzip segment generated"
+grep_has  'gzip_vary on;'    "$INSTALL_SH" "gzip_vary enabled"
+grep_none 'gzip_types[^\n]*text/html' "$INSTALL_SH" "gzip_types never lists text/html"
+grep_none 'gzip_types[^\n]*woff2'     "$INSTALL_SH" "gzip_types never lists woff2"
+
 # 22. Supervisor worker uses current/artisan.
 grep_has  'command=php \$\{ACTIVE_APP_DIR\}/artisan queue:work' "$INSTALL_SH" "supervisor worker uses ACTIVE_APP_DIR/artisan"
 grep_none 'command=php \$\{APP_DIR\}/artisan queue:work'        "$INSTALL_SH" "supervisor worker no longer hardcodes APP_DIR/artisan"
@@ -194,6 +217,8 @@ WRAPPERS_SH="${REPO_ROOT}/scripts/deploy/install-command-wrappers.sh"
 DEPLOY_SH="${REPO_ROOT}/scripts/deploy/deploy.sh"
 grep_has  'zpw_install_wrappers'   "$INSTALL_SH" "install.sh installs wrappers via the shared installer"
 grep_has  'zpw_install_wrappers'   "$DEPLOY_SH"  "deploy.sh (re)installs wrappers on activation (legacy servers get them)"
+grep_has  'dep_seed_required_defaults' "$DEPLOY_SH" "deploy.sh ensures required default records before the symlink switch"
+grep_none 'artisan db:seed'            "$DEPLOY_SH" "deploy.sh never runs the full DatabaseSeeder"
 grep_has  'zpd_resolve_script'     "$WRAPPERS_SH" "shared installer emits the current-release resolver"
 grep_none 'exec sudo bash "\$\{APP_DIR\}/scripts/deploy/deploy.sh"' "$INSTALL_SH" "no hardcoded legacy deploy.sh in install.sh shortcuts"
 grep_has  'zpw_backup_wrappers'    "$DEPLOY_SH"  "deploy.sh backs up wrappers before a legacy cutover"

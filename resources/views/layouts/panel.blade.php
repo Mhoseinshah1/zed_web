@@ -18,10 +18,9 @@
     <meta name="csrf-token" content="{{ csrf_token() }}">
     <title>@yield('title', 'داشبورد') | ZedProxy</title>
     <script>{!! ThemeManager::noFoucScript($zedAppearance) !!}</script>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    {{-- Fonts: SELF-HOSTED Vazirmatn (resources/css/fonts.css via app.css). --}}
+    @include('partials.font-preloads')
     @vite(['resources/css/app.css', 'resources/js/app.js'])
-    <style>body { font-family: 'Vazirmatn', system-ui, sans-serif; }</style>
     {{-- User account dropdown menu — scoped .zp-um-* (user panel only, no leak).
          Chrome from the theme vars; accent follows the active template via
          --zp-tpl-accent (falls back to the theme primary); logout uses danger. --}}

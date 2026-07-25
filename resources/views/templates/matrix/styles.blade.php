@@ -8,7 +8,6 @@
             --zp-tpl-accent-soft:  rgba(52, 211, 153, .10);
             --zp-tpl-gradient:     linear-gradient(135deg, #10b981, #34d399);
         }
-        body { font-family: 'Vazirmatn', system-ui, sans-serif; }
         .zm-mono { font-family: 'Courier New', monospace; direction: ltr; unicode-bidi: embed; }
         #zm-matrix { position: fixed; inset: 0; z-index: 0; opacity: .16; pointer-events: none; }
         .zm-bg-glow { position: fixed; inset: 0; z-index: 0; pointer-events: none;

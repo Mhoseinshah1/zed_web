@@ -40,6 +40,7 @@ class SeoSettings
         'seo_google_verification' => '',
         'seo_bing_verification' => '',
         'seo_google_analytics_id' => '',
+        'seo_offer_price_valid_until' => '',
         'seo_schema_breadcrumb_enabled' => '1',
         'seo_schema_organization_enabled' => '1',
         'seo_schema_website_enabled' => '1',
@@ -136,6 +137,25 @@ class SeoSettings
         $id = strtoupper(trim(self::get('seo_google_analytics_id')));
 
         return preg_match('/^G-[A-Z0-9]{4,20}$/', $id) === 1 ? $id : '';
+    }
+
+    /**
+     * Optional Offer priceValidUntil — SAFE accessor: only a real, ISO
+     * YYYY-MM-DD date that is not already expired is ever returned; anything
+     * else (malformed, impossible, past) yields '' so the schema simply omits
+     * the property. Never invents a future date.
+     */
+    public static function offerPriceValidUntil(): string
+    {
+        $v = trim(self::get('seo_offer_price_valid_until'));
+        if (preg_match('/^(\d{4})-(\d{2})-(\d{2})$/', $v, $m) !== 1) {
+            return '';
+        }
+        if (! checkdate((int) $m[2], (int) $m[3], (int) $m[1])) {
+            return '';
+        }
+
+        return $v >= now()->format('Y-m-d') ? $v : '';
     }
 
     public static function locale(): string

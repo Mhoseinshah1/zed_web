@@ -528,6 +528,22 @@ setup_ssl() {
         sed -i "s|^APP_URL=.*|APP_URL=https://${DOMAIN}|" "${APP_DIR}/.env"
         ok "APP_URL updated to https://${DOMAIN}"
 
+        # Verified www reconciliation AFTER certbot modified the config: the
+        # managed www redirect must exist and the 443 www block must match the
+        # NEW certificate's ACTUAL coverage (SAN-checked against the file the
+        # live config references) before installation reports success.
+        WWW_BAK="$(mktemp "${NGINX_CONF}.zpd-www.XXXXXX")" && cp -a "$NGINX_CONF" "$WWW_BAK" || WWW_BAK=""
+        if [ -n "$WWW_BAK" ] \
+            && ZPD_WWW_APEX="$DOMAIN" zpd_nginx_rewrite_www "$NGINX_CONF" \
+            && nginx -t >/dev/null 2>&1; then
+            rm -f "$WWW_BAK"
+            systemctl reload nginx >/dev/null 2>&1 || true
+            ok "www.${DOMAIN} → ${DOMAIN} redirect reconciled against the new certificate."
+        else
+            if [ -n "$WWW_BAK" ]; then cp -a "$WWW_BAK" "$NGINX_CONF"; rm -f "$WWW_BAK"; fi
+            warn "www redirect reconciliation was skipped (config restored) — it will be retried on the next deploy."
+        fi
+
         # Rebuild all caches with new APP_URL (route/view caches may embed URLs)
         cd "$APP_DIR"
         php artisan optimize:clear
@@ -1544,6 +1560,20 @@ else
     php artisan migrate --force || error "Migration failed. Check database credentials."
 fi
 
+# ─── Required default records ────────────────────────────────────────────────
+# terms/privacy/about CMS pages (the 301 alias destinations) and the
+# login/register noindex SEO records. Runs EXACTLY two firstOrCreate seeders —
+# idempotent, never overwrites administrator edits, never seeds demo data.
+log "Ensuring required default records (CMS pages + SEO registry)..."
+if [ "$IS_EXISTING" = "true" ]; then
+    php artisan zedproxy:seed-required-defaults --no-interaction \
+        || fail_reinstall "ایجاد رکوردهای پیش‌فرض ضروری ناموفق بود. تنظیمات و کد قبلی بازیابی شد."
+else
+    php artisan zedproxy:seed-required-defaults --no-interaction \
+        || error "Required default records could not be created. Check database credentials."
+fi
+ok "رکوردهای پیش‌فرض ضروری آماده‌اند."
+
 # ─── Admin user ───────────────────────────────────────────────────────────────
 if [ "$IS_EXISTING" = "true" ]; then
     # Re-run: never auto-create a second admin and never reset the existing
@@ -1643,9 +1673,17 @@ else
     cat > "$NGINX_CONF" <<NGINX
 server {
     listen 80;
-    server_name ${DOMAIN} www.${DOMAIN};
+    server_name ${DOMAIN};
     root ${ACTIVE_APP_DIR}/public;
     index index.php;
+
+    # ZPD-GZIP-BEGIN (managed by ZedProxy deploy)
+    gzip on;
+    gzip_vary on;
+    gzip_comp_level 5;
+    gzip_min_length 1024;
+    gzip_types text/css text/plain text/xml application/javascript application/json application/ld+json application/xml application/rss+xml image/svg+xml application/manifest+json;
+    # ZPD-GZIP-END
 
     charset utf-8;
 
@@ -1698,6 +1736,21 @@ server {
 
     client_max_body_size 20M;
 }
+
+# ZPD-WWW-REDIRECT-BEGIN (managed by ZedProxy deploy — canonical host routing)
+server {
+    listen 80;
+    server_name www.${DOMAIN};
+    # HTTP-01 renewals for www must keep working: serve ACME challenges
+    # from the app webroot BEFORE the catch-all redirect.
+    location ^~ /.well-known/acme-challenge/ {
+        root ${ACTIVE_APP_DIR}/public;
+    }
+    location / {
+        return 301 https://${DOMAIN}\$request_uri;
+    }
+}
+# ZPD-WWW-REDIRECT-END
 NGINX
 fi
 

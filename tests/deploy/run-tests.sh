@@ -111,6 +111,7 @@ case "$*" in
         hang)    echo "Migrating: 2026_01_01_000000_add_widget"; sleep 60; exit 0 ;;
         *)       echo "Nothing to migrate."; exit 0 ;;
       esac ;;
+  *"zedproxy:seed-required-defaults"*) exit ${MOCK_SEED_RC:-0} ;;
   *"artisan schedule:list"*) exit ${MOCK_SCHEDULE_RC:-0} ;;
   *"zedproxy:health"*)
       case "${MOCK_HEALTH_MODE:-ok}" in
@@ -927,17 +928,459 @@ nginx_before="$(cat "$ZPD_NGINX_CONF")"
 assert_eq "$(cat "$ZPD_NGINX_CONF")" "$nginx_before" "config restored after failed validation"
 rm -rf "$BASE"
 
+# RB8. `try_files $uri =404;` (and any wrong fallback) is NORMALIZED in place,
+#      not failed — this was the PR #72 defect where reconciliation failed
+#      permanently instead of healing.
+new_base
+cat > "$ZPD_NGINX_CONF" <<EOF
+server {
+    listen 80;
+    root ${BASE}/current/public;
+    location = /robots.txt {
+        access_log off;
+        try_files \$uri =404;
+    }
+}
+EOF
+assert_false zpd_nginx_robots_ok "$ZPD_NGINX_CONF"
+assert_true  zpd_nginx_rewrite_robots "$ZPD_NGINX_CONF"
+assert_true  zpd_nginx_robots_ok "$ZPD_NGINX_CONF"
+assert_eq "$(grep -c 'try_files' "$ZPD_NGINX_CONF")" "1" "wrong fallback replaced, not duplicated"
+assert_true bash -c "grep -q 'try_files \$uri /index.php?\$query_string;' '$ZPD_NGINX_CONF'"
+assert_false bash -c "grep -q '=404' '$ZPD_NGINX_CONF'"
+rm -rf "$BASE"
+
+# RB9. Single-line block with a wrong /index.php fallback is normalized too.
+new_base
+printf 'server {\n  listen 80;\n  root %s/current/public;\n  location = /robots.txt  { access_log off; try_files $uri /index.php; }\n}\n' "$BASE" > "$ZPD_NGINX_CONF"
+assert_false zpd_nginx_robots_ok "$ZPD_NGINX_CONF"
+assert_true  zpd_nginx_rewrite_robots "$ZPD_NGINX_CONF"
+assert_true  zpd_nginx_robots_ok "$ZPD_NGINX_CONF"
+rm -rf "$BASE"
+
+# RB10. A MULTI-LINE favicon block: the fresh robots block must be inserted
+#       AFTER its closing brace, never inside it.
+new_base
+cat > "$ZPD_NGINX_CONF" <<EOF
+server {
+    listen 80;
+    root ${BASE}/current/public;
+    location = /favicon.ico {
+        access_log off;
+        log_not_found off;
+    }
+    location / { try_files \$uri \$uri/ /index.php?\$query_string; }
+}
+EOF
+assert_true zpd_nginx_rewrite_robots "$ZPD_NGINX_CONF"
+assert_true zpd_nginx_robots_ok "$ZPD_NGINX_CONF"
+# The favicon block is intact and closed BEFORE the robots block starts.
+fav_close="$(grep -n '^    }' "$ZPD_NGINX_CONF" | head -1 | cut -d: -f1)"
+robots_open="$(grep -n 'location = /robots.txt' "$ZPD_NGINX_CONF" | cut -d: -f1)"
+assert_true test "$fav_close" -lt "$robots_open"
+assert_eq "$(awk '/location = \/favicon\.ico/,/}/' "$ZPD_NGINX_CONF" | grep -c 'robots')" "0" "robots block NOT inserted inside the favicon block"
+rm -rf "$BASE"
+
+# RB11. An UNCLOSED robots block is rejected by predicate AND mutator, without
+#       mutation (PR #72 predicate wrongly returned success here).
+new_base
+printf 'server {\n  listen 80;\n  root %s/current/public;\n  location = /robots.txt {\n      access_log off;\n' "$BASE" > "$ZPD_NGINX_CONF"
+broken="$(cat "$ZPD_NGINX_CONF")"
+assert_false zpd_nginx_robots_ok "$ZPD_NGINX_CONF"
+( zpd_nginx_rewrite_robots "$ZPD_NGINX_CONF" >/dev/null 2>&1 ); assert_rc 1 "$?" "unclosed robots block refused"
+assert_eq "$(cat "$ZPD_NGINX_CONF")" "$broken" "unclosed block: file NOT mutated"
+rm -rf "$BASE"
+
+# RB12. DUPLICATE exact-match robots blocks in ONE server block (an nginx
+#       config error) are rejected fail-closed; a regex robots location is
+#       never silently modified either.
+new_base
+printf 'server {\n  root %s/current/public;\n  location = /robots.txt  { access_log off; }\n  location = /robots.txt  { access_log off; }\n}\n' "$BASE" > "$ZPD_NGINX_CONF"
+dup_before="$(cat "$ZPD_NGINX_CONF")"
+assert_false zpd_nginx_robots_ok "$ZPD_NGINX_CONF"
+( zpd_nginx_rewrite_robots "$ZPD_NGINX_CONF" >/dev/null 2>&1 ); assert_rc 1 "$?" "duplicate robots blocks refused"
+assert_eq "$(cat "$ZPD_NGINX_CONF")" "$dup_before" "duplicate blocks: file NOT mutated"
+printf 'server {\n  root %s/current/public;\n  location ~ ^/robots { deny all; }\n}\n' "$BASE" > "$ZPD_NGINX_CONF"
+regex_before="$(cat "$ZPD_NGINX_CONF")"
+out="$(zpd_nginx_rewrite_robots "$ZPD_NGINX_CONF" 2>&1)"; rc=$?
+assert_rc 1 "$rc" "regex robots location refused"
+printf '%s' "$out" | grep -q 'unsupported regex' && ok "regex refusal is diagnosed" || bad "regex refusal not diagnosed"
+assert_eq "$(cat "$ZPD_NGINX_CONF")" "$regex_before" "regex layout: file NOT mutated"
+rm -rf "$BASE"
+
+# RB13. Mode AND ownership are preserved through a repair (fail-closed
+#       metadata handling, same-directory atomic temp file).
+new_base
+printf 'server {\n  listen 80;\n  root %s/current/public;\n  location = /robots.txt  { access_log off; log_not_found off; }\n}\n' "$BASE" > "$ZPD_NGINX_CONF"
+chmod 640 "$ZPD_NGINX_CONF"
+meta_before="$(stat -c '%a %u:%g' "$ZPD_NGINX_CONF")"
+assert_true zpd_nginx_rewrite_robots "$ZPD_NGINX_CONF"
+assert_eq "$(stat -c '%a %u:%g' "$ZPD_NGINX_CONF")" "$meta_before" "mode and ownership preserved after repair"
+assert_eq "$(ls "$(dirname "$ZPD_NGINX_CONF")"/.zpd-nginx.* 2>/dev/null | wc -l)" "0" "no temp file left behind"
+rm -rf "$BASE"
+
+# RB14. A temp-file or metadata failure aborts WITHOUT touching the original
+#       (fail-closed commit; tests run as root, so simulate via overrides).
+new_base
+printf 'server {\n  root %s/current/public;\n  location = /robots.txt  { access_log off; }\n}\n' "$BASE" > "$ZPD_NGINX_CONF"
+ro_before="$(cat "$ZPD_NGINX_CONF")"
+( zpd_nginx_mktemp() { return 1; }; zpd_nginx_rewrite_robots "$ZPD_NGINX_CONF" >/dev/null 2>&1 ); assert_rc 1 "$?" "temp-file creation failure → repair fails"
+assert_eq "$(cat "$ZPD_NGINX_CONF")" "$ro_before" "original untouched when the temp file cannot be created"
+( zpd_nginx_commit_file() { rm -f "$2"; return 1; }; zpd_nginx_rewrite_robots "$ZPD_NGINX_CONF" >/dev/null 2>&1 ); assert_rc 1 "$?" "metadata/commit failure → repair fails"
+assert_eq "$(cat "$ZPD_NGINX_CONF")" "$ro_before" "original untouched when metadata preservation fails"
+rm -rf "$BASE"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Canonical www→apex routing (predicate + mutator, ACME-exempt, SAN-gated 443)
+# ─────────────────────────────────────────────────────────────────────────────
+echo "-- nginx www canonical routing --"
+
+cat > "${MOCKBIN}/openssl-match" <<'EOF'
+#!/usr/bin/env bash
+echo "Hostname www.example.com does match certificate"
+EOF
+cat > "${MOCKBIN}/openssl-nomatch" <<'EOF'
+#!/usr/bin/env bash
+echo "Hostname www.example.com does NOT match certificate"
+EOF
+chmod +x "${MOCKBIN}/openssl-match" "${MOCKBIN}/openssl-nomatch"
+
+# WW1. The historical combined `server_name domain www.domain;` is reconciled:
+#      the app block keeps ONLY the apex; a managed www redirect block appears
+#      with the ACME exemption BEFORE the catch-all 301 to the literal apex.
+new_base
+cat > "$ZPD_NGINX_CONF" <<EOF
+server {
+    listen 80;
+    server_name example.com www.example.com;
+    root ${BASE}/current/public;
+    location / { try_files \$uri \$uri/ /index.php?\$query_string; }
+}
+EOF
+assert_false zpd_nginx_www_ok "$ZPD_NGINX_CONF"
+assert_true  zpd_nginx_rewrite_www "$ZPD_NGINX_CONF"
+assert_true  zpd_nginx_www_ok "$ZPD_NGINX_CONF"
+assert_false bash -c "grep -E '^[[:space:]]*server_name' '$ZPD_NGINX_CONF' | head -1 | grep -q 'www'"
+assert_true bash -c "grep -q 'server_name www.example.com;' '$ZPD_NGINX_CONF'"
+assert_true bash -c "grep -q 'return 301 https://example.com\$request_uri;' '$ZPD_NGINX_CONF'"
+acme_line="$(grep -n 'acme-challenge' "$ZPD_NGINX_CONF" | cut -d: -f1)"
+redir_line="$(grep -n 'return 301 https://example.com' "$ZPD_NGINX_CONF" | cut -d: -f1)"
+assert_true test "$acme_line" -lt "$redir_line"      # ACME exemption BEFORE the 301
+assert_eq "$(grep -c 'listen 443' "$ZPD_NGINX_CONF")" "0" "no 443 www block without a certificate"
+# The app block itself never redirects (no self-redirect loop).
+assert_eq "$(awk '/^server/{n++} n==1' "$ZPD_NGINX_CONF" | grep -c 'return 301')" "0" "canonical host does not redirect"
+www_fixed="$(cat "$ZPD_NGINX_CONF")"
+assert_true zpd_nginx_rewrite_www "$ZPD_NGINX_CONF"
+assert_eq "$(cat "$ZPD_NGINX_CONF")" "$www_fixed" "second www reconciliation is byte-identical"
+rm -rf "$BASE"
+
+# WW2. Certbot server: the 443 www redirect appears ONLY when the ACTUAL
+#      certificate covers www; certbot SSL lines stay byte-identical.
+new_base
+certfile="${BASE}/fullchain.pem"; echo dummy > "$certfile"
+cat > "$ZPD_NGINX_CONF" <<EOF
+server {
+    listen 80;
+    server_name example.com www.example.com;
+    root ${BASE}/current/public;
+}
+server {
+    listen 443 ssl; # managed by Certbot
+    server_name example.com www.example.com;
+    root ${BASE}/current/public;
+    ssl_certificate ${certfile}; # managed by Certbot
+    ssl_certificate_key ${BASE}/privkey.pem; # managed by Certbot
+    include /etc/letsencrypt/options-ssl-nginx.conf; # managed by Certbot
+}
+EOF
+ssl_before="$(grep 'managed by Certbot' "$ZPD_NGINX_CONF")"
+( ZPD_OPENSSL="${MOCKBIN}/openssl-match" zpd_nginx_rewrite_www "$ZPD_NGINX_CONF" ); assert_rc 0 "$?" "www rewrite with covering cert succeeds"
+( ZPD_OPENSSL="${MOCKBIN}/openssl-match" zpd_nginx_www_ok "$ZPD_NGINX_CONF" ); assert_rc 0 "$?" "predicate ok while coverage persists"
+assert_eq "$(grep 'managed by Certbot' "$ZPD_NGINX_CONF")" "$ssl_before" "certbot lines byte-identical"
+assert_true bash -c "awk '/ZPD-WWW-REDIRECT-BEGIN/,/ZPD-WWW-REDIRECT-END/' '$ZPD_NGINX_CONF' | grep -q 'listen 443 ssl'"
+assert_true bash -c "awk '/ZPD-WWW-REDIRECT-BEGIN/,/ZPD-WWW-REDIRECT-END/' '$ZPD_NGINX_CONF' | grep -q 'ssl_certificate ${certfile}'"
+# WW2b. Coverage LOST later (cert no longer matches www) → the predicate now
+#       fails and the mutator REMOVES the managed 443 block; apex certbot SSL
+#       lines stay byte-identical.
+( ZPD_OPENSSL="${MOCKBIN}/openssl-nomatch" zpd_nginx_www_ok "$ZPD_NGINX_CONF" ); assert_rc 1 "$?" "coverage loss makes the 443 www block drift"
+( ZPD_OPENSSL="${MOCKBIN}/openssl-nomatch" zpd_nginx_rewrite_www "$ZPD_NGINX_CONF" ); assert_rc 0 "$?" "rewrite removes the unsafe 443 www block"
+assert_eq "$(awk '/ZPD-WWW-REDIRECT-BEGIN/,/ZPD-WWW-REDIRECT-END/' "$ZPD_NGINX_CONF" | grep -c 'listen 443')" "0" "managed 443 www block removed after coverage loss"
+assert_eq "$(grep 'managed by Certbot' "$ZPD_NGINX_CONF")" "$ssl_before" "apex certbot lines still byte-identical"
+# WW2c. Coverage GAINED later (HTTP-only managed block, cert now matches) →
+#       the 443 block is added on the next reconcile.
+( ZPD_OPENSSL="${MOCKBIN}/openssl-match" zpd_nginx_www_ok "$ZPD_NGINX_CONF" ); assert_rc 1 "$?" "coverage gain makes the missing 443 block drift"
+( ZPD_OPENSSL="${MOCKBIN}/openssl-match" zpd_nginx_rewrite_www "$ZPD_NGINX_CONF" ); assert_rc 0 "$?" "rewrite adds the 443 www block after coverage appears"
+assert_true bash -c "awk '/ZPD-WWW-REDIRECT-BEGIN/,/ZPD-WWW-REDIRECT-END/' '$ZPD_NGINX_CONF' | grep -q 'listen 443 ssl'"
+www_state="$(cat "$ZPD_NGINX_CONF")"
+( ZPD_OPENSSL="${MOCKBIN}/openssl-match" zpd_nginx_rewrite_www "$ZPD_NGINX_CONF" ); assert_rc 0 "$?" "repeat reconcile succeeds"
+assert_eq "$(cat "$ZPD_NGINX_CONF")" "$www_state" "repeat reconcile with stable coverage is byte-identical"
+rm -rf "$BASE"
+
+# WW3. Same fixture but the certificate does NOT cover www → NO 443 www block
+#      (a redirect cannot repair a failed TLS handshake), 80 block still added.
+new_base
+certfile="${BASE}/fullchain.pem"; echo dummy > "$certfile"
+cat > "$ZPD_NGINX_CONF" <<EOF
+server {
+    listen 80;
+    server_name example.com www.example.com;
+    root ${BASE}/current/public;
+    ssl_certificate ${certfile};
+}
+EOF
+( ZPD_OPENSSL="${MOCKBIN}/openssl-nomatch" zpd_nginx_rewrite_www "$ZPD_NGINX_CONF" ); assert_rc 0 "$?" "www rewrite with non-covering cert succeeds"
+assert_true zpd_nginx_www_ok "$ZPD_NGINX_CONF"
+assert_eq "$(awk '/ZPD-WWW-REDIRECT-BEGIN/,/ZPD-WWW-REDIRECT-END/' "$ZPD_NGINX_CONF" | grep -c 'listen 443')" "0" "no invalid 443 www block"
+assert_true bash -c "awk '/ZPD-WWW-REDIRECT-BEGIN/,/ZPD-WWW-REDIRECT-END/' '$ZPD_NGINX_CONF' | grep -q 'listen 80'"
+rm -rf "$BASE"
+
+# WW6. APEX-ONLY app config with NO managed redirect is DRIFT, not healthy —
+#      www could hit the default server and return 200.
+new_base
+printf 'server {\n    listen 80;\n    server_name example.com;\n    root %s/current/public;\n}\n' "$BASE" > "$ZPD_NGINX_CONF"
+assert_false zpd_nginx_www_ok "$ZPD_NGINX_CONF"
+assert_true  zpd_nginx_rewrite_www "$ZPD_NGINX_CONF"
+assert_true  zpd_nginx_www_ok "$ZPD_NGINX_CONF"
+assert_true bash -c "grep -q 'server_name www.example.com;' '$ZPD_NGINX_CONF'"
+rm -rf "$BASE"
+
+# WW7. Wrong redirect destination / missing \$request_uri / wrong server_name
+#      in the managed block are each REJECTED and normalized on rewrite.
+new_base
+printf 'server {\n    listen 80;\n    server_name example.com;\n    root %s/current/public;\n}\n' "$BASE" > "$ZPD_NGINX_CONF"
+zpd_nginx_rewrite_www "$ZPD_NGINX_CONF" >/dev/null
+sed -i 's|return 301 https://example.com$request_uri;|return 301 https://other.example$request_uri;|' "$ZPD_NGINX_CONF"
+assert_false zpd_nginx_www_ok "$ZPD_NGINX_CONF"      # wrong destination rejected
+assert_true  zpd_nginx_rewrite_www "$ZPD_NGINX_CONF"
+assert_true bash -c "grep -q 'return 301 https://example.com\$request_uri;' '$ZPD_NGINX_CONF'"
+sed -i 's|return 301 https://example.com$request_uri;|return 301 https://example.com;|' "$ZPD_NGINX_CONF"
+assert_false zpd_nginx_www_ok "$ZPD_NGINX_CONF"      # missing $request_uri rejected
+assert_true  zpd_nginx_rewrite_www "$ZPD_NGINX_CONF"
+assert_true bash -c "grep -q 'return 301 https://example.com\$request_uri;' '$ZPD_NGINX_CONF'"
+sed -i 's|server_name www.example.com;|server_name www.other.example;|' "$ZPD_NGINX_CONF"
+assert_false zpd_nginx_www_ok "$ZPD_NGINX_CONF"      # wrong www hostname rejected
+assert_true  zpd_nginx_rewrite_www "$ZPD_NGINX_CONF"
+assert_true zpd_nginx_www_ok "$ZPD_NGINX_CONF"
+rm -rf "$BASE"
+
+# WW8. Operator-created UNMANAGED www block is healthy and never modified.
+new_base
+cat > "$ZPD_NGINX_CONF" <<EOF
+server {
+    listen 80;
+    server_name example.com;
+    root ${BASE}/current/public;
+}
+server {
+    listen 80;
+    server_name www.example.com;
+    return 302 https://somewhere.else\$request_uri;
+}
+EOF
+op_before="$(cat "$ZPD_NGINX_CONF")"
+assert_true zpd_nginx_www_ok "$ZPD_NGINX_CONF"
+assert_true zpd_nginx_rewrite_www "$ZPD_NGINX_CONF"
+assert_eq "$(cat "$ZPD_NGINX_CONF")" "$op_before" "operator www block untouched"
+rm -rf "$BASE"
+
+# WW9. Fresh post-Certbot reconciliation shape: explicit ZPD_WWW_APEX (as
+#      install.sh passes \$DOMAIN) wins over derivation.
+new_base
+printf 'server {\n    listen 80;\n    server_name example.com;\n    root %s/current/public;\n}\n' "$BASE" > "$ZPD_NGINX_CONF"
+( ZPD_WWW_APEX="example.com" zpd_nginx_rewrite_www "$ZPD_NGINX_CONF" ); assert_rc 0 "$?" "post-certbot reconcile with explicit apex succeeds"
+( ZPD_WWW_APEX="example.com" zpd_nginx_www_ok "$ZPD_NGINX_CONF" ); assert_rc 0 "$?" "explicit-apex predicate passes"
+rm -rf "$BASE"
+
+# WW4. No www anywhere (minimal fixtures) → predicate ok, mutator no-op.
+new_base; setup_atomic_service_configs
+assert_true zpd_nginx_www_ok "$ZPD_NGINX_CONF"
+plain_before="$(cat "$ZPD_NGINX_CONF")"
+assert_true zpd_nginx_rewrite_www "$ZPD_NGINX_CONF"
+assert_eq "$(cat "$ZPD_NGINX_CONF")" "$plain_before" "no-www config untouched"
+rm -rf "$BASE"
+
+# WW5. nginx -t failure after a www rewrite restores the original config.
+new_base
+printf 'server {\n  listen 80;\n  server_name example.com www.example.com;\n  root %s/current/public;\n  location = /robots.txt { access_log off; log_not_found off; try_files $uri /index.php?$query_string; }\n}\n' "$BASE" > "$ZPD_NGINX_CONF"
+nginx_before="$(cat "$ZPD_NGINX_CONF")"
+( MOCK_NGINX_RC=1 dep_cutover_nginx "$BASE" >/dev/null 2>&1 ); assert_rc 1 "$?" "nginx -t failure fails the www cutover"
+assert_eq "$(cat "$ZPD_NGINX_CONF")" "$nginx_before" "config restored after failed validation"
+rm -rf "$BASE"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Managed gzip segment (predicate + mutator)
+# ─────────────────────────────────────────────────────────────────────────────
+echo "-- nginx gzip reconciliation --"
+
+# GZ1. Missing gzip entirely → managed segment inserted into the app block:
+#      correct types, gzip_vary on, no text/html, no compressed formats.
+new_base; setup_atomic_service_configs
+assert_false zpd_nginx_gzip_ok "$ZPD_NGINX_CONF"
+assert_true  zpd_nginx_rewrite_gzip "$ZPD_NGINX_CONF"
+assert_true  zpd_nginx_gzip_ok "$ZPD_NGINX_CONF"
+assert_true bash -c "grep -q 'gzip_vary on;' '$ZPD_NGINX_CONF'"
+assert_true bash -c "grep -q 'application/javascript' '$ZPD_NGINX_CONF'"
+assert_false bash -c "grep 'gzip_types' '$ZPD_NGINX_CONF' | grep -q 'text/html'"
+assert_false bash -c "grep 'gzip_types' '$ZPD_NGINX_CONF' | grep -q 'woff2'"
+gzip_fixed="$(cat "$ZPD_NGINX_CONF")"
+assert_true zpd_nginx_rewrite_gzip "$ZPD_NGINX_CONF"
+assert_eq "$(cat "$ZPD_NGINX_CONF")" "$gzip_fixed" "second gzip run is byte-identical"
+rm -rf "$BASE"
+
+# GZ2. An INCOMPLETE managed segment is normalized back to canonical.
+new_base; setup_atomic_service_configs
+zpd_nginx_rewrite_gzip "$ZPD_NGINX_CONF" >/dev/null
+sed -i '/gzip_vary on;/d' "$ZPD_NGINX_CONF"                      # simulate drift
+assert_false zpd_nginx_gzip_ok "$ZPD_NGINX_CONF"
+assert_true  zpd_nginx_rewrite_gzip "$ZPD_NGINX_CONF"
+assert_true  zpd_nginx_gzip_ok "$ZPD_NGINX_CONF"
+assert_eq "$(grep -c 'gzip_vary on;' "$ZPD_NGINX_CONF")" "1" "gzip_vary restored exactly once"
+rm -rf "$BASE"
+
+# GZ3. Custom operator gzip directives are NEVER duplicated or modified.
+new_base
+printf 'server {\n  listen 80;\n  root %s/current/public;\n  gzip on;\n  gzip_types text/css;\n}\n' "$BASE" > "$ZPD_NGINX_CONF"
+custom_before="$(cat "$ZPD_NGINX_CONF")"
+assert_true zpd_nginx_gzip_ok "$ZPD_NGINX_CONF"      # operator-managed, not drift
+assert_true zpd_nginx_rewrite_gzip "$ZPD_NGINX_CONF"
+assert_eq "$(cat "$ZPD_NGINX_CONF")" "$custom_before" "custom gzip config untouched"
+rm -rf "$BASE"
+
+# GZ4. The managed www redirect-only block stays minimal: no gzip inside it.
+new_base
+printf 'server {\n  listen 80;\n  server_name example.com www.example.com;\n  root %s/current/public;\n}\n' "$BASE" > "$ZPD_NGINX_CONF"
+assert_true zpd_nginx_rewrite_www "$ZPD_NGINX_CONF"
+assert_true zpd_nginx_rewrite_gzip "$ZPD_NGINX_CONF"
+assert_eq "$(awk '/ZPD-WWW-REDIRECT-BEGIN/,/ZPD-WWW-REDIRECT-END/' "$ZPD_NGINX_CONF" | grep -c 'gzip')" "0" "redirect-only block has no gzip"
+assert_true zpd_nginx_gzip_ok "$ZPD_NGINX_CONF"
+rm -rf "$BASE"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Fail-closed pre-cutover backup transaction
+# ─────────────────────────────────────────────────────────────────────────────
+echo "-- fail-closed nginx pre-cutover backup --"
+
+# BK1. A successful cutover leaves NO backup artifact behind.
+new_base
+printf 'server {\n  listen 80;\n  root %s/current/public;\n  location = /robots.txt  { access_log off; }\n}\n' "$BASE" > "$ZPD_NGINX_CONF"
+( dep_cutover_nginx "$BASE" >/dev/null 2>&1 ); assert_rc 0 "$?" "cutover succeeds"
+assert_eq "$(ls "$(dirname "$ZPD_NGINX_CONF")"/.zpd-precutover.* 2>/dev/null | wc -l)" "0" "no pre-cutover backup left after success"
+rm -rf "$BASE"
+
+# BK2. Backup creation failure → NO mutator runs, config untouched.
+new_base
+printf 'server {\n  listen 80;\n  root %s/public;\n  location = /robots.txt  { access_log off; }\n}\n' "$BASE" > "$ZPD_NGINX_CONF"
+bk_before="$(cat "$ZPD_NGINX_CONF")"
+( dep_backup_nginx_conf() { return 1; }; dep_cutover_nginx "$BASE" >/dev/null 2>&1 ); assert_rc 1 "$?" "backup creation failure fails the cutover"
+assert_eq "$(cat "$ZPD_NGINX_CONF")" "$bk_before" "config NOT mutated without a verified backup"
+# BK2b. Backup VERIFICATION failure (helper lies with a bad path) → same.
+( dep_backup_nginx_conf() { printf '%s' "/nonexistent/backup"; }; dep_cutover_nginx "$BASE" >/dev/null 2>&1 ); assert_rc 1 "$?" "backup verification failure fails the cutover"
+assert_eq "$(cat "$ZPD_NGINX_CONF")" "$bk_before" "config NOT mutated after a failed backup verification"
+rm -rf "$BASE"
+
+# BK3. A STALE legacy fixed-name backup is never reused: with wrong content in
+#      ${conf}.zpd-precutover, a failed cutover restores the REAL original.
+new_base
+printf 'server {\n  listen 80;\n  server_name example.com www.example.com;\n  root %s/current/public;\n  location = /robots.txt { access_log off; log_not_found off; try_files $uri /index.php?$query_string; }\n}\n' "$BASE" > "$ZPD_NGINX_CONF"
+printf 'STALE OLD CONTENT\n' > "${ZPD_NGINX_CONF}.zpd-precutover"
+bk_orig="$(cat "$ZPD_NGINX_CONF")"
+( MOCK_NGINX_RC=1 dep_cutover_nginx "$BASE" >/dev/null 2>&1 ); assert_rc 1 "$?" "nginx -t failure fails the cutover"
+assert_eq "$(cat "$ZPD_NGINX_CONF")" "$bk_orig" "restored from the FRESH backup, not the stale artifact"
+assert_false test -f "${ZPD_NGINX_CONF}.zpd-precutover"     # stale artifact removed
+rm -rf "$BASE"
+
+# BK4. Restore preserves content AND mode/ownership (verified restoration).
+new_base
+printf 'server {\n  listen 80;\n  server_name example.com www.example.com;\n  root %s/current/public;\n  location = /robots.txt { access_log off; log_not_found off; try_files $uri /index.php?$query_string; }\n}\n' "$BASE" > "$ZPD_NGINX_CONF"
+chmod 640 "$ZPD_NGINX_CONF"
+bk_meta="$(stat -c '%a %u:%g' "$ZPD_NGINX_CONF")"
+( MOCK_NGINX_RC=1 dep_cutover_nginx "$BASE" >/dev/null 2>&1 ); assert_rc 1 "$?" "failed cutover triggers a verified restore"
+assert_eq "$(stat -c '%a %u:%g' "$ZPD_NGINX_CONF")" "$bk_meta" "restore preserved mode and ownership"
+rm -rf "$BASE"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Per-block gzip completeness
+# ─────────────────────────────────────────────────────────────────────────────
+echo "-- per-block gzip completeness --"
+
+# GZ5. Wrong or missing gzip_comp_level / gzip_min_length are drift and are
+#      normalized back to canonical.
+new_base; setup_atomic_service_configs
+zpd_nginx_rewrite_gzip "$ZPD_NGINX_CONF" >/dev/null
+sed -i 's/gzip_comp_level 5;/gzip_comp_level 9;/' "$ZPD_NGINX_CONF"
+assert_false zpd_nginx_gzip_ok "$ZPD_NGINX_CONF"     # wrong comp level rejected
+assert_true  zpd_nginx_rewrite_gzip "$ZPD_NGINX_CONF"
+assert_true bash -c "grep -q 'gzip_comp_level 5;' '$ZPD_NGINX_CONF'"
+sed -i '/gzip_min_length 1024;/d' "$ZPD_NGINX_CONF"
+assert_false zpd_nginx_gzip_ok "$ZPD_NGINX_CONF"     # missing min length rejected
+assert_true  zpd_nginx_rewrite_gzip "$ZPD_NGINX_CONF"
+assert_eq "$(grep -c 'gzip_min_length 1024;' "$ZPD_NGINX_CONF")" "1" "min length restored exactly once"
+sed -i '/gzip_comp_level 5;/d' "$ZPD_NGINX_CONF"
+assert_false zpd_nginx_gzip_ok "$ZPD_NGINX_CONF"     # missing comp level rejected
+assert_true  zpd_nginx_rewrite_gzip "$ZPD_NGINX_CONF"
+assert_true  zpd_nginx_gzip_ok "$ZPD_NGINX_CONF"
+rm -rf "$BASE"
+
+# GZ6. TWO app-serving blocks (HTTP + certbot HTTPS): a managed segment in one
+#      never makes the other healthy — BOTH get the canonical segment.
+new_base
+cat > "$ZPD_NGINX_CONF" <<EOF
+server {
+    listen 80;
+    server_name example.com;
+    root ${BASE}/current/public;
+}
+server {
+    listen 443 ssl; # managed by Certbot
+    server_name example.com;
+    root ${BASE}/current/public;
+    ssl_certificate ${BASE}/fullchain.pem; # managed by Certbot
+}
+EOF
+assert_false zpd_nginx_gzip_ok "$ZPD_NGINX_CONF"
+assert_true  zpd_nginx_rewrite_gzip "$ZPD_NGINX_CONF"
+assert_true  zpd_nginx_gzip_ok "$ZPD_NGINX_CONF"
+assert_eq "$(grep -c 'ZPD-GZIP-BEGIN' "$ZPD_NGINX_CONF")" "2" "both app blocks carry the managed segment"
+# gzip only in HTTP but absent in HTTPS → drift again.
+awk 'BEGIN{n=0} /ZPD-GZIP-BEGIN/{n++} n<2{print} n>=2 && !/gzip/ && !/ZPD-GZIP/{print}' "$ZPD_NGINX_CONF" > "${ZPD_NGINX_CONF}.partial" || true
+python3 - "$ZPD_NGINX_CONF" <<'PY'
+import re, sys
+p = sys.argv[1]
+s = open(p).read()
+# strip ONLY the second managed segment (the HTTPS block's one)
+parts = s.split('# ZPD-GZIP-BEGIN (managed by ZedProxy deploy)')
+if len(parts) == 3:
+    tail = parts[2].split('# ZPD-GZIP-END', 1)[1]
+    s = parts[0] + '# ZPD-GZIP-BEGIN (managed by ZedProxy deploy)' + parts[1] + tail
+open(p, 'w').write(s)
+PY
+rm -f "${ZPD_NGINX_CONF}.partial"
+assert_eq "$(grep -c 'ZPD-GZIP-BEGIN' "$ZPD_NGINX_CONF")" "1" "fixture: HTTPS block segment stripped"
+assert_false zpd_nginx_gzip_ok "$ZPD_NGINX_CONF"     # HTTP-only gzip is NOT healthy
+assert_true  zpd_nginx_rewrite_gzip "$ZPD_NGINX_CONF"
+assert_true  zpd_nginx_gzip_ok "$ZPD_NGINX_CONF"
+assert_eq "$(grep -c 'ZPD-GZIP-BEGIN' "$ZPD_NGINX_CONF")" "2" "HTTPS block segment restored"
+gz_two="$(cat "$ZPD_NGINX_CONF")"
+assert_true zpd_nginx_rewrite_gzip "$ZPD_NGINX_CONF"
+assert_eq "$(cat "$ZPD_NGINX_CONF")" "$gz_two" "two-block gzip second run byte-identical"
+rm -rf "$BASE"
+
 # RB7. repair --scan reports the robots drift (read-only), --apply --nginx fixes it.
 new_base; sha="$(mk_release_git 20260101000000-aaaaaaaaaaaa)"; zpd_switch_current 20260101000000-aaaaaaaaaaaa
 setup_atomic_service_configs
 printf 'server {\n  listen 80;\n  root %s/current/public;\n  location = /robots.txt  { access_log off; log_not_found off; }\n}\n' "$BASE" > "$ZPD_NGINX_CONF"
 out="$(zrp_main --scan 2>&1)" || true
 printf '%s' "$out" | grep -q 'robots.txt location lacks the Laravel fallback' && ok "scan reports the robots drift" || bad "scan missed the robots drift"
+printf '%s' "$out" | grep -q 'gzip is not enabled' && ok "scan reports the gzip drift" || bad "scan missed the gzip drift"
 assert_false zpd_nginx_robots_ok "$ZPD_NGINX_CONF"     # scan is read-only
+assert_false zpd_nginx_gzip_ok "$ZPD_NGINX_CONF"       # scan is read-only
 ( MOCK_HTTP_CODE=200 zrp_main --apply --nginx >/dev/null 2>&1 ); assert_rc 0 "$?" "--apply --nginx repairs the robots block"
 assert_true zpd_nginx_robots_ok "$ZPD_NGINX_CONF"
+assert_true zpd_nginx_gzip_ok "$ZPD_NGINX_CONF"
+assert_true zpd_nginx_www_ok "$ZPD_NGINX_CONF"
 out="$(zrp_main --scan 2>&1)" || true
 printf '%s' "$out" | grep -q 'robots.txt location reaches Laravel' && ok "scan reports robots ok after repair" || bad "scan does not report robots ok"
+printf '%s' "$out" | grep -q 'www host routing is canonical' && ok "scan reports www state" || bad "scan missing the www line"
 rm -rf "$BASE"
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1705,6 +2148,28 @@ assert_eq "$(zpd_manifest_get "$fman" original_failure_reason_code)" "migration_
 assert_eq "$(zpd_manifest_get "$fman" rollback_readiness)" "success" "rollback readiness recorded as success"
 assert_eq "$(zpd_manifest_get "$fman" rollback_reconciliation)" "success" "rollback reconciliation recorded"
 assert_eq "$(zpd_manifest_get "$fman" failure_stage)" "migrate" "failure_stage equals the ORIGINAL stage (not a rollback stage)"
+unset ZPD_REPO_URL ZPD_REF; rm -rf "$BASE" "$(dirname "$SRC_BARE")"
+
+# Q4c. Required-defaults seeding runs on every deploy; its failure stops
+#      activation BEFORE the symlink switch and records the stage.
+new_base; mk_source_repo
+psha="$(mk_release_git 20260101000000-aaaaaaaaaaaa)"; zpd_switch_current 20260101000000-aaaaaaaaaaaa
+setup_atomic_service_configs; zpw_install_wrappers >/dev/null 2>&1
+export ZPD_REPO_URL="$SRC_BARE" ZPD_REF=main
+MOCK_LOG="${BASE}/php-invocations.log"
+( export MOCK_LOG; MOCK_HTTP_CODE=200 dep_main >/dev/null 2>&1 ); rc=$?
+assert_rc 0 "$rc" "deploy succeeds with the required-defaults stage"
+assert_true bash -c "grep -q 'zedproxy:seed-required-defaults' '$MOCK_LOG'"
+unset MOCK_LOG
+after_ok="$(zpd_current_release)"
+sleep 1
+( MOCK_SEED_RC=1 MOCK_HTTP_CODE=200 dep_main >/dev/null 2>&1 ); rc=$?
+assert_rc 1 "$rc" "required-defaults seeding failure fails the deploy"
+assert_eq "$(zpd_current_release)" "$after_ok" "current NOT switched after a seeding failure"
+attempted="$(ls "$BASE/releases" | grep -E '\.failed$' | tail -1)"
+fman="${BASE}/releases/${attempted}/RELEASE_MANIFEST.json"
+assert_eq "$(zpd_manifest_get "$fman" original_failure_stage)" "required_defaults" "failure stage is required_defaults"
+assert_eq "$(zpd_manifest_get "$fman" original_failure_reason_code)" "required_defaults_failed" "failure reason recorded"
 unset ZPD_REPO_URL ZPD_REF; rm -rf "$BASE" "$(dirname "$SRC_BARE")"
 
 echo "-- extended scheduler discovery --"

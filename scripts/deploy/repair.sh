@@ -91,6 +91,21 @@ zrp_scan_nginx() {
     else
         echo "  FIX  nginx robots.txt location lacks the Laravel fallback (dynamic robots.txt would 404)"; issues=$((issues + 1))
     fi
+    if zpd_nginx_www_ok "$(zpd_nginx_conf_path)"; then
+        echo "  ok   www host routing is canonical (or not applicable)"
+    else
+        echo "  FIX  www is served by the app block instead of a 301 redirect to the apex"; issues=$((issues + 1))
+    fi
+    if zpd_nginx_gzip_ok "$(zpd_nginx_conf_path)"; then
+        if ! grep -q 'ZPD-GZIP-BEGIN' "$(zpd_nginx_conf_path)" 2>/dev/null \
+            && zpd_nginx_has_custom_gzip "$(zpd_nginx_conf_path)" 2>/dev/null; then
+            echo "  note operator-managed gzip directives present (left alone)"
+        else
+            echo "  ok   managed gzip segment present"
+        fi
+    else
+        echo "  FIX  gzip is not enabled for CSS/JS/JSON/SVG/XML responses"; issues=$((issues + 1))
+    fi
     return "$issues"
 }
 

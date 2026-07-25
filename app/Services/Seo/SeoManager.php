@@ -2,6 +2,7 @@
 
 namespace App\Services\Seo;
 
+use App\Http\Middleware\NoIndexHeaders;
 use App\Models\Page;
 use App\Models\SeoPage;
 use App\Models\Tutorial;
@@ -240,6 +241,12 @@ class SeoManager
     /** @return array{0:bool,1:bool} */
     private function resolveRobots(?SeoPage $record, ?Model $model): array
     {
+        // The `noindex` middleware's verdict is authoritative: it wins over
+        // SeoPage records, controller overrides, model values, and defaults,
+        // and does not depend on any database seed state.
+        if (request()?->attributes->get(NoIndexHeaders::REQUEST_ATTRIBUTE) === true) {
+            return [false, false];
+        }
         if (self::isForcedNoindexPath(request()?->path() ?? '')) {
             return [false, false];
         }
@@ -341,6 +348,48 @@ class SeoManager
         }
 
         return $this->baseUrl().'/'.ltrim($resolved, '/');
+    }
+
+    /**
+     * Resolve + STRICTLY validate an operator-provided image reference for
+     * schema/OG output. Accepted: a trusted local CMS/public asset path
+     * (resolved against the canonical host) or a valid absolute HTTPS URL.
+     * Rejected → '' (callers omit the property): http:// in production,
+     * javascript:/data:/file:/any non-http scheme, malformed URLs, and
+     * whitespace/control-character payloads. Never performs network I/O.
+     */
+    public function safeImageUrl(?string $value): string
+    {
+        $v = trim((string) $value);
+        if ($v === '') {
+            return '';
+        }
+        // No embedded whitespace or control characters, ever.
+        if (preg_match('/[\x00-\x1f\x7f\s]/u', $v) === 1) {
+            return '';
+        }
+        if (preg_match('#^[a-z][a-z0-9+.\-]*:#i', $v) === 1) {
+            // Explicit scheme: only http(s); http only outside production.
+            if (preg_match('#^https://#i', $v) !== 1) {
+                if (app()->environment('production') || preg_match('#^http://#i', $v) !== 1) {
+                    return '';
+                }
+            }
+            $parts = parse_url($v);
+            if ($parts === false || empty($parts['host'])) {
+                return '';
+            }
+
+            return $v;
+        }
+        // Local/CMS path → canonical-host URL via the existing resolver, then
+        // re-validated through the scheme branch above.
+        $resolved = $this->absoluteUrl($v);
+        if ($resolved === '' || preg_match('#^https?://#i', $resolved) !== 1) {
+            return '';
+        }
+
+        return $this->safeImageUrl($resolved);
     }
 
     /** Remove tracking parameters (utm_*, gclid, fbclid, …) from a URL's query. */
