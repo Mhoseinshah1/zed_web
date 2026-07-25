@@ -1030,17 +1030,175 @@ assert_eq "$(cat "$ZPD_NGINX_CONF")" "$ro_before" "original untouched when the t
 assert_eq "$(cat "$ZPD_NGINX_CONF")" "$ro_before" "original untouched when metadata preservation fails"
 rm -rf "$BASE"
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Canonical www→apex routing (predicate + mutator, ACME-exempt, SAN-gated 443)
+# ─────────────────────────────────────────────────────────────────────────────
+echo "-- nginx www canonical routing --"
+
+cat > "${MOCKBIN}/openssl-match" <<'EOF'
+#!/usr/bin/env bash
+echo "Hostname www.example.com does match certificate"
+EOF
+cat > "${MOCKBIN}/openssl-nomatch" <<'EOF'
+#!/usr/bin/env bash
+echo "Hostname www.example.com does NOT match certificate"
+EOF
+chmod +x "${MOCKBIN}/openssl-match" "${MOCKBIN}/openssl-nomatch"
+
+# WW1. The historical combined `server_name domain www.domain;` is reconciled:
+#      the app block keeps ONLY the apex; a managed www redirect block appears
+#      with the ACME exemption BEFORE the catch-all 301 to the literal apex.
+new_base
+cat > "$ZPD_NGINX_CONF" <<EOF
+server {
+    listen 80;
+    server_name example.com www.example.com;
+    root ${BASE}/current/public;
+    location / { try_files \$uri \$uri/ /index.php?\$query_string; }
+}
+EOF
+assert_false zpd_nginx_www_ok "$ZPD_NGINX_CONF"
+assert_true  zpd_nginx_rewrite_www "$ZPD_NGINX_CONF"
+assert_true  zpd_nginx_www_ok "$ZPD_NGINX_CONF"
+assert_false bash -c "grep -E '^[[:space:]]*server_name' '$ZPD_NGINX_CONF' | head -1 | grep -q 'www'"
+assert_true bash -c "grep -q 'server_name www.example.com;' '$ZPD_NGINX_CONF'"
+assert_true bash -c "grep -q 'return 301 https://example.com\$request_uri;' '$ZPD_NGINX_CONF'"
+acme_line="$(grep -n 'acme-challenge' "$ZPD_NGINX_CONF" | cut -d: -f1)"
+redir_line="$(grep -n 'return 301 https://example.com' "$ZPD_NGINX_CONF" | cut -d: -f1)"
+assert_true test "$acme_line" -lt "$redir_line"      # ACME exemption BEFORE the 301
+assert_eq "$(grep -c 'listen 443' "$ZPD_NGINX_CONF")" "0" "no 443 www block without a certificate"
+# The app block itself never redirects (no self-redirect loop).
+assert_eq "$(awk '/^server/{n++} n==1' "$ZPD_NGINX_CONF" | grep -c 'return 301')" "0" "canonical host does not redirect"
+www_fixed="$(cat "$ZPD_NGINX_CONF")"
+assert_true zpd_nginx_rewrite_www "$ZPD_NGINX_CONF"
+assert_eq "$(cat "$ZPD_NGINX_CONF")" "$www_fixed" "second www reconciliation is byte-identical"
+rm -rf "$BASE"
+
+# WW2. Certbot server: the 443 www redirect appears ONLY when the ACTUAL
+#      certificate covers www; certbot SSL lines stay byte-identical.
+new_base
+certfile="${BASE}/fullchain.pem"; echo dummy > "$certfile"
+cat > "$ZPD_NGINX_CONF" <<EOF
+server {
+    listen 80;
+    server_name example.com www.example.com;
+    root ${BASE}/current/public;
+}
+server {
+    listen 443 ssl; # managed by Certbot
+    server_name example.com www.example.com;
+    root ${BASE}/current/public;
+    ssl_certificate ${certfile}; # managed by Certbot
+    ssl_certificate_key ${BASE}/privkey.pem; # managed by Certbot
+    include /etc/letsencrypt/options-ssl-nginx.conf; # managed by Certbot
+}
+EOF
+ssl_before="$(grep 'managed by Certbot' "$ZPD_NGINX_CONF")"
+( ZPD_OPENSSL="${MOCKBIN}/openssl-match" zpd_nginx_rewrite_www "$ZPD_NGINX_CONF" ); assert_rc 0 "$?" "www rewrite with covering cert succeeds"
+assert_true zpd_nginx_www_ok "$ZPD_NGINX_CONF"
+assert_eq "$(grep 'managed by Certbot' "$ZPD_NGINX_CONF")" "$ssl_before" "certbot lines byte-identical"
+assert_true bash -c "awk '/ZPD-WWW-REDIRECT-BEGIN/,/ZPD-WWW-REDIRECT-END/' '$ZPD_NGINX_CONF' | grep -q 'listen 443 ssl'"
+assert_true bash -c "awk '/ZPD-WWW-REDIRECT-BEGIN/,/ZPD-WWW-REDIRECT-END/' '$ZPD_NGINX_CONF' | grep -q 'ssl_certificate ${certfile}'"
+rm -rf "$BASE"
+
+# WW3. Same fixture but the certificate does NOT cover www → NO 443 www block
+#      (a redirect cannot repair a failed TLS handshake), 80 block still added.
+new_base
+certfile="${BASE}/fullchain.pem"; echo dummy > "$certfile"
+cat > "$ZPD_NGINX_CONF" <<EOF
+server {
+    listen 80;
+    server_name example.com www.example.com;
+    root ${BASE}/current/public;
+    ssl_certificate ${certfile};
+}
+EOF
+( ZPD_OPENSSL="${MOCKBIN}/openssl-nomatch" zpd_nginx_rewrite_www "$ZPD_NGINX_CONF" ); assert_rc 0 "$?" "www rewrite with non-covering cert succeeds"
+assert_true zpd_nginx_www_ok "$ZPD_NGINX_CONF"
+assert_eq "$(awk '/ZPD-WWW-REDIRECT-BEGIN/,/ZPD-WWW-REDIRECT-END/' "$ZPD_NGINX_CONF" | grep -c 'listen 443')" "0" "no invalid 443 www block"
+assert_true bash -c "awk '/ZPD-WWW-REDIRECT-BEGIN/,/ZPD-WWW-REDIRECT-END/' '$ZPD_NGINX_CONF' | grep -q 'listen 80'"
+rm -rf "$BASE"
+
+# WW4. No www anywhere (minimal fixtures) → predicate ok, mutator no-op.
+new_base; setup_atomic_service_configs
+assert_true zpd_nginx_www_ok "$ZPD_NGINX_CONF"
+plain_before="$(cat "$ZPD_NGINX_CONF")"
+assert_true zpd_nginx_rewrite_www "$ZPD_NGINX_CONF"
+assert_eq "$(cat "$ZPD_NGINX_CONF")" "$plain_before" "no-www config untouched"
+rm -rf "$BASE"
+
+# WW5. nginx -t failure after a www rewrite restores the original config.
+new_base
+printf 'server {\n  listen 80;\n  server_name example.com www.example.com;\n  root %s/current/public;\n  location = /robots.txt { access_log off; log_not_found off; try_files $uri /index.php?$query_string; }\n}\n' "$BASE" > "$ZPD_NGINX_CONF"
+nginx_before="$(cat "$ZPD_NGINX_CONF")"
+( MOCK_NGINX_RC=1 dep_cutover_nginx "$BASE" >/dev/null 2>&1 ); assert_rc 1 "$?" "nginx -t failure fails the www cutover"
+assert_eq "$(cat "$ZPD_NGINX_CONF")" "$nginx_before" "config restored after failed validation"
+rm -rf "$BASE"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Managed gzip segment (predicate + mutator)
+# ─────────────────────────────────────────────────────────────────────────────
+echo "-- nginx gzip reconciliation --"
+
+# GZ1. Missing gzip entirely → managed segment inserted into the app block:
+#      correct types, gzip_vary on, no text/html, no compressed formats.
+new_base; setup_atomic_service_configs
+assert_false zpd_nginx_gzip_ok "$ZPD_NGINX_CONF"
+assert_true  zpd_nginx_rewrite_gzip "$ZPD_NGINX_CONF"
+assert_true  zpd_nginx_gzip_ok "$ZPD_NGINX_CONF"
+assert_true bash -c "grep -q 'gzip_vary on;' '$ZPD_NGINX_CONF'"
+assert_true bash -c "grep -q 'application/javascript' '$ZPD_NGINX_CONF'"
+assert_false bash -c "grep 'gzip_types' '$ZPD_NGINX_CONF' | grep -q 'text/html'"
+assert_false bash -c "grep 'gzip_types' '$ZPD_NGINX_CONF' | grep -q 'woff2'"
+gzip_fixed="$(cat "$ZPD_NGINX_CONF")"
+assert_true zpd_nginx_rewrite_gzip "$ZPD_NGINX_CONF"
+assert_eq "$(cat "$ZPD_NGINX_CONF")" "$gzip_fixed" "second gzip run is byte-identical"
+rm -rf "$BASE"
+
+# GZ2. An INCOMPLETE managed segment is normalized back to canonical.
+new_base; setup_atomic_service_configs
+zpd_nginx_rewrite_gzip "$ZPD_NGINX_CONF" >/dev/null
+sed -i '/gzip_vary on;/d' "$ZPD_NGINX_CONF"                      # simulate drift
+assert_false zpd_nginx_gzip_ok "$ZPD_NGINX_CONF"
+assert_true  zpd_nginx_rewrite_gzip "$ZPD_NGINX_CONF"
+assert_true  zpd_nginx_gzip_ok "$ZPD_NGINX_CONF"
+assert_eq "$(grep -c 'gzip_vary on;' "$ZPD_NGINX_CONF")" "1" "gzip_vary restored exactly once"
+rm -rf "$BASE"
+
+# GZ3. Custom operator gzip directives are NEVER duplicated or modified.
+new_base
+printf 'server {\n  listen 80;\n  root %s/current/public;\n  gzip on;\n  gzip_types text/css;\n}\n' "$BASE" > "$ZPD_NGINX_CONF"
+custom_before="$(cat "$ZPD_NGINX_CONF")"
+assert_true zpd_nginx_gzip_ok "$ZPD_NGINX_CONF"      # operator-managed, not drift
+assert_true zpd_nginx_rewrite_gzip "$ZPD_NGINX_CONF"
+assert_eq "$(cat "$ZPD_NGINX_CONF")" "$custom_before" "custom gzip config untouched"
+rm -rf "$BASE"
+
+# GZ4. The managed www redirect-only block stays minimal: no gzip inside it.
+new_base
+printf 'server {\n  listen 80;\n  server_name example.com www.example.com;\n  root %s/current/public;\n}\n' "$BASE" > "$ZPD_NGINX_CONF"
+assert_true zpd_nginx_rewrite_www "$ZPD_NGINX_CONF"
+assert_true zpd_nginx_rewrite_gzip "$ZPD_NGINX_CONF"
+assert_eq "$(awk '/ZPD-WWW-REDIRECT-BEGIN/,/ZPD-WWW-REDIRECT-END/' "$ZPD_NGINX_CONF" | grep -c 'gzip')" "0" "redirect-only block has no gzip"
+assert_true zpd_nginx_gzip_ok "$ZPD_NGINX_CONF"
+rm -rf "$BASE"
+
 # RB7. repair --scan reports the robots drift (read-only), --apply --nginx fixes it.
 new_base; sha="$(mk_release_git 20260101000000-aaaaaaaaaaaa)"; zpd_switch_current 20260101000000-aaaaaaaaaaaa
 setup_atomic_service_configs
 printf 'server {\n  listen 80;\n  root %s/current/public;\n  location = /robots.txt  { access_log off; log_not_found off; }\n}\n' "$BASE" > "$ZPD_NGINX_CONF"
 out="$(zrp_main --scan 2>&1)" || true
 printf '%s' "$out" | grep -q 'robots.txt location lacks the Laravel fallback' && ok "scan reports the robots drift" || bad "scan missed the robots drift"
+printf '%s' "$out" | grep -q 'gzip is not enabled' && ok "scan reports the gzip drift" || bad "scan missed the gzip drift"
 assert_false zpd_nginx_robots_ok "$ZPD_NGINX_CONF"     # scan is read-only
+assert_false zpd_nginx_gzip_ok "$ZPD_NGINX_CONF"       # scan is read-only
 ( MOCK_HTTP_CODE=200 zrp_main --apply --nginx >/dev/null 2>&1 ); assert_rc 0 "$?" "--apply --nginx repairs the robots block"
 assert_true zpd_nginx_robots_ok "$ZPD_NGINX_CONF"
+assert_true zpd_nginx_gzip_ok "$ZPD_NGINX_CONF"
+assert_true zpd_nginx_www_ok "$ZPD_NGINX_CONF"
 out="$(zrp_main --scan 2>&1)" || true
 printf '%s' "$out" | grep -q 'robots.txt location reaches Laravel' && ok "scan reports robots ok after repair" || bad "scan does not report robots ok"
+printf '%s' "$out" | grep -q 'www host routing is canonical' && ok "scan reports www state" || bad "scan missing the www line"
 rm -rf "$BASE"
 
 # ─────────────────────────────────────────────────────────────────────────────

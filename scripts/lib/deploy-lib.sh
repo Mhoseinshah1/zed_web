@@ -593,6 +593,243 @@ zpd_supervisor_rewrite() {
     sed -i "s#stdout_logfile=.*#stdout_logfile=${base}/shared/storage/logs/worker.log#g" "$conf"
 }
 
+# -----------------------------------------------------------------------------
+# Canonical www→apex host routing (managed ZPD-WWW-REDIRECT block).
+#
+# Drift = an app-serving server block whose server_name lists BOTH the apex
+# and its www variant (the historical `server_name domain www.domain;`), which
+# serves the site with status 200 on two hosts. The mutator splits them:
+# www gets a minimal redirect server that (1) keeps serving
+# /.well-known/acme-challenge/ from the app webroot BEFORE the redirect (a
+# blanket :80 redirect silently breaks HTTP-01 renewals for www) and
+# (2) 301s everything else to the literal https://APEX$request_uri (never
+# $host — that would retain www). A `listen 443 ssl` www redirect is created
+# ONLY when the live certificate provably covers www (SAN check on the actual
+# file referenced by ssl_certificate) — a redirect cannot repair a failed TLS
+# handshake. Custom www-only server blocks an operator wrote are left alone.
+# -----------------------------------------------------------------------------
+
+# zpd_nginx_www_drift_domain CONF — print the apex when some server_name line
+# serves both APEX and www.APEX; empty otherwise.
+zpd_nginx_www_drift_domain() {
+    awk '
+        /^[[:space:]]*server_name[[:space:]]/ {
+            line = $0; sub(/;.*/, "", line)
+            n = split(line, t, /[[:space:]]+/)
+            apex = ""; www = ""
+            for (i = 1; i <= n; i++) {
+                if (t[i] == "" || t[i] == "server_name") continue
+                if (t[i] ~ /^www\./) www = substr(t[i], 5)
+                else if (apex == "") apex = t[i]
+            }
+            if (apex != "" && www == apex) { print apex; exit }
+        }
+    ' "$1"
+}
+
+# zpd_cert_covers_www CONF APEX — 0 iff the certificate file referenced by the
+# live config's ssl_certificate directive covers www.APEX (bounded SAN check
+# on the REAL file — never inferred from DNS or a certbot filename).
+zpd_cert_covers_www() {
+    local conf="$1" apex="$2" cert
+    cert="$(grep -m1 -E '^[[:space:]]*ssl_certificate[[:space:]]' "$conf" | awk '{print $2}' | tr -d ';')"
+    [ -n "$cert" ] && [ -f "$cert" ] || return 1
+    timeout -k 5 "${ZPD_SVC_TIMEOUT:-20}s" "${ZPD_OPENSSL:-openssl}" x509 -in "$cert" -noout -checkhost "www.${apex}" </dev/null 2>/dev/null \
+        | grep -q 'does match'
+}
+
+zpd_nginx_www_ok() {
+    local conf="$1"
+    [ -f "$conf" ] || return 1
+    # An app block still serving both hosts is drift.
+    [ -n "$(zpd_nginx_www_drift_domain "$conf")" ] && return 1
+    # A managed redirect block, when present, must keep the ACME exemption and
+    # the literal-apex 301.
+    if grep -q 'ZPD-WWW-REDIRECT-BEGIN' "$conf"; then
+        awk '
+            /ZPD-WWW-REDIRECT-BEGIN/ { inm = 1 }
+            inm && /acme-challenge/ { a = 1 }
+            inm && /return 301 https:\/\// { r = 1 }
+            /ZPD-WWW-REDIRECT-END/ { inm = 0 }
+            END { exit (a && r) ? 0 : 1 }
+        ' "$conf" || return 1
+    fi
+    return 0
+}
+
+zpd_nginx_rewrite_www() {
+    local conf="$1" apex webroot tmp
+    [ -f "$conf" ] || { echo "nginx www: config missing: ${conf}" >&2; return 1; }
+    zpd_nginx_www_ok "$conf" && return 0
+    apex="$(zpd_nginx_www_drift_domain "$conf")"
+    if [ -z "$apex" ]; then
+        echo "nginx www: managed ZPD-WWW-REDIRECT block is malformed — refusing to modify (restore or delete the managed block manually)" >&2
+        return 1
+    fi
+    webroot="$(grep -m1 -E '^[[:space:]]*root[[:space:]]' "$conf" | awk '{print $2}' | tr -d ';')"
+    if [ -z "$webroot" ]; then
+        echo "nginx www: cannot determine the app webroot for the ACME exemption — refusing to modify" >&2
+        return 1
+    fi
+    tmp="$(zpd_nginx_mktemp "$conf")" || return 1
+    # 1) Drop www.APEX from every server_name line (the app blocks keep apex).
+    awk -v apex="$apex" '
+        BEGIN { esc = apex; gsub(/\./, "\\.", esc) }
+        /^[[:space:]]*server_name[[:space:]]/ { gsub("[[:space:]]+www\\." esc, "") }
+        { print }
+    ' "$conf" > "$tmp" || { rm -f "$tmp"; return 1; }
+    # 2) Append the managed redirect block once (idempotent via the marker).
+    if ! grep -q 'ZPD-WWW-REDIRECT-BEGIN' "$tmp"; then
+        {
+            printf '\n# ZPD-WWW-REDIRECT-BEGIN (managed by ZedProxy deploy — canonical host routing)\n'
+            printf 'server {\n'
+            printf '    listen 80;\n'
+            printf '    server_name www.%s;\n' "$apex"
+            printf '    # HTTP-01 renewals for www must keep working: serve ACME challenges\n'
+            printf '    # from the app webroot BEFORE the catch-all redirect.\n'
+            printf '    location ^~ /.well-known/acme-challenge/ {\n'
+            printf '        root %s;\n' "$webroot"
+            printf '    }\n'
+            printf '    location / {\n'
+            printf '        return 301 https://%s$request_uri;\n' "$apex"
+            printf '    }\n'
+            printf '}\n'
+            if zpd_cert_covers_www "$conf" "$apex"; then
+                # Reuse the live cert paths, but strip trailing comments — the
+                # copied lines in OUR block are not certbot-managed.
+                local strip='s/[[:space:]]*#.*$//' sslc sslk sslinc ssldh
+                sslc="$(grep -m1 -E '^[[:space:]]*ssl_certificate[[:space:]]' "$conf" | sed "$strip")"
+                sslk="$(grep -m1 -E '^[[:space:]]*ssl_certificate_key[[:space:]]' "$conf" | sed "$strip")"
+                sslinc="$(grep -m1 -E '^[[:space:]]*include[[:space:]].*options-ssl' "$conf" | sed "$strip")"
+                ssldh="$(grep -m1 -E '^[[:space:]]*ssl_dhparam[[:space:]]' "$conf" | sed "$strip")"
+                printf 'server {\n'
+                printf '    listen 443 ssl;\n'
+                printf '    server_name www.%s;\n' "$apex"
+                [ -n "$sslc" ] && printf '%s\n' "$sslc"
+                [ -n "$sslk" ] && printf '%s\n' "$sslk"
+                [ -n "$sslinc" ] && printf '%s\n' "$sslinc"
+                [ -n "$ssldh" ] && printf '%s\n' "$ssldh"
+                printf '    return 301 https://%s$request_uri;\n' "$apex"
+                printf '}\n'
+            fi
+            printf '# ZPD-WWW-REDIRECT-END\n'
+        } >> "$tmp"
+    fi
+    zpd_nginx_commit_file "$conf" "$tmp" || return 1
+    zpd_nginx_www_ok "$conf"
+}
+
+# -----------------------------------------------------------------------------
+# Managed gzip directives (ZPD-GZIP block) for application-serving blocks.
+#
+# Ubuntu's default nginx gzips HTML only — CSS/JS/JSON/SVG/XML/sitemap were
+# served uncompressed. The managed segment enables gzip for text assets only:
+# no text/html (nginx compresses it implicitly; declaring it warns) and no
+# already-compressed formats (woff2/png/jpg/webp/…). Custom operator gzip
+# directives outside our markers are NEVER duplicated or modified — the config
+# is treated as operator-managed and left alone.
+# -----------------------------------------------------------------------------
+ZPD_GZIP_TYPES='text/css text/plain text/xml application/javascript application/json application/ld+json application/xml application/rss+xml image/svg+xml application/manifest+json'
+
+# zpd_nginx_gzip_managed_lines INDENT — print the canonical managed segment.
+zpd_nginx_gzip_managed_lines() {
+    local i="${1:-    }"
+    printf '%s# ZPD-GZIP-BEGIN (managed by ZedProxy deploy)\n' "$i"
+    printf '%sgzip on;\n' "$i"
+    printf '%sgzip_vary on;\n' "$i"
+    printf '%sgzip_comp_level 5;\n' "$i"
+    printf '%sgzip_min_length 1024;\n' "$i"
+    printf '%sgzip_types %s;\n' "$i" "$ZPD_GZIP_TYPES"
+    printf '%s# ZPD-GZIP-END\n' "$i"
+}
+
+# zpd_nginx_has_custom_gzip CONF — any gzip directive OUTSIDE our markers.
+zpd_nginx_has_custom_gzip() {
+    awk '
+        /ZPD-GZIP-BEGIN/ { inm = 1 }
+        /ZPD-GZIP-END/   { inm = 0; next }
+        !inm && /^[[:space:]]*gzip(_[a-z_]+)?[[:space:]]/ { found = 1 }
+        END { exit found ? 0 : 1 }
+    ' "$1"
+}
+
+zpd_nginx_gzip_ok() {
+    local conf="$1"
+    [ -f "$conf" ] || return 1
+    if ! grep -q 'ZPD-GZIP-BEGIN' "$conf"; then
+        # Operator-managed gzip is not our drift; NO gzip at all is.
+        zpd_nginx_has_custom_gzip "$conf" && return 0
+        return 1
+    fi
+    # Every managed segment must contain the canonical directives, and the
+    # managed gzip_types must never list text/html or compressed formats.
+    awk -v types="$ZPD_GZIP_TYPES" '
+        /ZPD-GZIP-BEGIN/ { inm = 1; g = v = t = 0; segs++ }
+        inm && /^[[:space:]]*gzip on;/       { g = 1 }
+        inm && /^[[:space:]]*gzip_vary on;/  { v = 1 }
+        inm && /^[[:space:]]*gzip_types /    {
+            t = 1
+            if ($0 ~ /text\/html/ || $0 ~ /woff2/ || $0 ~ /image\/(png|jpeg|webp|gif)/) bad = 1
+            if (index($0, types) == 0) bad = 1
+        }
+        /ZPD-GZIP-END/ { if (!(g && v && t)) bad = 1; inm = 0 }
+        END { exit (segs > 0 && !bad && !inm) ? 0 : 1 }
+    ' "$conf"
+}
+
+zpd_nginx_rewrite_gzip() {
+    local conf="$1" tmp
+    [ -f "$conf" ] || { echo "nginx gzip: config missing: ${conf}" >&2; return 1; }
+    zpd_nginx_gzip_ok "$conf" && return 0
+    if ! grep -q 'ZPD-GZIP-BEGIN' "$conf" && zpd_nginx_has_custom_gzip "$conf"; then
+        # Never duplicate or fight operator directives.
+        echo "nginx gzip: custom gzip directives present — leaving the config operator-managed" >&2
+        return 0
+    fi
+    tmp="$(zpd_nginx_mktemp "$conf")" || return 1
+    if grep -q 'ZPD-GZIP-BEGIN' "$conf"; then
+        # Normalize every managed segment to the canonical content.
+        awk -v types="$ZPD_GZIP_TYPES" '
+            /ZPD-GZIP-BEGIN/ {
+                indent = $0; sub(/[^ \t].*$/, "", indent)
+                print indent "# ZPD-GZIP-BEGIN (managed by ZedProxy deploy)"
+                print indent "gzip on;"
+                print indent "gzip_vary on;"
+                print indent "gzip_comp_level 5;"
+                print indent "gzip_min_length 1024;"
+                print indent "gzip_types " types ";"
+                print indent "# ZPD-GZIP-END"
+                skip = 1; next
+            }
+            /ZPD-GZIP-END/ { skip = 0; next }
+            skip { next }
+            { print }
+        ' "$conf" > "$tmp" || { rm -f "$tmp"; return 1; }
+    else
+        # Insert after the first server-level root line of each app-serving
+        # block — never inside the managed www redirect-only block.
+        awk -v types="$ZPD_GZIP_TYPES" '
+            /ZPD-WWW-REDIRECT-BEGIN/ { inwww = 1 }
+            /ZPD-WWW-REDIRECT-END/   { inwww = 0 }
+            { print }
+            !inwww && /^[[:space:]]*root[[:space:]]/ && !donein {
+                indent = $0; sub(/[^ \t].*$/, "", indent)
+                print indent "# ZPD-GZIP-BEGIN (managed by ZedProxy deploy)"
+                print indent "gzip on;"
+                print indent "gzip_vary on;"
+                print indent "gzip_comp_level 5;"
+                print indent "gzip_min_length 1024;"
+                print indent "gzip_types " types ";"
+                print indent "# ZPD-GZIP-END"
+                donein = 1
+            }
+            /^server[[:space:]]*{/ || /^}[[:space:]]*$/ { donein = 0 }
+        ' "$conf" > "$tmp" || { rm -f "$tmp"; return 1; }
+    fi
+    zpd_nginx_commit_file "$conf" "$tmp" || return 1
+    zpd_nginx_gzip_ok "$conf"
+}
+
 # zpd_supervisor_ok CONF BASE — worker command runs current/artisan AND the
 # legacy direct path is absent (fail-closed: a config still referencing
 # <base>/artisan is rejected even if a current/ line also exists).

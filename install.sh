@@ -1657,9 +1657,17 @@ else
     cat > "$NGINX_CONF" <<NGINX
 server {
     listen 80;
-    server_name ${DOMAIN} www.${DOMAIN};
+    server_name ${DOMAIN};
     root ${ACTIVE_APP_DIR}/public;
     index index.php;
+
+    # ZPD-GZIP-BEGIN (managed by ZedProxy deploy)
+    gzip on;
+    gzip_vary on;
+    gzip_comp_level 5;
+    gzip_min_length 1024;
+    gzip_types text/css text/plain text/xml application/javascript application/json application/ld+json application/xml application/rss+xml image/svg+xml application/manifest+json;
+    # ZPD-GZIP-END
 
     charset utf-8;
 
@@ -1712,6 +1720,21 @@ server {
 
     client_max_body_size 20M;
 }
+
+# ZPD-WWW-REDIRECT-BEGIN (managed by ZedProxy deploy — canonical host routing)
+server {
+    listen 80;
+    server_name www.${DOMAIN};
+    # HTTP-01 renewals for www must keep working: serve ACME challenges
+    # from the app webroot BEFORE the catch-all redirect.
+    location ^~ /.well-known/acme-challenge/ {
+        root ${ACTIVE_APP_DIR}/public;
+    }
+    location / {
+        return 301 https://${DOMAIN}\$request_uri;
+    }
+}
+# ZPD-WWW-REDIRECT-END
 NGINX
 fi
 

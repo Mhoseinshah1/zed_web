@@ -900,7 +900,12 @@ dep_cutover_nginx() {
     # robots.txt must reach Laravel (dynamic RobotsController) — same
     # precutover-backup + nginx -t + verified-restore-on-failure flow as root.
     zpd_nginx_rewrite_robots "$conf" || { dep_err "$(zpd_msg_nginx_restored)"; dep_restore_precutover_nginx "$conf" || true; return 1; }
-    if ! zpd_nginx_root_ok "$conf" "$base" || ! zpd_nginx_robots_ok "$conf" || ! dep_validate_nginx; then
+    # www→apex canonical host routing (ACME-exempt, SAN-gated 443) and the
+    # managed gzip segment share the same transactional flow.
+    zpd_nginx_rewrite_www "$conf"   || { dep_err "$(zpd_msg_nginx_restored)"; dep_restore_precutover_nginx "$conf" || true; return 1; }
+    zpd_nginx_rewrite_gzip "$conf"  || { dep_err "$(zpd_msg_nginx_restored)"; dep_restore_precutover_nginx "$conf" || true; return 1; }
+    if ! zpd_nginx_root_ok "$conf" "$base" || ! zpd_nginx_robots_ok "$conf" \
+        || ! zpd_nginx_www_ok "$conf" || ! zpd_nginx_gzip_ok "$conf" || ! dep_validate_nginx; then
         dep_err "$(zpd_msg_nginx_restored)"
         dep_restore_precutover_nginx "$conf" || true
         return 1
@@ -1302,8 +1307,9 @@ dep_restore_operational_snapshot() {
 # and `nginx -t`-validated with restore-on-failure (dep_cutover_nginx).
 dep_reconcile_nginx() {
     local base="$1" conf; conf="$(zpd_nginx_conf_path)"
-    if [ -f "$conf" ] && zpd_nginx_root_ok "$conf" "$base" && zpd_nginx_robots_ok "$conf"; then return 0; fi
-    dep_log "Reconciling Nginx (root → current/public, dynamic robots.txt)…"
+    if [ -f "$conf" ] && zpd_nginx_root_ok "$conf" "$base" && zpd_nginx_robots_ok "$conf" \
+        && zpd_nginx_www_ok "$conf" && zpd_nginx_gzip_ok "$conf"; then return 0; fi
+    dep_log "Reconciling Nginx (root → current/public, dynamic robots.txt, canonical www, gzip)…"
     dep_cutover_nginx "$base"
 }
 
