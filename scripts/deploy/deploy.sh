@@ -536,6 +536,19 @@ dep_run_migrations() {
     return 0
 }
 
+# dep_seed_required_defaults RELEASE_DIR — ensure the records the application
+# REQUIRES to behave correctly (terms/privacy/about CMS pages behind the 301
+# aliases, login/register noindex SEO records) via the targeted artisan
+# command. The command runs EXACTLY two firstOrCreate seeders — administrator
+# edits are never overwritten and re-running is idempotent. Bounded and
+# non-interactive; a failure stops activation BEFORE the symlink switch.
+dep_seed_required_defaults() {
+    local rel="$1"
+    ( cd "$rel" 2>/dev/null || exit 1
+      dep_run_bounded "$ZPD_ARTISAN_TIMEOUT" "required_defaults: seed" \
+          "$ZPD_PHP" artisan zedproxy:seed-required-defaults --no-interaction )
+}
+
 # ── Bounded CLI health + internal resource checks ────────────────────────────
 
 # dep_cli_health CURRENT_DIR — `php artisan zedproxy:health --json`, bounded by a
@@ -1852,6 +1865,17 @@ dep_activate() {
     if ! dep_run_migrations "$(zpd_releases_dir)/${id}"; then
         dep_record_failure "$DEP_STAGE" "migration_failed" "dep_run_migrations" "activation: migrations failed"
         dep_err "activation: migrations failed"
+        return 30
+    fi
+
+    # 3b. required default records (idempotent seeders) — run AFTER migrations
+    #     and BEFORE the symlink switch, so a failure can never make a release
+    #     public without its required CMS/SEO records and never leaves `current`
+    #     pointing at the new release.
+    dep_stage "required_defaults"
+    if ! dep_seed_required_defaults "$(zpd_releases_dir)/${id}"; then
+        dep_record_failure "$DEP_STAGE" "required_defaults_failed" "dep_seed_required_defaults" "activation: required default records could not be ensured"
+        dep_err "activation: required default records could not be ensured"
         return 30
     fi
 

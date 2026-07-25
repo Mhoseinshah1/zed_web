@@ -2,6 +2,7 @@
 
 namespace App\Services\Seo;
 
+use App\Http\Middleware\NoIndexHeaders;
 use App\Models\Page;
 use App\Models\SeoPage;
 use App\Models\Tutorial;
@@ -240,6 +241,12 @@ class SeoManager
     /** @return array{0:bool,1:bool} */
     private function resolveRobots(?SeoPage $record, ?Model $model): array
     {
+        // The `noindex` middleware's verdict is authoritative: it wins over
+        // SeoPage records, controller overrides, model values, and defaults,
+        // and does not depend on any database seed state.
+        if (request()?->attributes->get(NoIndexHeaders::REQUEST_ATTRIBUTE) === true) {
+            return [false, false];
+        }
         if (self::isForcedNoindexPath(request()?->path() ?? '')) {
             return [false, false];
         }

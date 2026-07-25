@@ -1544,6 +1544,20 @@ else
     php artisan migrate --force || error "Migration failed. Check database credentials."
 fi
 
+# ─── Required default records ────────────────────────────────────────────────
+# terms/privacy/about CMS pages (the 301 alias destinations) and the
+# login/register noindex SEO records. Runs EXACTLY two firstOrCreate seeders —
+# idempotent, never overwrites administrator edits, never seeds demo data.
+log "Ensuring required default records (CMS pages + SEO registry)..."
+if [ "$IS_EXISTING" = "true" ]; then
+    php artisan zedproxy:seed-required-defaults --no-interaction \
+        || fail_reinstall "ایجاد رکوردهای پیش‌فرض ضروری ناموفق بود. تنظیمات و کد قبلی بازیابی شد."
+else
+    php artisan zedproxy:seed-required-defaults --no-interaction \
+        || error "Required default records could not be created. Check database credentials."
+fi
+ok "رکوردهای پیش‌فرض ضروری آماده‌اند."
+
 # ─── Admin user ───────────────────────────────────────────────────────────────
 if [ "$IS_EXISTING" = "true" ]; then
     # Re-run: never auto-create a second admin and never reset the existing

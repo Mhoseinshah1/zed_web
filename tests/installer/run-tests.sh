@@ -181,6 +181,12 @@ grep_has  'location = /robots\.txt \{'                       "$INSTALL_SH" "ngin
 grep_has  'try_files \\\$uri /index\.php\?\\\$query_string;' "$INSTALL_SH" "robots.txt location falls through to Laravel (dynamic robots)"
 grep_none 'location = /robots\.txt.*access_log.*\}'          "$INSTALL_SH" "no static-only single-line robots.txt block remains"
 
+# 21c. Required default records (terms/privacy/about pages, login/register
+#      noindex SEO records) are ensured on install AND on every deploy — the
+#      targeted command only, never the full DatabaseSeeder.
+grep_has  'zedproxy:seed-required-defaults' "$INSTALL_SH" "install.sh ensures required default records after migrations"
+grep_none 'artisan db:seed'                 "$INSTALL_SH" "install.sh never runs the full DatabaseSeeder"
+
 # 22. Supervisor worker uses current/artisan.
 grep_has  'command=php \$\{ACTIVE_APP_DIR\}/artisan queue:work' "$INSTALL_SH" "supervisor worker uses ACTIVE_APP_DIR/artisan"
 grep_none 'command=php \$\{APP_DIR\}/artisan queue:work'        "$INSTALL_SH" "supervisor worker no longer hardcodes APP_DIR/artisan"
@@ -194,6 +200,8 @@ WRAPPERS_SH="${REPO_ROOT}/scripts/deploy/install-command-wrappers.sh"
 DEPLOY_SH="${REPO_ROOT}/scripts/deploy/deploy.sh"
 grep_has  'zpw_install_wrappers'   "$INSTALL_SH" "install.sh installs wrappers via the shared installer"
 grep_has  'zpw_install_wrappers'   "$DEPLOY_SH"  "deploy.sh (re)installs wrappers on activation (legacy servers get them)"
+grep_has  'dep_seed_required_defaults' "$DEPLOY_SH" "deploy.sh ensures required default records before the symlink switch"
+grep_none 'artisan db:seed'            "$DEPLOY_SH" "deploy.sh never runs the full DatabaseSeeder"
 grep_has  'zpd_resolve_script'     "$WRAPPERS_SH" "shared installer emits the current-release resolver"
 grep_none 'exec sudo bash "\$\{APP_DIR\}/scripts/deploy/deploy.sh"' "$INSTALL_SH" "no hardcoded legacy deploy.sh in install.sh shortcuts"
 grep_has  'zpw_backup_wrappers'    "$DEPLOY_SH"  "deploy.sh backs up wrappers before a legacy cutover"

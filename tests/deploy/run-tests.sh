@@ -111,6 +111,7 @@ case "$*" in
         hang)    echo "Migrating: 2026_01_01_000000_add_widget"; sleep 60; exit 0 ;;
         *)       echo "Nothing to migrate."; exit 0 ;;
       esac ;;
+  *"zedproxy:seed-required-defaults"*) exit ${MOCK_SEED_RC:-0} ;;
   *"artisan schedule:list"*) exit ${MOCK_SCHEDULE_RC:-0} ;;
   *"zedproxy:health"*)
       case "${MOCK_HEALTH_MODE:-ok}" in
@@ -1705,6 +1706,28 @@ assert_eq "$(zpd_manifest_get "$fman" original_failure_reason_code)" "migration_
 assert_eq "$(zpd_manifest_get "$fman" rollback_readiness)" "success" "rollback readiness recorded as success"
 assert_eq "$(zpd_manifest_get "$fman" rollback_reconciliation)" "success" "rollback reconciliation recorded"
 assert_eq "$(zpd_manifest_get "$fman" failure_stage)" "migrate" "failure_stage equals the ORIGINAL stage (not a rollback stage)"
+unset ZPD_REPO_URL ZPD_REF; rm -rf "$BASE" "$(dirname "$SRC_BARE")"
+
+# Q4c. Required-defaults seeding runs on every deploy; its failure stops
+#      activation BEFORE the symlink switch and records the stage.
+new_base; mk_source_repo
+psha="$(mk_release_git 20260101000000-aaaaaaaaaaaa)"; zpd_switch_current 20260101000000-aaaaaaaaaaaa
+setup_atomic_service_configs; zpw_install_wrappers >/dev/null 2>&1
+export ZPD_REPO_URL="$SRC_BARE" ZPD_REF=main
+MOCK_LOG="${BASE}/php-invocations.log"
+( export MOCK_LOG; MOCK_HTTP_CODE=200 dep_main >/dev/null 2>&1 ); rc=$?
+assert_rc 0 "$rc" "deploy succeeds with the required-defaults stage"
+assert_true bash -c "grep -q 'zedproxy:seed-required-defaults' '$MOCK_LOG'"
+unset MOCK_LOG
+after_ok="$(zpd_current_release)"
+sleep 1
+( MOCK_SEED_RC=1 MOCK_HTTP_CODE=200 dep_main >/dev/null 2>&1 ); rc=$?
+assert_rc 1 "$rc" "required-defaults seeding failure fails the deploy"
+assert_eq "$(zpd_current_release)" "$after_ok" "current NOT switched after a seeding failure"
+attempted="$(ls "$BASE/releases" | grep -E '\.failed$' | tail -1)"
+fman="${BASE}/releases/${attempted}/RELEASE_MANIFEST.json"
+assert_eq "$(zpd_manifest_get "$fman" original_failure_stage)" "required_defaults" "failure stage is required_defaults"
+assert_eq "$(zpd_manifest_get "$fman" original_failure_reason_code)" "required_defaults_failed" "failure reason recorded"
 unset ZPD_REPO_URL ZPD_REF; rm -rf "$BASE" "$(dirname "$SRC_BARE")"
 
 echo "-- extended scheduler discovery --"
