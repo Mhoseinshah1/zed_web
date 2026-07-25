@@ -1930,6 +1930,59 @@ mk_release 20260101000000-aaaaaaaaaaaa activating
 ); assert_rc 1 "$?" "stale-release finalization failure propagates non-zero"
 rm -rf "$BASE"
 
+echo "-- Codex review fixes (relative cron form, snapshot modes, rollback cron sources, supervisor autostart) --"
+
+# X1. The installer's relative form `cd <base> && php artisan schedule:run` is
+#     classified OURS and reconciled away (no double scheduling)…
+new_base; sha="$(mk_release_git 20260101000000-aaaaaaaaaaaa)"; zpd_switch_current 20260101000000-aaaaaaaaaaaa
+setup_atomic_service_configs; rm -f "$ZPD_SCHED_CRON"
+printf '* * * * * www-data cd %s && php artisan schedule:run >> /var/log/x 2>&1\n' "$BASE" > "$ZPD_ETC_CRONTAB"
+dep_scheduler_scan "$BASE" | grep -q "^OURS ${ZPD_ETC_CRONTAB}" \
+  && ok "relative-artisan cron form classified OURS" || bad "relative-artisan cron form not classified OURS"
+assert_true dep_reconcile_scheduler "$BASE"
+assert_false bash -c "grep -q 'schedule:run' '$ZPD_ETC_CRONTAB'"
+assert_true dep_scheduler_single_source_ok "$BASE"
+# …while a foreign app's relative artisan after `cd <base>` stays FOREIGN.
+printf '* * * * * www-data cd %s && php /other/app/artisan schedule:run\n' "$BASE" > "$ZPD_ETC_CRONTAB"
+dep_scheduler_scan "$BASE" | grep -q "^FOREIGN ${ZPD_ETC_CRONTAB}" \
+  && ok "foreign absolute artisan after cd stays FOREIGN" || bad "foreign artisan misclassified as ours"
+rm -rf "$BASE"
+
+# X2. Snapshot copies keep the ORIGINAL mode — a 0644 cron file is restored as
+#     0644, never forced to the snapshot directory's 0600.
+new_base; sha="$(mk_release_git 20260101000000-aaaaaaaaaaaa)"; zpd_switch_current 20260101000000-aaaaaaaaaaaa
+setup_atomic_service_configs; chmod 644 "$ZPD_SCHED_CRON"
+snap="$(dep_snapshot_operational_config mode-test)"
+printf '* * * * * root echo corrupted\n' > "$ZPD_SCHED_CRON"; chmod 600 "$ZPD_SCHED_CRON"
+( dep_restore_operational_snapshot "$snap" >/dev/null 2>&1 ); assert_rc 0 "$?" "restore succeeds"
+assert_eq "$(stat -c '%a' "$ZPD_SCHED_CRON")" "644" "restored cron keeps its original 0644 mode"
+rm -rf "$BASE"
+
+# X3. A failed first cutover puts a STRIPPED non-canonical cron entry back from
+#     the per-activation snapshot — the legacy app never loses its scheduler.
+new_base; make_legacy_base; setup_legacy_service_configs
+printf '* * * * * root cd %s && php artisan schedule:run\n' "$BASE" > "$ZPD_ETC_CRONTAB"
+zpd_save_legacy_rollback "$BASE" "$ZPD_NGINX_CONF" "$ZPD_SUPERVISOR_CONF" "$ZPD_SCHED_CRON"
+DEP_SNAPSHOT_DIR="$(dep_snapshot_operational_config cutover-test)"
+: > "$ZPD_ETC_CRONTAB"                          # reconciliation stripped the entry
+( MOCK_HTTP_CODE=200 dep_first_cutover_rollback "$BASE" php8.3-fpm >/dev/null 2>&1 ); rc=$?
+assert_rc 0 "$rc" "legacy rollback succeeds and restores stripped cron sources"
+assert_true bash -c "grep -q 'schedule:run' '$ZPD_ETC_CRONTAB'"
+DEP_SNAPSHOT_DIR=""
+rm -rf "$BASE"
+
+# X4. A Supervisor scheduler stanza with autostart=false that is NOT running is
+#     an inactive leftover (deploy proceeds); the same stanza running blocks.
+new_base; sha="$(mk_release_git 20260101000000-aaaaaaaaaaaa)"; zpd_switch_current 20260101000000-aaaaaaaaaaaa
+setup_atomic_service_configs; rm -f "$ZPD_SCHED_CRON"
+printf '[program:zp-sched]\ncommand=php %s/current/artisan schedule:run\nautostart=false\n' "$BASE" > "${BASE}/supervisor.d/zp-sched.conf"
+( MOCK_SUP_STATUS='zp-sched   STOPPED   Not started' dep_reconcile_scheduler "$BASE" >/dev/null 2>&1 ); \
+  assert_rc 0 "$?" "stopped autostart=false supervisor stanza does not block"
+rm -f "$ZPD_SCHED_CRON"
+( MOCK_SUP_STATUS='zp-sched   RUNNING   pid 7, uptime 0:01:00' dep_reconcile_scheduler "$BASE" >/dev/null 2>&1 ); \
+  assert_rc 1 "$?" "the SAME stanza while RUNNING blocks"
+rm -rf "$BASE"
+
 rm -rf "$MOCKBIN"
 echo ""
 echo "== results: ${PASS} passed, ${FAIL} failed =="

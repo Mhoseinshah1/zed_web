@@ -619,15 +619,18 @@ zpd_scheduler_lines() {
 # -----------------------------------------------------------------------------
 # zpd_scheduler_ours_re BASE — the ERE matching OUR scheduler invocations: the
 # EXECUTED artisan path must live under BASE (legacy base/artisan,
-# current/artisan, or an individual releases/<id>/artisan). Shared by
-# classification AND removal so the two can never disagree. A foreign app's
-# schedule:run that merely mentions BASE elsewhere on the line (e.g.
-# `cd <base> && php /other/artisan schedule:run`) is NOT ours.
+# current/artisan, or an individual releases/<id>/artisan), OR the installer's
+# own relative form `cd <base> && php artisan schedule:run` (where the artisan
+# actually executed resolves under BASE). Shared by classification AND removal
+# so the two can never disagree. A foreign app's schedule:run that merely
+# mentions BASE elsewhere on the line (e.g. `cd <base> && php /other/artisan
+# schedule:run`) is NOT ours — the relative alternative requires the literal
+# relative `php artisan` immediately after the cd into BASE.
 # -----------------------------------------------------------------------------
 zpd_scheduler_ours_re() {
     local esc
     esc="$(printf '%s' "$1" | sed 's/[][\.*^$(){}?+|]/\\&/g')"
-    printf '%s(/current|/releases/[^[:space:]]*)?/artisan[[:space:]]+schedule:run' "$esc"
+    printf '(%s(/current|/releases/[^[:space:]]*)?/artisan[[:space:]]+schedule:run|cd[[:space:]]+%s(/current)?/?[[:space:]]*&&[[:space:]]*php[[:space:]]+artisan[[:space:]]+schedule:run)' "$esc" "$esc"
 }
 
 # zpd_scheduler_line_is_ours LINE BASE — 0 when LINE executes the ZedProxy

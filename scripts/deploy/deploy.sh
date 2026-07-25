@@ -866,13 +866,16 @@ dep_snapshot_operational_config() {
     mkdir -p "$dir" 2>/dev/null || return 1
     chmod 700 "$dir" 2>/dev/null || true
     chown 0:0 "$dir" 2>/dev/null || true
+    # The copies keep their ORIGINAL mode/ownership (`cp -a`) — the restore
+    # uses the copy's metadata as the restoration source, so forcing 0600 here
+    # would restore e.g. a 0644 cron file as 0600. Confidentiality comes from
+    # the 0700 root-owned snapshot directory, never from mutating the copies.
     local f
     for f in "$(zpd_nginx_conf_path)" "$(zpd_local_health_conf_path)" \
              "$(zpd_supervisor_conf_path)" "$(zpd_scheduler_cron_path)" \
              "$(zpd_deploy_env_file)"; do
         if [ -f "$f" ]; then
             cp -a "$f" "${dir}/$(basename "$f").snap" 2>/dev/null || return 1
-            chmod 600 "${dir}/$(basename "$f").snap" 2>/dev/null || true
         fi
     done
     if declare -F zpw_backup_wrappers >/dev/null 2>&1; then
@@ -891,7 +894,6 @@ dep_snapshot_operational_config() {
         n_src=$((n_src + 1))
         if [ -f "$src" ]; then
             cp -a "$src" "${dir}/sched-sources/src-${n_src}" 2>/dev/null || return 1
-            chmod 600 "${dir}/sched-sources/src-${n_src}" 2>/dev/null || true
             printf '%s\t%s\t%s\t%s\t1\n' "$n_src" "$src" \
                 "$(stat -c '%a' "$src" 2>/dev/null)" "$(stat -c '%u:%g' "$src" 2>/dev/null)" >> "$map" || return 1
         else
@@ -1148,17 +1150,34 @@ dep_scheduler_scan_noncron() {
     return 0
 }
 
+# _dep_supervisor_program_active CONF — is the Supervisor program defined in
+# CONF active? autostart defaults to true, so any stanza without an explicit
+# `autostart=false` is active (supervisord will run it). With autostart=false
+# the program is active only when the daemon reports it RUNNING/STARTING right
+# now (bounded query; an unparseable stanza stays conservatively active).
+_dep_supervisor_program_active() {
+    local f="$1" prog
+    if ! grep -qiE '^[[:space:]]*autostart[[:space:]]*=[[:space:]]*false' "$f" 2>/dev/null; then
+        return 0
+    fi
+    prog="$(sed -n 's/^\[program:\([^]]*\)\].*/\1/p' "$f" 2>/dev/null | head -n1)"
+    [ -n "$prog" ] || return 0
+    dep_svc "$ZPD_SUPERVISORCTL" status "$prog" 2>/dev/null | grep -qE 'RUNNING|STARTING'
+}
+
 # dep_scheduler_filter_active — stdin: scan lines from dep_scheduler_scan_noncron;
 # stdout: only the ACTIVE subset. A systemd source is active when its unit is
-# running/activating or enabled (will start at boot). Every Supervisor program
-# is treated as active — supervisord autostarts loaded programs. Everything
+# running/activating or enabled (will start at boot). A Supervisor program is
+# active unless it is autostart=false AND not currently running. Everything
 # else is an INACTIVE leftover: a cleanup candidate, not a live duplicate.
 dep_scheduler_filter_active() {
     local line state en ac
     while IFS= read -r line; do
         [ -n "$line" ] || continue
         case "$line" in
-            SUPERVISOR\ *) printf '%s\n' "$line" ;;
+            SUPERVISOR\ *)
+                _dep_supervisor_program_active "${line#SUPERVISOR }" && printf '%s\n' "$line"
+                ;;
             SYSTEMD\ *)
                 state="${line##*\(}"; state="${state%\)}"
                 en="${state%%/*}"; ac="${state##*/}"
@@ -1483,6 +1502,16 @@ dep_first_cutover_rollback() {
         zpw_restore_wrappers "$(dep_wrapper_backup_dir)" || dep_warn "wrapper restore failed"
     fi
     rm -f "$(zpd_current_link)" 2>/dev/null || true
+    # Reconciliation may have STRIPPED the legacy scheduler entry from a
+    # non-canonical cron source (e.g. /etc/crontab) before this failure. Those
+    # sources are recorded in the per-activation operational snapshot — put
+    # them back (scheduler scope only, after `current` is dropped so no check
+    # runs against the failed release) so the restored legacy application
+    # never comes back with its scheduler silently disabled.
+    if [ -n "${DEP_SNAPSHOT_DIR:-}" ] && [ -d "$DEP_SNAPSHOT_DIR" ]; then
+        dep_restore_operational_snapshot "$DEP_SNAPSHOT_DIR" scheduler \
+            || { dep_err "rollback: could not restore the pre-cutover scheduler sources"; return 1; }
+    fi
     # SEMANTIC verification of the restored configuration — the rollback is
     # never reported healthy just because files came back (or because the
     # internal health vhost was repaired): the public Nginx root must serve
@@ -1497,8 +1526,8 @@ dep_first_cutover_rollback() {
             || { dep_err "rollback: restored Supervisor command does not run the legacy artisan"; return 1; }
     fi
     if [ -f "$(zpd_scheduler_cron_path)" ]; then
-        grep -Eq "php ${base}(/current)?/artisan[[:space:]]+schedule:run" "$(zpd_scheduler_cron_path)" \
-            && ! grep -q "php ${base}/current/artisan" "$(zpd_scheduler_cron_path)" \
+        grep -Eq "$(zpd_scheduler_ours_re "$base")" "$(zpd_scheduler_cron_path)" \
+            && ! grep -q "${base}/current/artisan" "$(zpd_scheduler_cron_path)" \
             || { dep_err "rollback: restored Scheduler source is not the expected legacy source"; return 1; }
     fi
     # Verified loopback health target for the RESTORED LEGACY app (root
