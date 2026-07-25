@@ -73,10 +73,25 @@ class EmailVerificationService
         // When the operational configuration drifts (fingerprint change) or
         // the proof expires, enforcement silently degrades to optional so new
         // users are never locked out behind an unproven mailer.
-        return $this->isEnabled()
-            && (bool) SiteSetting::get('email_verification_required_on_register', false)
+        //
+        // The enabled/required PAIR is read in ONE statement (mirroring the
+        // settings page's one-transaction save), so this can never observe a
+        // half-applied policy — enabled from a new save, required from the
+        // old one — and stamp a registration with a mixed state.
+        $flags = SiteSetting::query()
+            ->whereIn('key', ['email_verification_enabled', 'email_verification_required_on_register'])
+            ->pluck('value', 'key');
+
+        return $this->settingIsTrue($flags->get('email_verification_enabled'))
+            && $this->settingIsTrue($flags->get('email_verification_required_on_register'))
             && $this->isMailConfigured()
             && $this->hasVerifiedMailTest();
+    }
+
+    /** Truthiness matching SiteSetting::get's coercion ('true' or numeric). */
+    private function settingIsTrue(?string $value): bool
+    {
+        return $value === 'true' || (is_numeric($value) && (int) $value !== 0);
     }
 
     // ── Transport-test proof ─────────────────────────────────────────────────

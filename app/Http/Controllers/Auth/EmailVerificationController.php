@@ -115,6 +115,14 @@ class EmailVerificationController extends Controller
     {
         $user = $request->user();
 
+        // This endpoint exists ONLY for the active verification flow (fixing
+        // a mistyped address before the code arrives). It must never act as a
+        // hidden self-service email changer: with verification disabled, or
+        // for an already-verified account, refuse before touching anything.
+        if ($user->hasVerifiedEmailAddress() || ! $this->verification->isEnabled()) {
+            return redirect()->route('dashboard.index');
+        }
+
         // Normalize BEFORE validation so uniqueness is checked against the
         // value that will be stored (and case-insensitively — PostgreSQL's
         // varchar unique index would otherwise let Victim@X and victim@x

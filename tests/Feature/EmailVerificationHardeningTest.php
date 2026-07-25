@@ -218,6 +218,84 @@ class EmailVerificationHardeningTest extends TestCase
         Mail::assertSent(TestEmailMail::class, 1);
     }
 
+    public function test_disable_switch_works_during_a_mail_outage_even_with_required_left_on(): void
+    {
+        // The proof is gone (expired / transport now unusable) and required
+        // was previously on — the admin must still be able to turn the
+        // feature OFF without touching the required toggle.
+        SiteSetting::set('email_mail_test_fingerprint', '');
+        $this->assertFalse(app(EmailVerificationService::class)->hasVerifiedMailTest());
+
+        Livewire::actingAs($this->admin())
+            ->test(EmailSettingsPage::class)
+            ->fillForm([
+                'email_verification_enabled' => false,
+                'email_verification_required_on_register' => true,
+            ])
+            ->call('save')
+            ->assertNotified('تنظیمات ذخیره شد.');
+
+        $this->assertFalse((bool) SiteSetting::get('email_verification_enabled'));
+        $this->assertTrue((bool) SiteSetting::get('email_verification_required_on_register'));
+        $this->assertFalse(app(EmailVerificationService::class)->isRequiredOnRegister());
+
+        // The guard still bites the moment required mode would become ACTIVE:
+        // re-enabling with the stale required toggle is refused unchanged.
+        Livewire::actingAs($this->admin())
+            ->test(EmailSettingsPage::class)
+            ->fillForm([
+                'email_verification_enabled' => true,
+                'email_verification_required_on_register' => true,
+            ])
+            ->call('save');
+
+        $this->assertFalse((bool) SiteSetting::get('email_verification_enabled'), 'refused save writes nothing');
+    }
+
+    public function test_required_policy_pair_accepts_numeric_truthy_stored_values(): void
+    {
+        // SiteSetting::set casts to string — a boolean writer stores '1'.
+        SiteSetting::set('email_verification_enabled', true);
+        SiteSetting::set('email_verification_required_on_register', 1);
+
+        $this->assertTrue(app(EmailVerificationService::class)->isRequiredOnRegister());
+    }
+
+    public function test_change_address_endpoint_is_gated_on_the_active_verification_flow(): void
+    {
+        Mail::fake();
+
+        // An already-VERIFIED account: the mistyped-address fixer must never
+        // double as a hidden self-service email changer.
+        $verified = User::factory()->create([
+            'email' => 'settled@example.com',
+            'email_verified_at' => now()->subDay(),
+            'password' => Hash::make('secret-pass-1'),
+        ]);
+        $this->actingAs($verified)->patch('/email/verification/change-address', [
+            'email' => 'other@example.com', 'password' => 'secret-pass-1',
+        ])->assertRedirect(route('dashboard.index'));
+        $verified->refresh();
+        $this->assertSame('settled@example.com', $verified->email, 'address untouched');
+        $this->assertNotNull($verified->email_verified_at, 'verification untouched');
+
+        // Feature DISABLED: the endpoint refuses even for unverified users —
+        // no address change, no verification reset, no code issuance.
+        SiteSetting::set('email_verification_enabled', 'false');
+        $unverified = $this->unverifiedUser([
+            'email' => 'pending@example.com',
+            'password' => Hash::make('secret-pass-1'),
+        ]);
+        auth()->logout();
+        $this->app['auth']->forgetGuards();
+        $this->actingAs($unverified)->patch('/email/verification/change-address', [
+            'email' => 'sneaky@example.com', 'password' => 'secret-pass-1',
+        ])->assertRedirect(route('dashboard.index'));
+        $this->assertSame('pending@example.com', $unverified->fresh()->email, 'address untouched while disabled');
+        $this->assertSame(0, EmailVerificationCode::count(), 'no code issued');
+        Mail::assertNothingSent();
+    }
+
     // ── Item 4: sanitized delivery errors ────────────────────────────────────
 
     public function test_dispatch_failure_stores_sanitized_error_and_frees_the_cooldown(): void

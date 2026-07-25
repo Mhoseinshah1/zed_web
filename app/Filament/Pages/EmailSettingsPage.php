@@ -15,6 +15,7 @@ use Filament\Forms\Contracts\HasForms;
 use Filament\Forms\Form;
 use Filament\Notifications\Notification;
 use Filament\Pages\Page;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\RateLimiter;
@@ -129,11 +130,18 @@ class EmailSettingsPage extends Page implements HasActions, HasForms
     {
         $data = $this->form->getState();
 
+        $enabled = ! empty($data['email_verification_enabled']);
         $requireOnRegister = ! empty($data['email_verification_required_on_register']);
+
+        // The mail guards below apply only when required mode will actually be
+        // ACTIVE (enabled AND required). A leftover required=true must never
+        // block turning the feature OFF — e.g. disabling verification during a
+        // mail outage, when the proof has expired and could not be renewed.
+        $requiredWillBeActive = $enabled && $requireOnRegister;
 
         // ── Validation guard: never allow REQUIRED verification while the
         //    mailer is clearly unconfigured (users could never receive codes).
-        if ($requireOnRegister && ! $this->mailLooksConfigured()) {
+        if ($requiredWillBeActive && ! $this->mailLooksConfigured()) {
             Notification::make()
                 ->title('برای اجباری کردن تایید ایمیل، ابتدا باید پیکربندی ایمیل سرور (.env) کامل و قابل استفاده باشد. mailer فعلی: '.$this->mailerName())
                 ->danger()->send();
@@ -146,7 +154,7 @@ class EmailSettingsPage extends Page implements HasActions, HasForms
         //    demands a recent SUCCESSFUL test through the CURRENT
         //    configuration (fingerprint-matched), so admins can never lock
         //    new users behind an unproven transport.
-        if ($requireOnRegister && ! $this->mailTestVerified()) {
+        if ($requiredWillBeActive && ! $this->mailTestVerified()) {
             Notification::make()
                 ->title('برای اجباری کردن تایید ایمیل، ابتدا باید یک «ارسال ایمیل تست» موفق با همین پیکربندی انجام شود.')
                 ->danger()->send();
@@ -157,12 +165,19 @@ class EmailSettingsPage extends Page implements HasActions, HasForms
         // (No global "required since" timestamp: the registration transaction
         // stamps every NEW account with the effective policy at that moment —
         // an immutable per-user marker the middleware enforces.)
-        SiteSetting::set('email_verification_enabled', ! empty($data['email_verification_enabled']) ? 'true' : 'false');
-        SiteSetting::set('email_verification_required_on_register', $requireOnRegister ? 'true' : 'false');
-        SiteSetting::set('email_otp_ttl_minutes', (int) ($data['email_otp_ttl_minutes'] ?? EmailVerificationService::CODE_TTL_MINUTES));
-        SiteSetting::set('email_otp_max_attempts', (int) ($data['email_otp_max_attempts'] ?? EmailVerificationService::MAX_ATTEMPTS));
-        SiteSetting::set('email_otp_resend_cooldown_seconds', (int) ($data['email_otp_resend_cooldown_seconds'] ?? EmailVerificationService::RESEND_COOLDOWN_SEC));
-        SiteSetting::set('email_otp_daily_cap', (int) ($data['email_otp_daily_cap'] ?? EmailVerificationService::DAILY_CAP));
+        //
+        // ONE transaction: the enabled/required pair (and the OTP rules) commit
+        // atomically, so a concurrent registration can never be stamped from a
+        // half-applied policy — enabled from the new save, required from the
+        // old one. (The service reads the pair back in a single statement.)
+        DB::transaction(function () use ($data, $enabled, $requireOnRegister): void {
+            SiteSetting::set('email_verification_enabled', $enabled ? 'true' : 'false');
+            SiteSetting::set('email_verification_required_on_register', $requireOnRegister ? 'true' : 'false');
+            SiteSetting::set('email_otp_ttl_minutes', (int) ($data['email_otp_ttl_minutes'] ?? EmailVerificationService::CODE_TTL_MINUTES));
+            SiteSetting::set('email_otp_max_attempts', (int) ($data['email_otp_max_attempts'] ?? EmailVerificationService::MAX_ATTEMPTS));
+            SiteSetting::set('email_otp_resend_cooldown_seconds', (int) ($data['email_otp_resend_cooldown_seconds'] ?? EmailVerificationService::RESEND_COOLDOWN_SEC));
+            SiteSetting::set('email_otp_daily_cap', (int) ($data['email_otp_daily_cap'] ?? EmailVerificationService::DAILY_CAP));
+        });
 
         Notification::make()->title('تنظیمات ذخیره شد.')->success()->send();
     }
