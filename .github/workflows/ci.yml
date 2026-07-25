@@ -580,6 +580,49 @@ jobs:
             || { echo '::error::PostgreSQL/Redis probes are not bounded.'; exit 1; }
           echo 'Transactionality + fail-closed repair invariants hold.'
 
+      - name: Assert legacy-rollback, failure-context, and discovery invariants (Prompt 20)
+        run: |
+          set -euo pipefail
+          dep=scripts/deploy/deploy.sh
+          rep=scripts/deploy/repair.sh
+          # ── First-cutover rollback: bounded Supervisor ops, fail-closed, and a
+          # legacy loopback health target (never current/public after rm current).
+          body="$(awk '/^dep_first_cutover_rollback\(\)/{f=1} f&&/^}/{f=0} f' "$dep")"
+          printf '%s' "$body" | grep -q 'dep_svc "\$ZPD_SUPERVISORCTL"' \
+            || { echo '::error::first-cutover rollback supervisor ops are not bounded.'; exit 1; }
+          printf '%s' "$body" | grep -Eq 'SUPERVISORCTL[^\n]*\|\| *true' \
+            && { echo '::error::first-cutover rollback supervisor ops fail open.'; exit 1; }
+          printf '%s' "$body" | grep -q '/public"' \
+            || { echo '::error::legacy rollback lacks a legacy-root health target.'; exit 1; }
+          printf '%s' "$body" | grep -q 'dep_supervisor_group_running' \
+            || { echo '::error::legacy rollback does not require RUNNING workers.'; exit 1; }
+          # ── Immutable original-failure context.
+          grep -q 'dep_record_failure' "$dep" && grep -q 'original_failure_stage' "$dep" \
+            || { echo '::error::immutable original-failure context missing.'; exit 1; }
+          grep -q 'rollback_reconciliation=' "$dep" \
+            || { echo '::error::rollback reconciliation state not recorded.'; exit 1; }
+          # ── Extended scheduler discovery + single active source.
+          for fn in dep_scheduler_scan_noncron dep_scheduler_single_source_ok; do
+            grep -q "$fn" "$dep" || { echo "::error::missing ${fn} (extended discovery)."; exit 1; }
+          done
+          grep -q 'zpd_systemd_unit_dir' scripts/lib/deploy-lib.sh \
+            || { echo '::error::systemd discovery paths missing.'; exit 1; }
+          # ── Fail-closed snapshot restore.
+          awk '/^dep_restore_operational_snapshot\(\)/{f=1} f&&/^}/{f=0} f' "$dep" \
+            | grep -q 'dep_supervisor_group_running' \
+            || { echo '::error::snapshot restore does not require RUNNING workers.'; exit 1; }
+          # ── Exact repair component flags.
+          for flag in -- --nginx --supervisor --scheduler --wrappers --health-vhost --manifests --state --operational; do
+            [ "$flag" = "--" ] && continue
+            grep -q -- "$flag" "$rep" || { echo "::error::repair flag ${flag} missing."; exit 1; }
+          done
+          # ── Shared failure recorder + central failure events for every stage.
+          grep -q 'dep_fail' "$dep" && grep -q 'last-failure.json' "$dep" \
+            || { echo '::error::shared failure recorder / central failure event missing.'; exit 1; }
+          [ "$(grep -c 'dep_fail ' "$dep")" -ge 8 ] \
+            || { echo '::error::dep_fail is not wired into every meaningful stage.'; exit 1; }
+          echo 'Legacy-rollback, failure-context, and discovery invariants hold.'
+
       # ── Supply-chain verification (authoritative home; formerly the separate
       #    supply-chain.yml workflow, folded in here to remove duplicate jobs). ──
       - name: Assert no forbidden supply-chain patterns remain

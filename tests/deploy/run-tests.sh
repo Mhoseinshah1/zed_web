@@ -119,6 +119,10 @@ exit ${MOCK_PGDUMP_RC:-0}
 EOF
 cat > "${MOCKBIN}/systemctl" <<'EOF'
 #!/usr/bin/env bash
+case "${1:-}" in
+  is-enabled) echo "${MOCK_TIMER_ENABLED:-enabled}"; exit 0 ;;
+  is-active)  echo "${MOCK_TIMER_ACTIVE:-active}";  exit 0 ;;
+esac
 exit ${MOCK_SYSTEMCTL_RC:-0}
 EOF
 cat > "${MOCKBIN}/nginx" <<'EOF'
@@ -188,6 +192,8 @@ export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER
 
 # Keep doctor sub-checks fast in the suite (each is bounded anyway).
 export ZDR_TIMEOUT=3
+# Temp fixtures are root-owned; evaluate shared-writability for root.
+export ZPD_APP_USER=root
 export ZPD_DOCTOR_TIMEOUT=30
 
 # shellcheck disable=SC1090
@@ -252,6 +258,9 @@ new_base() {
     export ZPD_CRON_SPOOL_DIR="${BASE}/cron-spool"
     export ZPD_SCHED_CRON="${BASE}/cron.d/zedproxy-scheduler"
     export ZPD_SCHED_LOG="${BASE}/scheduler.log"
+    # Non-cron scheduler homes (systemd units, Supervisor programs) — all temp.
+    export ZPD_SYSTEMD_UNIT_DIR="${BASE}/systemd"
+    export ZPD_SUPERVISOR_SCAN_DIR="${BASE}/supervisor.d"
     export ZPD_WRAPPER_BIN="${BASE}/wbin"
     export ZPD_WRAPPER_LIB="${BASE}/wlib"
     export ZPD_DEPLOY_ENV="${BASE}/deploy.env"
@@ -260,7 +269,8 @@ new_base() {
     export ZPD_FPM_SOCK="${BASE}/php-fpm.sock"
     mkdir -p "${BASE}/releases" "${BASE}/shared/storage/app/public" \
              "${BASE}/shared/storage/framework" "${BASE}/wbin" "${BASE}/wlib" \
-             "${BASE}/cron.d" "${BASE}/cron-spool" "${BASE}/logs"
+             "${BASE}/cron.d" "${BASE}/cron-spool" "${BASE}/logs" \
+             "${BASE}/systemd" "${BASE}/supervisor.d"
     printf 'APP_KEY=base64:AAAABBBBCCCCDDDDEEEEFFFFGGGGHHHHIIIIJJJJKKK=\nDB_DATABASE=zed\nDB_USERNAME=zed\nDB_PASSWORD=secret\nREDIS_HOST=127.0.0.1\nREDIS_PORT=6379\nREDIS_PASSWORD=null\n' > "${BASE}/shared/.env"
 }
 
@@ -1423,6 +1433,195 @@ new_base; setup_atomic_service_configs
   assert_rc 1 "$?" "reread failure surfaces even with a correct supervisor file"
 ( dep_reconcile_supervisor "$BASE" >/dev/null 2>&1 ); assert_rc 0 "$?" "correct file + healthy daemon passes"
 rm -rf "$BASE"
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Prompt 20 — legacy rollback health, immutable failure context, extended
+# scheduler discovery, fail-closed restore, exact repair flags, failure events
+# ═════════════════════════════════════════════════════════════════════════════
+
+echo "-- first-cutover legacy rollback --"
+
+# Q1/Q3. Legacy rollback works with NO `current` and repoints the loopback
+#        health vhost at the LEGACY webroot (never current/public).
+new_base; make_legacy_base; setup_legacy_service_configs
+zpd_save_legacy_rollback "$BASE" "$ZPD_NGINX_CONF" "$ZPD_SUPERVISOR_CONF" "$ZPD_SCHED_CRON"
+mkdir -p "${BASE}/releases/20260101000000-aaaaaaaaaaaa"; zpd_switch_current 20260101000000-aaaaaaaaaaaa
+dep_bring_down "$BASE"     # legacy app fenced during the failed cutover
+( MOCK_HTTP_CODE=200 dep_first_cutover_rollback "$BASE" php8.3-fpm >/dev/null 2>&1 ); rc=$?
+assert_rc 0 "$rc" "legacy rollback passes full health with current absent"
+assert_false test -e "$(zpd_current_link)"
+assert_true bash -c "grep -q 'root ${BASE}/public;' '$ZPD_LOCAL_HEALTH_CONF'"
+assert_false bash -c "grep -q 'current/public' '$ZPD_LOCAL_HEALTH_CONF'"     # no dangling health root
+assert_false zpd_is_in_maintenance "$BASE"
+rm -rf "$BASE"
+
+# Q2. First-cutover Supervisor commands are BOUNDED (a hang times out fast).
+t0=$SECONDS
+new_base; make_legacy_base; setup_legacy_service_configs
+zpd_save_legacy_rollback "$BASE" "$ZPD_NGINX_CONF" "$ZPD_SUPERVISOR_CONF" "$ZPD_SCHED_CRON"
+( MOCK_SUP_HANG=1 ZPD_SVC_TIMEOUT=1 MOCK_HTTP_CODE=200 dep_first_cutover_rollback "$BASE" php8.3-fpm >/dev/null 2>&1 ); rc=$?
+elapsed=$((SECONDS - t0))
+assert_true test "$rc" -ne 0        # bounded + fail-closed
+assert_true test "$elapsed" -lt 15
+rm -rf "$BASE"
+
+# Q2b. Fail-closed: FATAL workers fail the legacy rollback.
+new_base; make_legacy_base; setup_legacy_service_configs
+zpd_save_legacy_rollback "$BASE" "$ZPD_NGINX_CONF" "$ZPD_SUPERVISOR_CONF" "$ZPD_SCHED_CRON"
+( MOCK_SUP_STATUS='zedproxy-worker:x FATAL Exited' MOCK_HTTP_CODE=200 dep_first_cutover_rollback "$BASE" php8.3-fpm >/dev/null 2>&1 ); \
+  assert_rc 1 "$?" "legacy rollback fails closed when workers are not RUNNING"
+rm -rf "$BASE"
+
+echo "-- immutable original failure context --"
+
+# Q4a. dep_record_failure is immutable: the FIRST failure wins.
+DEP_ORIG_FAILURE_STAGE=""; DEP_ORIG_FAILURE_REASON=""; DEP_ORIG_FAILURE_INVARIANT=""; DEP_ORIG_FAILURE_MESSAGE=""
+dep_record_failure "internal_readiness" "internal_readiness_failed" "dep_verify_internal_release" "scheduler broken"
+dep_record_failure "rollback_readiness" "later" "later" "later"
+assert_eq "$DEP_ORIG_FAILURE_STAGE" "internal_readiness" "first recorded failure is immutable"
+DEP_ORIG_FAILURE_STAGE=""; DEP_ORIG_FAILURE_REASON=""; DEP_ORIG_FAILURE_INVARIANT=""; DEP_ORIG_FAILURE_MESSAGE=""
+
+# Q4b. The ORIGINAL failure stage survives a rollback that runs through every
+#      rollback stage to SUCCESS (migrate failure + healthy previous release).
+new_base; mk_source_repo
+psha="$(mk_release_git 20260101000000-aaaaaaaaaaaa)"; zpd_switch_current 20260101000000-aaaaaaaaaaaa
+setup_atomic_service_configs; zpw_install_wrappers >/dev/null 2>&1
+export ZPD_REPO_URL="$SRC_BARE" ZPD_REF=main
+( MOCK_MIGRATE_MODE=fail MOCK_HTTP_CODE=200 dep_main >/dev/null 2>&1 ); rc=$?
+assert_rc 1 "$rc" "deploy with failing migrations fails"
+attempted="$(ls "$BASE/releases" | grep -E '\.failed$' | head -1)"
+fman="${BASE}/releases/${attempted}/RELEASE_MANIFEST.json"
+assert_eq "$(zpd_manifest_get "$fman" original_failure_stage)" "migrate" "original failure stage preserved through rollback"
+assert_eq "$(zpd_manifest_get "$fman" original_failure_reason_code)" "migration_failed" "original reason preserved"
+assert_eq "$(zpd_manifest_get "$fman" rollback_readiness)" "success" "rollback readiness recorded as success"
+assert_eq "$(zpd_manifest_get "$fman" rollback_reconciliation)" "success" "rollback reconciliation recorded"
+assert_eq "$(zpd_manifest_get "$fman" failure_stage)" "migrate" "failure_stage equals the ORIGINAL stage (not a rollback stage)"
+unset ZPD_REPO_URL ZPD_REF; rm -rf "$BASE" "$(dirname "$SRC_BARE")"
+
+echo "-- extended scheduler discovery --"
+
+# Q5. A systemd .timer executing our scheduler is detected → fail BEFORE modification.
+new_base; sha="$(mk_release_git 20260101000000-aaaaaaaaaaaa)"; zpd_switch_current 20260101000000-aaaaaaaaaaaa
+setup_atomic_service_configs; rm -f "$ZPD_SCHED_CRON"
+printf '[Timer]\nOnCalendar=*-*-* *:*:00\nExecStart=/usr/bin/php %s/current/artisan schedule:run\n' "$BASE" > "${BASE}/systemd/zp-sched.timer"
+out="$(dep_reconcile_scheduler "$BASE" 2>&1)"; rc=$?
+assert_rc 1 "$rc" "systemd .timer scheduler source aborts reconciliation"
+printf '%s' "$out" | grep -q 'SYSTEMD' && ok "systemd timer reported" || bad "systemd timer not reported"
+assert_false test -f "$ZPD_SCHED_CRON"       # failed BEFORE any modification
+rm -rf "$BASE"
+
+# Q6. A systemd .service executing our scheduler is detected.
+new_base; sha="$(mk_release_git 20260101000000-aaaaaaaaaaaa)"; zpd_switch_current 20260101000000-aaaaaaaaaaaa
+setup_atomic_service_configs; rm -f "$ZPD_SCHED_CRON"
+printf '[Service]\nExecStart=/usr/bin/php %s/artisan schedule:run\n' "$BASE" > "${BASE}/systemd/zp-sched.service"
+( dep_reconcile_scheduler "$BASE" >/dev/null 2>&1 ); assert_rc 1 "$?" "systemd .service scheduler source aborts reconciliation"
+assert_false test -f "$ZPD_SCHED_CRON"
+rm -rf "$BASE"
+
+# Q7. A Supervisor program executing our scheduler is detected.
+new_base; sha="$(mk_release_git 20260101000000-aaaaaaaaaaaa)"; zpd_switch_current 20260101000000-aaaaaaaaaaaa
+setup_atomic_service_configs; rm -f "$ZPD_SCHED_CRON"
+printf '[program:zp-sched]\ncommand=php %s/current/artisan schedule:run\n' "$BASE" > "${BASE}/supervisor.d/zp-sched.conf"
+( dep_reconcile_scheduler "$BASE" >/dev/null 2>&1 ); assert_rc 1 "$?" "Supervisor scheduler program aborts reconciliation"
+rm -rf "$BASE"
+
+# Q8. Ambiguous source fails BEFORE modification: the legacy crontab entry that
+#     WOULD have been migrated is untouched after the abort.
+new_base; sha="$(mk_release_git 20260101000000-aaaaaaaaaaaa)"; zpd_switch_current 20260101000000-aaaaaaaaaaaa
+setup_atomic_service_configs; rm -f "$ZPD_SCHED_CRON"
+printf '* * * * * root php %s/artisan schedule:run\n' "$BASE" > "$ZPD_ETC_CRONTAB"
+printf '[Service]\nExecStart=php %s/current/artisan schedule:run\n' "$BASE" > "${BASE}/systemd/amb.service"
+crontab_before="$(cat "$ZPD_ETC_CRONTAB")"
+( dep_reconcile_scheduler "$BASE" >/dev/null 2>&1 ); assert_rc 1 "$?" "ambiguous source aborts"
+assert_eq "$(cat "$ZPD_ETC_CRONTAB")" "$crontab_before" "no source was modified before the abort"
+rm -rf "$BASE"
+
+# Q9. After successful reconciliation EXACTLY ONE active scheduler source remains.
+new_base; sha="$(mk_release_git 20260101000000-aaaaaaaaaaaa)"; zpd_switch_current 20260101000000-aaaaaaaaaaaa
+setup_atomic_service_configs; rm -f "$ZPD_SCHED_CRON"
+printf '* * * * * www-data php %s/current/artisan schedule:run\n' "$BASE" > "${ZPD_CRON_D_DIR}/legacyfile"
+assert_true dep_reconcile_scheduler "$BASE"
+assert_true dep_scheduler_single_source_ok "$BASE"
+assert_false test -f "${ZPD_CRON_D_DIR}/legacyfile"
+rm -rf "$BASE"
+
+echo "-- fail-closed snapshot restore --"
+
+# Q10/Q11/Q12. Nginx reload, Supervisor reread/update, worker restart/RUNNING
+#              failures each make dep_restore_operational_snapshot fail.
+new_base; sha="$(mk_release_git 20260101000000-aaaaaaaaaaaa)"; zpd_switch_current 20260101000000-aaaaaaaaaaaa
+setup_atomic_service_configs
+snap="$(dep_snapshot_operational_config restore-test)"
+( MOCK_NGINX_RC=1 dep_restore_operational_snapshot "$snap" >/dev/null 2>&1 );    assert_rc 1 "$?" "nginx -t failure fails the restore"
+( MOCK_SYSTEMCTL_RC=1 dep_restore_operational_snapshot "$snap" >/dev/null 2>&1 ); assert_rc 1 "$?" "nginx reload failure fails the restore"
+( MOCK_SUP_REREAD_RC=1 dep_restore_operational_snapshot "$snap" >/dev/null 2>&1 ); assert_rc 1 "$?" "supervisor reread failure fails the restore"
+( MOCK_SUP_UPDATE_RC=1 dep_restore_operational_snapshot "$snap" >/dev/null 2>&1 ); assert_rc 1 "$?" "supervisor update failure fails the restore"
+( MOCK_SUP_RESTART_RC=1 dep_restore_operational_snapshot "$snap" >/dev/null 2>&1 ); assert_rc 1 "$?" "worker restart failure fails the restore"
+( MOCK_SUP_STATUS='zedproxy-worker:x FATAL Exited' dep_restore_operational_snapshot "$snap" >/dev/null 2>&1 ); assert_rc 1 "$?" "workers not RUNNING fails the restore"
+( dep_restore_operational_snapshot "$snap" >/dev/null 2>&1 ); assert_rc 0 "$?" "healthy restore passes"
+rm -rf "$BASE"
+
+echo "-- exact repair component flags --"
+
+# Q13. Each individual flag repairs ONLY its named component.
+new_base; sha="$(mk_release_git 20260101000000-aaaaaaaaaaaa)"; zpd_switch_current 20260101000000-aaaaaaaaaaaa
+setup_atomic_service_configs
+printf 'server {\n  listen 80;\n  root %s/public;\n}\n' "$BASE" > "$ZPD_NGINX_CONF"                       # broken nginx
+printf '[program:zedproxy-worker]\ncommand=php %s/artisan queue:work\n' "$BASE" > "$ZPD_SUPERVISOR_CONF"  # broken supervisor
+rm -f "$ZPD_SCHED_CRON" "$ZPD_LOCAL_HEALTH_CONF"                                                          # broken sched + hv
+printf '#!/usr/bin/env bash\n# OLD\n' > "${ZPD_WRAPPER_BIN}/zedproxy-update"; chmod +x "${ZPD_WRAPPER_BIN}/zedproxy-update"
+sup_broken="$(cat "$ZPD_SUPERVISOR_CONF")"
+( MOCK_HTTP_CODE=200 zrp_main --apply --nginx >/dev/null 2>&1 ); assert_rc 0 "$?" "--nginx repair succeeds"
+assert_true zpd_nginx_root_ok "$ZPD_NGINX_CONF" "$BASE"
+assert_eq "$(cat "$ZPD_SUPERVISOR_CONF")" "$sup_broken" "--nginx did not touch supervisor"
+assert_false test -f "$ZPD_SCHED_CRON"                       # --nginx did not touch scheduler
+( MOCK_HTTP_CODE=200 zrp_main --apply --supervisor >/dev/null 2>&1 ); assert_rc 0 "$?" "--supervisor repair succeeds"
+assert_true zpd_supervisor_ok "$ZPD_SUPERVISOR_CONF" "$BASE"
+assert_false test -f "$ZPD_SCHED_CRON"                       # still untouched
+( MOCK_HTTP_CODE=200 zrp_main --apply --wrappers >/dev/null 2>&1 ); assert_rc 0 "$?" "--wrappers repair succeeds"
+assert_true bash -c "grep -q 'zpd_resolve_script update.sh' '${ZPD_WRAPPER_BIN}/zedproxy-update'"
+assert_false test -f "$ZPD_SCHED_CRON"
+( MOCK_HTTP_CODE=200 zrp_main --apply --health-vhost >/dev/null 2>&1 ); assert_rc 0 "$?" "--health-vhost repair succeeds"
+assert_true zpd_local_health_conf_ok "$ZPD_LOCAL_HEALTH_CONF" "$BASE"
+assert_false test -f "$ZPD_SCHED_CRON"
+( MOCK_HTTP_CODE=200 zrp_main --apply --scheduler >/dev/null 2>&1 ); assert_rc 0 "$?" "--scheduler repair succeeds"
+assert_true zpd_scheduler_cron_ok "$ZPD_SCHED_CRON" "$BASE"
+rm -rf "$BASE"
+
+echo "-- failure events + diagnostics for every stage --"
+
+# Q14. BUILD failure → failed manifest + central failure event + bundle.
+new_base; mk_source_repo; setup_atomic_service_configs
+export ZPD_REPO_URL="$SRC_BARE" ZPD_REF=main
+( MOCK_NPM_CI_RC=1 MOCK_HTTP_CODE=200 dep_main >/dev/null 2>&1 ); assert_rc 1 "$?" "build failure fails deploy"
+lf="${BASE}/shared/deploy/last-failure.json"
+assert_eq "$(zpd_manifest_get "$lf" stage)" "build" "central failure event records stage=build"
+attempted="$(ls "$BASE/releases" | grep -E '\.failed$' | head -1)"
+assert_eq "$(zpd_manifest_get "${BASE}/releases/${attempted}/RELEASE_MANIFEST.json" result)" "failed" "build-failed manifest finalized"
+assert_true bash -c "ls ${BASE}/logs/diagnostics/zedproxy-diagnostic-*.tar.gz >/dev/null 2>&1"   # bundle produced
+unset ZPD_REPO_URL ZPD_REF; rm -rf "$BASE" "$(dirname "$SRC_BARE")"
+
+# Q15. SMOKE failure → failed manifest + central event + bundle.
+new_base; mk_source_repo; setup_atomic_service_configs
+export ZPD_REPO_URL="$SRC_BARE" ZPD_REF=main
+( MOCK_HEALTH_MODE=fail MOCK_HTTP_CODE=200 dep_main >/dev/null 2>&1 ); assert_rc 1 "$?" "smoke failure fails deploy"
+assert_eq "$(zpd_manifest_get "${BASE}/shared/deploy/last-failure.json" stage)" "smoke" "central failure event records stage=smoke"
+assert_true bash -c "ls ${BASE}/logs/diagnostics/zedproxy-diagnostic-*.tar.gz >/dev/null 2>&1"
+unset ZPD_REPO_URL ZPD_REF; rm -rf "$BASE" "$(dirname "$SRC_BARE")"
+
+# Q16a. CLONE failure (resolvable full-SHA ref, unreachable repo) → central event.
+new_base; setup_atomic_service_configs
+export ZPD_REPO_URL="https://nonexistent.invalid.example/x.git" ZPD_REF="0123456789abcdef0123456789abcdef01234567"
+( MOCK_HTTP_CODE=200 dep_main >/dev/null 2>&1 ); assert_rc 1 "$?" "clone failure fails deploy"
+assert_eq "$(zpd_manifest_get "${BASE}/shared/deploy/last-failure.json" stage)" "clone" "central failure event records stage=clone"
+unset ZPD_REPO_URL ZPD_REF; rm -rf "$BASE"
+
+# Q16b. BACKUP failure → central event.
+new_base; mk_source_repo; setup_atomic_service_configs
+export ZPD_REPO_URL="$SRC_BARE" ZPD_REF=main
+( MOCK_PGDUMP_RC=1 MOCK_HTTP_CODE=200 dep_main >/dev/null 2>&1 ); assert_rc 1 "$?" "backup failure fails deploy"
+assert_eq "$(zpd_manifest_get "${BASE}/shared/deploy/last-failure.json" stage)" "backup" "central failure event records stage=backup"
+unset ZPD_REPO_URL ZPD_REF; rm -rf "$BASE" "$(dirname "$SRC_BARE")"
 
 rm -rf "$MOCKBIN"
 echo ""

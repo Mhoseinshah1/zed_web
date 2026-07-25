@@ -111,6 +111,48 @@ dep_stage() {
     DEP_STAGE_TS="$now"
 }
 
+# ── Immutable ORIGINAL-failure context ───────────────────────────────────────
+#
+# DEP_STAGE keeps moving during rollback (rollback_switch → rollback_readiness),
+# so the finalizer must never read it to describe WHAT FAILED. The FIRST failure
+# recorded here is immutable: a Scheduler/internal-readiness failure remains the
+# original failure even after a rollback has run through every rollback stage.
+DEP_ORIG_FAILURE_STAGE=""
+DEP_ORIG_FAILURE_REASON=""
+DEP_ORIG_FAILURE_INVARIANT=""
+DEP_ORIG_FAILURE_MESSAGE=""
+
+# dep_record_failure STAGE REASON_CODE INVARIANT MESSAGE — record the ORIGINAL
+# failure once; later calls (e.g. during rollback) never overwrite it.
+dep_record_failure() {
+    [ -n "$DEP_ORIG_FAILURE_STAGE" ] && return 0
+    DEP_ORIG_FAILURE_STAGE="$1"
+    DEP_ORIG_FAILURE_REASON="$2"
+    DEP_ORIG_FAILURE_INVARIANT="$3"
+    DEP_ORIG_FAILURE_MESSAGE="$4"
+}
+
+# dep_fail STAGE REASON_CODE MESSAGE — shared bounded failure recorder for EVERY
+# meaningful stage (preflight, resolve, backup, clone, SHA verification,
+# link_shared, build, smoke, metadata, manifest preparation, reconciliation,
+# activation, rollback). Records the immutable original failure, writes a SAFE
+# central failure event (works BEFORE any release id exists), and produces a
+# bounded redacted diagnostic bundle when possible — never hiding the original
+# error. Always returns 1 so callers can `dep_fail … ; return 1` or `|| return 1`.
+dep_fail() {
+    local stage="$1" reason="$2" msg="$3"
+    dep_record_failure "$stage" "$reason" "$stage" "$msg"
+    dep_err "$msg"
+    zpd_write_manifest "$(zpd_shared_dir)/deploy/last-failure.json" \
+        "stage=${stage}" "reason_code=${reason}" "message=${msg}" \
+        "release_id=${DEP_STAGE_RELEASE:-none}" \
+        "previous_release=${DEP_STAGE_PREVIOUS:-none}" \
+        "occurred_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+        || dep_warn "could not write the central failure event"
+    dep_failure_bundle
+    return 1
+}
+
 # ── Preflight ────────────────────────────────────────────────────────────────
 
 # dep_preflight SHARED_DIR — verify the release can proceed. Returns non-zero
@@ -328,11 +370,13 @@ dep_health() {
     return 0
 }
 
-# dep_verify_scheduler CURRENT_DIR — scheduler installed + heartbeat reachable.
+# dep_verify_scheduler CURRENT_DIR — bounded `schedule:list` probe. A Laravel
+# bootstrap that hangs must never freeze the deployer, the repair (which holds
+# the deployment lock), or the doctor.
 dep_verify_scheduler() {
     local cur="$1"
     ( cd "$cur" 2>/dev/null || exit 1
-      "$ZPD_PHP" artisan schedule:list >/dev/null 2>&1 || exit 1
+      timeout "${ZPD_HEALTH_CLI_TIMEOUT}s" "$ZPD_PHP" artisan schedule:list </dev/null >/dev/null 2>&1 || exit 1
     )
 }
 
@@ -461,21 +505,25 @@ dep_fpm_socket() {
 # previous config and returns 1 on validation failure. Idempotent — a config that
 # is already correct is left untouched (no reload).
 dep_ensure_local_health() {
-    local base="$1" conf port sock want
+    local base="$1" root="${2:-${1}/current/public}" conf port sock want
     conf="$(zpd_local_health_conf_path)"
     port="$(zpd_local_health_port)"
     sock="$(dep_fpm_socket)"
 
-    if [ -f "$conf" ] && zpd_local_health_conf_ok "$conf" "$base" "$port"; then
+    # "Already correct" requires the CURRENT PHP-FPM socket too — a vhost whose
+    # listen/root match but whose fastcgi_pass targets an obsolete socket would
+    # 502 forever while looking healthy to the validator.
+    if [ -f "$conf" ] && zpd_local_health_conf_ok "$conf" "$base" "$port" "$root" \
+        && grep -q "fastcgi_pass unix:${sock};" "$conf"; then
         return 0   # already correct
     fi
 
-    dep_log "Repairing local health vhost (${conf} → 127.0.0.1:${port})…"
+    dep_log "Repairing local health vhost (${conf} → 127.0.0.1:${port}, root ${root})…"
     [ -f "$conf" ] && cp -a "$conf" "${conf}.zpd-prev" 2>/dev/null || true
-    want="$(zpd_local_health_conf_content "$base" "$sock")"
+    want="$(zpd_local_health_conf_content "$base" "$sock" "$root")"
     mkdir -p "$(dirname "$conf")" 2>/dev/null || true
     printf '%s\n' "$want" > "$conf" 2>/dev/null || { dep_err "could not write ${conf}"; return 1; }
-    if ! zpd_local_health_conf_ok "$conf" "$base" "$port" || ! dep_validate_nginx; then
+    if ! zpd_local_health_conf_ok "$conf" "$base" "$port" "$root" || ! dep_validate_nginx; then
         dep_err "local health vhost invalid — restoring previous config"
         if [ -f "${conf}.zpd-prev" ]; then cp -a "${conf}.zpd-prev" "$conf" 2>/dev/null || true; else rm -f "$conf" 2>/dev/null || true; fi
         return 1
@@ -799,35 +847,46 @@ dep_snapshot_operational_config() {
 # dep_restore_operational_snapshot SNAP_DIR — put back every snapshotted file
 # (removing managed files that did not exist at snapshot time), then validate,
 # reload Nginx, reread/update Supervisor, and restart the workers so the
-# restored configuration is actually in effect. Returns non-zero if the restored
-# state fails validation.
+# restored configuration is actually in effect.
+#
+# FAIL-CLOSED: every required restore operation is accumulated — file
+# restoration, Nginx validation + reload, Supervisor reread + update, worker
+# restart + group RUNNING, scheduler-source restoration (content verified
+# against the snapshot), and a bounded schedule:list where an active release
+# exists. The function returns non-zero when ANY of them failed, so a caller
+# can never report "restored and validated" over services still running a
+# partially modified configuration.
 dep_restore_operational_snapshot() {
-    local dir="$1"
+    local dir="$1" rc=0
     [ -d "$dir" ] || { dep_err "restore: snapshot ${dir} missing"; return 1; }
     local f dest
     for dest in "$(zpd_nginx_conf_path)" "$(zpd_local_health_conf_path)" \
                 "$(zpd_supervisor_conf_path)" "$(zpd_scheduler_cron_path)"; do
         f="${dir}/$(basename "$dest").snap"
         if [ -f "$f" ]; then
-            cp -a "$f" "$dest" 2>/dev/null || dep_warn "restore: could not restore ${dest}"
+            cp -a "$f" "$dest" 2>/dev/null || { dep_err "restore: could not restore ${dest}"; rc=1; }
         else
             rm -f "$dest" 2>/dev/null || true   # did not exist pre-deploy
         fi
     done
     if declare -F zpw_restore_wrappers >/dev/null 2>&1 && [ -d "${dir}/wrappers" ]; then
-        zpw_restore_wrappers "${dir}/wrappers" || dep_warn "restore: wrapper restore failed"
+        zpw_restore_wrappers "${dir}/wrappers" || { dep_err "restore: wrapper restore failed"; rc=1; }
     fi
     # Restore every scheduler SOURCE the transaction may have modified —
-    # content, mode, and ownership exactly; files that did not exist before the
-    # transaction are removed. This is what puts a stripped /etc/crontab entry
-    # back when a later reconciliation step fails.
+    # content, mode, and ownership exactly (verified against the snapshot);
+    # files that did not exist before the transaction are removed. This is what
+    # puts a stripped /etc/crontab entry back when a later step fails.
     local map="${dir}/sched-sources/sources.map" idx path mode owner existed
     if [ -f "$map" ]; then
         while IFS=$'\t' read -r idx path mode owner existed; do
             [ -n "$path" ] || continue
             if [ "$existed" = "1" ]; then
-                cp "${dir}/sched-sources/src-${idx}" "$path" 2>/dev/null \
-                    || { dep_warn "restore: could not restore scheduler source ${path}"; continue; }
+                if ! cp "${dir}/sched-sources/src-${idx}" "$path" 2>/dev/null \
+                   || ! cmp -s "${dir}/sched-sources/src-${idx}" "$path"; then
+                    dep_err "restore: scheduler source ${path} was not restored exactly"
+                    rc=1
+                    continue
+                fi
                 [ -n "$mode" ]  && chmod "$mode" "$path" 2>/dev/null || true
                 [ -n "$owner" ] && chown "$owner" "$path" 2>/dev/null || true
             else
@@ -835,12 +894,18 @@ dep_restore_operational_snapshot() {
             fi
         done < "$map"
     fi
-    dep_validate_nginx || { dep_err "restore: nginx -t failed on restored config"; return 1; }
-    dep_reload_nginx   || dep_warn "restore: nginx reload failed"
-    dep_svc "$ZPD_SUPERVISORCTL" reread >/dev/null 2>&1 || dep_warn "restore: supervisor reread failed"
-    dep_svc "$ZPD_SUPERVISORCTL" update >/dev/null 2>&1 || dep_warn "restore: supervisor update failed"
-    dep_restart_workers || dep_warn "restore: worker restart failed"
-    return 0
+    dep_validate_nginx || { dep_err "restore: nginx -t failed on restored config"; rc=1; }
+    dep_reload_nginx   || { dep_err "restore: nginx reload failed"; rc=1; }
+    dep_svc "$ZPD_SUPERVISORCTL" reread >/dev/null 2>&1 || { dep_err "restore: supervisor reread failed"; rc=1; }
+    dep_svc "$ZPD_SUPERVISORCTL" update >/dev/null 2>&1 || { dep_err "restore: supervisor update failed"; rc=1; }
+    dep_restart_workers || { dep_err "restore: worker restart failed"; rc=1; }
+    dep_supervisor_group_running || { dep_err "restore: worker group not RUNNING after restore"; rc=1; }
+    # Bounded functional scheduler verification of the RESTORED state.
+    if [ -L "$(zpd_current_link)" ]; then
+        dep_verify_scheduler "$(zpd_current_link)" \
+            || { dep_err "restore: schedule:list failed on the restored state"; rc=1; }
+    fi
+    return "$rc"
 }
 
 # dep_reconcile_nginx BASE — ensure the Nginx root serves <BASE>/current/public.
@@ -897,6 +962,50 @@ dep_scheduler_scan() {
     return 0
 }
 
+# dep_scheduler_scan_noncron BASE — bounded, READ-ONLY discovery of ZedProxy
+# scheduler invocations OUTSIDE cron: systemd .timer/.service units and
+# Supervisor program definitions. These are UNMANAGED homes — the reconciler
+# never edits them automatically; any hit is a conflict that must fail BEFORE
+# modification. Prints classified lines:
+#   SYSTEMD <unit-file> (<enabled-state>/<active-state>)
+#   SUPERVISOR <conf-file>
+dep_scheduler_scan_noncron() {
+    local base="$1" f re en ac
+    re="$(zpd_scheduler_ours_re "$base")"
+    # systemd units (.timer + .service): ExecStart / command lines.
+    if [ -d "$(zpd_systemd_unit_dir)" ]; then
+        for f in "$(zpd_systemd_unit_dir)"/*.timer "$(zpd_systemd_unit_dir)"/*.service; do
+            [ -f "$f" ] || continue
+            if grep -E 'artisan[[:space:]]+schedule:run' "$f" 2>/dev/null | grep -vE '^[[:space:]]*#' | grep -qE "$re"; then
+                en="$(dep_svc "$ZPD_SYSTEMCTL" is-enabled "$(basename "$f")" 2>/dev/null | head -n1 || true)"
+                ac="$(dep_svc "$ZPD_SYSTEMCTL" is-active "$(basename "$f")" 2>/dev/null | head -n1 || true)"
+                printf 'SYSTEMD %s (%s/%s)\n' "$f" "${en:-unknown}" "${ac:-unknown}"
+            fi
+        done
+    fi
+    # Supervisor programs (any command= executing our schedule:run).
+    if [ -d "$(zpd_supervisor_scan_dir)" ]; then
+        for f in "$(zpd_supervisor_scan_dir)"/*.conf; do
+            [ -f "$f" ] || continue
+            if grep -E '^[[:space:]]*command[[:space:]]*=' "$f" 2>/dev/null | grep -qE "$re"; then
+                printf 'SUPERVISOR %s\n' "$f"
+            fi
+        done
+    fi
+    return 0
+}
+
+# dep_scheduler_single_source_ok BASE — after reconciliation EXACTLY ONE active
+# ZedProxy scheduler source may exist: the canonical cron file. Any remaining
+# cron duplicate or non-cron (systemd/supervisor) source fails.
+dep_scheduler_single_source_ok() {
+    local base="$1"
+    zpd_scheduler_cron_ok "$(zpd_scheduler_cron_path)" "$base" || return 1
+    dep_scheduler_scan "$base" | grep -q '^OURS ' && return 1
+    [ -n "$(dep_scheduler_scan_noncron "$base")" ] && return 1
+    return 0
+}
+
 # dep_reconcile_scheduler BASE — make /etc/cron.d/zedproxy-scheduler the ONLY
 # source executing the ZedProxy scheduler:
 #   1. Discover every schedule:run entry across cron.d, /etc/crontab, and the
@@ -913,7 +1022,19 @@ dep_reconcile_scheduler() {
     local base="$1" entry kind src spool
     spool="$(zpd_cron_spool_dir)"
 
-    # 1+2: conflict scan — ZedProxy entries in user spool crontabs abort.
+    # 1+2: conflict scan BEFORE any modification. ZedProxy entries in user
+    # spool crontabs, systemd .timer/.service units, or Supervisor programs are
+    # UNMANAGED/AMBIGUOUS homes — abort with a clear diagnostic instead of
+    # editing them (or leaving a second active scheduler running).
+    local conflict
+    conflict="$(dep_scheduler_scan_noncron "$base")"
+    if [ -n "$conflict" ]; then
+        printf '%s\n' "$conflict" | while IFS= read -r entry; do
+            dep_err "scheduler: unmanaged scheduler source found: ${entry}"
+        done
+        dep_err "$(zpd_msg_sched_conflict)"
+        return 1
+    fi
     while IFS= read -r entry; do
         [ -n "$entry" ] || continue
         kind="${entry%% *}"; src="${entry#* }"
@@ -961,6 +1082,10 @@ dep_reconcile_scheduler() {
         dep_verify_scheduler "$(zpd_current_link)" \
             || { dep_err "scheduler: schedule:list failed after reconciliation"; return 1; }
     fi
+
+    # 6: EXACTLY ONE active ZedProxy scheduler source must remain.
+    dep_scheduler_single_source_ok "$base" \
+        || { dep_err "scheduler: more than one active scheduler source remains"; return 1; }
     return 0
 }
 
@@ -1050,6 +1175,7 @@ dep_activate() {
     #    and any warning reflect whether the DB actually changed.
     dep_stage "migrate"
     if ! dep_run_migrations "$(zpd_releases_dir)/${id}"; then
+        dep_record_failure "$DEP_STAGE" "migration_failed" "dep_run_migrations" "activation: migrations failed"
         dep_err "activation: migrations failed"
         return 30
     fi
@@ -1057,6 +1183,7 @@ dep_activate() {
     # 4. atomic symlink switch
     dep_stage "switch"
     if ! zpd_switch_current "$id"; then
+        dep_record_failure "$DEP_STAGE" "switch_failed" "zpd_switch_current" "activation: symlink switch failed"
         dep_err "activation: symlink switch failed"
         return 31
     fi
@@ -1075,16 +1202,21 @@ dep_activate() {
     #     restored and the activation fails (→ rollback).
     dep_stage "operational_reconcile"
     dep_reconcile_operational "$base" "$id" \
-        || { dep_err "activation: operational reconciliation failed"; return 31; }
+        || { dep_record_failure "$DEP_STAGE" "reconcile_failed" "dep_reconcile_operational" "activation: operational reconciliation failed"
+             dep_err "activation: operational reconciliation failed"; return 31; }
 
     # 5-7. reload PHP-FPM, validate + reload Nginx
     dep_stage "service_reload"
-    dep_reload_php_fpm "$fpm" || { dep_err "activation: php-fpm reload failed"; return 31; }
-    dep_validate_nginx        || { dep_err "activation: nginx -t failed"; return 31; }
-    dep_reload_nginx          || { dep_err "activation: nginx reload failed"; return 31; }
+    dep_reload_php_fpm "$fpm" || { dep_record_failure "$DEP_STAGE" "service_reload_failed" "dep_reload_php_fpm" "activation: php-fpm reload failed"
+                                   dep_err "activation: php-fpm reload failed"; return 31; }
+    dep_validate_nginx        || { dep_record_failure "$DEP_STAGE" "service_reload_failed" "dep_validate_nginx" "activation: nginx -t failed"
+                                   dep_err "activation: nginx -t failed"; return 31; }
+    dep_reload_nginx          || { dep_record_failure "$DEP_STAGE" "service_reload_failed" "dep_reload_nginx" "activation: nginx reload failed"
+                                   dep_err "activation: nginx reload failed"; return 31; }
 
     # 8. restart workers against the new release
-    dep_restart_workers || { dep_err "activation: worker restart failed"; return 31; }
+    dep_restart_workers || { dep_record_failure "$DEP_STAGE" "worker_restart_failed" "dep_restart_workers" "activation: worker restart failed"
+                             dep_err "activation: worker restart failed"; return 31; }
 
     # ── Phase A — INTERNAL readiness (still in maintenance mode) ─────────────
     # Only checks that do NOT depend on a public HTTP application response, so a
@@ -1092,6 +1224,7 @@ dep_activate() {
     dep_stage "internal_readiness"
     dep_log "Verifying internal readiness (maintenance mode)…"
     if ! dep_verify_internal_release "$base" "$id" "$sha"; then
+        dep_record_failure "$DEP_STAGE" "internal_readiness_failed" "dep_verify_internal_release" "activation: internal readiness failed"
         return 31
     fi
 
@@ -1099,6 +1232,7 @@ dep_activate() {
     dep_stage "bring_up"
     dep_log "Bringing the new release online…"
     if ! dep_bring_up "$current_dir"; then
+        dep_record_failure "$DEP_STAGE" "maintenance_exit_failed" "dep_bring_up" "activation: release could not exit maintenance"
         return 31
     fi
 
@@ -1106,6 +1240,7 @@ dep_activate() {
     dep_stage "http_readiness"
     dep_log "Verifying public HTTP readiness…"
     if ! dep_verify_http_release "$ZPD_HEALTH_URL"; then
+        dep_record_failure "$DEP_STAGE" "http_readiness_failed" "dep_verify_http_release" "activation: public HTTP readiness failed"
         # Fence the failed release again so it does not keep serving during the
         # rollback the caller is about to perform.
         dep_bring_down "$current_dir"
@@ -1117,9 +1252,15 @@ dep_activate() {
 # dep_first_cutover_rollback BASE PHP_FPM_SVC
 #
 # Restore the legacy application after a FAILED first legacy→release cutover:
-# put back the snapshotted Nginx/Supervisor/scheduler config, drop the `current`
-# symlink (so Nginx serves the legacy root again), reload services, and bring the
-# legacy app out of maintenance mode. Returns 0 only if the legacy app is healthy.
+# put back the snapshotted Nginx/Supervisor/scheduler/local-health config, drop
+# the `current` symlink (so Nginx serves the legacy root again), and bring the
+# legacy app out of maintenance. FAIL-CLOSED: every requirement — Nginx
+# validation + reload, Supervisor reread/update (bounded), worker restart +
+# group RUNNING, maintenance actually off, CLI health, and HTTP readiness over
+# a LEGACY loopback health target — must pass, or the rollback returns
+# non-zero. The loopback vhost is repointed at <BASE>/public BEFORE any HTTP
+# check: after `current` is removed, a current/public health root would be a
+# dangling target and the check would be meaningless.
 dep_first_cutover_rollback() {
     local base="$1" fpm="$2"
     zpd_restore_legacy_rollback || dep_warn "no legacy snapshot to restore"
@@ -1129,14 +1270,26 @@ dep_first_cutover_rollback() {
         zpw_restore_wrappers "$(dep_wrapper_backup_dir)" || dep_warn "wrapper restore failed"
     fi
     rm -f "$(zpd_current_link)" 2>/dev/null || true
-    dep_reload_php_fpm "$fpm" || true
-    dep_reload_nginx          || true
-    "$ZPD_SUPERVISORCTL" reread >/dev/null 2>&1 || dep_warn "supervisor reread during rollback failed"
-    "$ZPD_SUPERVISORCTL" update >/dev/null 2>&1 || dep_warn "supervisor update during rollback failed"
-    dep_restart_workers       || dep_warn "worker restart during rollback failed"
+    # Verified loopback health target for the RESTORED LEGACY app (root
+    # <base>/public — never current/public once `current` is gone). If the
+    # legacy snapshot restored its own (legacy-rooted) vhost this is a no-op.
+    if ! zpd_local_health_conf_ok "$(zpd_local_health_conf_path)" "$base" "$(zpd_local_health_port)" "${base}/public"; then
+        dep_ensure_local_health "$base" "${base}/public" \
+            || { dep_err "rollback: could not provide a legacy loopback health target"; return 1; }
+    fi
+    dep_reload_php_fpm "$fpm"   || { dep_err "rollback: php-fpm reload failed"; return 1; }
+    dep_validate_nginx          || { dep_err "rollback: nginx -t failed on restored config"; return 1; }
+    dep_reload_nginx            || { dep_err "rollback: nginx reload failed"; return 1; }
+    dep_svc "$ZPD_SUPERVISORCTL" reread >/dev/null 2>&1 \
+                                || { dep_err "rollback: supervisor reread failed"; return 1; }
+    dep_svc "$ZPD_SUPERVISORCTL" update >/dev/null 2>&1 \
+                                || { dep_err "rollback: supervisor update failed"; return 1; }
+    dep_restart_workers         || { dep_err "rollback: worker restart failed"; return 1; }
+    dep_supervisor_group_running || { dep_err "rollback: worker group not RUNNING"; return 1; }
     # Bring the legacy app up BEFORE any HTTP check, then verify maintenance is
     # actually off (a rollback is not healthy just because the symlink dropped).
-    dep_bring_up "$base"      || { dep_err "rollback: legacy app could not exit maintenance"; return 1; }
+    dep_bring_up "$base"        || { dep_err "rollback: legacy app could not exit maintenance"; return 1; }
+    dep_cli_health "$base"      || { dep_err "rollback: legacy CLI health failed"; return 1; }
     dep_health "$ZPD_HEALTH_URL"
 }
 
@@ -1152,19 +1305,22 @@ dep_first_cutover_rollback() {
 # switched back with failed readiness is a materially different state than a
 # switch that never happened) so failure finalization can report the truth.
 DEP_ROLLBACK_SWITCH="not_available"
+DEP_ROLLBACK_RECONCILE="not_available"
 DEP_ROLLBACK_READY="not_available"
 dep_rollback_code() {
     local prev="$1" fpm="$2" base; base="$(zpd_base)"
-    DEP_ROLLBACK_SWITCH="not_available"; DEP_ROLLBACK_READY="not_available"
+    DEP_ROLLBACK_SWITCH="not_available"; DEP_ROLLBACK_RECONCILE="not_available"; DEP_ROLLBACK_READY="not_available"
     [ -n "$prev" ] || { dep_err "rollback: no previous release"; return 1; }
     dep_stage "rollback_switch"
     zpd_switch_current "$prev" || { DEP_ROLLBACK_SWITCH="failed"; dep_err "rollback: switch back failed"; return 1; }
-    DEP_ROLLBACK_SWITCH="success"; DEP_ROLLBACK_READY="failed"
+    DEP_ROLLBACK_SWITCH="success"
     dep_stage "rollback_reconcile"
-    dep_reload_php_fpm "$fpm" || dep_warn "rollback: php-fpm reload failed"
-    dep_reload_nginx          || dep_warn "rollback: nginx reload failed"
-    dep_restart_workers       || dep_warn "rollback: worker restart failed"
+    DEP_ROLLBACK_RECONCILE="success"
+    dep_reload_php_fpm "$fpm" || { DEP_ROLLBACK_RECONCILE="failed"; dep_warn "rollback: php-fpm reload failed"; }
+    dep_reload_nginx          || { DEP_ROLLBACK_RECONCILE="failed"; dep_warn "rollback: nginx reload failed"; }
+    dep_restart_workers       || { DEP_ROLLBACK_RECONCILE="failed"; dep_warn "rollback: worker restart failed"; }
     dep_stage "rollback_readiness"
+    DEP_ROLLBACK_READY="failed"
     dep_bring_up "$(zpd_current_link)" || { dep_err "rollback: previous release could not exit maintenance"; return 1; }
     dep_verify_internal_release "$base" "$prev" "" || { dep_err "rollback: previous release failed internal readiness"; return 1; }
     dep_verify_http_release "$ZPD_HEALTH_URL"      || { dep_err "rollback: previous release failed HTTP readiness"; return 1; }
@@ -1199,11 +1355,15 @@ dep_adopt_current_release() {
     local mode; mode="$(dep_release_verify_mode "$id")"
     [ "$mode" = "historical" ] || return 0
 
-    # The canonical directory must live inside releases/ (no symlink escape).
+    # Canonicalize the ACTIVE SYMLINK ITSELF (not a reconstructed path with the
+    # same basename): the resolved `current` target must be exactly the
+    # selected directory under releases/. Otherwise metadata could be adopted
+    # for code that is not actually running.
     local canon releases_canon
-    canon="$(cd "$dir" 2>/dev/null && pwd -P)" || { dep_warn "adopt: ${id} directory unreadable"; return 0; }
+    canon="$(readlink -f "$cur" 2>/dev/null)" || { dep_warn "adopt: current target unreadable"; return 0; }
     releases_canon="$(cd "$(zpd_releases_dir)" 2>/dev/null && pwd -P)" || return 0
-    case "$canon" in "$releases_canon"/*) ;; *) dep_warn "adopt: ${id} resolves outside releases/"; return 0 ;; esac
+    [ "$canon" = "${releases_canon}/${id}" ] \
+        || { dep_warn "adopt: current resolves to ${canon}, not releases/${id} — not adopting"; return 0; }
 
     [ -f "${dir}/artisan" ] && [ -f "${dir}/public/index.php" ] \
         || { dep_warn "adopt: ${id} lacks required Laravel files"; return 0; }
@@ -1323,29 +1483,42 @@ dep_reconcile_state() {
         "state_repaired_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 }
 
-# dep_finalize_failed_release MANIFEST ID SHA RC ROLLBACK_TARGET ROLLBACK_RESULT
+# dep_finalize_failed_release MANIFEST ID SHA RC ROLLBACK_TARGET ROLLBACK_RESULT \
+#                             ORIG_STAGE ORIG_REASON ORIG_INVARIANT ORIG_MESSAGE
 #
 # Write the FINAL manifest for a failed attempt — called on EVERY failure path,
 # BEFORE returning, regardless of rollback outcome. A completed failed
-# deployment must never remain `activating`.
+# deployment must never remain `activating`. The ORIGINAL failure context is
+# passed EXPLICITLY (captured before any rollback) — never read from the
+# mutable DEP_STAGE, which has moved on through the rollback stages by now.
 dep_finalize_failed_release() {
     local manifest="$1" id="$2" sha="$3" rc="$4" rb_target="$5" rb_result="$6"
-    local reason mig_state="$DEP_MIGRATION_STATUS"
-    case "$rc" in
-        30) reason="migration_failed";        mig_state="failed" ;;
-        31) reason="readiness_failed" ;;
-        *)  reason="activation_failed" ;;
-    esac
+    local orig_stage="${7:-unknown}" orig_reason="${8:-}" orig_inv="${9:-}" orig_msg="${10:-}"
+    local mig_state="$DEP_MIGRATION_STATUS"
+    if [ -z "$orig_reason" ]; then
+        case "$rc" in
+            30) orig_reason="migration_failed" ;;
+            31) orig_reason="readiness_failed" ;;
+            *)  orig_reason="activation_failed" ;;
+        esac
+    fi
+    [ "$rc" -eq 30 ] && mig_state="failed"
     zpd_write_manifest "$manifest" \
         "release_id=${id}" \
         "git_sha=${sha}" \
         "result=failed" \
-        "failure_stage=${DEP_STAGE}" \
-        "failure_reason_code=${reason}" \
+        "failure_stage=${orig_stage}" \
+        "failure_reason_code=${orig_reason}" \
+        "original_failure_stage=${orig_stage}" \
+        "original_failure_reason_code=${orig_reason}" \
+        "original_failure_invariant=${orig_inv:-unknown}" \
+        "original_failure_message=${orig_msg:-}" \
         "migration_status=${mig_state}" \
         "rollback_target=${rb_target:-none}" \
         "rollback_result=${rb_result}" \
+        "rollback_stage=${DEP_STAGE}" \
         "rollback_switch=${DEP_ROLLBACK_SWITCH}" \
+        "rollback_reconciliation=${DEP_ROLLBACK_RECONCILE}" \
         "rollback_readiness=${DEP_ROLLBACK_READY}" \
         "active_release_after_failure=$(zpd_current_release)" \
         "finished_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
@@ -1416,7 +1589,9 @@ dep_main() {
     trap '_dep_on_interrupt' INT TERM
     DEP_STAGE="init"; DEP_STAGE_TS=0
     DEP_MIGRATION_STATUS="not_run"
-    DEP_ROLLBACK_SWITCH="not_available"; DEP_ROLLBACK_READY="not_available"
+    DEP_ROLLBACK_SWITCH="not_available"; DEP_ROLLBACK_RECONCILE="not_available"; DEP_ROLLBACK_READY="not_available"
+    DEP_ORIG_FAILURE_STAGE=""; DEP_ORIG_FAILURE_REASON=""
+    DEP_ORIG_FAILURE_INVARIANT=""; DEP_ORIG_FAILURE_MESSAGE=""
     # Load persistent non-secret config for this invocation (explicit env wins).
     zpd_load_deploy_env
     base="$(zpd_base)"; shared="$(zpd_shared_dir)"; releases="$(zpd_releases_dir)"
@@ -1437,7 +1612,7 @@ dep_main() {
 
     dep_stage "preflight"
     dep_log "Preflight…"
-    dep_preflight "$shared" || return 1
+    dep_preflight "$shared" || { dep_fail "preflight" "preflight_failed" "preflight checks failed — nothing changed"; return 1; }
 
     # ── Historical-state repair BEFORE the new deployment starts ─────────────
     # Adopt the active release if it predates the manifest system (backfilled
@@ -1456,19 +1631,19 @@ dep_main() {
     dep_stage "resolve"
     local repo ref sha errfile
     errfile="$(mktemp 2>/dev/null || echo /tmp/zpd-git.$$)"
-    repo="$(zpd_resolve_repo_url)" || { dep_err "$(zpd_msg_no_repo)"; rm -f "$errfile"; return 1; }
+    repo="$(zpd_resolve_repo_url)" || { rm -f "$errfile"; dep_fail "resolve" "repo_unresolvable" "$(zpd_msg_no_repo)"; return 1; }
     ref="${ZPD_REF:-$(zpd_default_ref)}"
 
     dep_log "Resolving ${ref} from repository…"
     sha="$(zpd_resolve_sha "$repo" "$ref" "$errfile")" || {
-        dep_err "$(zpd_msg_git_fetch_failed)"
         zpd_redact_file "$errfile" >&2
         rm -f "$errfile"
+        dep_fail "resolve" "ref_unresolvable" "$(zpd_msg_git_fetch_failed)"
         return 1
     }
 
     local id rel_dir current_before manifest ts_start
-    id="$(zpd_release_id "$sha")" || { dep_err "could not derive release id from resolved SHA"; rm -f "$errfile"; return 1; }
+    id="$(zpd_release_id "$sha")" || { rm -f "$errfile"; dep_fail "resolve" "release_id_failed" "could not derive release id from resolved SHA"; return 1; }
     rel_dir="${releases}/${id}"
     current_before="$(zpd_current_release)"
     ts_start="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -1478,19 +1653,20 @@ dep_main() {
 
     dep_stage "backup"
     dep_log "Backing up .env + database…"
-    dep_backup_env "${shared}/.env" "$(zpd_backup_dir)/${id}" || { dep_err "env backup failed"; rm -f "$errfile"; return 1; }
+    dep_backup_env "${shared}/.env" "$(zpd_backup_dir)/${id}" \
+        || { rm -f "$errfile"; dep_fail "backup" "env_backup_failed" "env backup failed"; return 1; }
     if ! dep_backup_database "$(zpd_backup_dir)/${id}/db.dump" "${shared}/.env"; then
-        dep_err "database backup failed — aborting (nothing changed)"
         rm -f "$errfile"
+        dep_fail "backup" "db_backup_failed" "database backup failed — aborting (nothing changed)"
         return 1
     fi
 
     dep_stage "clone"
     dep_log "Fetching ${ref} (${sha:0:12}) into ${rel_dir}…"
     if ! zpd_git_clone_ref "$repo" "$ref" "$rel_dir" "$errfile"; then
-        dep_err "$(zpd_msg_git_fetch_failed)"
         zpd_redact_file "$errfile" >&2
         rm -rf "$rel_dir"; rm -f "$errfile"
+        dep_fail "clone" "clone_failed" "$(zpd_msg_git_fetch_failed)"
         return 1
     fi
 
@@ -1498,32 +1674,33 @@ dep_main() {
     # code that is actually deployed).
     local got; got="$(zpd_git_head_sha "$rel_dir")"
     if [ "$got" != "$sha" ]; then
-        dep_err "deployed commit ${got:-<none>} does not match resolved ${sha} — aborting"
         rm -rf "$rel_dir"; rm -f "$errfile"
+        dep_fail "clone" "sha_verification_failed" "deployed commit ${got:-<none>} does not match resolved ${sha} — aborting"
         return 1
     fi
     rm -f "$errfile"
 
     dep_stage "link_shared"
-    zpd_link_shared "$rel_dir" "$shared" || { dep_err "link shared failed"; rm -rf "$rel_dir"; return 1; }
+    zpd_link_shared "$rel_dir" "$shared" \
+        || { rm -rf "$rel_dir"; dep_fail "link_shared" "link_shared_failed" "linking shared .env/storage failed"; return 1; }
 
     dep_stage "build"
     dep_log "Building release…"
     if ! dep_build "$rel_dir"; then
-        dep_err "build failed — marking release failed, current untouched"
         zpd_write_manifest "$manifest" "release_id=${id}" "git_sha=${sha}" "result=failed" \
             "failure_stage=build" "failure_reason_code=build_failed" "started_at=${ts_start}" \
             "finished_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" "manifest_schema_version=$(zpd_manifest_schema_version)"
         mv "$rel_dir" "${rel_dir}.failed" 2>/dev/null || true
+        dep_fail "build" "build_failed" "build failed — release marked failed, current untouched"
         return 1
     fi
     dep_stage "smoke"
     if ! dep_smoke "$rel_dir"; then
-        dep_err "smoke test failed"
         zpd_write_manifest "$manifest" "release_id=${id}" "git_sha=${sha}" "result=failed" \
             "failure_stage=smoke" "failure_reason_code=smoke_failed" "started_at=${ts_start}" \
             "finished_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" "manifest_schema_version=$(zpd_manifest_schema_version)"
         mv "$rel_dir" "${rel_dir}.failed" 2>/dev/null || true
+        dep_fail "smoke" "smoke_failed" "smoke test failed — release marked failed, current untouched"
         return 1
     fi
 
@@ -1538,12 +1715,15 @@ dep_main() {
     rm -f "$_meta_file"
 
     dep_stage "manifest_prepare"
-    zpd_write_manifest "$manifest" \
+    if ! zpd_write_manifest "$manifest" \
         "release_id=${id}" "git_sha=${sha}" "git_ref=${ref}" "repo_url=${repo}" \
         "previous_release=${current_before}" "legacy_migration=${legacy}" \
         "started_at=${ts_start}" "result=activating" "migration_status=pending" \
         "manifest_schema_version=$(zpd_manifest_schema_version)" \
-        "${ver_pairs[@]}"
+        "${ver_pairs[@]}"; then
+        dep_fail "manifest_prepare" "manifest_write_failed" "could not write the release manifest"
+        return 1
+    fi
 
     # Snapshot the legacy operational config so a failed FIRST cutover can restore
     # the legacy application exactly (there is no previous release to fall back on).
@@ -1577,11 +1757,18 @@ dep_main() {
         return 0
     fi
 
-    # ── Activation failed. ──
-    local failure_stage="$DEP_STAGE"
-    dep_stage "failed"
-    dep_err "activation failed (rc=${rc}, stage=${failure_stage})"
-    DEP_STAGE="$failure_stage"   # finalization records the stage that FAILED
+    # ── Activation failed. Capture the IMMUTABLE original failure context NOW,
+    # before any rollback moves DEP_STAGE through the rollback stages.
+    local orig_stage="${DEP_ORIG_FAILURE_STAGE:-$DEP_STAGE}"
+    local orig_reason="${DEP_ORIG_FAILURE_REASON:-}"
+    local orig_inv="${DEP_ORIG_FAILURE_INVARIANT:-}"
+    local orig_msg="${DEP_ORIG_FAILURE_MESSAGE:-}"
+    dep_err "activation failed (rc=${rc}, stage=${orig_stage})"
+    zpd_write_manifest "$(zpd_shared_dir)/deploy/last-failure.json" \
+        "stage=${orig_stage}" "reason_code=${orig_reason:-rc_${rc}}" "message=${orig_msg}" \
+        "release_id=${id}" "previous_release=${current_before:-none}" \
+        "occurred_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+        || dep_warn "could not write the central failure event"
 
     # Migration-state for the manifest: on a migrate-stage failure the DB change
     # is `failed`; otherwise it reflects whether Artisan actually applied anything.
@@ -1605,6 +1792,7 @@ dep_main() {
         # rollback that could not move the symlink must never leave `current`
         # dangling (that would turn a rollback failure into an outage).
         dep_finalize_failed_release "$manifest" "$id" "$sha" "$rc" "legacy" "$rb_result" \
+            "$orig_stage" "$orig_reason" "$orig_inv" "$orig_msg" \
             || dep_warn "could not finalize failed-release manifest"
         if [ "$(zpd_current_release)" != "$id" ]; then
             mv "$rel_dir" "${rel_dir}.failed" 2>/dev/null || true
@@ -1633,6 +1821,7 @@ dep_main() {
     # itself failed, `current` still targets the attempted release and renaming
     # it would leave the live symlink dangling (an instant outage).
     dep_finalize_failed_release "$manifest" "$id" "$sha" "$rc" "${current_before:-none}" "$rb_result" \
+        "$orig_stage" "$orig_reason" "$orig_inv" "$orig_msg" \
         || dep_warn "could not finalize failed-release manifest"
     if [ "$(zpd_current_release)" != "$id" ]; then
         mv "$rel_dir" "${rel_dir}.failed" 2>/dev/null || true

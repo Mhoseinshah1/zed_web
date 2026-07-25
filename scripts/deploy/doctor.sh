@@ -110,7 +110,11 @@ zdr_check_releases() {
             strict)
                 if [ -z "$mansha" ] || [ "$mansha" = "unknown" ]; then
                     zdr_add "active_manifest" fail "modern manifest missing its git_sha (result=${res})"
-                elif [ -n "$headsha" ] && [ "$mansha" != "$headsha" ]; then
+                elif [ -z "$headsha" ]; then
+                    # Strict verification REQUIRES a readable deployed HEAD —
+                    # rollback readiness would reject this release too.
+                    zdr_add "active_manifest" fail "deployed git HEAD unreadable for strict manifest (result=${res})"
+                elif [ "$mansha" != "$headsha" ]; then
                     zdr_add "active_manifest" fail "manifest SHA != deployed HEAD (result=${res})"
                 else
                     zdr_add "active_manifest" ok "result=${res:-unknown} sha=${mansha}"
@@ -171,23 +175,34 @@ zdr_check_app() {
     else
         zdr_add "maintenance_mode" ok "off"
     fi
-    # Symlink INTEGRITY only — never the contents.
+    # Symlink INTEGRITY only — never the contents. Links must be SYMLINKS that
+    # RESOLVE into shared/ (mere existence hides isolated local storage).
     if [ -L "${cur}/.env" ] && [ -e "${cur}/.env" ]; then
         zdr_add "env_link" ok "current/.env -> $(readlink "${cur}/.env" 2>/dev/null)"
     else
         zdr_add "env_link" fail "current/.env is not a valid symlink into shared/"
     fi
-    if [ -e "${cur}/storage" ] && [ -e "${cur}/public/storage" ]; then
-        zdr_add "storage_links" ok "storage + public/storage present"
+    if dep_check_shared_links "$cur" 2>/dev/null; then
+        zdr_add "storage_links" ok ".env/storage/public-storage resolve into shared/"
     else
-        zdr_add "storage_links" fail "storage or public/storage link missing"
+        zdr_add "storage_links" fail "storage links missing or not resolving into shared/"
     fi
-    # Permission-bit inspection ONLY — the doctor is read-only and must never
-    # create even a transient probe file on the system.
-    if [ -d "$(zpd_shared_dir)/storage" ] && [ -w "$(zpd_shared_dir)/storage" ]; then
-        zdr_add "shared_writable" ok "writable (permission bits)"
+    # Permission-bit inspection ONLY (read-only — never a probe file), evaluated
+    # for the SERVICE ACCOUNT: as root, [ -w ] is always true, which would hide
+    # a permission outage for the www-data workers/PHP-FPM.
+    local sdir appuser mode owner group ok_w=0
+    sdir="$(zpd_shared_dir)/storage"
+    appuser="${ZPD_APP_USER:-www-data}"
+    if [ -d "$sdir" ]; then
+        mode="$(stat -c '%a' "$sdir" 2>/dev/null)"; owner="$(stat -c '%U' "$sdir" 2>/dev/null)"; group="$(stat -c '%G' "$sdir" 2>/dev/null)"
+        case "$mode" in *[2367]) ok_w=1 ;; esac                                  # world-writable
+        [ "$owner" = "$appuser" ] && case "$mode" in [2367]*) ok_w=1 ;; esac     # owner-writable
+        [ "$group" = "$appuser" ] && case "$mode" in ?[2367]?) ok_w=1 ;; esac    # group-writable
+    fi
+    if [ "$ok_w" = "1" ]; then
+        zdr_add "shared_writable" ok "writable by ${appuser} (mode ${mode}, ${owner}:${group})"
     else
-        zdr_add "shared_writable" fail "shared storage missing or not writable"
+        zdr_add "shared_writable" fail "shared storage missing or not writable by ${appuser}"
     fi
     [ -f "${cur}/public/build/manifest.json" ] \
         && zdr_add "vite_manifest" ok "present" \
@@ -218,7 +233,8 @@ zdr_check_scheduler() {
     zpd_scheduler_cron_ok "$(zpd_scheduler_cron_path)" "$base" \
         && zdr_add "scheduler_cron" ok "$(zpd_scheduler_cron_path)" \
         || zdr_add "scheduler_cron" fail "canonical cron missing/legacy/duplicated"
-    # Every discovered scheduler source outside the canonical file.
+    # Every discovered scheduler source outside the canonical file — cron AND
+    # non-cron homes (systemd timers/services, Supervisor programs).
     local entry kind src ours=0 foreign=0
     while IFS= read -r entry; do
         [ -n "$entry" ] || continue
@@ -226,6 +242,11 @@ zdr_check_scheduler() {
         if [ "$kind" = "OURS" ]; then ours=$((ours + 1)); zdr_add "scheduler_duplicate" fail "ZedProxy schedule:run also in ${src}"; fi
         [ "$kind" = "FOREIGN" ] && foreign=$((foreign + 1))
     done < <(dep_scheduler_scan "$base")
+    while IFS= read -r entry; do
+        [ -n "$entry" ] || continue
+        ours=$((ours + 1))
+        zdr_add "scheduler_conflict" fail "unmanaged scheduler source: ${entry}"
+    done < <(dep_scheduler_scan_noncron "$base")
     [ "$ours" -eq 0 ] && zdr_add "scheduler_sources" ok "single canonical source"
     [ "$foreign" -gt 0 ] && zdr_add "scheduler_foreign" warn "${foreign} unrelated Laravel scheduler line(s) found (left untouched)"
     # Heartbeat age (optional file, e.g. written by the schedule itself).

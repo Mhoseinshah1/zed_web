@@ -88,6 +88,7 @@ zpd_mask_secrets() {
     sed -E \
         -e 's/(PGPASSWORD)=[^[:space:]]*/\1=***/g' \
         -e 's/(APP_KEY|DB_PASSWORD|REDIS_PASSWORD|MAIL_PASSWORD)=[^[:space:]]*/\1=***/gI' \
+        -e 's/("(password|passwd|pass|secret|token|api[_-]?key|apikey|auth|access[_-]?token|refresh[_-]?token|client[_-]?secret)"[[:space:]]*:[[:space:]]*")[^"]*/\1***/gI' \
         -e 's/((password|passwd|pass|secret|token|api[_-]?key|auth)[[:space:]]*[=:][[:space:]]*)[^[:space:]"'"'"']+/\1***/gI' \
         -e 's#(://)[^/@[:space:]:]+:[^/@[:space:]]+@#\1***:***@#g'
 }
@@ -422,12 +423,15 @@ zpd_local_health_port()      { printf '%s' "${ZPD_LOCAL_HEALTH_PORT:-18080}"; }
 zpd_local_health_url()       { printf 'http://127.0.0.1:%s' "$(zpd_local_health_port)"; }
 
 # -----------------------------------------------------------------------------
-# zpd_local_health_conf_content BASE FPM_SOCK — the complete loopback-only vhost.
-# Serves <BASE>/current/public through index.php via the given PHP-FPM socket.
-# Binds ONLY to 127.0.0.1/[::1]; never to a public interface.
+# zpd_local_health_conf_content BASE FPM_SOCK [ROOT] — the complete
+# loopback-only vhost. Serves ROOT (default <BASE>/current/public) through
+# index.php via the given PHP-FPM socket. The ROOT override exists for the
+# first-cutover LEGACY rollback: after `current` is removed the loopback health
+# target must serve the legacy webroot (<BASE>/public), never a dangling
+# current/public. Binds ONLY to 127.0.0.1/[::1]; never to a public interface.
 # -----------------------------------------------------------------------------
 zpd_local_health_conf_content() {
-    local base="$1" sock="$2" port; port="$(zpd_local_health_port)"
+    local base="$1" sock="$2" root="${3:-${1}/current/public}" port; port="$(zpd_local_health_port)"
     cat <<CONF
 # ZedProxy INTERNAL loopback health vhost (managed). Loopback ONLY — never public.
 # Used by the atomic deployer to validate a release without Cloudflare/public TLS.
@@ -435,7 +439,7 @@ server {
     listen 127.0.0.1:${port};
     listen [::1]:${port};
     server_name _;
-    root ${base}/current/public;
+    root ${root};
     index index.php;
     access_log off;
     add_header X-Robots-Tag "noindex, nofollow, noarchive" always;
@@ -464,10 +468,10 @@ CONF
 #     never be exposed on an external interface.
 # -----------------------------------------------------------------------------
 zpd_local_health_conf_ok() {
-    local conf="$1" base="$2" port="${3:-$(zpd_local_health_port)}"
+    local conf="$1" base="$2" port="${3:-$(zpd_local_health_port)}" root="${4:-${2}/current/public}"
     [ -f "$conf" ] || return 1
     grep -Eq "listen[[:space:]]+127\.0\.0\.1:${port}\b" "$conf" || return 1
-    grep -Eq "root[[:space:]]+${base}/current/public;" "$conf" || return 1
+    grep -Eq "root[[:space:]]+${root};" "$conf" || return 1
     # Reject any `listen` directive that is NOT loopback (position-independent, so
     # a one-line `server { listen 0.0.0.0:PORT; }` is still caught).
     if grep -oE 'listen[[:space:]]+[^;]+' "$conf" | grep -vqE '127\.0\.0\.1:|\[::1\]:'; then
@@ -551,6 +555,9 @@ zpd_scheduler_cron_ok() {
 zpd_cron_d_dir()     { printf '%s' "${ZPD_CRON_D_DIR:-/etc/cron.d}"; }
 zpd_etc_crontab()    { printf '%s' "${ZPD_ETC_CRONTAB:-/etc/crontab}"; }
 zpd_cron_spool_dir() { printf '%s' "${ZPD_CRON_SPOOL_DIR:-/var/spool/cron/crontabs}"; }
+# Non-cron scheduler homes (read-only discovery; never modified automatically):
+zpd_systemd_unit_dir()     { printf '%s' "${ZPD_SYSTEMD_UNIT_DIR:-/etc/systemd/system}"; }
+zpd_supervisor_scan_dir()  { printf '%s' "${ZPD_SUPERVISOR_SCAN_DIR:-$(dirname "$(zpd_supervisor_conf_path)")}"; }
 
 # -----------------------------------------------------------------------------
 # zpd_scheduler_sources — print every readable file that may carry cron entries:
@@ -564,6 +571,10 @@ zpd_scheduler_sources() {
         for f in "$(zpd_cron_d_dir)"/*; do
             [ -f "$f" ] || continue
             [ "$f" = "$(zpd_scheduler_cron_path)" ] && continue
+            # cron itself IGNORES /etc/cron.d entries whose basename contains a
+            # dot (run-parts rule) — so backups like *.zpd-precutover are not
+            # active sources and must not be scanned as such.
+            case "$(basename "$f")" in *.*) continue ;; esac
             printf '%s\n' "$f"
         done
     fi
@@ -634,17 +645,21 @@ zpd_manifest_schema_version() { printf '2'; }
 zpd_legacy_marker_file() { printf '%s/shared/deploy/legacy-rollback.json' "$(zpd_base)"; }
 
 # zpd_save_legacy_rollback BASE NGINX_CONF SUPERVISOR_CONF SCHED_CRON — snapshot
-# the pre-cutover config files so first-cutover rollback can restore them.
+# the pre-cutover config files (including the loopback health vhost) so
+# first-cutover rollback can restore them exactly.
 zpd_save_legacy_rollback() {
     local base="$1" nginx="$2" super="$3" cron="$4"
-    local dir; dir="$(dirname "$(zpd_legacy_marker_file)")"
+    local dir lh; dir="$(dirname "$(zpd_legacy_marker_file)")"
+    lh="$(zpd_local_health_conf_path)"
     mkdir -p "$dir" 2>/dev/null || return 1
     [ -f "$nginx" ] && cp -a "$nginx" "${dir}/nginx.legacy" 2>/dev/null || true
     [ -f "$super" ] && cp -a "$super" "${dir}/supervisor.legacy" 2>/dev/null || true
     [ -f "$cron" ]  && cp -a "$cron"  "${dir}/scheduler.legacy" 2>/dev/null || true
+    [ -f "$lh" ]    && cp -a "$lh"    "${dir}/localhealth.legacy" 2>/dev/null || true
     zpd_write_manifest "$(zpd_legacy_marker_file)" \
         "legacy_base=${base}" "nginx_conf=${nginx}" "supervisor_conf=${super}" \
-        "scheduler_cron=${cron}" "created_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        "scheduler_cron=${cron}" "local_health_conf=${lh}" \
+        "created_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 }
 
 # zpd_has_legacy_rollback — return 0 if a saved legacy snapshot exists.
@@ -655,14 +670,17 @@ zpd_has_legacy_rollback() { [ -f "$(zpd_legacy_marker_file)" ]; }
 zpd_restore_legacy_rollback() {
     local marker; marker="$(zpd_legacy_marker_file)"
     [ -f "$marker" ] || return 1
-    local dir nginx super cron
+    local dir nginx super cron lh
     dir="$(dirname "$marker")"
     nginx="$(zpd_manifest_get "$marker" nginx_conf)"
     super="$(zpd_manifest_get "$marker" supervisor_conf)"
     cron="$(zpd_manifest_get "$marker" scheduler_cron)"
+    lh="$(zpd_manifest_get "$marker" local_health_conf)"
+    [ -z "$lh" ] && lh="$(zpd_local_health_conf_path)"
     [ -f "${dir}/nginx.legacy" ] && [ -n "$nginx" ] && cp -a "${dir}/nginx.legacy" "$nginx" 2>/dev/null || true
     [ -f "${dir}/supervisor.legacy" ] && [ -n "$super" ] && cp -a "${dir}/supervisor.legacy" "$super" 2>/dev/null || true
     [ -f "${dir}/scheduler.legacy" ] && [ -n "$cron" ] && cp -a "${dir}/scheduler.legacy" "$cron" 2>/dev/null || true
+    [ -f "${dir}/localhealth.legacy" ] && [ -n "$lh" ] && cp -a "${dir}/localhealth.legacy" "$lh" 2>/dev/null || true
     return 0
 }
 
