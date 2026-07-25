@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Auth;
 use App\Http\Controllers\Controller;
 use App\Models\User;
 use App\Services\Auth\LoginThrottleSettings;
+use App\Services\Email\EmailVerificationService;
 use App\Services\Phone\PhoneVerificationService;
 use App\Services\Referrals\ReferralService;
 use App\Services\Referrals\ReferralSettings;
@@ -163,6 +164,27 @@ class AuthController extends Controller
         ], $user);
 
         Auth::login($user);
+
+        // Email verification comes FIRST in the onboarding order (email →
+        // phone/profile → dashboard). The user is authenticated in a limited
+        // unverified state; the OTP job dispatches after the transaction
+        // commits (afterCommit) and the message is HONEST about the outcome.
+        // When the feature is disabled this block is skipped entirely — no
+        // code, no records, unchanged legacy behavior.
+        $emailVerification = app(EmailVerificationService::class);
+        if ($emailVerification->isEnabled()) {
+            $result = $emailVerification->requestCode($user, [
+                'ip' => $request->ip(),
+                'user_agent' => substr((string) $request->userAgent(), 0, 255),
+            ]);
+
+            return redirect()
+                ->route('verification.notice')
+                ->with(
+                    ($result['email_sent'] ?? false) ? 'success' : 'error',
+                    $result['message'],
+                );
+        }
 
         // When OTP verification is mandatory at registration, send the code and
         // route the user to the verification page before they can do anything.

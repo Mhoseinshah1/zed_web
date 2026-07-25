@@ -45,7 +45,9 @@ return [
             'port' => env('MAIL_PORT', 2525),
             'username' => env('MAIL_USERNAME'),
             'password' => env('MAIL_PASSWORD'),
-            'timeout' => null,
+            // Bounded connection/response timeout so a hung SMTP server can
+            // never freeze a queue worker for its full job timeout (1-120s).
+            'timeout' => min(120, max(1, (int) env('MAIL_TIMEOUT', 10))),
             'local_domain' => env('MAIL_EHLO_DOMAIN', parse_url((string) env('APP_URL', 'http://localhost'), PHP_URL_HOST)),
         ],
 

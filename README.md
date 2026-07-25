@@ -1128,6 +1128,46 @@ Upcoming sections (in future development phases):
 - Monitoring — live server status
 - Renew / extra traffic — update Marzban user after renewal
 
+## Email (SMTP) configuration and email-OTP verification
+
+Outbound mail defaults to `MAIL_MAILER=log` (messages go to the log — nothing
+is delivered). Email verification sends a 6-digit OTP; it treats the `log`
+and `array` mailers as **unconfigured** in production, so "required at
+registration" cannot be enabled until a real transport works.
+
+1. Edit the server's `.env` (SMTP credentials live ONLY here — never in the
+   database or the admin panel):
+
+   ```
+   MAIL_MAILER=smtp
+   MAIL_HOST=smtp.example.com
+   MAIL_PORT=587
+   MAIL_SCHEME=null
+   MAIL_USERNAME=your-user
+   MAIL_PASSWORD=your-pass
+   MAIL_FROM_ADDRESS=noreply@yourdomain.com
+   MAIL_FROM_NAME="ZedProxy"
+   MAIL_TIMEOUT=10
+   ```
+
+2. Apply the change (config is cached in production):
+
+   ```
+   php artisan optimize:clear
+   php artisan config:cache
+   sudo supervisorctl restart zedproxy-worker:*   # queue workers pick up the new config
+   ```
+
+3. In the admin panel → «تنظیمات ایمیل و تایید ایمیل» use **ارسال ایمیل تست**
+   to confirm real delivery, then enable verification (and, if desired,
+   make it required at registration).
+
+Existing users are grandfathered by a one-time migration (their
+`email_verified_at` is backfilled to their `created_at`), so enabling
+required verification never locks out accounts that existed before the
+feature shipped. The installer preserves your mail configuration on re-runs
+and never prints or logs `MAIL_PASSWORD`.
+
 ## Updating ZedProxy
 
 The `update.sh` script performs a safe, zero-data-loss update of a running ZedProxy installation.

@@ -211,6 +211,16 @@ class User extends Authenticatable implements FilamentUser
         return $this->hasMany(PhoneVerificationCode::class);
     }
 
+    public function hasVerifiedEmailAddress(): bool
+    {
+        return $this->email_verified_at !== null;
+    }
+
+    public function emailVerificationCodes(): HasMany
+    {
+        return $this->hasMany(EmailVerificationCode::class);
+    }
+
     public function activeServicesCount(): int
     {
         return $this->services()->where('status', UserService::STATUS_ACTIVE)->count();

@@ -62,6 +62,12 @@ class UserResource extends Resource
                     ->required()
                     ->unique(ignoreRecord: true)
                     ->maxLength(255),
+                Forms\Components\Toggle::make('email_change_mark_verified')
+                    ->label('ایمیل جدید تاییدشده در نظر گرفته شود')
+                    ->helperText('فقط وقتی آدرس ایمیل را تغییر دهید اعمال می‌شود: روشن = ایمیل جدید تاییدشده ثبت می‌شود؛ خاموش = کاربر باید ایمیل جدید را با کد تایید کند.')
+                    ->default(true)
+                    ->dehydrated(true)
+                    ->visibleOn('edit'),
 
                 Forms\Components\TextInput::make('phone')
                     ->label('شماره موبایل')

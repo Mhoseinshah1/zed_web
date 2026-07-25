@@ -1420,9 +1420,19 @@ REDIS_HOST=127.0.0.1
 REDIS_PASSWORD=null
 REDIS_PORT=6379
 
+# Mail stays on the log transport until the operator deliberately configures
+# SMTP in this file (credentials live ONLY here — never in the database).
+# After editing: php artisan optimize:clear && php artisan config:cache,
+# then restart the queue workers.
 MAIL_MAILER=log
+MAIL_SCHEME=null
+MAIL_HOST=127.0.0.1
+MAIL_PORT=2525
+MAIL_USERNAME=null
+MAIL_PASSWORD=null
 MAIL_FROM_ADDRESS="noreply@${DOMAIN}"
 MAIL_FROM_NAME="ZedProxy"
+MAIL_TIMEOUT=10
 
 VITE_APP_NAME="ZedProxy"
 ENV

@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\Auth\AuthController;
+use App\Http\Controllers\Auth\EmailVerificationController;
 use App\Http\Controllers\CentralPayController;
 use App\Http\Controllers\CheckoutController;
 use App\Http\Controllers\ContactController;
@@ -88,6 +89,23 @@ Route::middleware(['noindex', 'guest'])->group(function () {
 // Logout (any authenticated user)
 Route::post('/logout', [AuthController::class, 'logout'])->middleware('auth')->name('logout');
 
+// ── Email OTP verification ───────────────────────────────────────────────────
+// auth + noindex; NEVER behind email.verified (no redirect loops). The GET
+// notice page never sends a code — sending is an explicit rate-limited POST.
+Route::middleware(['noindex', 'auth'])->group(function () {
+    Route::get('/email/verify', [EmailVerificationController::class, 'notice'])
+        ->name('verification.notice');
+    Route::post('/email/verify', [EmailVerificationController::class, 'verify'])
+        ->middleware('throttle:10,1')
+        ->name('verification.verify');
+    Route::post('/email/verification/resend', [EmailVerificationController::class, 'resend'])
+        ->middleware('throttle:5,10')
+        ->name('verification.resend');
+    Route::patch('/email/verification/change-address', [EmailVerificationController::class, 'changeAddress'])
+        ->middleware('throttle:5,10')
+        ->name('verification.change');
+});
+
 // Theme / appearance preference — available to guests (cookie) and users (saved)
 Route::post('/theme', [ThemeController::class, 'update'])->name('theme.update');
 
@@ -95,12 +113,15 @@ Route::post('/theme', [ThemeController::class, 'update'])->name('theme.update');
 // Server-side idempotency (purchase intent + fingerprint) is the real guarantee;
 // the throttle blunts abusive bursts of submissions.
 Route::post('/plans/{plan}/buy', [CheckoutController::class, 'buy'])
-    ->middleware(['auth', 'profile.complete', 'throttle:purchase-submit'])
+    ->middleware(['auth', 'email.verified', 'profile.complete', 'throttle:purchase-submit'])
     ->name('plans.buy');
 
 // User dashboard (prefix: /dashboard, name: dashboard.*)
 // noindex: all private user pages return X-Robots-Tag: noindex, nofollow, noarchive.
-Route::middleware(['noindex', 'auth'])->prefix('dashboard')->name('dashboard.')->group(function () {
+// email.verified guards the whole dashboard (orders/payments, services,
+// renewals/add-ons, wallet + top-up, representative, tickets, profile) —
+// enforcing the onboarding order: email first, then phone/profile completion.
+Route::middleware(['noindex', 'auth', 'email.verified'])->prefix('dashboard')->name('dashboard.')->group(function () {
     Route::get('/', [DashboardController::class, 'index'])->name('index');
     Route::get('/orders', [OrderController::class, 'index'])->name('orders');
     Route::get('/orders/{order}', [OrderController::class, 'show'])->name('orders.show');
