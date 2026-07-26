@@ -58,6 +58,13 @@ return [
         ],
 
         'sqs' => [
+            // NOT used by this deployment (redis/database/sync are). If you
+            // switch to SQS: the QUEUE's visibility timeout (an AWS-side
+            // setting — SQS defaults to 30s; there is no retry_after here)
+            // MUST exceed SendEmailOtpJob::$timeout (240s), like the other
+            // drivers' retry_after (300s). Below it, SQS redelivers the job
+            // mid-SMTP-exchange: the redeliveries burn $tries and failed()
+            // would finalize the FIRST worker's still-active sending claim.
             'driver' => 'sqs',
             'key' => env('AWS_ACCESS_KEY_ID'),
             'secret' => env('AWS_SECRET_ACCESS_KEY'),

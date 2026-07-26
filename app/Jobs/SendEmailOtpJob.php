@@ -74,8 +74,13 @@ class SendEmailOtpJob implements ShouldBeEncrypted, ShouldQueue
      * within-bounds on every step must never be killed by the worker
      * mid-conversation — especially not after remote acceptance, where a
      * retry would duplicate the OTP email. 10 × 20s + claim/finalize margin.
-     * Every queue driver's retry_after (config/queue.php: 300) MUST stay
-     * above this, or an in-flight job would be handed to a second worker.
+     * EVERY queue driver's redelivery horizon MUST stay above this —
+     * retry_after (config/queue.php: 300s) for database/Beanstalkd/Redis,
+     * and the AWS-side queue VISIBILITY TIMEOUT for SQS (its 30s default is
+     * far too low; see config/queue.php) — or an in-flight job would be
+     * handed to a second worker mid-exchange, and failed()'s abandonment
+     * logic (which relies on no attempt still running at retry exhaustion)
+     * could finalize a live claim.
      */
     public int $timeout = 240;
 
