@@ -67,9 +67,12 @@ class BackupService
         $start = microtime(true);
 
         try {
-            @mkdir($this->settings->storagePath(), 0750, true);
-            $work = rtrim($this->settings->storagePath(), '/').'/.work_'.uniqid();
-            @mkdir($work, 0750, true);
+            // Fail closed BEFORE any external process runs: an invalid stored
+            // path (relative, control chars, traversal) throws a sanitized
+            // config failure here — pg_dump/tar never see a CWD-relative path.
+            $root = $this->settings->storagePath();
+            $this->pathPolicy()->ensureUsableRoot($root);
+            $work = $this->createWorkDir($root);
 
             $sources = [];
 
@@ -91,8 +94,7 @@ class BackupService
                 throw new \RuntimeException('No backup sources selected.');
             }
 
-            $archive = rtrim($this->settings->storagePath(), '/')
-                .'/zedproxy-backup-'.now()->format('Ymd-His').'.tar.gz';
+            $archive = $root.'/zedproxy-backup-'.now()->format('Ymd-His').'.tar.gz';
 
             $this->createArchive($archive, $sources, $this->excludePatterns());
 
@@ -127,6 +129,55 @@ class BackupService
 
             return ['status' => BackupLog::STATUS_FAILED, 'log_id' => $log->id, 'path' => null, 'size' => 0, 'duration_ms' => $duration, 'error' => $msg];
         }
+    }
+
+    private function pathPolicy(): BackupPathPolicy
+    {
+        return app(BackupPathPolicy::class);
+    }
+
+    /**
+     * Create a fresh, private, collision-resistant work directory inside the
+     * validated backup root. Guarantees:
+     *  - the name carries 64 bits of CSPRNG entropy (not a guessable uniqid),
+     *  - mkdir() is non-recursive with mode 0700, so an already-existing path
+     *    (including one pre-planted by another local user, or leftovers from
+     *    a failed run) is NEVER adopted — creation either makes a brand-new
+     *    private directory or the backup fails,
+     *  - the created directory is verified to physically resolve inside the
+     *    backup root (realpath), so a symlinked root component cannot silently
+     *    redirect backup artifacts elsewhere,
+     *  - no suppressed, unchecked filesystem calls.
+     *
+     * @throws BackupFailure permission-category failure
+     */
+    private function createWorkDir(string $root): string
+    {
+        $work = $root.'/.work_'.bin2hex(random_bytes(8));
+
+        // @ only silences the duplicate PHP warning; the result IS checked.
+        if (! @mkdir($work, 0700)) {
+            $err = error_get_last()['message'] ?? 'mkdir failed';
+
+            throw BackupFailure::permission(
+                'امکان ساخت پوشه کاری بکاپ وجود ندارد. دسترسی‌های مسیر ذخیره بکاپ را بررسی کنید.',
+                'mkdir failed for backup work dir '.$work.': '.$err,
+            );
+        }
+
+        $realWork = realpath($work);
+        $realRoot = realpath($root);
+        if ($realWork === false || $realRoot === false
+            || ! str_starts_with($realWork, rtrim($realRoot, '/').'/')) {
+            $this->removeDir($work);
+
+            throw BackupFailure::permission(
+                'پوشه کاری بکاپ خارج از مسیر ذخیره بکاپ قرار می‌گیرد و به دلایل امنیتی رد شد.',
+                'backup work dir does not resolve inside the backup root: work='.$work.' root='.$root,
+            );
+        }
+
+        return $realWork;
     }
 
     /**

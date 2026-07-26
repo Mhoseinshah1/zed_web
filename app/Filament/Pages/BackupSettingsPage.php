@@ -5,6 +5,8 @@ namespace App\Filament\Pages;
 use App\Jobs\RunBackupJob;
 use App\Models\BackupLog;
 use App\Models\SiteSetting;
+use App\Services\Backup\BackupFailure;
+use App\Services\Backup\BackupPathPolicy;
 use App\Services\Backup\BackupScheduler;
 use App\Services\Backup\BackupService;
 use App\Services\Backup\BackupSettings;
@@ -114,7 +116,16 @@ class BackupSettingsPage extends Page implements HasActions, HasForms
                         .' دقیقه. بکاپ با فاصله زمانی خیلی کوتاه ممکن است فشار زیادی به سرور وارد کند.'),
 
                 Forms\Components\TextInput::make('backup_retention_days')->label('روزهای نگهداری بکاپ')->numeric()->minValue(1)->default(7),
-                Forms\Components\TextInput::make('backup_storage_path')->label('مسیر ذخیره بکاپ (اختیاری)')->placeholder(storage_path('app/backups'))->columnSpanFull(),
+                Forms\Components\TextInput::make('backup_storage_path')->label('مسیر ذخیره بکاپ (اختیاری)')
+                    ->placeholder(storage_path('app/backups'))->columnSpanFull()
+                    ->helperText('باید یک مسیر مطلق باشد (با / شروع شود). برای استفاده از مسیر پیش‌فرض خالی بگذارید.')
+                    ->rule(fn () => function (string $attribute, mixed $value, \Closure $fail): void {
+                        try {
+                            app(BackupPathPolicy::class)->resolve((string) $value);
+                        } catch (BackupFailure $e) {
+                            $fail($e->publicMessage());
+                        }
+                    }),
             ])->columns(2),
 
             Forms\Components\Section::make('محتوای بکاپ')->schema([
@@ -174,7 +185,20 @@ class BackupSettingsPage extends Page implements HasActions, HasForms
         ));
         SiteSetting::set('backup_schedule_time', $this->validTime($data['backup_schedule_time'] ?? '03:00', '03:00'));
         SiteSetting::set('backup_retention_days', (int) max(1, (int) ($data['backup_retention_days'] ?? 7)));
-        SiteSetting::set('backup_storage_path', (string) ($data['backup_storage_path'] ?? ''));
+
+        // Same authoritative policy the runtime uses: store either '' (use
+        // default) or a validated NORMALIZED absolute path — never a raw value.
+        $rawPath = trim((string) ($data['backup_storage_path'] ?? ''));
+        try {
+            $storedPath = $rawPath === '' ? '' : app(BackupPathPolicy::class)->validateAbsolute($rawPath);
+        } catch (BackupFailure $e) {
+            Notification::make()->title($e->publicMessage())->danger()->send();
+
+            return;
+        }
+        SiteSetting::set('backup_storage_path', $storedPath);
+        $this->data['backup_storage_path'] = $storedPath;
+
         SiteSetting::set('backup_max_telegram_file_size_mb', (int) max(1, min(50, (int) ($data['backup_max_telegram_file_size_mb'] ?? 50))));
         SiteSetting::set('daily_report_time', $this->validTime($data['daily_report_time'] ?? '21:00', '21:00'));
 
@@ -209,7 +233,13 @@ class BackupSettingsPage extends Page implements HasActions, HasForms
             ->requiresConfirmation()
             ->modalDescription('بکاپ‌های قدیمی‌تر از دوره نگهداری حذف می‌شوند.')
             ->action(function () {
-                $removed = app(BackupService::class)->cleanupOld();
+                try {
+                    $removed = app(BackupService::class)->cleanupOld();
+                } catch (BackupFailure $e) {
+                    Notification::make()->title($e->publicMessage())->danger()->send();
+
+                    return;
+                }
                 Notification::make()->title("پاکسازی انجام شد ({$removed} فایل حذف شد).")->success()->send();
             });
     }

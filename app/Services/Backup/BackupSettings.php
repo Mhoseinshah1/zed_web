@@ -58,11 +58,19 @@ class BackupSettings
         return max(1, (int) SiteSetting::get('backup_retention_days', 7));
     }
 
+    /**
+     * The validated absolute backup root. Goes through BackupPathPolicy, so a
+     * legacy/invalid stored value (relative path, control chars, traversal)
+     * fails closed here — even when it bypassed the admin form and was
+     * written straight into the database.
+     *
+     * @throws BackupFailure config-category failure for an invalid stored value
+     */
     public function storagePath(): string
     {
-        $p = trim((string) SiteSetting::get('backup_storage_path', ''));
-
-        return $p !== '' ? $p : storage_path('app/backups');
+        return app(BackupPathPolicy::class)->resolve(
+            (string) SiteSetting::get('backup_storage_path', ''),
+        );
     }
 
     public function includeDatabase(): bool
