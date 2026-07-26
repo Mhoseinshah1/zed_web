@@ -20,6 +20,7 @@ class EmailVerificationCode extends Model
         'attempts',
         'send_status',
         'send_error',
+        'delivery_claimed_at',
         'delivery_finalized_at',
         'delivery_config_fingerprint',
         'ip_address',

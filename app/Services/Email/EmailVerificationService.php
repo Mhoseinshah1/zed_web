@@ -58,15 +58,28 @@ class EmailVerificationService
     public const OUTAGE_MIN_FAILURES = 3;
 
     /**
-     * An UNEXPIRED `queued` row this old proves no worker is consuming: a
-     * live worker claims within seconds (contention retries within ~100s),
-     * so publication-succeeded-but-never-claimed is pipeline downtime that
-     * dispatch_failed (publication errors only) cannot see. Deliberately
-     * BELOW the 5-minute TTL floor: the evidence self-clears when the code
-     * expires, so a permanently lost job can never wedge enforcement open
-     * forever — while a live stall keeps producing fresh stuck rows.
+     * A `queued` row this old proves no worker is consuming: a live worker
+     * claims within seconds (contention retries within ~100s), so
+     * publication-succeeded-but-never-claimed is pipeline downtime that
+     * dispatch_failed (publication errors only) cannot see. The evidence
+     * deliberately OUTLIVES the code's expiry — expiry proves nothing about
+     * queue recovery — and clears only on positive proof a worker consumed
+     * a job after the stall began (see transportLooksLive()).
      */
     public const STALLED_QUEUE_MINUTES = 4;
+
+    /**
+     * A `sending` claim this old with NO finalization proves the claiming
+     * worker died mid-delivery and nothing resumed the job: on a live
+     * queue, an interrupted attempt is redelivered at the redelivery
+     * horizon (retry_after 300s > job timeout 240s) and the retry either
+     * RE-CLAIMS the row (fresh delivery_claimed_at) or finalizes it — so
+     * in healthy operation a claim stamp is never older than ~300s. Eight
+     * minutes adds margin for slow polls and longer SQS visibility
+     * timeouts; a false positive merely pauses enforcement (fail-open)
+     * until the redelivered attempt finalizes.
+     */
+    public const ABANDONED_SENDING_MINUTES = 8;
 
     /** Shown when the bounded per-user lock could not be acquired in time. */
     public const BUSY_MESSAGE = 'سیستم موقتاً مشغول است. لطفاً چند لحظه بعد دوباره تلاش کنید.';
@@ -249,6 +262,25 @@ class EmailVerificationService
             ->whereNull('used_at')
             ->where('created_at', '<=', now()->subMinutes(self::STALLED_QUEUE_MINUTES))
             ->max('created_at');
+
+        // ABANDONED claims are the same outage one step later: a worker
+        // claimed (queued → sending), was killed before finalizing, and
+        // nothing resumed the reserved job — the row carries no
+        // delivery_finalized_at, so the outcome scan below is equally blind
+        // to it. delivery_claimed_at is refreshed on every (re-)claim and
+        // never bumped by web-side mutations, so a stamp past the abandoned
+        // threshold is proof the pipeline stopped mid-delivery. (Pre-column
+        // legacy rows carry NULL and are ignored.)
+        $abandonedSendingSince = EmailVerificationCode::query()
+            ->where('send_status', EmailVerificationCode::SEND_STATUS_SENDING)
+            ->whereNull('used_at')
+            ->whereNull('delivery_finalized_at')
+            ->where('delivery_claimed_at', '<=', now()->subMinutes(self::ABANDONED_SENDING_MINUTES))
+            ->max('delivery_claimed_at');
+
+        $stalledQueuedSince = collect([$stalledQueuedSince, $abandonedSendingSince])
+            ->filter()
+            ->max();
         if ($stalledQueuedSince !== null) {
             $stalledQueuedSince = Carbon::parse($stalledQueuedSince);
             $workerConsumedAfterStall = EmailVerificationCode::query()

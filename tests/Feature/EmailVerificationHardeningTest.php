@@ -1432,6 +1432,54 @@ class EmailVerificationHardeningTest extends TestCase
         $this->travelBack();
     }
 
+    public function test_an_abandoned_sending_claim_pauses_enforcement_until_a_worker_resumes(): void
+    {
+        $svc = app(EmailVerificationService::class);
+        $user = $this->unverifiedUser();
+        $this->assertTrue($svc->isEnforceableNow(), 'healthy baseline');
+
+        // A worker claimed the row (queued → sending) and is mid-delivery. A
+        // FRESH claim is normal in-flight work — not outage evidence.
+        $claimed = EmailVerificationCode::create([
+            'user_id' => $user->id, 'email' => $user->email,
+            'code_hash' => Hash::make('123456'), 'attempts' => 0,
+            'expires_at' => now()->addMinutes(10),
+            'send_status' => EmailVerificationCode::SEND_STATUS_SENDING,
+            'delivery_claimed_at' => now()->subMinute(),
+        ]);
+        $this->assertTrue($svc->transportLooksLive(), 'an in-flight claim is not an outage');
+
+        // The claiming worker died before ANY finalization and nothing
+        // resumed the job: the claim stamp ages past the redelivery horizon.
+        // The row has no delivery_finalized_at, so the outcome scan is blind
+        // to it — only the abandoned-claim probe can see this outage.
+        EmailVerificationCode::whereKey($claimed->id)->update([
+            'delivery_claimed_at' => now()->subMinutes(EmailVerificationService::ABANDONED_SENDING_MINUTES + 1),
+        ]);
+        $this->assertFalse($svc->transportLooksLive(), 'an abandoned sending claim is pipeline downtime');
+        $this->assertFalse($svc->isEnforceableNow());
+        $this->actingAs($user)->get('/dashboard')->assertOk();
+
+        // The code expiring changes nothing: expiry proves nothing about the
+        // worker, and the required user must not stay redirected behind a
+        // pipeline that stopped mid-delivery.
+        $this->travel(11)->minutes();
+        $this->assertFalse($svc->transportLooksLive(), 'abandoned-claim evidence outlives the code expiry');
+
+        // A resumed worker finalizing the redelivered attempt is the
+        // recovery proof (the row leaves `sending` and gains a finalization).
+        EmailVerificationCode::whereKey($claimed->id)->update([
+            'send_status' => EmailVerificationCode::SEND_STATUS_FAILED,
+            'send_error' => 'delivery failed: connection timed out',
+            'delivery_claimed_at' => null,
+            'delivery_finalized_at' => now(),
+            'delivery_config_fingerprint' => $svc->mailConfigFingerprint(),
+        ]);
+        $this->assertTrue($svc->transportLooksLive(), 'a resumed worker finalizing the claim proves recovery');
+        $this->assertTrue($svc->isEnforceableNow());
+        $this->travelBack();
+    }
+
     public function test_a_queue_outage_pauses_enforcement_like_a_mail_outage(): void
     {
         $svc = app(EmailVerificationService::class);
