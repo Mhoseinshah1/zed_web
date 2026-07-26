@@ -220,6 +220,22 @@ class SendEmailOtpJob implements ShouldBeEncrypted, ShouldQueue
                 ->first();
 
             if ($record === null || ! in_array($record->send_status, $claimableFrom, true)) {
+                // The queue DID deliver this job even though the row was
+                // already retired (web-side invalidateCodes → skipped).
+                // Stamp consumption on never-claimed skips so the stall
+                // probe can distinguish "retired, then its job consumed"
+                // (healthy worker) from "published and never consumed"
+                // (dead workers) — without this, sub-threshold resends
+                // would leave rows indistinguishable from a stalled queue.
+                if ($record !== null
+                    && $record->send_status === EmailVerificationCode::SEND_STATUS_SKIPPED
+                    && $record->delivery_claimed_at === null) {
+                    EmailVerificationCode::whereKey($this->codeId)
+                        ->where('send_status', EmailVerificationCode::SEND_STATUS_SKIPPED)
+                        ->whereNull('delivery_claimed_at')
+                        ->update(['delivery_claimed_at' => now()]);
+                }
+
                 return null;
             }
 
@@ -284,7 +300,14 @@ class SendEmailOtpJob implements ShouldBeEncrypted, ShouldQueue
         });
     }
 
-    /** Terminal skip inside the claim transaction — claim fields cleared. */
+    /**
+     * Terminal skip inside the claim transaction. The claim TOKEN is
+     * cleared (terminal rows are never claimable), but delivery_claimed_at
+     * is stamped with the consumption time: a worker executed this row's
+     * job and decided to skip — positive proof the queue is being consumed,
+     * which the stall probe uses to tell worker-skips apart from rows no
+     * worker ever touched.
+     */
     private function markSkipped(array $fromStatuses): void
     {
         EmailVerificationCode::whereKey($this->codeId)
@@ -292,7 +315,7 @@ class SendEmailOtpJob implements ShouldBeEncrypted, ShouldQueue
             ->update([
                 'send_status' => EmailVerificationCode::SEND_STATUS_SKIPPED,
                 'delivery_claim_token' => null,
-                'delivery_claimed_at' => null,
+                'delivery_claimed_at' => now(),
                 'delivery_finalized_at' => now(),
             ]);
     }

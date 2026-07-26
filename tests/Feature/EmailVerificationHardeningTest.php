@@ -1530,6 +1530,50 @@ class EmailVerificationHardeningTest extends TestCase
         $this->assertTrue($svc->isEnforceableNow());
     }
 
+    public function test_sub_threshold_resends_cannot_launder_the_stall_signal(): void
+    {
+        $svc = app(EmailVerificationService::class);
+        $user = $this->unverifiedUser();
+        $this->assertTrue($svc->isEnforceableNow(), 'healthy baseline');
+
+        // Workers dead; the user resends every couple of minutes. Each
+        // resend retires the previous row (web skip — delivery_claimed_at
+        // stays NULL) BEFORE it can age past the queued-only threshold and
+        // publishes a fresh replacement, so no row is ever old AND queued.
+        $retired = EmailVerificationCode::create([
+            'user_id' => $user->id, 'email' => $user->email,
+            'code_hash' => Hash::make('123456'), 'attempts' => 0,
+            'expires_at' => now()->addMinutes(10), 'used_at' => now(),
+            'send_status' => EmailVerificationCode::SEND_STATUS_SKIPPED,
+            'delivery_finalized_at' => now()->subMinutes(3),
+        ]);
+        EmailVerificationCode::whereKey($retired->id)->update([
+            'created_at' => now()->subMinutes(EmailVerificationService::STALLED_QUEUE_MINUTES + 1),
+        ]);
+        EmailVerificationCode::create([
+            'user_id' => $user->id, 'email' => $user->email,
+            'code_hash' => Hash::make('654321'), 'attempts' => 0,
+            'expires_at' => now()->addMinutes(10),
+            'send_status' => EmailVerificationCode::SEND_STATUS_QUEUED,
+        ]);
+
+        $this->assertFalse(
+            $svc->transportLooksLive(),
+            'a publication retired without any worker ever consuming it is stall evidence',
+        );
+        $this->assertFalse($svc->isEnforceableNow());
+
+        // A worker finally executing the retired row's job stamps its
+        // delivery_claimed_at (claim()/markSkipped) — the queue is
+        // demonstrably draining, which both removes the row from the
+        // evidence set and satisfies the recovery proof.
+        EmailVerificationCode::whereKey($retired->id)->update([
+            'delivery_claimed_at' => now(),
+        ]);
+        $this->assertTrue($svc->transportLooksLive(), 'a worker-stamped skip proves the queue is draining');
+        $this->assertTrue($svc->isEnforceableNow());
+    }
+
     public function test_an_abandoned_sending_claim_pauses_enforcement_until_a_worker_resumes(): void
     {
         $svc = app(EmailVerificationService::class);

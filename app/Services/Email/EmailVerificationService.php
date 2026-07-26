@@ -58,13 +58,16 @@ class EmailVerificationService
     public const OUTAGE_MIN_FAILURES = 3;
 
     /**
-     * A `queued` row this old proves no worker is consuming: a live worker
-     * claims within seconds (contention retries within ~100s), so
-     * publication-succeeded-but-never-claimed is pipeline downtime that
-     * dispatch_failed (publication errors only) cannot see. The evidence
-     * deliberately OUTLIVES the code's expiry — expiry proves nothing about
-     * queue recovery — and clears only on positive proof a worker consumed
-     * a job after the stall began (see transportLooksLive()).
+     * A publication this old that NO worker ever consumed proves nothing is
+     * draining the queue: a live worker claims within seconds (contention
+     * retries within ~100s), so publication-succeeded-but-never-consumed is
+     * pipeline downtime that dispatch_failed (publication errors only)
+     * cannot see. The evidence covers rows still `queued` AND rows the web
+     * side retired unconsumed (skipped with a NULL delivery_claimed_at —
+     * sub-threshold resends must not launder the signal), deliberately
+     * OUTLIVES the code's expiry, and clears only on positive proof a
+     * worker consumed a job after the stall became detectable (see
+     * transportLooksLive()).
      */
     public const STALLED_QUEUE_MINUTES = 4;
 
@@ -268,9 +271,25 @@ class EmailVerificationService
         // never web-stamped skipped or dispatch_failed) finalized after the
         // stall, or the stalled row itself leaving `queued` when a recovered
         // worker claims it.
+        // The evidence is any PUBLICATION no worker ever consumed — not only
+        // rows still `queued`: a resend faster than the stall threshold
+        // retires the previous row (web-stamped skipped, delivery_claimed_at
+        // NULL) before it can age into the queued-only probe, which would
+        // let sub-threshold resends keep enforcement active forever against
+        // dead workers. A worker that later consumes a retired row's job
+        // stamps delivery_claimed_at on it (claim() / markSkipped), removing
+        // it from this set — so "retired then consumed" (healthy) never
+        // counts, while "published and never consumed" always does.
         $stalledQueuedSince = EmailVerificationCode::query()
-            ->where('send_status', EmailVerificationCode::SEND_STATUS_QUEUED)
-            ->whereNull('used_at')
+            ->where(function ($q) {
+                $q->where(function ($q2) {
+                    $q2->where('send_status', EmailVerificationCode::SEND_STATUS_QUEUED)
+                        ->whereNull('used_at');
+                })->orWhere(function ($q2) {
+                    $q2->where('send_status', EmailVerificationCode::SEND_STATUS_SKIPPED)
+                        ->whereNull('delivery_claimed_at');
+                });
+            })
             ->where('created_at', '<=', now()->subMinutes(self::STALLED_QUEUE_MINUTES))
             ->max('created_at');
 
@@ -284,7 +303,10 @@ class EmailVerificationService
         // legacy rows carry NULL and are ignored.)
         $abandonedSendingSince = EmailVerificationCode::query()
             ->where('send_status', EmailVerificationCode::SEND_STATUS_SENDING)
-            ->whereNull('used_at')
+            // Deliberately NOT filtered on used_at: a resend (or a verify)
+            // marks the row used without changing its status, and an
+            // abandoned claim stays evidence of a worker dying mid-delivery
+            // regardless of what the web side did to the row afterwards.
             ->whereNull('delivery_finalized_at')
             ->where('delivery_claimed_at', '<=', now()->subMinutes(self::ABANDONED_SENDING_MINUTES))
             ->max('delivery_claimed_at');
@@ -325,16 +347,29 @@ class EmailVerificationService
         ])->filter()->max();
         if ($stalledDetectedAt !== null) {
             $workerConsumedAfterStall = EmailVerificationCode::query()
-                ->whereIn('send_status', [
-                    EmailVerificationCode::SEND_STATUS_SENT,
-                    EmailVerificationCode::SEND_STATUS_ACCEPTED_PENDING,
-                    EmailVerificationCode::SEND_STATUS_FAILED,
-                ])
-                // Queue-consumption proof, so no fingerprint or error-category
-                // scoping: even a recipient-bounced `failed` row proves the
-                // worker pulled a job off the queue after the stall became
-                // detectable.
-                ->where('delivery_finalized_at', '>', $stalledDetectedAt)
+                ->where(function ($q) use ($stalledDetectedAt) {
+                    // Queue-consumption proof, so no fingerprint or
+                    // error-category scoping: even a recipient-bounced
+                    // `failed` row proves the worker pulled a job off the
+                    // queue after the stall became detectable.
+                    $q->where(function ($q2) use ($stalledDetectedAt) {
+                        $q2->whereIn('send_status', [
+                            EmailVerificationCode::SEND_STATUS_SENT,
+                            EmailVerificationCode::SEND_STATUS_ACCEPTED_PENDING,
+                            EmailVerificationCode::SEND_STATUS_FAILED,
+                        ])->where('delivery_finalized_at', '>', $stalledDetectedAt);
+                    })
+                        // A WORKER-stamped skip is consumption too: claim()/
+                        // markSkipped stamp delivery_claimed_at when the
+                        // worker executes a job whose row was already
+                        // retired — nothing was sent, but the queue is
+                        // demonstrably being drained. (Web-side skips carry
+                        // NULL and can never satisfy this.)
+                        ->orWhere(function ($q2) use ($stalledDetectedAt) {
+                            $q2->where('send_status', EmailVerificationCode::SEND_STATUS_SKIPPED)
+                                ->where('delivery_claimed_at', '>', $stalledDetectedAt);
+                        });
+                })
                 ->exists();
             if (! $workerConsumedAfterStall) {
                 $persisted = $stalledDetectedAt->format('Y-m-d H:i:s');
