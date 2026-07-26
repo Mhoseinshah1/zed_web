@@ -479,7 +479,30 @@ Backups are driven by the **Laravel scheduler** (`zedproxy:backup --scheduled`),
 configured from the admin panel — there is no separate backup cron. Make sure
 the scheduler cron below is installed (the installer does this automatically);
 everything else (backups, Telegram reports, panel health, Marzban sync) runs
-through it. Backups older than the configured retention are removed automatically.
+through it. Backups older than the configured retention are removed automatically
+— retention cleanup only runs **after** a new backup has been committed, so a
+failing backup never shrinks the set of existing valid backups.
+
+### Backup storage path rules
+
+The optional «مسیر ذخیره بکاپ» setting must be an **absolute** path (starting
+with `/`), with no `.`/`..` segments and no control characters. Leaving it
+empty uses the default `storage/app/backups`. Relative values are rejected —
+they are **not** auto-prefixed into an absolute path, because a relative path
+would resolve against the process working directory and behave differently
+under web, Artisan, the scheduler and Supervisor.
+
+**Recovery for an invalid stored value** (e.g. a legacy relative path saved
+before validation existed, or a value edited directly in the database): the
+backup run fails closed with a sanitized config error before `pg_dump`/`tar`
+execute. To fix it, open **بکاپ و سرور** in the admin panel and save an
+absolute path — or clear the field to fall back to the default. No manual
+database surgery or redeploy is required.
+
+Archives are built under a private per-run work directory inside the backup
+root and only appear under their final `zedproxy-backup-*.tar.gz(.enc)` name
+via one atomic rename after verification — a crashed or failed run never
+leaves a partial file that looks like a completed backup.
 
 ## Scheduler (production-critical)
 

@@ -7,6 +7,7 @@ use App\Models\BackupLog;
 use App\Models\TelegramAdminTopic;
 use App\Services\Telegram\TelegramAdminNotifier;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Process;
 
 /**
@@ -65,6 +66,7 @@ class BackupService
     {
         $log = BackupLog::create(['type' => $type, 'status' => BackupLog::STATUS_STARTED, 'started_at' => now()]);
         $start = microtime(true);
+        $work = null;
 
         try {
             // Fail closed BEFORE any external process runs: an invalid stored
@@ -91,43 +93,118 @@ class BackupService
             }
 
             if (empty($sources)) {
-                throw new \RuntimeException('No backup sources selected.');
+                throw BackupFailure::config('هیچ منبعی برای بکاپ انتخاب نشده است. حداقل یک مورد را در تنظیمات بکاپ فعال کنید.');
             }
 
-            $archive = $root.'/zedproxy-backup-'.now()->format('Ymd-His').'.tar.gz';
+            // Build under a temp NON-FINAL name inside the private work dir —
+            // same filesystem as the backup root, so commitment below is one
+            // atomic rename. A crashed/failed run can never leave a partial
+            // file that looks like a completed backup.
+            $tmpArchive = $work.'/archive.tar.gz';
+            $this->createArchive($tmpArchive, $sources, $this->excludePatterns());
+            $this->assertNonEmptyFile($tmpArchive, BackupFailure::archive('tar reported success but produced no usable archive'));
 
-            $this->createArchive($archive, $sources, $this->excludePatterns());
+            $candidate = $tmpArchive;
+            $final = $root.'/zedproxy-backup-'.now()->format('Ymd-His').'.tar.gz';
 
             if ($this->settings->encryptEnabled() && $this->settings->hasPassword()) {
-                $archive = $this->encryptArchive($archive, $this->settings->password());
+                $tmpEncrypted = $tmpArchive.'.enc';
+                $this->encryptArchive($tmpArchive, $tmpEncrypted, $this->settings->password());
+                // Verify the encrypted artifact BEFORE the plaintext goes away.
+                $this->assertNonEmptyFile($tmpEncrypted, BackupFailure::encryption('openssl reported success but produced no usable output'));
+                $this->deleteQuietly($tmpArchive);
+                $candidate = $tmpEncrypted;
+                $final .= '.enc';
             }
 
-            $this->removeDir($work);
+            // Atomic commitment: the verified artifact appears under its
+            // final name in one rename, or the run fails with nothing
+            // half-written in the backup root.
+            $this->commitArchive($candidate, $final);
 
-            $size = (int) (is_file($archive) ? filesize($archive) : 0);
+            clearstatcache(true, $final);
+            $size = (int) filesize($final);
+            // Retention cleanup ONLY after the new backup is committed — a
+            // failed run never reduces the set of existing valid backups.
             $cleaned = $this->cleanupOld();
             $duration = (int) round((microtime(true) - $start) * 1000);
 
             $log->update([
                 'status' => BackupLog::STATUS_SUCCESS,
-                'file_path' => $archive,
+                'file_path' => $final,
                 'file_size' => $size,
                 'duration_ms' => $duration,
                 'finished_at' => now(),
                 'metadata' => ['cleaned' => $cleaned],
             ]);
 
-            $this->reportSuccess($log, $archive, $size, $duration, $cleaned, $forceSendFile);
+            $this->reportSuccess($log, $final, $size, $duration, $cleaned, $forceSendFile);
 
-            return ['status' => BackupLog::STATUS_SUCCESS, 'log_id' => $log->id, 'path' => $archive, 'size' => $size, 'duration_ms' => $duration, 'error' => null];
+            return ['status' => BackupLog::STATUS_SUCCESS, 'log_id' => $log->id, 'path' => $final, 'size' => $size, 'duration_ms' => $duration, 'error' => null];
         } catch (\Throwable $e) {
+            // Nothing in this path touches committed zedproxy-backup-* files:
+            // a new failure can never remove a previously valid backup.
+            $failure = $e instanceof BackupFailure ? $e : BackupFailure::internal($e);
+            Log::error('Backup failed', [
+                'category' => $failure->category(),
+                'detail' => $failure->detail() !== '' ? $failure->detail() : $failure->publicMessage(),
+            ]);
+
             $duration = (int) round((microtime(true) - $start) * 1000);
-            $msg = mb_substr($e->getMessage(), 0, 500);
+            // Operator-facing channels (BackupLog/Filament/Telegram) get ONLY
+            // the bounded sanitized message — raw process output, paths and
+            // credentials-adjacent detail stay in the server log above.
+            $msg = mb_substr($failure->publicMessage(), 0, 500);
 
             $log->update(['status' => BackupLog::STATUS_FAILED, 'error' => $msg, 'duration_ms' => $duration, 'finished_at' => now()]);
             $this->reportFailure($msg);
 
             return ['status' => BackupLog::STATUS_FAILED, 'log_id' => $log->id, 'path' => null, 'size' => 0, 'duration_ms' => $duration, 'error' => $msg];
+        } finally {
+            // EVERY exit path — success or failure — clears the work dir and
+            // with it the temp dump, temp archive and temp encrypted output.
+            // Cleanup problems are logged, never thrown: they must not turn a
+            // committed valid backup into a reported failure.
+            if ($work !== null) {
+                $this->removeDir($work);
+            }
+        }
+    }
+
+    /**
+     * Commit a fully verified artifact to its final name with one atomic
+     * same-filesystem rename. Refuses to overwrite an existing committed
+     * backup and verifies the final artifact after the rename.
+     *
+     * @throws BackupFailure commit-category failure
+     */
+    protected function commitArchive(string $candidate, string $final): void
+    {
+        if (file_exists($final)) {
+            throw BackupFailure::commit('final backup path already exists, refusing to overwrite: '.$final);
+        }
+
+        // @ only silences the duplicate PHP warning; the result IS checked.
+        if (! @rename($candidate, $final)) {
+            $err = error_get_last()['message'] ?? 'rename failed';
+
+            throw BackupFailure::commit('rename to final backup name failed: '.$err);
+        }
+
+        clearstatcache(true, $final);
+        if (! is_file($final) || (int) filesize($final) <= 0) {
+            throw BackupFailure::commit('final backup artifact missing or empty after rename: '.$final);
+        }
+    }
+
+    /**
+     * @throws BackupFailure the given failure when the artifact is missing/empty
+     */
+    private function assertNonEmptyFile(string $path, BackupFailure $failure): void
+    {
+        clearstatcache(true, $path);
+        if (! is_file($path) || (int) filesize($path) <= 0) {
+            throw $failure;
         }
     }
 
@@ -218,17 +295,18 @@ class BackupService
             $added++;
         }
         if ($added === 0) {
-            throw new \RuntimeException('No existing sources to archive.');
+            throw BackupFailure::config('هیچ‌کدام از منابع انتخاب‌شده برای بکاپ روی سرور وجود ندارند.');
         }
 
         $result = Process::path(base_path())->timeout(900)->run($cmd);
         if (! $result->successful()) {
-            throw new \RuntimeException('tar failed: '.mb_substr($result->errorOutput() ?: 'unknown', 0, 200));
+            // Raw tar stderr may contain absolute paths — server log only.
+            throw BackupFailure::archive('tar failed: '.mb_substr($result->errorOutput() ?: 'unknown', 0, 500));
         }
     }
 
     /** pg_dump with the password supplied via PGPASSWORD env (never in argv). */
-    private function dumpDatabase(string $target): void
+    protected function dumpDatabase(string $target): void
     {
         $conn = (string) config('database.default');
         $cfg = (array) config("database.connections.{$conn}", []);
@@ -248,25 +326,29 @@ class BackupService
             ->run($cmd);
 
         if (! $result->successful()) {
-            // errorOutput from pg_dump does not contain the password (it's in env).
-            throw new \RuntimeException('pg_dump failed: '.mb_substr($result->errorOutput() ?: 'unknown', 0, 200));
+            // pg_dump stderr can leak host/db/username — server log only. The
+            // password never appears there (it travels via env, not argv).
+            throw BackupFailure::dump('pg_dump failed: '.mb_substr($result->errorOutput() ?: 'unknown', 0, 500));
         }
+
+        $this->assertNonEmptyFile($target, BackupFailure::dump('pg_dump reported success but produced no usable dump file'));
     }
 
-    /** Encrypt the archive with openssl (password via env). Returns new path. */
-    private function encryptArchive(string $archive, string $password): string
+    /**
+     * Encrypt $in to $out with openssl (password via env, never argv). The
+     * plaintext input is NOT deleted here — the caller verifies the encrypted
+     * artifact first and only then discards the plaintext.
+     */
+    protected function encryptArchive(string $in, string $out, string $password): void
     {
-        $enc = $archive.'.enc';
         $result = Process::timeout(900)
             ->env(['ZP_BK_PASS' => $password])
-            ->run(['openssl', 'enc', '-aes-256-cbc', '-salt', '-pbkdf2', '-pass', 'env:ZP_BK_PASS', '-in', $archive, '-out', $enc]);
+            ->run(['openssl', 'enc', '-aes-256-cbc', '-salt', '-pbkdf2', '-pass', 'env:ZP_BK_PASS', '-in', $in, '-out', $out]);
 
         if (! $result->successful()) {
-            throw new \RuntimeException('encryption failed: '.mb_substr($result->errorOutput() ?: 'unknown', 0, 120));
+            // openssl stderr may contain file paths — server log only.
+            throw BackupFailure::encryption('openssl enc failed: '.mb_substr($result->errorOutput() ?: 'unknown', 0, 500));
         }
-        @unlink($archive);
-
-        return $enc;
     }
 
     /** Delete archives older than the retention window. Returns count removed. */
@@ -277,8 +359,15 @@ class BackupService
         $removed = 0;
         foreach (glob($dir.'/zedproxy-backup-*') ?: [] as $file) {
             if (is_file($file) && filemtime($file) < $cutoff) {
-                @unlink($file);
-                $removed++;
+                // @ only silences the duplicate PHP warning; failure is
+                // checked, logged, and excluded from the removed count.
+                if (@unlink($file)) {
+                    $removed++;
+                } else {
+                    Log::warning('Backup retention cleanup could not delete an expired archive', [
+                        'detail' => error_get_last()['message'] ?? 'unlink failed',
+                    ]);
+                }
             }
         }
 
@@ -318,6 +407,8 @@ class BackupService
         return $size > 0 && $size <= $this->settings->maxTelegramFileMb() * 1048576;
     }
 
+    /** Best-effort cleanup: failures are logged, NEVER thrown (a cleanup
+     *  problem must not turn a committed valid backup into a failure). */
     private function removeDir(string $dir): void
     {
         if (! is_dir($dir)) {
@@ -328,8 +419,22 @@ class BackupService
                 continue;
             }
             $path = $dir.'/'.$f;
-            is_dir($path) ? $this->removeDir($path) : @unlink($path);
+            is_dir($path) ? $this->removeDir($path) : $this->deleteQuietly($path);
         }
-        @rmdir($dir);
+        if (! @rmdir($dir)) {
+            Log::warning('Backup cleanup could not remove a work directory', [
+                'detail' => error_get_last()['message'] ?? 'rmdir failed',
+            ]);
+        }
+    }
+
+    /** Checked-and-logged delete for temporary artifacts — never throws. */
+    private function deleteQuietly(string $path): void
+    {
+        if (is_file($path) && ! @unlink($path)) {
+            Log::warning('Backup cleanup could not delete a temporary file', [
+                'detail' => error_get_last()['message'] ?? 'unlink failed',
+            ]);
+        }
     }
 }
