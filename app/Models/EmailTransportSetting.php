@@ -3,6 +3,8 @@
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\QueryException;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 
 /**
@@ -109,15 +111,86 @@ class EmailTransportSetting extends Model
     }
 
     /**
-     * Every insert is forced onto the singleton identity — combined with the
-     * unique index, a second concurrent first-time save cannot create a
-     * second logical row (the losing insert violates the constraint instead
-     * of silently coexisting).
+     * DEFENSE IN DEPTH ONLY: every Eloquent insert is stamped with the
+     * canonical identity so ordinary code never even attempts a noncanonical
+     * key. The actual invariant lives in the DATABASE — the unique index
+     * plus the CHECK constraint (PostgreSQL) / RAISE triggers (SQLite) that
+     * reject any noncanonical key, including raw query-builder inserts that
+     * bypass this hook entirely.
      */
     protected static function booted(): void
     {
         static::creating(function (self $row): void {
             $row->singleton_key = self::SINGLETON_KEY;
         });
+    }
+
+    /**
+     * Production persistence path: save with bounded recovery for the ONE
+     * recoverable conflict — losing a concurrent FIRST-creation race on the
+     * unique singleton key.
+     *
+     * Concurrent-write policy (documented): saves serialize on the canonical
+     * row and the LAST COMMITTED save wins. A loser reloads the committed
+     * winner row and re-applies its own values (including explicitly staged
+     * secret ciphertext) as an UPDATE of that row — exactly one retry, no
+     * loop. Anything else — noncanonical-key rejections, unrelated database
+     * errors, conflicts on an UPDATE — propagates untouched: this method
+     * never converts a real failure into silence.
+     */
+    public function saveSingleton(): self
+    {
+        $wasInsert = ! $this->exists;
+
+        try {
+            // Nested transaction = SAVEPOINT when a caller (the settings
+            // page) already opened one: on PostgreSQL a failed INSERT aborts
+            // the surrounding transaction, so the conflict must roll back to
+            // the savepoint for the recovery UPDATE below to be possible at
+            // all.
+            DB::transaction(function (): void {
+                $this->save();
+            });
+
+            return $this;
+        } catch (QueryException $e) {
+            if (! $wasInsert || ! self::isSingletonInsertConflict($e)) {
+                throw $e;
+            }
+
+            // Lost the first-creation race: adopt the committed winner and
+            // apply OUR values on top (last-committed save wins).
+            $winner = self::instance();
+            if ($winner === null) {
+                throw $e; // conflict without a visible winner — not ours to guess
+            }
+
+            foreach (['enabled', 'host', 'port', 'security', 'from_address', 'from_name', 'timeout', 'local_domain'] as $field) {
+                $winner->{$field} = $this->{$field};
+            }
+            // Secrets transfer as already-encrypted attribute payloads, and
+            // ONLY when this save explicitly staged them — an absent secret
+            // keeps the winner's stored one (blank-keeps-existing semantics).
+            foreach (['username', 'password'] as $secret) {
+                if (array_key_exists($secret, $this->getAttributes())) {
+                    $winner->setRawAttributes(
+                        array_merge($winner->getAttributes(), [$secret => $this->getAttributes()[$secret]]),
+                        false,
+                    );
+                }
+            }
+
+            $winner->save();
+
+            return $winner;
+        }
+    }
+
+    /** The one recoverable conflict: a duplicate on the singleton unique key. */
+    private static function isSingletonInsertConflict(QueryException $e): bool
+    {
+        return str_contains($e->getMessage(), 'singleton_key')
+            && (str_contains($e->getMessage(), 'duplicate key')      // PostgreSQL 23505
+                || str_contains($e->getMessage(), 'UNIQUE constraint failed')); // SQLite
     }
 }

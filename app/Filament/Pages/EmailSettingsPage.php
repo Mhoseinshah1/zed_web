@@ -413,8 +413,14 @@ class EmailSettingsPage extends Page implements HasActions, HasForms
 
         $smtpChanged = $row->isDirty() || ! $row->exists;
 
+        // saveSingleton(): bounded recovery when two admins race the very
+        // first row creation — the loser adopts the committed winner row and
+        // applies these values as an update (last-committed save wins), so
+        // no unique-conflict QueryException ever surfaces to the admin. The
+        // proof invalidation inside commitTransportChange() compares
+        // fingerprints across the configuration that actually COMMITS.
         $this->commitTransportChange(function () use ($row): void {
-            $row->save();
+            $row->saveSingleton();
         });
 
         if ($smtpChanged) {
