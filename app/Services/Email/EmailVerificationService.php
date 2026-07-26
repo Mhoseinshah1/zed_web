@@ -545,6 +545,14 @@ class EmailVerificationService
      *     persisted, logged, or displayed. The HMAC input exists in memory
      *     only; only the final combined hash is stored. Rotating APP_KEY
      *     therefore also invalidates old proofs safely.
+     *
+     * ONE proof policy for BOTH configuration sources: this reads the
+     * EFFECTIVE runtime configuration, which EmailTransportSettingsService
+     * resolves before it is evaluated — when the admin-panel SMTP override is
+     * enabled, the default mailer is the dedicated `managed_smtp` mailer and
+     * its values (including the override source itself, via the default
+     * mailer name and topology) flow into this fingerprint exactly like
+     * environment-backed values do. No parallel fingerprint system exists.
      */
     public function mailConfigFingerprint(): string
     {
