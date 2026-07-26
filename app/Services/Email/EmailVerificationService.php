@@ -202,15 +202,32 @@ class EmailVerificationService
             ->orderByDesc('delivery_finalized_at')
             ->orderByDesc('id')
             ->limit(self::OUTAGE_MIN_FAILURES)
-            ->pluck('send_status');
+            ->get(['send_status', 'delivery_finalized_at']);
 
         if ($recentOutcomes->count() < self::OUTAGE_MIN_FAILURES) {
             return true;
         }
 
-        return $recentOutcomes->contains(
-            fn ($status) => $status !== EmailVerificationCode::SEND_STATUS_FAILED,
+        $anySuccess = $recentOutcomes->contains(
+            fn ($outcome) => $outcome->send_status !== EmailVerificationCode::SEND_STATUS_FAILED,
         );
+        if ($anySuccess) {
+            return true;
+        }
+
+        // The failures may belong to a configuration the operator has since
+        // REPLACED or repaired: a successful admin transport test — which
+        // exercises EVERY delivery leaf and is fingerprint-bound to the
+        // CURRENT configuration — run AFTER the newest failure is positive
+        // live evidence too (test sends never create OTP outcome rows, so
+        // without this the old failures would keep enforcement suspended for
+        // the rest of the window).
+        $newestFailureAt = $recentOutcomes->first()->delivery_finalized_at;
+        $testAt = $this->mailTestVerifiedAt();
+
+        return $testAt !== null
+            && $testAt->gt($newestFailureAt)
+            && $this->hasVerifiedMailTest();
     }
 
     // ── Transport-test proof ─────────────────────────────────────────────────

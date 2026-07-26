@@ -456,16 +456,22 @@ class SendEmailOtpJob implements ShouldBeEncrypted, ShouldQueue
 
     /**
      * The framework invokes this on a RE-UNSERIALIZED instance — the claim
-     * token never survives into it, so this callback is deliberately limited
-     * to the only mutation that is safe without claim ownership: an UNOWNED
-     * `queued` record. That covers retries exhausted purely by lock/cache
-     * contention (releaseForRetry) — ZERO transport attempts happened, so
-     * the record closes out as `dispatch_failed`, which the daily cap and
-     * cooldown exclude: contention or a cache outage can never burn a user's
-     * OTP allowance. Real transport failures were already closed out
-     * token-matched inside handle() (failTransportAttempt); a claimed
-     * `sending` record is NEVER touched here — it may belong to a newer
-     * retry's claim.
+     * token never survives into it — but by the time it fires every retry of
+     * THIS job is exhausted, and claims on this codeId are only ever made by
+     * this job's own attempts (retry_after > job timeout excludes a
+     * still-running attempt). Two token-free mutations are therefore safe:
+     *
+     *  - an UNOWNED `queued` record (contention exhausted before any claim,
+     *    ZERO transport attempts) → `dispatch_failed`, which the daily cap
+     *    and cooldown exclude — contention or a cache outage can never burn
+     *    a user's OTP allowance;
+     *  - an ABANDONED `sending` claim (an early attempt claimed, later
+     *    reservations burned out before re-claiming) → `failed` — a real
+     *    transport attempt happened, and the record must not stay actionable
+     *    until expiry advertising a code no transport accepted.
+     *
+     * Real transport failures on the final attempt were already closed out
+     * token-matched inside handle() (failTransportAttempt).
      */
     public function failed(Throwable $e): void
     {
@@ -479,6 +485,26 @@ class SendEmailOtpJob implements ShouldBeEncrypted, ShouldQueue
             ->update([
                 'send_status' => EmailVerificationCode::SEND_STATUS_DISPATCH_FAILED,
                 'send_error' => $safe,
+                'delivery_finalized_at' => now(),
+            ]);
+
+        // An ABANDONED `sending` claim (an early attempt claimed, then the
+        // remaining reservations burned out on contention before re-claiming)
+        // must not stay actionable until expiry — the notice would advertise
+        // a code no transport ever accepted while the cooldown blocks a
+        // replacement. Claims for this codeId are made ONLY by this job's own
+        // attempts, and retry_after (300s) > job timeout (240s) guarantees no
+        // attempt is still running when retries are exhausted — so a leftover
+        // `sending` here is demonstrably ours and safely final: a REAL
+        // transport attempt happened, honest terminal state `failed` (counts
+        // toward the cap).
+        EmailVerificationCode::whereKey($this->codeId)
+            ->where('send_status', EmailVerificationCode::SEND_STATUS_SENDING)
+            ->update([
+                'send_status' => EmailVerificationCode::SEND_STATUS_FAILED,
+                'send_error' => $safe,
+                'delivery_claim_token' => null,
+                'delivery_claimed_at' => null,
                 'delivery_finalized_at' => now(),
             ]);
     }

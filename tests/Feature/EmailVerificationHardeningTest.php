@@ -336,17 +336,26 @@ class EmailVerificationHardeningTest extends TestCase
     public function test_job_failed_hook_stores_category_not_raw_transport_text(): void
     {
         $user = $this->unverifiedUser();
-        // A claimed `sending` record is NEVER touched by the re-unserialized
-        // failed() callback — it may belong to a newer retry's claim.
+        // An ABANDONED `sending` claim (early attempt claimed, later retries
+        // burned out on contention): with every retry exhausted the claim is
+        // demonstrably this job's own — failed() finalizes it as `failed`
+        // (real transport attempt, never left actionable until expiry) with
+        // a SANITIZED error and the claim fields cleared.
         $claimed = EmailVerificationCode::create([
             'user_id' => $user->id, 'email' => $user->email,
             'code_hash' => Hash::make('123456'),
             'expires_at' => now()->addMinutes(10), 'attempts' => 0,
             'send_status' => EmailVerificationCode::SEND_STATUS_SENDING,
         ]);
+        EmailVerificationCode::whereKey($claimed->id)->update([
+            'delivery_claim_token' => bin2hex(random_bytes(32)), 'delivery_claimed_at' => now(),
+        ]);
         (new SendEmailOtpJob($claimed->id, $user->id, (string) $user->email, '123456', 10))
             ->failed(new \RuntimeException('535 Authentication failed with password "TopSecret42"'));
-        $this->assertSame(EmailVerificationCode::SEND_STATUS_SENDING, $claimed->fresh()->send_status, 'a claimed record is never failed without its token');
+        $claimed->refresh();
+        $this->assertSame(EmailVerificationCode::SEND_STATUS_FAILED, $claimed->send_status, 'abandoned claims are finalized, never left actionable');
+        $this->assertNull($claimed->delivery_claim_token);
+        $this->assertStringNotContainsString('TopSecret42', (string) $claimed->send_error);
 
         // An UNOWNED queued record (contention exhausted before any claim)
         // closes out as dispatch_failed with a SANITIZED error.
@@ -1278,6 +1287,33 @@ class EmailVerificationHardeningTest extends TestCase
         // have concrete rows to share-lock against a concurrent policy save.
         $this->assertSame('false', SiteSetting::where('key', 'email_verification_enabled')->value('value'));
         $this->assertSame('false', SiteSetting::where('key', 'email_verification_required_on_register')->value('value'));
+    }
+
+    public function test_a_successful_transport_test_after_the_failures_clears_the_outage(): void
+    {
+        $svc = app(EmailVerificationService::class);
+        $user = $this->unverifiedUser();
+
+        foreach (range(1, 3) as $i) {
+            EmailVerificationCode::create([
+                'user_id' => $user->id, 'email' => $user->email,
+                'code_hash' => Hash::make('123456'), 'attempts' => 0,
+                'expires_at' => now()->addMinutes(10), 'used_at' => now(),
+                'send_status' => EmailVerificationCode::SEND_STATUS_FAILED,
+                'delivery_finalized_at' => now(),
+            ]);
+        }
+        $this->assertFalse($svc->transportLooksLive(), 'the setUp proof PRE-dates the failures — no clearance');
+
+        // The operator repairs/replaces the configuration and runs a
+        // successful per-leaf transport test AFTER the newest failure:
+        // positive, fingerprint-bound live evidence — enforcement resumes
+        // without waiting for a real OTP or the window to expire.
+        $this->travel(1)->minutes();
+        $svc->recordSuccessfulMailTest();
+        $this->assertTrue($svc->transportLooksLive(), 'a post-failure certified test is a recovery');
+        $this->assertTrue($svc->isEnforceableNow());
+        $this->travelBack();
     }
 
     public function test_recipient_rejections_never_fabricate_a_global_outage(): void
