@@ -112,8 +112,9 @@ class EmailSettingsPage extends Page implements HasActions, HasForms
                         Forms\Components\TextInput::make('email_otp_ttl_minutes')
                             ->label('مدت اعتبار کد (دقیقه)')
                             // Floor above the job's claim-time delivery margin
-                            // (120s): a 1-minute TTL would make every delivery
-                            // claim skip the code before it could be sent.
+                            // (240s — the full supported SMTP exchange): a
+                            // shorter TTL would make every delivery claim skip
+                            // the code before it could be sent.
                             ->numeric()->minValue(EmailVerificationService::MIN_TTL_MINUTES)->maxValue(60)->default(EmailVerificationService::CODE_TTL_MINUTES),
                         Forms\Components\TextInput::make('email_otp_max_attempts')
                             ->label('حداکثر تلاش برای هر کد')

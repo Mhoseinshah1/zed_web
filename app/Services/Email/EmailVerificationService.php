@@ -664,10 +664,11 @@ class EmailVerificationService
 
     /**
      * Codes must comfortably outlive the job's claim-time delivery margin
-     * (120s): a shorter TTL would make EVERY delivery claim skip the code and
-     * required-mode users could never receive a usable OTP.
+     * (240s — the full supported SMTP exchange): a shorter TTL would make
+     * EVERY delivery claim skip the code and required-mode users could never
+     * receive a usable OTP.
      */
-    public const MIN_TTL_MINUTES = 3;
+    public const MIN_TTL_MINUTES = 5;
 
     public function ttlMinutes(): int
     {
@@ -805,6 +806,16 @@ class EmailVerificationService
                         return ['error' => 'تعداد درخواست کد تایید در شبانه‌روز به حداکثر رسیده است. لطفاً فردا دوباره تلاش کنید.', 'status' => 'rate_limited'];
                     }
 
+                    // The still-usable delivered code being SUPERSEDED (if
+                    // any): its id travels out of the transaction so a
+                    // DEFINITE pre-publication dispatch failure can restore
+                    // it — the user must never lose an already-delivered
+                    // usable code without receiving a replacement.
+                    $supersededId = EmailVerificationCode::query()
+                        ->actionableFor($lockedUser)
+                        ->latest('id')
+                        ->value('id');
+
                     // Single active code: invalidate every previous unused code first.
                     $this->invalidateCodes($lockedUser);
 
@@ -824,7 +835,7 @@ class EmailVerificationService
                         'user_agent' => $meta['user_agent'] ?? null,
                     ]);
 
-                    return ['record' => $record, 'code' => $code];
+                    return ['record' => $record, 'code' => $code, 'superseded_id' => $supersededId];
                 });
             });
         } catch (QueryException $e) {
@@ -874,6 +885,12 @@ class EmailVerificationService
                     'delivery_finalized_at' => now(),
                     'delivery_config_fingerprint' => $this->mailConfigFingerprint(),
                 ])->save();
+
+                // DEFINITE pre-publication failure: the replacement never
+                // existed for delivery, so the code it superseded is restored
+                // — the user must not lose an already-delivered usable OTP
+                // and receive nothing in exchange.
+                $this->restoreSupersededCode($outcome['superseded_id'] ?? null, $record->user_id);
             }
 
             return ['status' => 'error', 'message' => 'ارسال ایمیل با خطا مواجه شد. لطفاً دوباره تلاش کنید.', 'email_sent' => false];
@@ -882,6 +899,49 @@ class EmailVerificationService
         // HONEST wording: the code is QUEUED for delivery — nothing has been
         // handed to a mail transport yet, so we never claim it was "sent".
         return ['status' => 'queued', 'message' => 'کد تایید در صف ارسال قرار گرفت.', 'email_sent' => true];
+    }
+
+    /**
+     * Restores the code a failed resend superseded — ONLY on the definite
+     * pre-publication path (the replacement was never handed to any worker).
+     * Re-validated under the standard locks: same user, unchanged address,
+     * still unverified, consumed (by our supersession), unexpired, and in an
+     * actionable send status. Best-effort: on contention or a cache outage
+     * the user simply requests a fresh code.
+     */
+    private function restoreSupersededCode(?int $codeId, int $userId): void
+    {
+        if ($codeId === null) {
+            return;
+        }
+
+        try {
+            $this->withUserLock($userId, function () use ($codeId, $userId) {
+                DB::transaction(function () use ($codeId, $userId) {
+                    DatabaseLockTimeout::applyLocal();
+
+                    $lockedUser = User::whereKey($userId)->lockForUpdate()->first();
+                    $record = EmailVerificationCode::whereKey($codeId)->lockForUpdate()->first();
+
+                    if (
+                        $lockedUser === null
+                        || $record === null
+                        || $lockedUser->email_verified_at !== null
+                        || $record->user_id !== $lockedUser->id
+                        || strcasecmp((string) $record->email, (string) $lockedUser->email) !== 0
+                        || $record->used_at === null
+                        || $record->expires_at->isPast()
+                        || ! in_array($record->send_status, EmailVerificationCode::ACTIONABLE_STATUSES, true)
+                    ) {
+                        return;
+                    }
+
+                    $record->forceFill(['used_at' => null])->save();
+                });
+            });
+        } catch (Throwable) {
+            // Best-effort only — never turns a dispatch failure into a 500.
+        }
     }
 
     // ── Per-user bounded serialization lock ──────────────────────────────────

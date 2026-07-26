@@ -91,14 +91,14 @@ class SendEmailOtpJob implements ShouldBeEncrypted, ShouldQueue
     private const LOCK_TTL_SECONDS = 270;
 
     /**
-     * Minimum remaining code validity required to CLAIM a delivery. Below
-     * this, the message would advertise a near-dead (or dead-on-arrival)
-     * code — the claim skips instead and the user simply requests a fresh
-     * one. A slow-but-progressing transport can still consume part of the
-     * remaining window after claim: that residual is unavoidable without
-     * extending the code's validity, which would widen the security window.
+     * Minimum remaining code validity required to CLAIM a delivery — EQUAL
+     * to the job deadline: even the slowest supported SMTP exchange (the
+     * worker's own timeout ends anything longer) cannot outlive a claimed
+     * code's validity, so an accepted message never carries an
+     * expired-on-arrival OTP. Below the margin the claim skips and the user
+     * simply requests a fresh code.
      */
-    private const MIN_DELIVERY_MARGIN_SECONDS = 120;
+    private const MIN_DELIVERY_MARGIN_SECONDS = 240;
 
     /** This attempt's delivery claim — in memory only, never serialized/logged. */
     private ?string $claimToken = null;

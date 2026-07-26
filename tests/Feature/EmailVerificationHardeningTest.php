@@ -1327,6 +1327,34 @@ class EmailVerificationHardeningTest extends TestCase
         $this->travelBack();
     }
 
+    public function test_a_failed_resend_dispatch_restores_the_superseded_code(): void
+    {
+        SiteSetting::set('email_otp_resend_cooldown_seconds', 0);
+        $svc = app(EmailVerificationService::class);
+        $user = $this->unverifiedUser();
+
+        // An already-DELIVERED, still-usable code.
+        $delivered = EmailVerificationCode::create([
+            'user_id' => $user->id, 'email' => $user->email,
+            'code_hash' => Hash::make('123456'), 'attempts' => 0,
+            'expires_at' => now()->addMinutes(10),
+            'send_status' => EmailVerificationCode::SEND_STATUS_SENT,
+        ]);
+
+        // The resend supersedes it — and then queue publication fails before
+        // any worker could exist for the replacement.
+        Queue::shouldReceive('connection')->andThrow(new \RuntimeException('queue down'));
+        Queue::shouldReceive('push')->andThrow(new \RuntimeException('queue down'));
+
+        $this->assertSame('error', $svc->requestCode($user)['status']);
+
+        // The user must not end up with NOTHING: the delivered code is
+        // restored to actionable, so the OTP already in their inbox works.
+        $this->assertNull($delivered->fresh()->used_at, 'the superseded delivered code is restored');
+        $this->assertNotNull($svc->activeCodeRemainingMinutes($user->fresh()), 'and advertised again');
+        $this->assertSame('verified', $svc->verify($user->fresh(), '123456')['status'], 'and it still verifies');
+    }
+
     public function test_a_queue_outage_pauses_enforcement_like_a_mail_outage(): void
     {
         $svc = app(EmailVerificationService::class);
@@ -1655,17 +1683,18 @@ class EmailVerificationHardeningTest extends TestCase
     {
         Mail::fake();
         $user = $this->unverifiedUser();
-        // Issued earlier: only ~3 minutes of validity remain by delivery time.
+        // Issued earlier: only ~5.5 minutes of validity remain by delivery
+        // time (still above the 240s delivery-claim margin).
         $record = EmailVerificationCode::create([
             'user_id' => $user->id, 'email' => $user->email,
             'code_hash' => Hash::make('123456'),
-            'expires_at' => now()->addMinutes(3)->addSeconds(30), 'attempts' => 0,
+            'expires_at' => now()->addMinutes(5)->addSeconds(30), 'attempts' => 0,
             'send_status' => EmailVerificationCode::SEND_STATUS_QUEUED,
         ]);
 
         (new SendEmailOtpJob($record->id, $user->id, (string) $user->email, '123456', 10))->handle();
 
-        Mail::assertSent(EmailOtpMail::class, fn ($mail) => $mail->ttlMinutes === 3);
+        Mail::assertSent(EmailOtpMail::class, fn ($mail) => $mail->ttlMinutes === 5);
     }
 
     public function test_mid_send_invalidation_finalizes_as_skipped_not_sent(): void
