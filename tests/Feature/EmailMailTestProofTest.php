@@ -103,6 +103,39 @@ class EmailMailTestProofTest extends TestCase
         $this->assertFalse($this->svc()->hasVerifiedMailTest());
     }
 
+    public function test_a_failed_transport_test_revokes_the_existing_proof(): void
+    {
+        $this->svc()->recordSuccessfulMailTest();
+        $this->assertTrue($this->svc()->hasVerifiedMailTest());
+
+        // The endpoint died since the earlier success: the failed
+        // certification is NEGATIVE evidence — the historical proof must not
+        // keep required mode armed until three OTP jobs finish failing.
+        Mail::shouldReceive('mailer')->andReturnSelf();
+        Mail::shouldReceive('to')->andThrow(new \RuntimeException('connection refused'));
+        Livewire::actingAs($this->admin())
+            ->test(EmailSettingsPage::class)
+            ->callAction('testEmail', ['test_email' => 'probe@example.com']);
+
+        $this->assertFalse($this->svc()->hasVerifiedMailTest(), 'a failed endpoint test revokes the proof');
+    }
+
+    public function test_a_recipient_specific_test_bounce_keeps_the_proof(): void
+    {
+        $this->svc()->recordSuccessfulMailTest();
+        $this->assertTrue($this->svc()->hasVerifiedMailTest());
+
+        // The admin typo'd the destination: a recipient bounce proves
+        // nothing about the endpoint — the proof survives.
+        Mail::shouldReceive('mailer')->andReturnSelf();
+        Mail::shouldReceive('to')->andThrow(new \RuntimeException('550 recipient address rejected'));
+        Livewire::actingAs($this->admin())
+            ->test(EmailSettingsPage::class)
+            ->callAction('testEmail', ['test_email' => 'typo@example.com']);
+
+        $this->assertTrue($this->svc()->hasVerifiedMailTest(), 'a recipient bounce never revokes the proof');
+    }
+
     public function test_changing_the_smtp_timeout_invalidates_the_proof(): void
     {
         config([

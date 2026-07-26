@@ -635,10 +635,18 @@ class EmailVerificationService
             // ALSO requires its runtime package: Laravel's mail manager throws
             // when constructing a transport whose bridge isn't installed, so
             // credentials without the package are still an unusable mailer.
+            // SES accepts EITHER an explicit static key pair OR neither set —
+            // on EC2/ECS/EKS the AWS SDK's default provider chain (IAM role,
+            // env, shared config) authenticates without config values, and
+            // the synchronous certification test is the real verdict. A
+            // HALF-configured pair (one of key/secret missing) stays
+            // rejected as a misconfiguration.
             'ses', 'ses-v2' => class_exists(SesClient::class)
-                && (string) config('services.ses.key') !== ''
-                && (string) config('services.ses.secret') !== ''
-                && (string) config('services.ses.region') !== '',
+                && (string) config('services.ses.region') !== ''
+                && (
+                    ((string) config('services.ses.key') !== '' && (string) config('services.ses.secret') !== '')
+                    || ((string) config('services.ses.key') === '' && (string) config('services.ses.secret') === '')
+                ),
             'postmark' => class_exists(PostmarkTransportFactory::class)
                 && (string) config('services.postmark.key') !== '',
             // Laravel's MailManager instantiates the SDK's `\Resend` entry

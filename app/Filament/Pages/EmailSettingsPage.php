@@ -264,6 +264,17 @@ class EmailSettingsPage extends Page implements HasActions, HasForms
                     // credentials) — only the sanitized category.
                     $safe = MailFailure::summarize('test email failed', $e);
                     Log::warning('Admin test email failed', ['error' => $safe]);
+
+                    // A FAILED certification against the current endpoint is
+                    // negative evidence: revoke the stored proof so required
+                    // mode pauses immediately instead of trusting a
+                    // historical success until three OTP jobs finish failing.
+                    // A recipient-specific bounce proves nothing about the
+                    // endpoint and keeps the proof.
+                    if (MailFailure::categorize($e) !== 'recipient_rejected') {
+                        SiteSetting::set('email_mail_test_fingerprint', '');
+                        SiteSetting::set('email_mail_test_verified_at', '');
+                    }
                     Notification::make()
                         ->title('ارسال ایمیل تست ناموفق بود ('.MailFailure::categorize($e).'). جزئیات در لاگ سرور ثبت شد.')
                         ->danger()->send();
