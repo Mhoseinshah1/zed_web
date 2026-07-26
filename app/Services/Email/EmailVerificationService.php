@@ -1136,15 +1136,21 @@ class EmailVerificationService
         // PUBLICATION METADATA — a separate bounded write, strictly AFTER
         // dispatch() returned successfully: queue_published_at is the only
         // admissible queue-publication evidence (a merely-created row proves
-        // nothing while dispatch may still fail). NO status condition — a
+        // nothing while dispatch may still fail). The handoff moment is
+        // CAPTURED HERE, before the write can wait on any row lock — a
+        // blocked UPDATE that resumes after a LATER dispatch failure must
+        // record the true (older) handoff time, never a fresh now() that
+        // would masquerade as post-outage recovery. NO status condition — a
         // fast worker or the sync driver may already have moved the row to a
         // terminal state, and publication still succeeded. Immutable via the
-        // whereNull guard. If this stamp itself fails, dispatch already
-        // succeeded: never mark dispatch_failed, never dispatch again — log
-        // a static sanitized warning and leave NULL (health conservatively
-        // fails open, since recovery cannot be proven by this issuance).
+        // whereNull guard. If this stamp itself fails (including a bounded
+        // row-lock timeout), dispatch already succeeded: never mark
+        // dispatch_failed, never dispatch again — log a static sanitized
+        // warning and leave NULL (health conservatively fails open, since
+        // recovery cannot be proven by this issuance).
+        $publishedAt = now();
         try {
-            $this->recordQueuePublication($record->id);
+            $this->recordQueuePublication($record->id, $publishedAt);
         } catch (Throwable $metadataError) {
             Log::warning('Email OTP queue-publication metadata could not be recorded', [
                 'code_id' => $record->id,
@@ -1158,65 +1164,104 @@ class EmailVerificationService
     }
 
     /**
-     * The bounded queue-publication metadata write (immutable via the
-     * whereNull guard; no status condition — a fast worker or the sync
-     * driver may already have finalized the row, and publication still
-     * succeeded). Protected so tests can exercise requestCode()'s
-     * metadata-failure containment.
+     * The bounded queue-publication metadata write. $publishedAt is the
+     * handoff moment captured IMMEDIATELY after dispatch() returned — never
+     * evaluated inside this write, which can lawfully wait (bounded, via
+     * SET LOCAL lock_timeout) on a held row lock and must not launder that
+     * wait into a fresher publication time. Immutable via the whereNull
+     * guard; no status condition — a fast worker or the sync driver may
+     * already have finalized the row, and publication still succeeded.
+     * Protected so tests can exercise requestCode()'s metadata-failure
+     * containment.
      */
-    protected function recordQueuePublication(int $codeId): void
+    protected function recordQueuePublication(int $codeId, Carbon $publishedAt): void
     {
-        EmailVerificationCode::whereKey($codeId)
-            ->whereNull('queue_published_at')
-            ->update(['queue_published_at' => now()]);
+        DB::transaction(function () use ($codeId, $publishedAt) {
+            DatabaseLockTimeout::applyLocal();
+            EmailVerificationCode::whereKey($codeId)
+                ->whereNull('queue_published_at')
+                ->update(['queue_published_at' => $publishedAt]);
+        });
     }
 
     /**
      * dispatch() threw: classify WHERE the replacement issuance failed and
      * restore the superseded delivered code whenever the failure is provably
-     * ZERO-transport.
+     * ZERO-transport. A dispatch exception is UNCONFIRMED publication — a
+     * networked queue can accept the push and still return an error to the
+     * producer, and a fast worker may already be claiming the row — so the
+     * classification runs under the FULL protocol (per-user cache lock →
+     * User row → OTP row, bounded) and re-reads the authoritative state
+     * inside it; the row's fate is decided exactly once, serialized with
+     * the worker:
      *
-     *  - still `queued`: publication itself failed — no handler ever ran.
-     *    Marked dispatch_failed + consumed (a never-queued attempt must not
-     *    hold the cooldown), then the superseded code is restored.
-     *  - `dispatch_failed` with transport_attempted_at NULL: the sync driver
-     *    executed inline and failed() already closed the replacement out
-     *    (lock contention exhausted before any claim/transport). No mail
-     *    transport call ever began — consume the dead replacement and
-     *    restore.
-     *  - anything else (`failed` after a real attempt, `sent`,
-     *    `accepted_pending`, or transport_attempted_at set): a transport was
-     *    — or may have been — reached. NEVER restore: the inbox state is
-     *    unknown, and the honest outcome already stands.
+     *  - still `queued` UNDER THE LOCK: no worker has claimed. Closed as
+     *    dispatch_failed + consumed — and if the push secretly reached the
+     *    broker anyway, the late-delivered job finds a terminal
+     *    non-claimable row and skips, so no email can follow the restore.
+     *  - `dispatch_failed` with transport_attempted_at NULL: the sync
+     *    driver executed inline and failed() already closed the replacement
+     *    (contention exhausted before any claim/transport). Consume the
+     *    dead replacement and restore.
+     *  - anything else (`sending` under a worker's claim, `failed` after a
+     *    real attempt, `sent`, `accepted_pending`, or transport_attempted_at
+     *    set): a worker owns — or a transport may have been reached. NEVER
+     *    finalized here and NEVER restored: the worker/failed() settles it.
+     *  - lock contention or a cache outage: change NOTHING (fail open; the
+     *    row is unpublished, so it can never become stall evidence, and the
+     *    user's next resend retires it).
      */
     private function handleDispatchFailure(EmailVerificationCode $record, ?int $supersededId, Throwable $e): void
     {
-        $record->refresh();
+        try {
+            $outcome = $this->withUserLock($record->user_id, function () use ($record, $e) {
+                return DB::transaction(function () use ($record, $e) {
+                    DatabaseLockTimeout::applyLocal();
 
-        if ($record->send_status === EmailVerificationCode::SEND_STATUS_QUEUED) {
-            $record->forceFill([
-                'send_status' => EmailVerificationCode::SEND_STATUS_DISPATCH_FAILED,
-                'send_error' => MailFailure::summarize('queue dispatch failed', $e),
-                'used_at' => now(),
-                'delivery_finalized_at' => now(),
-                'delivery_config_fingerprint' => $this->mailConfigFingerprint(),
-            ])->save();
+                    $user = User::whereKey($record->user_id)->lockForUpdate()->first();
+                    $locked = EmailVerificationCode::whereKey($record->id)->lockForUpdate()->first();
 
-            $this->restoreSupersededCode($supersededId, $record->user_id);
+                    if ($locked === null) {
+                        return 'gone';
+                    }
 
-            return;
+                    if ($locked->send_status === EmailVerificationCode::SEND_STATUS_QUEUED) {
+                        $locked->forceFill([
+                            'send_status' => EmailVerificationCode::SEND_STATUS_DISPATCH_FAILED,
+                            'send_error' => MailFailure::summarize('queue dispatch failed', $e),
+                            'used_at' => now(),
+                            'delivery_finalized_at' => now(),
+                            'delivery_config_fingerprint' => $this->mailConfigFingerprint(),
+                        ])->save();
+
+                        return 'zero_transport';
+                    }
+
+                    if (
+                        $locked->send_status === EmailVerificationCode::SEND_STATUS_DISPATCH_FAILED
+                        && $locked->transport_attempted_at === null
+                    ) {
+                        // Consume the dead replacement (idempotent) so it can
+                        // neither be advertised nor block the restore's
+                        // newer-issuance guard.
+                        EmailVerificationCode::whereKey($locked->id)
+                            ->whereNull('used_at')
+                            ->update(['used_at' => now()]);
+
+                        return 'zero_transport';
+                    }
+
+                    return 'worker_owned';
+                });
+            });
+        } catch (QueryException $qe) {
+            if (! DatabaseLockTimeout::isLockTimeout($qe)) {
+                throw $qe;
+            }
+            $outcome = null;
         }
 
-        if (
-            $record->send_status === EmailVerificationCode::SEND_STATUS_DISPATCH_FAILED
-            && $record->transport_attempted_at === null
-        ) {
-            // Consume the dead replacement (idempotent) so it can neither be
-            // advertised nor block the restore's newer-issuance guard.
-            EmailVerificationCode::whereKey($record->id)
-                ->whereNull('used_at')
-                ->update(['used_at' => now()]);
-
+        if ($outcome === 'zero_transport') {
             $this->restoreSupersededCode($supersededId, $record->user_id);
         }
     }
