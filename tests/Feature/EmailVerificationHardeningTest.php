@@ -1483,6 +1483,99 @@ class EmailVerificationHardeningTest extends TestCase
         $this->assertTrue($svc->isEnforceableNow());
     }
 
+    public function test_late_deliveries_filling_the_outcome_window_do_not_mask_a_publication_outage(): void
+    {
+        $svc = app(EmailVerificationService::class);
+        $user = $this->unverifiedUser();
+        $this->assertTrue($svc->isEnforceableNow(), 'healthy baseline');
+
+        // THREE jobs published before the queue broke all finalize LATE —
+        // enough to fill the entire latest-outcomes scan with successes and
+        // expel every dispatch_failed row from it.
+        foreach ([1, 2, 3] as $i) {
+            $sent = EmailVerificationCode::create([
+                'user_id' => $user->id, 'email' => $user->email,
+                'code_hash' => Hash::make('123456'), 'attempts' => 0,
+                'expires_at' => now()->addMinutes(10), 'used_at' => now(),
+                'send_status' => EmailVerificationCode::SEND_STATUS_SENT,
+                'delivery_finalized_at' => now()->subSeconds($i),
+                'delivery_config_fingerprint' => $svc->mailConfigFingerprint(),
+            ]);
+            EmailVerificationCode::whereKey($sent->id)->update(['created_at' => now()->subMinutes(20)]);
+        }
+
+        // Meanwhile every NEW resend fails to publish.
+        foreach ([3, 4, 5] as $minutesAgo) {
+            $failed = EmailVerificationCode::create([
+                'user_id' => $user->id, 'email' => $user->email,
+                'code_hash' => Hash::make('123456'), 'attempts' => 0,
+                'expires_at' => now()->addMinutes(10), 'used_at' => now(),
+                'send_status' => EmailVerificationCode::SEND_STATUS_DISPATCH_FAILED,
+                'send_error' => 'dispatch failed: queue down',
+                'delivery_finalized_at' => now()->subMinutes($minutesAgo),
+                'delivery_config_fingerprint' => $svc->mailConfigFingerprint(),
+            ]);
+            EmailVerificationCode::whereKey($failed->id)->update(['created_at' => now()->subMinutes($minutesAgo)]);
+        }
+
+        $this->assertFalse(
+            $svc->transportLooksLive(),
+            'late completions must not crowd the publication failures out of the verdict',
+        );
+        $this->assertFalse($svc->isEnforceableNow());
+
+        // A row that actually REACHES the queue after the newest publication
+        // failure proves publishing works again.
+        EmailVerificationCode::create([
+            'user_id' => $user->id, 'email' => $user->email,
+            'code_hash' => Hash::make('654321'), 'attempts' => 0,
+            'expires_at' => now()->addMinutes(10),
+            'send_status' => EmailVerificationCode::SEND_STATUS_QUEUED,
+        ]);
+        $this->assertTrue($svc->transportLooksLive(), 'a successful publication clears the queue outage');
+        $this->assertTrue($svc->isEnforceableNow());
+    }
+
+    public function test_superseded_restore_is_refused_when_a_newer_issuance_exists(): void
+    {
+        $svc = app(EmailVerificationService::class);
+        $user = $this->unverifiedUser();
+
+        // The delivered code a failed resend superseded (used by our own
+        // supersession, still unexpired and actionable).
+        $old = EmailVerificationCode::create([
+            'user_id' => $user->id, 'email' => $user->email,
+            'code_hash' => Hash::make('123456'), 'attempts' => 0,
+            'expires_at' => now()->addMinutes(8), 'used_at' => now(),
+            'send_status' => EmailVerificationCode::SEND_STATUS_SENT,
+        ]);
+        // A concurrent retry slipped between our dispatch_failed
+        // finalization and the restore lock, creating a NEWER issuance.
+        $newer = EmailVerificationCode::create([
+            'user_id' => $user->id, 'email' => $user->email,
+            'code_hash' => Hash::make('654321'), 'attempts' => 0,
+            'expires_at' => now()->addMinutes(10),
+            'send_status' => EmailVerificationCode::SEND_STATUS_QUEUED,
+        ]);
+
+        $restore = new \ReflectionMethod($svc, 'restoreSupersededCode');
+        $restore->invoke($svc, $old->id, $user->id);
+        $this->assertNotNull(
+            $old->fresh()->used_at,
+            'restore refused — restoring would leave two actionable codes with the newer one always selected',
+        );
+
+        // Once no newer UNUSED issuance exists, the restore proceeds.
+        EmailVerificationCode::whereKey($newer->id)->update([
+            'used_at' => now(),
+            'send_status' => EmailVerificationCode::SEND_STATUS_SKIPPED,
+            'delivery_claimed_at' => now(),
+            'delivery_finalized_at' => now(),
+        ]);
+        $restore->invoke($svc, $old->id, $user->id);
+        $this->assertNull($old->fresh()->used_at, 'restored when the newer issuance is gone');
+    }
+
     public function test_stall_marker_writes_are_atomic_upserts(): void
     {
         $svc = app(EmailVerificationService::class);

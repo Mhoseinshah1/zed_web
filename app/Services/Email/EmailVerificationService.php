@@ -384,6 +384,33 @@ class EmailVerificationService
             }
         }
 
+        // PUBLICATION failures are judged FIRST and INDEPENDENTLY of the
+        // truncated transport scan below: enough late-finalizing pre-outage
+        // jobs can fill the latest-N outcome set with `sent` rows and expel
+        // every dispatch_failed from it — completion of old jobs says
+        // nothing about publishing today. Queue recovery requires a row
+        // that actually REACHED the queue (any status but dispatch_failed —
+        // the dispatch catch converts failed publications immediately)
+        // CREATED after the newest publication failure in the window; a
+        // mail test can never supply this (it sends synchronously,
+        // bypassing the queue).
+        $newestDispatchFailureAt = EmailVerificationCode::query()
+            ->where('send_status', EmailVerificationCode::SEND_STATUS_DISPATCH_FAILED)
+            ->where('delivery_finalized_at', '>=', now()->subMinutes(self::OUTAGE_WINDOW_MINUTES))
+            ->max('delivery_finalized_at');
+        if ($newestDispatchFailureAt !== null) {
+            $publishedAfterFailure = EmailVerificationCode::query()
+                ->where('send_status', '!=', EmailVerificationCode::SEND_STATUS_DISPATCH_FAILED)
+                ->where('created_at', '>', Carbon::parse($newestDispatchFailureAt))
+                ->exists();
+            if (! $publishedAfterFailure) {
+                return false;
+            }
+            // Publication demonstrably works again — any dispatch failures
+            // in the scan below are stale, and the transport verdict stands
+            // on its own evidence.
+        }
+
         $currentFingerprint = $this->mailConfigFingerprint();
 
         $recentOutcomes = EmailVerificationCode::query()
@@ -434,33 +461,6 @@ class EmailVerificationService
 
         if ($recentOutcomes->count() < self::OUTAGE_MIN_FAILURES) {
             return true;
-        }
-
-        // PUBLICATION failures are judged BEFORE any delivery success: a
-        // job published before the queue broke can finalize `sent` LATE,
-        // landing among the latest outcomes — completion of an old job says
-        // nothing about publishing today, and must not outrank
-        // contemporaneous dispatch_failed rows. Queue recovery requires
-        // evidence of a successful PUBLICATION: any row that reached
-        // `queued` or beyond (everything except dispatch_failed — the
-        // dispatch catch converts failed publications immediately) CREATED
-        // after the newest publication failure. A mail test can never
-        // supply this — it sends synchronously and proves nothing about
-        // the queue.
-        $newestDispatchFailureAt = $recentOutcomes
-            ->filter(fn ($outcome) => $outcome->send_status === EmailVerificationCode::SEND_STATUS_DISPATCH_FAILED)
-            ->max('delivery_finalized_at');
-        if ($newestDispatchFailureAt !== null) {
-            $publishedAfterFailure = EmailVerificationCode::query()
-                ->where('send_status', '!=', EmailVerificationCode::SEND_STATUS_DISPATCH_FAILED)
-                ->where('created_at', '>', $newestDispatchFailureAt)
-                ->exists();
-            if (! $publishedAfterFailure) {
-                return false;
-            }
-            // Publication demonstrably works again — the dispatch failures
-            // are stale, and the transport verdict below stands on its own
-            // evidence.
         }
 
         $anySuccess = $recentOutcomes->contains(
@@ -1141,6 +1141,17 @@ class EmailVerificationService
                         || $record->used_at === null
                         || $record->expires_at->isPast()
                         || ! in_array($record->send_status, EmailVerificationCode::ACTIONABLE_STATUSES, true)
+                        // A NEWER issuance exists: between our dispatch_failed
+                        // finalization and this lock, a concurrent retry saw no
+                        // actionable code and created a replacement. Restoring
+                        // now would leave TWO unused actionable rows — verify()
+                        // always selects the newest, so the restored code would
+                        // be dead weight that only mis-advertises a lifetime.
+                        // The newer issuance is the user's live path; refuse.
+                        || EmailVerificationCode::where('user_id', $userId)
+                            ->whereNull('used_at')
+                            ->where('id', '>', $record->id)
+                            ->exists()
                     ) {
                         return;
                     }
