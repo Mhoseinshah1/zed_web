@@ -1160,6 +1160,7 @@ class EmailVerificationHardeningTest extends TestCase
                 'expires_at' => now()->addMinutes(10), 'used_at' => now(),
                 'send_status' => EmailVerificationCode::SEND_STATUS_FAILED,
                 'delivery_finalized_at' => now(),
+                'delivery_config_fingerprint' => app(EmailVerificationService::class)->mailConfigFingerprint(),
             ]);
         }
 
@@ -1177,6 +1178,7 @@ class EmailVerificationHardeningTest extends TestCase
             'expires_at' => now()->addMinutes(10), 'used_at' => now(),
             'send_status' => EmailVerificationCode::SEND_STATUS_SENT,
             'delivery_finalized_at' => now(),
+            'delivery_config_fingerprint' => app(EmailVerificationService::class)->mailConfigFingerprint(),
         ]);
         $this->assertTrue($svc->transportLooksLive());
         $this->assertTrue($svc->isEnforceableNow());
@@ -1205,6 +1207,7 @@ class EmailVerificationHardeningTest extends TestCase
                 'expires_at' => now()->addMinutes(10), 'used_at' => now(),
                 'send_status' => EmailVerificationCode::SEND_STATUS_FAILED,
                 'delivery_finalized_at' => now(),
+                'delivery_config_fingerprint' => app(EmailVerificationService::class)->mailConfigFingerprint(),
             ]);
         }
         $this->assertFalse($svc->transportLooksLive());
@@ -1214,7 +1217,7 @@ class EmailVerificationHardeningTest extends TestCase
         // though every failure has a higher issuance id.
         $this->travel(1)->minutes();
         EmailVerificationCode::whereKey($older->id)
-            ->update(['send_status' => EmailVerificationCode::SEND_STATUS_SENT, 'delivery_finalized_at' => now()]);
+            ->update(['send_status' => EmailVerificationCode::SEND_STATUS_SENT, 'delivery_finalized_at' => now(), 'delivery_config_fingerprint' => app(EmailVerificationService::class)->mailConfigFingerprint()]);
         $this->travelBack();
 
         $this->assertTrue($svc->transportLooksLive(), 'out-of-order success is still a recovery');
@@ -1232,6 +1235,7 @@ class EmailVerificationHardeningTest extends TestCase
             'expires_at' => now()->addMinutes(10),
             'send_status' => EmailVerificationCode::SEND_STATUS_SENT,
             'delivery_finalized_at' => now()->subHours(2),
+            'delivery_config_fingerprint' => app(EmailVerificationService::class)->mailConfigFingerprint(),
         ]);
         // … then the endpoint dies: three fresh failures.
         foreach (range(1, 3) as $i) {
@@ -1241,6 +1245,7 @@ class EmailVerificationHardeningTest extends TestCase
                 'expires_at' => now()->addMinutes(10), 'used_at' => now(),
                 'send_status' => EmailVerificationCode::SEND_STATUS_FAILED,
                 'delivery_finalized_at' => now(),
+                'delivery_config_fingerprint' => app(EmailVerificationService::class)->mailConfigFingerprint(),
             ]);
         }
         $this->assertFalse($svc->transportLooksLive());
@@ -1301,6 +1306,7 @@ class EmailVerificationHardeningTest extends TestCase
                 'expires_at' => now()->addMinutes(10), 'used_at' => now(),
                 'send_status' => EmailVerificationCode::SEND_STATUS_FAILED,
                 'delivery_finalized_at' => now(),
+                'delivery_config_fingerprint' => app(EmailVerificationService::class)->mailConfigFingerprint(),
             ]);
         }
         $this->assertFalse($svc->transportLooksLive(), 'the setUp proof PRE-dates the failures — no clearance');
@@ -1331,6 +1337,7 @@ class EmailVerificationHardeningTest extends TestCase
                 'expires_at' => now()->addMinutes(10), 'used_at' => now(),
                 'send_status' => EmailVerificationCode::SEND_STATUS_DISPATCH_FAILED,
                 'delivery_finalized_at' => now(),
+                'delivery_config_fingerprint' => app(EmailVerificationService::class)->mailConfigFingerprint(),
             ]);
         }
 
@@ -1339,6 +1346,60 @@ class EmailVerificationHardeningTest extends TestCase
         auth()->logout();
         $this->app['auth']->forgetGuards();
         $this->actingAs($user)->get('/dashboard')->assertOk();
+
+        // A successful admin MAIL test proves nothing about the queue — it
+        // sends synchronously. The queue-outage category stays paused until
+        // a real queued delivery succeeds (or the window expires).
+        $this->travel(1)->minutes();
+        $svc->recordSuccessfulMailTest();
+        $this->assertFalse($svc->transportLooksLive(), 'a synchronous mail test never clears a queue outage');
+
+        EmailVerificationCode::create([
+            'user_id' => $user->id, 'email' => $user->email,
+            'code_hash' => Hash::make('123456'), 'attempts' => 0,
+            'expires_at' => now()->addMinutes(10), 'used_at' => now(),
+            'send_status' => EmailVerificationCode::SEND_STATUS_SENT,
+            'delivery_finalized_at' => now(),
+            'delivery_config_fingerprint' => app(EmailVerificationService::class)->mailConfigFingerprint(),
+        ]);
+        $this->assertTrue($svc->transportLooksLive(), 'a real queued delivery clears it');
+        $this->travelBack();
+    }
+
+    public function test_unscoped_legacy_outcomes_never_count_against_the_current_config(): void
+    {
+        $svc = app(EmailVerificationService::class);
+        $user = $this->unverifiedUser();
+
+        // Rolling deployment: pre-fingerprint workers finalize failures with
+        // a NULL fingerprint — nothing proves they belong to the CURRENT
+        // configuration, so they are not outage evidence for it.
+        foreach (range(1, 3) as $i) {
+            EmailVerificationCode::create([
+                'user_id' => $user->id, 'email' => $user->email,
+                'code_hash' => Hash::make('123456'), 'attempts' => 0,
+                'expires_at' => now()->addMinutes(10), 'used_at' => now(),
+                'send_status' => EmailVerificationCode::SEND_STATUS_FAILED,
+                'delivery_finalized_at' => now(),
+            ]);
+        }
+
+        $this->assertTrue($svc->transportLooksLive(), 'null-fingerprint rows are ignored');
+    }
+
+    public function test_a_dead_lock_backend_suspends_enforcement(): void
+    {
+        $svc = app(EmailVerificationService::class);
+        $this->assertTrue($svc->lockBackendLooksAvailable(), 'healthy baseline');
+        $this->assertTrue($svc->isEnforceableNow());
+
+        // The cache-lock backend dies while app + DB stay up: requestCode()
+        // and verify() would both fail closed before any outcome row exists —
+        // enforcement must fail open instead of stranding obligated users.
+        Cache::shouldReceive('lock')->andThrow(new \RuntimeException('redis connection refused'));
+        $this->assertFalse($svc->lockBackendLooksAvailable());
+        $this->assertFalse($svc->isEnforceableNow(), 'a dead lock backend pauses enforcement');
+        $this->assertFalse($svc->isRequiredOnRegister(), 'and registration stamping');
     }
 
     public function test_stale_config_failures_never_suspend_the_current_configuration(): void
@@ -1394,6 +1455,7 @@ class EmailVerificationHardeningTest extends TestCase
                 'send_status' => EmailVerificationCode::SEND_STATUS_FAILED,
                 'send_error' => 'delivery failed: recipient_rejected (TransportException)',
                 'delivery_finalized_at' => now(),
+                'delivery_config_fingerprint' => app(EmailVerificationService::class)->mailConfigFingerprint(),
             ]);
         }
 

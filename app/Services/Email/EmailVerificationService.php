@@ -92,6 +92,7 @@ class EmailVerificationService
             && $this->settingIsTrue($flags->get('email_verification_required_on_register'))
             && $this->isMailConfigured()
             && $this->hasVerifiedMailTest()
+            && $this->lockBackendLooksAvailable()
             // A LIVE outage (endpoint died without any config change) also
             // suspends stamping: registrations during it are permanently
             // exempt, exactly like the other fail-safe windows.
@@ -104,18 +105,6 @@ class EmailVerificationService
         return $value === 'true' || (is_numeric($value) && (int) $value !== 0);
     }
 
-    /**
-     * Whether an EXISTING per-user obligation can be enforced RIGHT NOW:
-     * feature enabled + usable mail + valid transport-test proof.
-     *
-     * Deliberately WITHOUT the registration-wide "required" toggle: that
-     * toggle only decides whether NEW registrations get stamped with the
-     * obligation. An obligation a user already carries — stamped at
-     * registration or imposed by an explicit admin «require_verification» —
-     * stays enforceable while the mail fail-safes hold, even in optional
-     * mode. The fail-safes still guarantee nobody is ever locked behind an
-     * unproven mailer.
-     */
     /**
      * The effective policy for a registration being INSERTED right now. MUST
      * be called inside the registration transaction: the enabled/required
@@ -147,15 +136,59 @@ class EmailVerificationService
             && $this->settingIsTrue($flags->get('email_verification_required_on_register'))
             && $this->isMailConfigured()
             && $this->hasVerifiedMailTest()
+            && $this->lockBackendLooksAvailable()
             && $this->transportLooksLive();
     }
 
+    /**
+     * Whether an EXISTING per-user obligation can be enforced RIGHT NOW:
+     * feature enabled + usable mail + valid transport-test proof + a live
+     * lock backend + live transport health.
+     *
+     * Deliberately WITHOUT the registration-wide "required" toggle: that
+     * toggle only decides whether NEW registrations get stamped with the
+     * obligation. An obligation a user already carries — stamped at
+     * registration or imposed by an explicit admin «require_verification» —
+     * stays enforceable while the pipeline fail-safes hold, even in optional
+     * mode. The fail-safes still guarantee nobody is ever locked behind an
+     * unproven or broken delivery pipeline.
+     */
     public function isEnforceableNow(): bool
     {
         return $this->isEnabled()
             && $this->isMailConfigured()
             && $this->hasVerifiedMailTest()
+            && $this->lockBackendLooksAvailable()
             && $this->transportLooksLive();
+    }
+
+    /**
+     * The per-user LOCK BACKEND is part of the delivery pipeline: with it
+     * down (a dedicated cache Redis connection or ACL failing while the app
+     * and database stay up), requestCode() and verify() both fail closed
+     * BEFORE any health outcome row exists — an obligated user could neither
+     * obtain nor submit a code while still being redirected. A unique random
+     * probe key distinguishes backend unavailability from ordinary per-user
+     * contention: it can never contend, so any failure here is the backend
+     * itself. Fail-open, like every other pipeline signal.
+     */
+    public function lockBackendLooksAvailable(): bool
+    {
+        try {
+            $probe = Cache::lock('email-verification:lock-probe:'.bin2hex(random_bytes(8)), 1);
+            if (! $probe->get()) {
+                return false;
+            }
+            try {
+                $probe->release();
+            } catch (Throwable) {
+                // TTL (1s) reclaims the probe key.
+            }
+
+            return true;
+        } catch (Throwable) {
+            return false;
+        }
     }
 
     /**
@@ -182,15 +215,15 @@ class EmailVerificationService
 
         $recentOutcomes = EmailVerificationCode::query()
             ->where('delivery_finalized_at', '>=', now()->subMinutes(self::OUTAGE_WINDOW_MINUTES))
-            // Only outcomes produced UNDER the current configuration: a
-            // long-lived worker still running a replaced config must not
-            // finalize a stale failure after the admin certified the new one
-            // and re-suspend enforcement. Legacy rows (null) stay counted
-            // until they age out of the window.
-            ->where(function ($q) use ($currentFingerprint) {
-                $q->where('delivery_config_fingerprint', $currentFingerprint)
-                    ->orWhereNull('delivery_config_fingerprint');
-            })
+            // Only outcomes PROVABLY produced under the current configuration
+            // count: a long-lived worker still running a replaced config —
+            // including pre-fingerprint code during a rolling deployment,
+            // whose rows carry NULL — must not finalize a stale failure after
+            // the admin certified the new one and re-suspend enforcement.
+            // Ignoring unscoped legacy rows costs at most one health window
+            // of old evidence right after deployment; fresh outcomes replace
+            // it immediately.
+            ->where('delivery_config_fingerprint', $currentFingerprint)
             ->where(function ($q) {
                 $q->whereIn('send_status', [
                     EmailVerificationCode::SEND_STATUS_SENT,
@@ -233,13 +266,24 @@ class EmailVerificationService
             return true;
         }
 
-        // The failures may belong to a configuration the operator has since
-        // REPLACED or repaired: a successful admin transport test — which
-        // exercises EVERY delivery leaf and is fingerprint-bound to the
-        // CURRENT configuration — run AFTER the newest failure is positive
-        // live evidence too (test sends never create OTP outcome rows, so
-        // without this the old failures would keep enforcement suspended for
-        // the rest of the window).
+        // A QUEUE outage among the failures can never be cleared by a mail
+        // test: the admin test sends SYNCHRONOUSLY and proves nothing about
+        // queue publication — only an actual successful queued delivery (or
+        // the window expiring) may clear that category.
+        $anyDispatchFailure = $recentOutcomes->contains(
+            fn ($outcome) => $outcome->send_status === EmailVerificationCode::SEND_STATUS_DISPATCH_FAILED,
+        );
+        if ($anyDispatchFailure) {
+            return false;
+        }
+
+        // Pure TRANSPORT failures may belong to an endpoint the operator has
+        // since repaired: a successful admin transport test — which exercises
+        // EVERY delivery leaf and is fingerprint-bound to the CURRENT
+        // configuration — run AFTER the newest failure is positive live
+        // evidence (test sends never create OTP outcome rows, so without
+        // this the old failures would keep enforcement suspended for the
+        // rest of the window).
         $newestFailureAt = $recentOutcomes->first()->delivery_finalized_at;
         $testAt = $this->mailTestVerifiedAt();
 
