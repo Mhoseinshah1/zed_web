@@ -32,14 +32,18 @@ final class MailFailure
                 || str_contains($message, 'certificate') => 'tls_failed',
             str_contains($message, 'resolve') || str_contains($message, 'getaddrinfo')
                 || str_contains($message, 'dns') => 'dns_failed',
-            // ONLY responses proven recipient-specific: a bare 550 can also
-            // mean relay denial or a rejected From address — sender-side,
-            // site-wide failures that MUST count as outage evidence
-            // (transportLooksLive excludes recipient_rejected), so they fall
+            // ONLY responses with PROVEN mailbox-specific evidence: phrases
+            // like "Recipient address rejected: Relay access denied" are
+            // sender-side relay policy — site-wide failures that MUST count
+            // as outage evidence (transportLooksLive excludes
+            // recipient_rejected), so anything mentioning relay, and any
+            // rejection without an unknown/nonexistent-mailbox marker, falls
             // through to `unknown` instead.
-            str_contains($message, 'recipient') || str_contains($message, 'mailbox unavailable')
-                || str_contains($message, 'user unknown') || str_contains($message, 'no such user')
-                || str_contains($message, 'mailbox not found') => 'recipient_rejected',
+            ! str_contains($message, 'relay') && (
+                str_contains($message, 'user unknown') || str_contains($message, 'no such user')
+                || str_contains($message, 'unknown recipient') || str_contains($message, 'mailbox unavailable')
+                || str_contains($message, 'mailbox not found') || str_contains($message, 'mailbox does not exist')
+            ) => 'recipient_rejected',
             default => 'unknown',
         };
     }

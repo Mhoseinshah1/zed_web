@@ -125,15 +125,32 @@ class EmailMailTestProofTest extends TestCase
         $this->svc()->recordSuccessfulMailTest();
         $this->assertTrue($this->svc()->hasVerifiedMailTest());
 
-        // The admin typo'd the destination: a recipient bounce proves
-        // nothing about the endpoint — the proof survives.
+        // The admin typo'd the destination: a PROVEN mailbox-specific bounce
+        // says nothing about the endpoint — the proof survives. (A relay
+        // denial phrased as a "recipient" rejection would NOT qualify.)
         Mail::shouldReceive('mailer')->andReturnSelf();
-        Mail::shouldReceive('to')->andThrow(new \RuntimeException('550 recipient address rejected'));
+        Mail::shouldReceive('to')->andThrow(new \RuntimeException('550 5.1.1 user unknown: no such user here'));
         Livewire::actingAs($this->admin())
             ->test(EmailSettingsPage::class)
             ->callAction('testEmail', ['test_email' => 'typo@example.com']);
 
         $this->assertTrue($this->svc()->hasVerifiedMailTest(), 'a recipient bounce never revokes the proof');
+    }
+
+    public function test_a_relay_denial_phrased_as_recipient_rejection_revokes_the_proof(): void
+    {
+        $this->svc()->recordSuccessfulMailTest();
+
+        // "Recipient address rejected: Relay access denied" is SENDER-side
+        // policy — every destination fails, so it is endpoint evidence, not a
+        // mailbox bounce: the proof must be revoked.
+        Mail::shouldReceive('mailer')->andReturnSelf();
+        Mail::shouldReceive('to')->andThrow(new \RuntimeException('554 Recipient address rejected: Relay access denied'));
+        Livewire::actingAs($this->admin())
+            ->test(EmailSettingsPage::class)
+            ->callAction('testEmail', ['test_email' => 'probe@example.com']);
+
+        $this->assertFalse($this->svc()->hasVerifiedMailTest(), 'relay denial is endpoint evidence');
     }
 
     public function test_changing_the_smtp_timeout_invalidates_the_proof(): void

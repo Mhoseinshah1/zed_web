@@ -382,6 +382,11 @@ class EmailVerificationHardeningTest extends TestCase
             new \RuntimeException('MAIL_PASSWORD=Hunter2Secret could not be used'),
             new \RuntimeException('smtp://deploy:Hunter2Secret@smtp.host:587 refused'),
             new \RuntimeException('unexpected: Authorization: Bearer abcDEF123456789'),
+            // Quoted equals-delimited credential variants from unknown
+            // transports must be scrubbed too.
+            new \RuntimeException("driver rejected API_KEY='Hunter2Secret' during handshake"),
+            new \RuntimeException('client_secret="Hunter2Secret" is expired'),
+            new \RuntimeException('bad token "abcDEF123456789" supplied'),
         ];
 
         foreach ($samples as $e) {

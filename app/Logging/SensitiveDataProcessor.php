@@ -139,9 +139,11 @@ class SensitiveDataProcessor implements ProcessorInterface
             '#([A-Za-z][A-Za-z0-9+.-]*://)[^/@\s:]+:[^/@\s]+@#' => '$1'.self::REDACTED.'@',
             // JSON "field": "value" pairs for credential-ish keys.
             '/("?(?:password|passwd|secret|token|api[_-]?key|api[_-]?token|access[_-]?token|refresh[_-]?token|authorization|signature)"?[[:space:]]*:[[:space:]]*")[^"]*"/i' => '$1'.self::REDACTED.'"',
-            // Quoted credentials in prose, e.g. SMTP transport errors like
-            // `authentication failed: username "x" / password "y"`.
-            '/\b(username|user|login|password|passwd)\b[[:space:]]*[:=]?[[:space:]]*["\'][^"\']*["\']/i' => '$1 '.self::REDACTED,
+            // Quoted credentials in prose or assignments — `password "y"`,
+            // `API_KEY='sk-…'`, `token="…"`, `client_secret='…'`: the
+            // KEY=VALUE pattern above deliberately skips quoted values, so
+            // every credential-key variant must be covered here too.
+            '/\b(username|user|login|password|passwd|pwd|secret|token|api[_-]?key|api[_-]?token|apikey|client[_-]?secret|access[_-]?token|refresh[_-]?token|app[_-]?key)\b[[:space:]]*[:=]?[[:space:]]*["\'][^"\']*["\']/i' => '$1 '.self::REDACTED,
             // UNQUOTED colon-delimited credentials in prose or headers, e.g.
             // `password: hunter2`, `api_key: sk-abc123` — exception text from
             // unknown transports formats secrets this way too.
