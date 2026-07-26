@@ -9,9 +9,10 @@ use Illuminate\Support\Facades\Schema;
  * by send_status + created_at on EVERY required-policy evaluation (middleware
  * for unverified users, registration stamping). Without an index that query
  * degrades into a scan of the whole lifetime OTP history precisely when the
- * table is large and the window is quiet. Composite (send_status, created_at)
- * serves the whereIn + range filter on both PostgreSQL and SQLite. Idempotent
- * both ways.
+ * table is large and the window is quiet. Composite (send_status, updated_at)
+ * serves the whereIn + FINALIZATION-time range/order on both PostgreSQL and
+ * SQLite. Drop-and-recreate converges environments that ran an earlier
+ * created_at build of this index under the same name. Idempotent both ways.
  */
 return new class extends Migration
 {
@@ -19,11 +20,14 @@ return new class extends Migration
 
     public function up(): void
     {
-        if (! Schema::hasIndex('email_verification_codes', self::INDEX)) {
+        if (Schema::hasIndex('email_verification_codes', self::INDEX)) {
             Schema::table('email_verification_codes', function (Blueprint $table) {
-                $table->index(['send_status', 'created_at'], self::INDEX);
+                $table->dropIndex(self::INDEX);
             });
         }
+        Schema::table('email_verification_codes', function (Blueprint $table) {
+            $table->index(['send_status', 'updated_at'], self::INDEX);
+        });
     }
 
     public function down(): void

@@ -1174,6 +1174,55 @@ class EmailVerificationHardeningTest extends TestCase
         $this->actingAs($user)->get('/dashboard')->assertRedirect(route('verification.notice'));
     }
 
+    public function test_out_of_order_recovery_clears_the_outage_signal(): void
+    {
+        $svc = app(EmailVerificationService::class);
+        $user = $this->unverifiedUser();
+
+        // An OLDER queued code (lower id) …
+        $older = EmailVerificationCode::create([
+            'user_id' => $user->id, 'email' => $user->email,
+            'code_hash' => Hash::make('123456'), 'attempts' => 0,
+            'expires_at' => now()->addMinutes(10), 'used_at' => now(),
+            'send_status' => EmailVerificationCode::SEND_STATUS_SENDING,
+        ]);
+        // … while three NEWER codes fail first.
+        foreach (range(1, 3) as $i) {
+            EmailVerificationCode::create([
+                'user_id' => $user->id, 'email' => $user->email,
+                'code_hash' => Hash::make('123456'), 'attempts' => 0,
+                'expires_at' => now()->addMinutes(10), 'used_at' => now(),
+                'send_status' => EmailVerificationCode::SEND_STATUS_FAILED,
+            ]);
+        }
+        $this->assertFalse($svc->transportLooksLive());
+
+        // The OLDER code finalizes successfully AFTER those failures: health
+        // is judged by FINALIZATION time, so recovery clears the outage even
+        // though every failure has a higher issuance id.
+        $this->travel(1)->minutes();
+        EmailVerificationCode::whereKey($older->id)
+            ->update(['send_status' => EmailVerificationCode::SEND_STATUS_SENT, 'updated_at' => now()]);
+        $this->travelBack();
+
+        $this->assertTrue($svc->transportLooksLive(), 'out-of-order success is still a recovery');
+    }
+
+    public function test_policy_capture_recreates_missing_rows_so_the_lock_has_a_target(): void
+    {
+        // Fresh-install shape: the policy rows do not exist at all.
+        SiteSetting::where('key', 'email_verification_enabled')->delete();
+        SiteSetting::where('key', 'email_verification_required_on_register')->delete();
+
+        $captured = DB::transaction(fn () => app(EmailVerificationService::class)->captureRequiredPolicyForRegistration());
+
+        $this->assertFalse($captured, 'missing rows read as an OFF policy');
+        // Both rows now physically exist (default false) — future captures
+        // have concrete rows to share-lock against a concurrent policy save.
+        $this->assertSame('false', SiteSetting::where('key', 'email_verification_enabled')->value('value'));
+        $this->assertSame('false', SiteSetting::where('key', 'email_verification_required_on_register')->value('value'));
+    }
+
     public function test_recipient_rejections_never_fabricate_a_global_outage(): void
     {
         $svc = app(EmailVerificationService::class);

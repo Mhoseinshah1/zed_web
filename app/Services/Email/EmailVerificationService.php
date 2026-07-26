@@ -128,6 +128,16 @@ class EmailVerificationService
      */
     public function captureRequiredPolicyForRegistration(): bool
     {
+        // A shared lock only serializes against rows that EXIST. The seed
+        // migration guarantees the pair on deployed instances; this makes
+        // the guarantee unconditional (deleted rows, pre-migration DBs) —
+        // insertOrIgnore is race-safe under the unique `key` index and never
+        // overwrites live values.
+        SiteSetting::query()->insertOrIgnore([
+            ['key' => 'email_verification_enabled', 'value' => 'false', 'created_at' => now(), 'updated_at' => now()],
+            ['key' => 'email_verification_required_on_register', 'value' => 'false', 'created_at' => now(), 'updated_at' => now()],
+        ]);
+
         $flags = SiteSetting::query()
             ->whereIn('key', ['email_verification_enabled', 'email_verification_required_on_register'])
             ->sharedLock()
@@ -162,8 +172,13 @@ class EmailVerificationService
      */
     public function transportLooksLive(): bool
     {
+        // Windowed and ordered by updated_at — the FINALIZATION time (every
+        // terminal transition writes it) — not issuance id: queued jobs
+        // routinely finalize out of issuance order, and an older code
+        // succeeding AFTER three newer failures is exactly the recovery
+        // signal that must clear the outage immediately.
         $recentOutcomes = EmailVerificationCode::query()
-            ->where('created_at', '>=', now()->subMinutes(self::OUTAGE_WINDOW_MINUTES))
+            ->where('updated_at', '>=', now()->subMinutes(self::OUTAGE_WINDOW_MINUTES))
             ->where(function ($q) {
                 $q->whereIn('send_status', [
                     EmailVerificationCode::SEND_STATUS_SENT,
@@ -183,7 +198,8 @@ class EmailVerificationService
                             });
                     });
             })
-            ->latest('id')
+            ->orderByDesc('updated_at')
+            ->orderByDesc('id')
             ->limit(self::OUTAGE_MIN_FAILURES)
             ->pluck('send_status');
 
