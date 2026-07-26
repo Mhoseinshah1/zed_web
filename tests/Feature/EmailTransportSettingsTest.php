@@ -10,6 +10,7 @@ use App\Services\Email\EmailTransportSettingsService;
 use App\Services\Email\EmailVerificationService;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
+use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
@@ -646,5 +647,216 @@ class EmailTransportSettingsTest extends TestCase
 
         $this->assertFalse($this->verification()->isMailConfigured());
         $this->assertFalse($this->verification()->isRequiredOnRegister(), 'required verification must automatically become unenforceable');
+    }
+
+    // ── Immutable environment baseline ──────────────────────────────────────
+
+    /** Route the model's storage through an unreachable database. */
+    private function breakStorage(): string
+    {
+        $original = (string) config('database.default');
+        config(['database.connections.zp_broken' => [
+            'driver' => 'sqlite',
+            'database' => '/nonexistent-zp/never-here.sqlite',
+            'prefix' => '',
+        ]]);
+        DB::setDefaultConnection('zp_broken');
+
+        return $original;
+    }
+
+    private function restoreStorage(string $connection): void
+    {
+        DB::setDefaultConnection($connection);
+    }
+
+    /** Simulate a process booted under a specific environment mail config. */
+    private function stageEnvironment(array $config): void
+    {
+        EmailTransportSettingsService::resetProcessBaselineForTesting();
+        config($config);
+    }
+
+    public function test_clearing_the_panel_from_name_restores_the_environment_name_immediately_everywhere(): void
+    {
+        $this->stageEnvironment(['mail.from.name' => 'Env Name E']);
+
+        // Panel name A is active, certified, and applied — both in the app
+        // singleton AND in a separate long-running-worker service instance.
+        $row = $this->enabledRow(['from_name' => 'Panel Name A']);
+        $this->svc()->apply();
+        $worker = new EmailTransportSettingsService;
+        $worker->apply();
+        $this->assertSame('Panel Name A', config('mail.from.name'));
+        $versionA = $this->svc()->version();
+        $this->recordProof();
+
+        // Clearing the OPTIONAL panel name must restore the ORIGINAL
+        // environment name — never echo the previously applied panel name
+        // back out of the mutated runtime config.
+        $row->fill(['from_name' => null])->save();
+        $this->svc()->apply();
+
+        $this->assertSame('Env Name E', config('mail.from.name'), 'immediate restore in this process');
+        $versionE = $this->svc()->version();
+        $this->assertNotSame($versionA, $versionE, 'the effective fingerprint changes from A to E');
+        $this->assertFalse($this->verification()->hasVerifiedMailTest(), 'the A-scoped proof is invalidated');
+
+        // The long-running worker (last applied A) converges before its next
+        // job: re-stage its stale view, then run its pre-job refresh.
+        config(['mail.from.name' => 'Panel Name A']);
+        $worker->apply();
+        $this->assertSame('Env Name E', config('mail.from.name'), 'worker adopts E before its next job');
+        // And the Queue::before hook (singleton) yields the same result.
+        TransportRefreshProbeJob::dispatch();
+        $this->assertSame('Env Name E', config('mail.from.name'));
+
+        // …and a freshly instantiated service (fresh process sharing the same
+        // environment) computes the SAME effective configuration/fingerprint.
+        $fresh = new EmailTransportSettingsService;
+        $fresh->apply();
+        $this->assertSame('Env Name E', config('mail.from.name'));
+        $this->assertSame($versionE, $fresh->version(), 'fresh and long-lived processes agree on the fingerprint');
+    }
+
+    public function test_disable_restores_an_original_environment_managed_smtp_definition_exactly(): void
+    {
+        // A deployment whose OWN environment config defines the reserved
+        // name — and even uses it as the default mailer.
+        $envDefinition = ['transport' => 'smtp', 'host' => 'env-managed.example', 'port' => 2525, 'timeout' => 5];
+        $this->stageEnvironment([
+            'mail.mailers.managed_smtp' => $envDefinition,
+            'mail.default' => 'managed_smtp',
+        ]);
+
+        $row = $this->enabledRow();
+        $this->svc()->apply();
+        $this->assertSame('smtp.panel.example', config('mail.mailers.managed_smtp.host'), 'panel override is active');
+
+        $row->fill(['enabled' => false])->save();
+        $this->svc()->apply();
+
+        // The ORIGINAL definition is restored exactly — old panel credentials
+        // are not retained merely because the env default carries the name.
+        $this->assertSame($envDefinition, config('mail.mailers.managed_smtp'));
+        $this->assertSame('managed_smtp', config('mail.default'));
+        $runtime = json_encode(config('mail.mailers.managed_smtp'));
+        $this->assertStringNotContainsString(self::CANARY_USER, $runtime);
+        $this->assertStringNotContainsString(self::CANARY_PASS, $runtime);
+        $this->assertStringNotContainsString('smtp.panel.example', $runtime);
+    }
+
+    public function test_disable_neutralizes_the_runtime_definition_when_env_had_none(): void
+    {
+        $row = $this->enabledRow();
+        $this->svc()->apply();
+        $this->assertSame('smtp.panel.example', config('mail.mailers.managed_smtp.host'));
+
+        $row->fill(['enabled' => false])->save();
+        $this->svc()->apply();
+
+        $this->assertNull(config('mail.mailers.managed_smtp'), 'no stale panel definition may remain resolvable');
+        $this->assertStringNotContainsString('smtp.panel.example', (string) json_encode(config('mail')));
+    }
+
+    // ── Pre-first-apply storage failure fails CLOSED ────────────────────────
+
+    public function test_fresh_process_storage_failure_fails_closed_never_environment_smtp(): void
+    {
+        // A service that has NEVER successfully resolved (fresh process)…
+        $fresh = new EmailTransportSettingsService;
+
+        $original = $this->breakStorage();
+        try {
+            $fresh->apply();
+
+            // …must NOT continue with the environment transport: it cannot
+            // know whether a panel override exists.
+            $this->assertSame('managed_smtp', config('mail.default'));
+            $this->assertSame('', config('mail.mailers.managed_smtp.host'));
+            $this->assertTrue($fresh->isStorageFailClosed());
+            $this->assertFalse($this->verification()->isMailConfigured());
+
+            // Repeated identical failures cause no repeated purges.
+            $purges = $fresh->purgeCount();
+            $fresh->apply();
+            $fresh->apply();
+            $this->assertSame($purges, $fresh->purgeCount());
+        } finally {
+            $this->restoreStorage($original);
+        }
+
+        // Storage recovers: the real source applies WITHOUT a restart.
+        $this->enabledRow();
+        $fresh->apply();
+        $this->assertSame('smtp.panel.example', config('mail.mailers.managed_smtp.host'));
+        $this->assertFalse($fresh->isStorageFailClosed());
+    }
+
+    public function test_previously_applied_panel_configuration_survives_transient_storage_failure(): void
+    {
+        $this->enabledRow(['host' => 'smtp.a.example']);
+        $this->svc()->apply();
+        $this->assertSame('smtp.a.example', config('mail.mailers.managed_smtp.host'));
+
+        $original = $this->breakStorage();
+        try {
+            $this->svc()->apply();
+
+            // Temporary mid-process failure: the last successfully applied
+            // configuration is retained — never reset, never fail-closed.
+            $this->assertSame('smtp.a.example', config('mail.mailers.managed_smtp.host'));
+            $this->assertSame('managed_smtp', config('mail.default'));
+            $this->assertFalse($this->svc()->isStorageFailClosed());
+        } finally {
+            $this->restoreStorage($original);
+        }
+    }
+
+    public function test_previously_applied_environment_configuration_survives_transient_storage_failure(): void
+    {
+        $envDefault = config('mail.default');
+        $this->svc()->apply(); // no row → environment source applied
+
+        $original = $this->breakStorage();
+        try {
+            $this->svc()->apply();
+
+            $this->assertSame($envDefault, config('mail.default'), 'the environment configuration is retained');
+            $this->assertFalse($this->svc()->isStorageFailClosed());
+        } finally {
+            $this->restoreStorage($original);
+        }
+    }
+
+    // ── Database-enforced singleton ─────────────────────────────────────────
+
+    public function test_repeated_instance_or_new_saves_update_exactly_one_singleton_row(): void
+    {
+        foreach (['a.example', 'b.example', 'c.example'] as $host) {
+            $row = EmailTransportSetting::instanceOrNew();
+            $row->fill(['host' => $host]);
+            $row->save();
+        }
+
+        $this->assertSame(1, EmailTransportSetting::query()->count());
+        $this->assertSame('c.example', EmailTransportSetting::instance()->host);
+        $this->assertSame(EmailTransportSetting::SINGLETON_KEY, EmailTransportSetting::instance()->singleton_key);
+    }
+
+    public function test_the_database_itself_rejects_a_second_logical_row(): void
+    {
+        EmailTransportSetting::instanceOrNew()->save();
+
+        // A direct second insert (bypassing every application-level check)
+        // violates the fixed unique singleton key — the invariant is the
+        // DATABASE's, not a convention.
+        $this->expectException(QueryException::class);
+
+        try {
+            (new EmailTransportSetting(['enabled' => false]))->save();
+        } finally {
+            $this->assertSame(1, EmailTransportSetting::query()->count());
+        }
     }
 }
