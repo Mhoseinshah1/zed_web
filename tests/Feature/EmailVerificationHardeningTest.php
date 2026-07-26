@@ -1432,6 +1432,53 @@ class EmailVerificationHardeningTest extends TestCase
         $this->travelBack();
     }
 
+    public function test_pre_outage_worker_activity_is_not_recovery_evidence(): void
+    {
+        $svc = app(EmailVerificationService::class);
+        $user = $this->unverifiedUser();
+        $this->assertTrue($svc->isEnforceableNow(), 'healthy baseline');
+
+        // T0: a code is queued. T0+1min: a worker finalizes some OTHER
+        // delivery — then every worker dies. That finalization predates the
+        // moment the queued row became stale (T0 + threshold), so it must
+        // NOT count as recovery once the row trips the probe.
+        $stuck = EmailVerificationCode::create([
+            'user_id' => $user->id, 'email' => $user->email,
+            'code_hash' => Hash::make('123456'), 'attempts' => 0,
+            'expires_at' => now()->addMinutes(10),
+            'send_status' => EmailVerificationCode::SEND_STATUS_QUEUED,
+        ]);
+        EmailVerificationCode::whereKey($stuck->id)->update([
+            'created_at' => now()->subMinutes(EmailVerificationService::STALLED_QUEUE_MINUTES + 2),
+        ]);
+        EmailVerificationCode::create([
+            'user_id' => $user->id, 'email' => $user->email,
+            'code_hash' => Hash::make('654321'), 'attempts' => 0,
+            'expires_at' => now()->addMinutes(10), 'used_at' => now(),
+            'send_status' => EmailVerificationCode::SEND_STATUS_SENT,
+            'delivery_finalized_at' => now()->subMinutes(EmailVerificationService::STALLED_QUEUE_MINUTES + 1),
+            'delivery_config_fingerprint' => $svc->mailConfigFingerprint(),
+        ]);
+
+        $this->assertFalse(
+            $svc->transportLooksLive(),
+            'a finalization BEFORE the stall became detectable is not recovery proof',
+        );
+        $this->assertFalse($svc->isEnforceableNow());
+
+        // A finalization AFTER the detection moment is.
+        EmailVerificationCode::create([
+            'user_id' => $user->id, 'email' => $user->email,
+            'code_hash' => Hash::make('999999'), 'attempts' => 0,
+            'expires_at' => now()->addMinutes(10), 'used_at' => now(),
+            'send_status' => EmailVerificationCode::SEND_STATUS_SENT,
+            'delivery_finalized_at' => now(),
+            'delivery_config_fingerprint' => $svc->mailConfigFingerprint(),
+        ]);
+        $this->assertTrue($svc->transportLooksLive(), 'post-detection worker activity proves recovery');
+        $this->assertTrue($svc->isEnforceableNow());
+    }
+
     public function test_a_resend_does_not_launder_stalled_worker_evidence(): void
     {
         $svc = app(EmailVerificationService::class);

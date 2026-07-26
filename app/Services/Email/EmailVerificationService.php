@@ -82,10 +82,12 @@ class EmailVerificationService
     public const ABANDONED_SENDING_MINUTES = 8;
 
     /**
-     * Persisted first-detection timestamp of a stalled/abandoned pipeline.
-     * The row-level evidence is mutable — a resend retires the aged queued
-     * row (skipped) and replaces it with one too fresh to trip the probes —
-     * so the detection itself is stored and holds the outage open until a
+     * Persisted detection timestamp of a stalled/abandoned pipeline — the
+     * moment the evidence became STALE (its row timestamp plus the
+     * applicable threshold), not the row's raw creation/claim time. The
+     * row-level evidence is mutable — a resend retires the aged queued row
+     * (skipped) and replaces it with one too fresh to trip the probes — so
+     * the detection itself is stored and holds the outage open until a
      * worker-stamped finalization NEWER than it proves recovery. Cleared
      * (set to '') on that proof; never displayed or admin-editable.
      */
@@ -305,13 +307,23 @@ class EmailVerificationService
             }
         }
 
-        $stalledSince = collect([$stalledQueuedSince, $abandonedSendingSince])
-            ->filter()
-            ->map(fn ($timestamp) => Carbon::parse($timestamp))
-            ->push($markerAt)
-            ->filter()
-            ->max();
-        if ($stalledSince !== null) {
+        // Recovery must postdate the moment the evidence became STALE — the
+        // row's timestamp PLUS its threshold — never the raw creation/claim
+        // time: a worker that finalized some other job right after this row
+        // was queued and then died with everyone else would otherwise leave
+        // a "proof" permanently newer than the evidence, masking the outage
+        // forever. A worker alive at the detection moment would have
+        // consumed the evidence row itself.
+        $stalledDetectedAt = collect([
+            $stalledQueuedSince === null
+                ? null
+                : Carbon::parse($stalledQueuedSince)->addMinutes(self::STALLED_QUEUE_MINUTES),
+            $abandonedSendingSince === null
+                ? null
+                : Carbon::parse($abandonedSendingSince)->addMinutes(self::ABANDONED_SENDING_MINUTES),
+            $markerAt,
+        ])->filter()->max();
+        if ($stalledDetectedAt !== null) {
             $workerConsumedAfterStall = EmailVerificationCode::query()
                 ->whereIn('send_status', [
                     EmailVerificationCode::SEND_STATUS_SENT,
@@ -320,11 +332,12 @@ class EmailVerificationService
                 ])
                 // Queue-consumption proof, so no fingerprint or error-category
                 // scoping: even a recipient-bounced `failed` row proves the
-                // worker pulled a job off the queue after the stall began.
-                ->where('delivery_finalized_at', '>', $stalledSince)
+                // worker pulled a job off the queue after the stall became
+                // detectable.
+                ->where('delivery_finalized_at', '>', $stalledDetectedAt)
                 ->exists();
             if (! $workerConsumedAfterStall) {
-                $persisted = $stalledSince->format('Y-m-d H:i:s');
+                $persisted = $stalledDetectedAt->format('Y-m-d H:i:s');
                 if ($marker !== $persisted) {
                     SiteSetting::set(self::STALL_MARKER_KEY, $persisted);
                 }
