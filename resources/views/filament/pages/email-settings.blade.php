@@ -27,6 +27,24 @@
                 @endif
             </div>
             <div>
+                <span class="text-gray-500 dark:text-gray-400">منبع مؤثر تنظیمات:</span>
+                @if($page->effectiveSource() === \App\Services\Email\EmailTransportSettingsService::SOURCE_PANEL)
+                    <span class="font-semibold text-green-600 dark:text-green-400">پنل مدیریت</span>
+                @elseif($page->effectiveSource() === \App\Services\Email\EmailTransportSettingsService::SOURCE_PANEL_INVALID)
+                    <span class="font-semibold text-red-600 dark:text-red-400">پنل (نامعتبر — ارسال متوقف است)</span>
+                @else
+                    <span class="font-semibold">فایل .env سرور</span>
+                @endif
+            </div>
+            <div>
+                <span class="text-gray-500 dark:text-gray-400">رمز عبور SMTP ذخیره‌شده:</span>
+                @if($page->storedPasswordExists())
+                    <span class="font-semibold text-green-600 dark:text-green-400">دارد</span>
+                @else
+                    <span class="font-semibold text-gray-600 dark:text-gray-300">ندارد</span>
+                @endif
+            </div>
+            <div>
                 <span class="text-gray-500 dark:text-gray-400">آخرین تست موفق:</span>
                 <span class="font-mono">{{ $page->lastMailTestAt() ?? '—' }}</span>
             </div>
@@ -55,7 +73,7 @@
 
     @unless($page->mailLooksConfigured())
         <div class="rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-800 dark:border-amber-700 dark:bg-amber-900/30 dark:text-amber-200">
-            ⚠ پیکربندی ارسال ایمیل کامل نیست (mailer «log» یا «array» در حالت production پذیرفته نمی‌شود). مقادیر MAIL_* را در فایل .env سرور تنظیم کنید، سپس <code>optimize:clear</code> و <code>config:cache</code> را اجرا و worker صف را ری‌استارت کنید. تا آن زمان نمی‌توانید تایید ایمیل را اجباری کنید.
+            ⚠ پیکربندی ارسال ایمیل کامل نیست (mailer «log» یا «array» در حالت production پذیرفته نمی‌شود). می‌توانید در بخش «پیکربندی SMTP» همین صفحه تنظیمات را وارد و فعال کنید — تغییرات بلافاصله و بدون نیاز به پاک کردن کش یا ری‌استارت worker اعمال می‌شود. (فایل .env سرور همچنان به عنوان منبع پایه/جایگزین وقتی تنظیمات پنل غیرفعال است معتبر است.) تا وقتی پیکربندی قابل استفاده نباشد نمی‌توانید تایید ایمیل را اجباری کنید.
         </div>
     @endunless
 
@@ -68,6 +86,10 @@
             </x-filament::button>
 
             {{ $this->testEmailAction }}
+
+            @if($page->storedPasswordExists())
+                {{ $this->clearSmtpPasswordAction }}
+            @endif
         </div>
     </form>
 

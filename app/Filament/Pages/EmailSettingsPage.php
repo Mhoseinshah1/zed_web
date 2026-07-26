@@ -4,8 +4,10 @@ namespace App\Filament\Pages;
 
 use App\Filament\Pages\Concerns\RequiresCommunicationsStepUp;
 use App\Mail\TestEmailMail;
+use App\Models\EmailTransportSetting;
 use App\Models\SiteSetting;
 use App\Services\AdminMfa\AdminSecurityAudit;
+use App\Services\Email\EmailTransportSettingsService;
 use App\Services\Email\EmailVerificationService;
 use App\Support\MailFailure;
 use Filament\Actions\Action;
@@ -21,14 +23,22 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\RateLimiter;
+use Illuminate\Validation\ValidationException;
 
 /**
- * Admin settings for email verification (OTP rules + feature flags).
+ * Admin settings for email verification (OTP rules + feature flags) and the
+ * admin-managed SMTP transport.
  *
- * ONLY non-secret feature settings live in SiteSetting. SMTP host/username/
- * password stay in .env and are NEVER stored here or displayed — this page
- * shows just the current mailer name, the From address, and whether the
- * configuration looks usable.
+ * Non-secret feature settings live in SiteSetting. SMTP settings live in the
+ * dedicated email_transport_settings singleton row: username/password are
+ * APP_KEY-encrypted at rest (never in the plaintext site_settings table),
+ * the stored password is NEVER hydrated into Livewire state (a blank field
+ * preserves it; an explicit confirmed action clears it), and every save/
+ * clear/test action re-asserts the communications step-up before touching
+ * any secret. Saving takes effect immediately — web requests re-resolve at
+ * bootstrap and queue workers re-resolve before every job; no config cache
+ * rebuild or worker restart is ever required. .env stays the bootstrap/
+ * fallback source while the panel override is disabled.
  */
 class EmailSettingsPage extends Page implements HasActions, HasForms
 {
@@ -64,7 +74,33 @@ class EmailSettingsPage extends Page implements HasActions, HasForms
             return;
         }
 
+        // Status/fingerprint displays must reflect the PERSISTED effective
+        // configuration (idempotent — bootstrap already applied it).
+        $this->transportService()->apply();
+
+        $row = EmailTransportSetting::instanceOrNew();
+
+        // Username may be shown only AFTER step-up succeeded (we are past the
+        // gate here). A corrupt/undecryptable value hydrates as empty — the
+        // status panel separately reports the configuration as unusable.
+        try {
+            $username = $row->exists ? $row->username : null;
+        } catch (\Throwable) {
+            $username = null;
+        }
+
         $this->form->fill([
+            'smtp_override_enabled' => (bool) $row->enabled,
+            'smtp_host' => $row->host,
+            'smtp_port' => $row->port,
+            'smtp_security' => $row->security,
+            'smtp_username' => $username,
+            // The stored password is NEVER hydrated — blank means "keep".
+            'smtp_password_new' => null,
+            'smtp_from_address' => $row->from_address,
+            'smtp_from_name' => $row->from_name,
+            'smtp_timeout' => $row->timeout,
+            'smtp_local_domain' => $row->local_domain,
             'email_verification_enabled' => (bool) SiteSetting::get('email_verification_enabled', false),
             'email_verification_required_on_register' => (bool) SiteSetting::get('email_verification_required_on_register', false),
             'email_otp_ttl_minutes' => (int) SiteSetting::get('email_otp_ttl_minutes', EmailVerificationService::CODE_TTL_MINUTES),
@@ -87,6 +123,23 @@ class EmailSettingsPage extends Page implements HasActions, HasForms
     public function mailLooksConfigured(): bool
     {
         return app(EmailVerificationService::class)->isMailConfigured();
+    }
+
+    protected function transportService(): EmailTransportSettingsService
+    {
+        return app(EmailTransportSettingsService::class);
+    }
+
+    /** Effective source: `panel`, `env`, or `panel_invalid` (fail-closed). */
+    public function effectiveSource(): string
+    {
+        return $this->transportService()->effectiveSource();
+    }
+
+    /** Whether an encrypted SMTP password is stored (presence only). */
+    public function storedPasswordExists(): bool
+    {
+        return EmailTransportSetting::instance()?->hasStoredPassword() ?? false;
     }
 
     /**
@@ -120,8 +173,67 @@ class EmailSettingsPage extends Page implements HasActions, HasForms
     {
         return $form
             ->schema([
+                Forms\Components\Section::make('پیکربندی SMTP (سرور ارسال ایمیل)')
+                    ->description('با فعال کردن «استفاده از تنظیمات پنل»، ارسال ایمیل با همین مقادیر انجام می‌شود و تغییرات بلافاصله (بدون نیاز به پاک کردن کش یا ری‌استارت worker) اعمال می‌گردد. تا وقتی غیرفعال باشد، تنظیمات فایل .env سرور معتبر است. نام کاربری و رمز عبور به‌صورت رمزنگاری‌شده ذخیره می‌شوند.')
+                    ->schema([
+                        Forms\Components\Toggle::make('smtp_override_enabled')
+                            ->label('استفاده از تنظیمات SMTP پنل (به جای .env)')
+                            ->live()
+                            ->default(false)
+                            ->columnSpan(2),
+                        Forms\Components\TextInput::make('smtp_host')
+                            ->label('هاست SMTP')
+                            ->placeholder('smtp.example.com')
+                            ->maxLength(255)
+                            ->required(fn (Forms\Get $get): bool => (bool) $get('smtp_override_enabled')),
+                        Forms\Components\TextInput::make('smtp_port')
+                            ->label('پورت')
+                            ->numeric()->minValue(1)->maxValue(65535)
+                            ->placeholder('587')
+                            ->required(fn (Forms\Get $get): bool => (bool) $get('smtp_override_enabled')),
+                        Forms\Components\Select::make('smtp_security')
+                            // The EXACT schemes Symfony Mailer 7 accepts —
+                            // never a legacy `encryption` value.
+                            ->label('امنیت اتصال')
+                            ->options([
+                                'smtp' => 'STARTTLS / بدون TLS اجباری (smtp — معمولاً پورت 587)',
+                                'smtps' => 'TLS مستقیم (smtps — معمولاً پورت 465)',
+                            ])
+                            ->native(false)
+                            ->required(fn (Forms\Get $get): bool => (bool) $get('smtp_override_enabled')),
+                        Forms\Components\TextInput::make('smtp_timeout')
+                            ->label('حداکثر زمان هر عملیات (ثانیه)')
+                            ->numeric()
+                            ->minValue(EmailTransportSettingsService::MIN_TIMEOUT)
+                            ->maxValue(EmailTransportSettingsService::MAX_TIMEOUT)
+                            ->placeholder('10')
+                            ->required(fn (Forms\Get $get): bool => (bool) $get('smtp_override_enabled')),
+                        Forms\Components\TextInput::make('smtp_username')
+                            ->label('نام کاربری SMTP')
+                            ->maxLength(255)
+                            ->autocomplete('off'),
+                        Forms\Components\TextInput::make('smtp_password_new')
+                            ->label('رمز عبور جدید SMTP')
+                            ->password()
+                            ->autocomplete('new-password')
+                            ->maxLength(1024)
+                            ->helperText('خالی بگذارید تا رمز ذخیره‌شده فعلی حفظ شود. برای حذف رمز از دکمه «حذف رمز ذخیره‌شده» استفاده کنید.'),
+                        Forms\Components\TextInput::make('smtp_from_address')
+                            ->label('آدرس فرستنده (From)')
+                            ->email()
+                            ->maxLength(255)
+                            ->required(fn (Forms\Get $get): bool => (bool) $get('smtp_override_enabled')),
+                        Forms\Components\TextInput::make('smtp_from_name')
+                            ->label('نام فرستنده')
+                            ->maxLength(255),
+                        Forms\Components\TextInput::make('smtp_local_domain')
+                            ->label('دامنه EHLO (اختیاری)')
+                            ->maxLength(255)
+                            ->helperText('در صورت خالی بودن، از دامنه APP_URL استفاده می‌شود.'),
+                    ])->columns(2),
+
                 Forms\Components\Section::make('تایید آدرس ایمیل')
-                    ->description('کاربر یک کد ۶ رقمی دریافت و وارد می‌کند. اطلاعات SMTP (هاست/نام کاربری/رمز) فقط در فایل .env سرور تنظیم می‌شود و اینجا نمایش داده نمی‌شود.')
+                    ->description('کاربر یک کد ۶ رقمی دریافت و وارد می‌کند.')
                     ->schema([
                         Forms\Components\Toggle::make('email_verification_enabled')
                             ->label('فعال بودن تایید ایمیل')
@@ -165,7 +277,23 @@ class EmailSettingsPage extends Page implements HasActions, HasForms
             return;
         }
 
-        $data = $this->form->getState();
+        try {
+            $data = $this->form->getState();
+        } catch (ValidationException $e) {
+            // A failed validation round-trip must not echo a typed plaintext
+            // password back into the Livewire snapshot.
+            $this->clearTransientSecretState();
+            throw $e;
+        }
+
+        // Extract the password replacement, then IMMEDIATELY drop it from
+        // component state — it lives in this method's scope only.
+        $newPassword = (string) ($data['smtp_password_new'] ?? '');
+        $this->clearTransientSecretState();
+
+        if (! $this->persistSmtpSettings($data, $newPassword)) {
+            return;
+        }
 
         $enabled = ! empty($data['email_verification_enabled']);
         $requireOnRegister = ! empty($data['email_verification_required_on_register']);
@@ -233,6 +361,159 @@ class EmailSettingsPage extends Page implements HasActions, HasForms
         Notification::make()->title('تنظیمات ذخیره شد.')->success()->send();
     }
 
+    /**
+     * Persist the SMTP transport settings ATOMICALLY with the proof
+     * invalidation: when the save semantically changes the EFFECTIVE mail
+     * configuration (fingerprint change — host, port, security, credentials,
+     * From identity, timeout, EHLO domain, or the override source), the
+     * stored transport-test proof is cleared in the SAME transaction; an
+     * identical save leaves a still-valid proof untouched. The new runtime
+     * configuration is applied immediately (workers pick it up before their
+     * next job via the queue hook). Returns false when the save was refused.
+     */
+    private function persistSmtpSettings(array $data, string $newPassword): bool
+    {
+        $overrideEnabled = ! empty($data['smtp_override_enabled']);
+
+        $row = EmailTransportSetting::instanceOrNew();
+        $wasEnabled = $row->exists && (bool) $row->getRawOriginal('enabled');
+
+        $str = static fn ($v): ?string => trim((string) ($v ?? '')) === '' ? null : trim((string) $v);
+        $int = static fn ($v): ?int => ($v === null || $v === '') ? null : (int) $v;
+
+        $row->fill([
+            'enabled' => $overrideEnabled,
+            'host' => $str($data['smtp_host'] ?? null),
+            'port' => $int($data['smtp_port'] ?? null),
+            'security' => $str($data['smtp_security'] ?? null),
+            'from_address' => $str($data['smtp_from_address'] ?? null),
+            'from_name' => $str($data['smtp_from_name'] ?? null),
+            'timeout' => $int($data['smtp_timeout'] ?? null),
+            'local_domain' => $str($data['smtp_local_domain'] ?? null),
+        ]);
+        // Secrets go through the explicit setters ONLY — never mass
+        // assignment. A blank password preserves the stored one.
+        $row->setUsernameSecret($str($data['smtp_username'] ?? null));
+        if ($newPassword !== '') {
+            $row->setPasswordSecret($newPassword);
+        }
+
+        // Incomplete drafts may be SAVED only while the override stays
+        // disabled; ENABLING demands a structurally valid host, port,
+        // supported security value, From address, and timeout. (Filament's
+        // conditional `required` rules mirror this client-side; this is the
+        // authoritative server-side check.)
+        if ($overrideEnabled && ! $this->transportService()->rowLooksStructurallyValid($row)) {
+            Notification::make()
+                ->title('برای فعال کردن تنظیمات SMTP پنل، هاست، پورت (۱ تا ۶۵۵۳۵)، نوع امنیت (smtp یا smtps)، آدرس فرستنده معتبر و زمان انتظار (۱ تا ۲۰ ثانیه) لازم است.')
+                ->danger()->send();
+
+            return false;
+        }
+
+        $smtpChanged = $row->isDirty() || ! $row->exists;
+
+        $this->commitTransportChange(function () use ($row): void {
+            $row->save();
+        });
+
+        if ($smtpChanged) {
+            AdminSecurityAudit::record('smtp_settings_changed', $this->stepUpUser(), 'success');
+        }
+        if ($overrideEnabled !== $wasEnabled) {
+            AdminSecurityAudit::record(
+                $overrideEnabled ? 'smtp_override_enabled' : 'smtp_override_disabled',
+                $this->stepUpUser(),
+                'success',
+            );
+        }
+
+        return true;
+    }
+
+    /**
+     * Run a transport mutation + proof-invalidation pair in ONE database
+     * transaction, then leave the RUNTIME configuration consistent with the
+     * database whether the transaction committed or rolled back.
+     */
+    private function commitTransportChange(callable $mutate): void
+    {
+        $verification = app(EmailVerificationService::class);
+        $transport = $this->transportService();
+
+        try {
+            DB::transaction(function () use ($mutate, $verification, $transport): void {
+                // The fingerprint of the configuration in force BEFORE this
+                // change (bootstrap/mount applied the persisted state).
+                $oldFingerprint = $verification->mailConfigFingerprint();
+
+                $mutate();
+
+                // Apply the new effective configuration NOW so the new
+                // fingerprint is computed against it — and so this very
+                // process (and, via the queue hook, every worker) uses it
+                // for all subsequent mail operations.
+                $transport->apply();
+
+                // Semantic change ⇒ the old transport-test proof no longer
+                // certifies the effective configuration: revoke it in the
+                // SAME transaction as the settings write. An identical save
+                // produces an identical fingerprint and touches nothing.
+                if (! hash_equals($oldFingerprint, $verification->mailConfigFingerprint())) {
+                    SiteSetting::set('email_mail_test_fingerprint', '');
+                    SiteSetting::set('email_mail_test_verified_at', '');
+                }
+            });
+        } catch (\Throwable $e) {
+            // The transaction rolled back but apply() may already have
+            // mutated in-memory config — re-resolve from the (unchanged)
+            // database so runtime state never reflects an uncommitted row.
+            $transport->apply();
+
+            throw $e;
+        }
+    }
+
+    /** Confirmed, step-up-guarded removal of the stored SMTP password. */
+    public function clearSmtpPasswordAction(): Action
+    {
+        return Action::make('clearSmtpPassword')
+            ->label('حذف رمز ذخیره‌شده SMTP')
+            ->color('danger')
+            ->icon('heroicon-o-trash')
+            ->requiresConfirmation()
+            ->modalHeading('حذف رمز عبور ذخیره‌شده SMTP')
+            ->modalDescription('رمز عبور رمزنگاری‌شده حذف می‌شود. اگر تنظیمات پنل فعال باشد، تا وارد کردن رمز جدید ممکن است ارسال ایمیل مختل شود.')
+            ->action(function (): void {
+                // Step-up re-asserted immediately before touching the secret.
+                if (! $this->assertStepUpForAction()) {
+                    return;
+                }
+
+                $row = EmailTransportSetting::instance();
+                if ($row === null || ! $row->hasStoredPassword()) {
+                    Notification::make()->title('رمز ذخیره‌شده‌ای وجود ندارد.')->warning()->send();
+
+                    return;
+                }
+
+                $this->commitTransportChange(function () use ($row): void {
+                    $row->setPasswordSecret(null);
+                    $row->save();
+                });
+
+                AdminSecurityAudit::record('smtp_password_cleared', $this->stepUpUser(), 'success');
+
+                Notification::make()->title('رمز عبور ذخیره‌شده حذف شد.')->success()->send();
+            });
+    }
+
+    /** Drop the in-memory plaintext password on any step-up denial. */
+    protected function clearTransientSecretState(): void
+    {
+        $this->data['smtp_password_new'] = null;
+    }
+
     public function testEmailAction(): Action
     {
         return Action::make('testEmail')
@@ -252,6 +533,10 @@ class EmailSettingsPage extends Page implements HasActions, HasForms
                 if (! $this->assertStepUpForAction()) {
                     return;
                 }
+
+                // The test certifies the PERSISTED effective configuration —
+                // never unsaved form values. Idempotent re-apply.
+                $this->transportService()->apply();
 
                 AdminSecurityAudit::record('test_email_requested', $this->stepUpUser(), 'success');
 
