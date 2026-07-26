@@ -2,8 +2,10 @@
 
 namespace App\Filament\Pages;
 
+use App\Filament\Pages\Concerns\RequiresCommunicationsStepUp;
 use App\Mail\TestEmailMail;
 use App\Models\SiteSetting;
+use App\Services\AdminMfa\AdminSecurityAudit;
 use App\Services\Email\EmailVerificationService;
 use App\Support\MailFailure;
 use Filament\Actions\Action;
@@ -32,6 +34,7 @@ class EmailSettingsPage extends Page implements HasActions, HasForms
 {
     use InteractsWithActions;
     use InteractsWithForms;
+    use RequiresCommunicationsStepUp;
 
     protected static string $view = 'filament.pages.email-settings';
 
@@ -52,6 +55,15 @@ class EmailSettingsPage extends Page implements HasActions, HasForms
 
     public function mount(): void
     {
+        // Step-up gate BEFORE any hydration: while locked the form is never
+        // filled and no configuration state reaches the Livewire snapshot.
+        // (The upcoming SMTP-management work adds real secrets to this page —
+        // the gate is the standing contract they inherit.)
+        $this->initializeStepUpState();
+        if (! $this->stepUpUnlocked) {
+            return;
+        }
+
         $this->form->fill([
             'email_verification_enabled' => (bool) SiteSetting::get('email_verification_enabled', false),
             'email_verification_required_on_register' => (bool) SiteSetting::get('email_verification_required_on_register', false),
@@ -147,6 +159,12 @@ class EmailSettingsPage extends Page implements HasActions, HasForms
 
     public function save(): void
     {
+        // Server-side step-up assertion FIRST — before dehydrating form
+        // state, before any guard, transaction, or write.
+        if (! $this->assertStepUpForAction()) {
+            return;
+        }
+
         $data = $this->form->getState();
 
         $enabled = ! empty($data['email_verification_enabled']);
@@ -210,6 +228,8 @@ class EmailSettingsPage extends Page implements HasActions, HasForms
             SiteSetting::set('email_otp_daily_cap', (int) ($data['email_otp_daily_cap'] ?? EmailVerificationService::DAILY_CAP));
         });
 
+        AdminSecurityAudit::record('email_settings_changed', $this->stepUpUser(), 'success');
+
         Notification::make()->title('تنظیمات ذخیره شد.')->success()->send();
     }
 
@@ -227,6 +247,14 @@ class EmailSettingsPage extends Page implements HasActions, HasForms
                     ->placeholder('you@example.com'),
             ])
             ->action(function (array $data) {
+                // Step-up re-asserted immediately before anything else — an
+                // expired grant sends nothing and touches nothing.
+                if (! $this->assertStepUpForAction()) {
+                    return;
+                }
+
+                AdminSecurityAudit::record('test_email_requested', $this->stepUpUser(), 'success');
+
                 // ONE shared policy with the routes: consume the named
                 // `email-test-send` limiter's own limits — an independent
                 // per-admin bucket (followed across IPs) AND an independent

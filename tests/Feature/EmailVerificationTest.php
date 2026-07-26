@@ -472,6 +472,7 @@ class EmailVerificationTest extends TestCase
         config(['mail.from.address' => 'not-an-email']);
         SiteSetting::set('email_verification_required_on_register', 'false');
         $admin = User::factory()->create(['is_admin' => true, 'email_verified_at' => now()]);
+        $this->grantCommunicationsStepUp($admin);
 
         Livewire::actingAs($admin)
             ->test(EmailSettingsPage::class)

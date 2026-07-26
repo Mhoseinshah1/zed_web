@@ -2,6 +2,12 @@
 
     @php($page = $this)
 
+    @unless($page->stepUpUnlocked)
+        @include('filament.pages.partials.step-up-lock')
+    @else
+
+    @include('filament.pages.partials.step-up-status')
+
     <div class="rounded-xl border border-gray-200 bg-white p-4 text-sm dark:border-gray-700 dark:bg-gray-900">
         <div class="grid grid-cols-1 gap-2 sm:grid-cols-3">
             <div>
@@ -66,5 +72,7 @@
     </form>
 
     <x-filament-actions::modals />
+
+    @endunless
 
 </x-filament-panels::page>
