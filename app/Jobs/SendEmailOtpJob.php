@@ -326,7 +326,17 @@ class SendEmailOtpJob implements ShouldBeEncrypted, ShouldQueue
                     return;
                 }
 
-                if ($lock->isOwnedByCurrentProcess()) {
+                // A cache outage DURING the ownership check (Redis died after
+                // the transport accepted) must not roll back finalization and
+                // leave `sending` for a duplicate re-send — an unverifiable
+                // lock is LOST ownership, honestly terminal as accepted_pending.
+                try {
+                    $lockStillOwned = $lock->isOwnedByCurrentProcess();
+                } catch (Throwable) {
+                    $lockStillOwned = false;
+                }
+
+                if ($lockStillOwned) {
                     $record->forceFill([
                         'send_status' => EmailVerificationCode::SEND_STATUS_SENT,
                         'send_error' => null,

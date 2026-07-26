@@ -1174,6 +1174,29 @@ class EmailVerificationHardeningTest extends TestCase
         $this->actingAs($user)->get('/dashboard')->assertRedirect(route('verification.notice'));
     }
 
+    public function test_recipient_rejections_never_fabricate_a_global_outage(): void
+    {
+        $svc = app(EmailVerificationService::class);
+        $user = $this->unverifiedUser();
+
+        // Deliberately rejectable addresses: the transport is FINE — only
+        // these recipients bounced. Any number of them must not flip
+        // required verification off for everyone.
+        foreach (range(1, 5) as $i) {
+            EmailVerificationCode::create([
+                'user_id' => $user->id, 'email' => $user->email,
+                'code_hash' => Hash::make('123456'), 'attempts' => 0,
+                'expires_at' => now()->addMinutes(10), 'used_at' => now(),
+                'send_status' => EmailVerificationCode::SEND_STATUS_FAILED,
+                'send_error' => 'delivery failed: recipient_rejected (TransportException)',
+            ]);
+        }
+
+        $this->assertTrue($svc->transportLooksLive(), 'recipient bounces are not outage evidence');
+        $this->assertTrue($svc->isEnforceableNow());
+        $this->assertTrue($svc->isRequiredOnRegister());
+    }
+
     // ── Honest lifetimes & synchronous delivery failures ─────────────────────
 
     public function test_notice_page_advertises_the_remaining_lifetime_of_the_active_code(): void

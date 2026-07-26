@@ -7,6 +7,7 @@ use App\Models\EmailVerificationCode;
 use App\Models\SiteSetting;
 use App\Models\User;
 use App\Services\Email\EmailVerificationService;
+use Illuminate\Contracts\Cache\Lock;
 use Illuminate\Contracts\Queue\Job;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Queue\Jobs\SyncJob;
@@ -113,6 +114,29 @@ class EmailDeliveryClaimTest extends TestCase
         }
         Mail::assertNothingSent();
         $this->assertSame(EmailVerificationCode::SEND_STATUS_QUEUED, $record->fresh()->send_status, 'unclaimed — failed() will close it out as dispatch_failed');
+    }
+
+    public function test_cache_outage_during_ownership_check_finalizes_as_accepted_pending(): void
+    {
+        Mail::fake();
+        $user = $this->user();
+        $record = $this->queuedRecord($user);
+
+        // Redis dies AFTER the transport accepted, DURING the final ownership
+        // check: an unverifiable lock is LOST ownership — the record must
+        // close out as accepted_pending (terminal), never roll back to
+        // `sending` where a retry would duplicate the accepted message.
+        $lock = Mockery::mock(Lock::class)->shouldIgnoreMissing();
+        $lock->shouldReceive('block')->andReturn(true);
+        $lock->shouldReceive('isOwnedByCurrentProcess')->andThrow(new \RuntimeException('redis connection refused'));
+        $lock->shouldReceive('release')->andThrow(new \RuntimeException('redis connection refused'));
+        Cache::shouldReceive('lock')->andReturn($lock);
+
+        $this->job($record, $user)->handle();
+
+        $fresh = $record->fresh();
+        $this->assertSame(EmailVerificationCode::SEND_STATUS_ACCEPTED_PENDING, $fresh->send_status);
+        $this->assertNull($fresh->delivery_claim_token, 'terminal — never re-claimable into a re-send');
     }
 
     public function test_claim_token_changes_on_retry(): void

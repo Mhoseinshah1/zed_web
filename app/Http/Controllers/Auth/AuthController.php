@@ -165,13 +165,14 @@ class AuthController extends Controller
 
         // ONE effective-policy decision for this whole registration: the
         // EFFECTIVE requirement (enabled + raw toggle + usable mail + valid
-        // transport-test proof) is resolved exactly once, persisted on the
-        // user inside the registration transaction as an immutable marker,
-        // and reused unchanged for every post-commit flow decision — no
-        // drift between insert and redirect, and no later recalculation.
+        // transport-test proof + live transport health) is resolved exactly
+        // once INSIDE the registration transaction — under a shared lock on
+        // the policy rows, so a concurrent admin policy save serializes with
+        // the marker write — persisted on the user as an immutable marker,
+        // and reused unchanged for every post-commit flow decision.
         $emailVerification = app(EmailVerificationService::class);
         $phoneRequired = app(PhoneVerificationService::class)->isRequiredOnRegister();
-        $emailRequiredForThisRegistration = $emailVerification->isRequiredOnRegister();
+        $emailRequiredForThisRegistration = false;
 
         // ONE transaction for the whole registration write set: the user row
         // and its referral attachment commit together or not at all — no
@@ -179,7 +180,9 @@ class AuthController extends Controller
         // OTP dispatch, login) run strictly AFTER the commit, so a rollback
         // produces no notification and no queued email.
         try {
-            $user = DB::transaction(function () use ($validated, $normalized, $referralCode, $emailRequiredForThisRegistration) {
+            $user = DB::transaction(function () use ($validated, $normalized, $referralCode, $emailVerification, &$emailRequiredForThisRegistration) {
+                $emailRequiredForThisRegistration = $emailVerification->captureRequiredPolicyForRegistration();
+
                 $user = User::create([
                     'name' => $validated['name'],
                     'username' => $validated['username'],

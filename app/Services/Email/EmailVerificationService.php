@@ -116,6 +116,30 @@ class EmailVerificationService
      * mode. The fail-safes still guarantee nobody is ever locked behind an
      * unproven mailer.
      */
+    /**
+     * The effective policy for a registration being INSERTED right now. MUST
+     * be called inside the registration transaction: the enabled/required
+     * pair is read under a SHARED row lock, so a concurrent admin policy
+     * save (its UPDATE blocks until this transaction ends) serializes with
+     * the immutable marker write — the stamped value always reflects a fully
+     * committed policy, never one that flips between this read and the user
+     * insert. The mail fail-safes (configuration, proof, live health) join
+     * the decision exactly as in isRequiredOnRegister().
+     */
+    public function captureRequiredPolicyForRegistration(): bool
+    {
+        $flags = SiteSetting::query()
+            ->whereIn('key', ['email_verification_enabled', 'email_verification_required_on_register'])
+            ->sharedLock()
+            ->pluck('value', 'key');
+
+        return $this->settingIsTrue($flags->get('email_verification_enabled'))
+            && $this->settingIsTrue($flags->get('email_verification_required_on_register'))
+            && $this->isMailConfigured()
+            && $this->hasVerifiedMailTest()
+            && $this->transportLooksLive();
+    }
+
     public function isEnforceableNow(): bool
     {
         return $this->isEnabled()
@@ -140,11 +164,25 @@ class EmailVerificationService
     {
         $recentOutcomes = EmailVerificationCode::query()
             ->where('created_at', '>=', now()->subMinutes(self::OUTAGE_WINDOW_MINUTES))
-            ->whereIn('send_status', [
-                EmailVerificationCode::SEND_STATUS_FAILED,
-                EmailVerificationCode::SEND_STATUS_SENT,
-                EmailVerificationCode::SEND_STATUS_ACCEPTED_PENDING,
-            ])
+            ->where(function ($q) {
+                $q->whereIn('send_status', [
+                    EmailVerificationCode::SEND_STATUS_SENT,
+                    EmailVerificationCode::SEND_STATUS_ACCEPTED_PENDING,
+                ])
+                    // Only ENDPOINT/configuration failures count as outage
+                    // evidence. Recipient-scoped rejections (sanitized
+                    // category `recipient_rejected`) are excluded entirely —
+                    // otherwise three deliberately rejectable addresses could
+                    // fabricate a "site-wide outage" and switch required
+                    // verification off for everyone.
+                    ->orWhere(function ($q2) {
+                        $q2->where('send_status', EmailVerificationCode::SEND_STATUS_FAILED)
+                            ->where(function ($q3) {
+                                $q3->whereNull('send_error')
+                                    ->orWhere('send_error', 'not like', '%recipient_rejected%');
+                            });
+                    });
+            })
             ->latest('id')
             ->limit(self::OUTAGE_MIN_FAILURES)
             ->pluck('send_status');
