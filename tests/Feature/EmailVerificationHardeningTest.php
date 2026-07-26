@@ -1432,6 +1432,57 @@ class EmailVerificationHardeningTest extends TestCase
         $this->travelBack();
     }
 
+    public function test_a_resend_does_not_launder_stalled_worker_evidence(): void
+    {
+        $svc = app(EmailVerificationService::class);
+        $user = $this->unverifiedUser();
+        $this->assertTrue($svc->isEnforceableNow(), 'healthy baseline');
+
+        // Workers dead: the aged queued row trips the probe, which also
+        // persists the detection marker.
+        $stuck = EmailVerificationCode::create([
+            'user_id' => $user->id, 'email' => $user->email,
+            'code_hash' => Hash::make('123456'), 'attempts' => 0,
+            'expires_at' => now()->addMinutes(10),
+            'send_status' => EmailVerificationCode::SEND_STATUS_QUEUED,
+        ]);
+        EmailVerificationCode::whereKey($stuck->id)->update([
+            'created_at' => now()->subMinutes(EmailVerificationService::STALLED_QUEUE_MINUTES + 1),
+        ]);
+        $this->assertFalse($svc->transportLooksLive(), 'a stalled queued backlog is pipeline downtime');
+        $this->assertNotSame('', SiteSetting::get(EmailVerificationService::STALL_MARKER_KEY, ''), 'the detection is persisted');
+
+        // The user RESENDS: invalidateCodes() retires the aged row as a
+        // web-stamped skip and publishes a replacement too fresh to trip
+        // the probe. Without the marker the pipeline would look healthy for
+        // another stall threshold — re-enforcing verification and stamping
+        // registrations against a still-dead worker.
+        EmailVerificationCode::whereKey($stuck->id)->update([
+            'send_status' => EmailVerificationCode::SEND_STATUS_SKIPPED,
+            'used_at' => now(),
+            'delivery_finalized_at' => now(),
+        ]);
+        $fresh = EmailVerificationCode::create([
+            'user_id' => $user->id, 'email' => $user->email,
+            'code_hash' => Hash::make('654321'), 'attempts' => 0,
+            'expires_at' => now()->addMinutes(10),
+            'send_status' => EmailVerificationCode::SEND_STATUS_QUEUED,
+        ]);
+        $this->assertFalse($svc->transportLooksLive(), 'the persisted marker holds the outage across the resend');
+        $this->assertFalse($svc->isEnforceableNow());
+
+        // A worker consuming the replacement is the recovery proof: it
+        // clears both the outage and the marker.
+        EmailVerificationCode::whereKey($fresh->id)->update([
+            'send_status' => EmailVerificationCode::SEND_STATUS_SENT,
+            'delivery_finalized_at' => now(),
+            'delivery_config_fingerprint' => $svc->mailConfigFingerprint(),
+        ]);
+        $this->assertTrue($svc->transportLooksLive(), 'a worker consuming the replacement clears the marker');
+        $this->assertSame('', SiteSetting::get(EmailVerificationService::STALL_MARKER_KEY, ''));
+        $this->assertTrue($svc->isEnforceableNow());
+    }
+
     public function test_an_abandoned_sending_claim_pauses_enforcement_until_a_worker_resumes(): void
     {
         $svc = app(EmailVerificationService::class);

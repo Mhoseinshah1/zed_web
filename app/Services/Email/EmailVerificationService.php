@@ -81,6 +81,16 @@ class EmailVerificationService
      */
     public const ABANDONED_SENDING_MINUTES = 8;
 
+    /**
+     * Persisted first-detection timestamp of a stalled/abandoned pipeline.
+     * The row-level evidence is mutable — a resend retires the aged queued
+     * row (skipped) and replaces it with one too fresh to trip the probes —
+     * so the detection itself is stored and holds the outage open until a
+     * worker-stamped finalization NEWER than it proves recovery. Cleared
+     * (set to '') on that proof; never displayed or admin-editable.
+     */
+    public const STALL_MARKER_KEY = 'email_pipeline_stalled_since';
+
     /** Shown when the bounded per-user lock could not be acquired in time. */
     public const BUSY_MESSAGE = 'سیستم موقتاً مشغول است. لطفاً چند لحظه بعد دوباره تلاش کنید.';
 
@@ -255,8 +265,7 @@ class EmailVerificationService
         // WORKER-stamped terminal outcome (sent / accepted_pending / failed;
         // never web-stamped skipped or dispatch_failed) finalized after the
         // stall, or the stalled row itself leaving `queued` when a recovered
-        // worker claims it. The user's next resend also retires the old row
-        // (invalidateCodes → skipped) and re-arms a fresh probe.
+        // worker claims it.
         $stalledQueuedSince = EmailVerificationCode::query()
             ->where('send_status', EmailVerificationCode::SEND_STATUS_QUEUED)
             ->whereNull('used_at')
@@ -278,11 +287,31 @@ class EmailVerificationService
             ->where('delivery_claimed_at', '<=', now()->subMinutes(self::ABANDONED_SENDING_MINUTES))
             ->max('delivery_claimed_at');
 
-        $stalledQueuedSince = collect([$stalledQueuedSince, $abandonedSendingSince])
+        // A RESEND must not launder the evidence: invalidateCodes() retires
+        // the aged queued row (→ web-stamped skipped) and its replacement is
+        // too fresh to trip either probe for another stall threshold — a
+        // window in which enforcement would resume and registrations would
+        // be stamped against a still-dead worker. The first detection is
+        // therefore PERSISTED as a marker (the evidence timestamp) and holds
+        // the outage across resends and row transitions until a worker
+        // proves recovery; a corrupt marker value is ignored (fail-open).
+        $marker = SiteSetting::get(self::STALL_MARKER_KEY, '');
+        $markerAt = null;
+        if (is_string($marker) && $marker !== '') {
+            try {
+                $markerAt = Carbon::parse($marker);
+            } catch (Throwable) {
+                $markerAt = null;
+            }
+        }
+
+        $stalledSince = collect([$stalledQueuedSince, $abandonedSendingSince])
+            ->filter()
+            ->map(fn ($timestamp) => Carbon::parse($timestamp))
+            ->push($markerAt)
             ->filter()
             ->max();
-        if ($stalledQueuedSince !== null) {
-            $stalledQueuedSince = Carbon::parse($stalledQueuedSince);
+        if ($stalledSince !== null) {
             $workerConsumedAfterStall = EmailVerificationCode::query()
                 ->whereIn('send_status', [
                     EmailVerificationCode::SEND_STATUS_SENT,
@@ -292,10 +321,18 @@ class EmailVerificationService
                 // Queue-consumption proof, so no fingerprint or error-category
                 // scoping: even a recipient-bounced `failed` row proves the
                 // worker pulled a job off the queue after the stall began.
-                ->where('delivery_finalized_at', '>', $stalledQueuedSince)
+                ->where('delivery_finalized_at', '>', $stalledSince)
                 ->exists();
             if (! $workerConsumedAfterStall) {
+                $persisted = $stalledSince->format('Y-m-d H:i:s');
+                if ($marker !== $persisted) {
+                    SiteSetting::set(self::STALL_MARKER_KEY, $persisted);
+                }
+
                 return false;
+            }
+            if ($marker !== '') {
+                SiteSetting::set(self::STALL_MARKER_KEY, '');
             }
         }
 
