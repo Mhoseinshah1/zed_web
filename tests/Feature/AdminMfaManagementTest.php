@@ -133,6 +133,138 @@ class AdminMfaManagementTest extends TestCase
         $this->assertSame($oldVersion, $this->totp()->credentialFor($admin)->version());
     }
 
+    public function test_forged_replacing_property_cannot_confirm_a_replacement(): void
+    {
+        // Authorization is the server-side replacement record, never Livewire
+        // component state: flipping $replacing client-side (no reauth ever
+        // happened) must confirm nothing, promote nothing, and re-stamp no
+        // marker.
+        $admin = $this->admin();
+        $this->grantCommunicationsStepUp($admin);
+        $this->be($admin);
+        $oldVersion = $this->totp()->credentialFor($admin)->version();
+        $markerBefore = session(AdminMfaSession::MARKER_KEY);
+
+        Livewire::actingAs($admin)->test(AdminSecurityPage::class)
+            ->set('replacing', true)
+            ->set('replacement_code', $this->currentAdminTotpCode($admin))
+            ->call('confirmReplacement')
+            ->assertSet('replacing', false)
+            ->assertSet('replacementQr', null)
+            ->assertSet('replacementKey', null)
+            ->assertSet('freshRecoveryCodes', null);
+
+        $this->assertSame($oldVersion, $this->totp()->credentialFor($admin)->version());
+        $this->assertEquals($markerBefore, session(AdminMfaSession::MARKER_KEY), 'marker untouched');
+    }
+
+    public function test_cancel_replacement_clears_record_pending_secret_and_component_state(): void
+    {
+        $admin = $this->admin();
+        $this->grantCommunicationsStepUp($admin);
+        $this->be($admin);
+        $oldVersion = $this->totp()->credentialFor($admin)->version();
+
+        $component = Livewire::actingAs($admin)->test(AdminSecurityPage::class)
+            ->callAction('startReplacement', [
+                'current_password' => 'secret123',
+                'totp_code' => $this->currentAdminTotpCode($admin),
+            ])
+            ->assertSet('replacing', true);
+
+        $this->assertNotNull(session(AdminMfaSession::REPLACEMENT_KEY));
+        $pending = $this->totp()->credentialFor($admin)->pending_secret;
+        $this->assertNotNull($pending);
+
+        $component->call('cancelReplacement')
+            ->assertSet('replacing', false)
+            ->assertSet('replacementQr', null)
+            ->assertSet('replacementKey', null)
+            ->assertSet('replacement_code', null);
+
+        // Server record AND database pending state are gone.
+        $this->assertNull(session(AdminMfaSession::REPLACEMENT_KEY));
+        $cred = $this->totp()->credentialFor($admin);
+        $this->assertNull($cred->pending_secret);
+        $this->assertNull($cred->pending_secret_generated_at);
+
+        // The cancelled flow cannot be completed with the old provisioned code.
+        $component->set('replacement_code', app(Google2FA::class)->getCurrentOtp($pending))
+            ->call('confirmReplacement')
+            ->assertSet('replacing', false);
+        $this->assertSame($oldVersion, $this->totp()->credentialFor($admin)->version());
+    }
+
+    public function test_expired_replacement_record_is_rejected_and_torn_down(): void
+    {
+        $admin = $this->admin();
+        $this->grantCommunicationsStepUp($admin);
+        $this->be($admin);
+        $oldVersion = $this->totp()->credentialFor($admin)->version();
+
+        $component = Livewire::actingAs($admin)->test(AdminSecurityPage::class)
+            ->callAction('startReplacement', [
+                'current_password' => 'secret123',
+                'totp_code' => $this->currentAdminTotpCode($admin),
+            ]);
+
+        $pending = $this->totp()->credentialFor($admin)->pending_secret;
+        $this->travel(AdminMfaSession::REPLACEMENT_TTL_MINUTES + 1)->minutes();
+
+        // The pending secret itself would still confirm (30-minute TTL) — the
+        // RECORD's shorter expiry is what must gate the confirmation.
+        $component->set('replacement_code', app(Google2FA::class)->getCurrentOtp($pending))
+            ->call('confirmReplacement')
+            ->assertSet('replacing', false);
+
+        $this->assertSame($oldVersion, $this->totp()->credentialFor($admin)->version());
+        $this->assertNull(session(AdminMfaSession::REPLACEMENT_KEY));
+        $this->assertNull($this->totp()->credentialFor($admin)->pending_secret);
+    }
+
+    public function test_replacement_record_bound_to_another_session_or_user_is_rejected(): void
+    {
+        $admin = $this->admin();
+        $this->grantCommunicationsStepUp($admin);
+        $this->be($admin);
+        $oldVersion = $this->totp()->credentialFor($admin)->version();
+
+        // Session mismatch.
+        $component = Livewire::actingAs($admin)->test(AdminSecurityPage::class)
+            ->callAction('startReplacement', [
+                'current_password' => 'secret123',
+                'totp_code' => $this->currentAdminTotpCode($admin),
+            ]);
+        $record = session(AdminMfaSession::REPLACEMENT_KEY);
+        $record['session_id'] = 'some-other-session-id';
+        session()->put(AdminMfaSession::REPLACEMENT_KEY, $record);
+
+        $pending = $this->totp()->credentialFor($admin)->pending_secret;
+        $component->set('replacement_code', app(Google2FA::class)->getCurrentOtp($pending))
+            ->call('confirmReplacement')
+            ->assertSet('replacing', false);
+        $this->assertSame($oldVersion, $this->totp()->credentialFor($admin)->version());
+        $this->assertNull(session(AdminMfaSession::REPLACEMENT_KEY), 'mismatched record cleared');
+
+        // User mismatch: a record minted for a different admin.
+        $other = $this->admin();
+        $this->grantCommunicationsStepUp($admin); // re-prime marker after teardown
+        $component = Livewire::actingAs($admin)->test(AdminSecurityPage::class)
+            ->callAction('startReplacement', [
+                'current_password' => 'secret123',
+                'totp_code' => $this->currentAdminTotpCode($admin),
+            ]);
+        $record = session(AdminMfaSession::REPLACEMENT_KEY);
+        $record['user_id'] = $other->id;
+        session()->put(AdminMfaSession::REPLACEMENT_KEY, $record);
+
+        $pending = $this->totp()->credentialFor($admin)->pending_secret;
+        $component->set('replacement_code', app(Google2FA::class)->getCurrentOtp($pending))
+            ->call('confirmReplacement')
+            ->assertSet('replacing', false);
+        $this->assertSame($oldVersion, $this->totp()->credentialFor($admin)->version());
+    }
+
     // ── Emergency CLI reset ──────────────────────────────────────────────────
 
     public function test_cli_reset_clears_the_factor_and_forces_re_enrollment(): void

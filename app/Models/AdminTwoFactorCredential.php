@@ -65,4 +65,16 @@ class AdminTwoFactorCredential extends Model
 
         return $raw === '' ? '' : hash('sha256', $raw);
     }
+
+    /**
+     * Non-secret digest of the PENDING secret's ciphertext — binds a
+     * replacement/enrollment hand-off to one specific provisioned secret
+     * without ever copying secret material into the session.
+     */
+    public function pendingVersion(): string
+    {
+        $raw = (string) $this->getRawOriginal('pending_secret');
+
+        return $raw === '' ? '' : hash('sha256', $raw);
+    }
 }

@@ -252,6 +252,29 @@ class AdminTotpService
         return $step === false ? null : (int) $step;
     }
 
+    /**
+     * Abandon an unconfirmed pending secret (replacement cancelled or its
+     * server-side record invalidated). The confirmed factor is untouched.
+     */
+    public function abandonPendingSecret(User $user): void
+    {
+        DB::transaction(function () use ($user): void {
+            $cred = AdminTwoFactorCredential::query()
+                ->where('user_id', $user->id)
+                ->lockForUpdate()
+                ->first();
+
+            if ($cred === null) {
+                return;
+            }
+
+            $cred->forceFill([
+                'pending_secret' => null,
+                'pending_secret_generated_at' => null,
+            ])->save();
+        });
+    }
+
     // ── Recovery codes ───────────────────────────────────────────────────────
 
     /**

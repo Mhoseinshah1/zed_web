@@ -200,13 +200,25 @@ class AdminSecurityPage extends Page implements HasActions, HasForms
                     return;
                 }
 
-                $enrollment = $this->totp()->startEnrollment($this->user());
+                $user = $this->user();
+                $enrollment = $this->totp()->startEnrollment($user);
+
+                // The server-side replacement record is the ONLY authorization
+                // confirmReplacement() accepts — created here, immediately
+                // after password + live-code verification, bound to this
+                // session and this exact pending secret. $replacing below is
+                // pure presentation state.
+                $cred = $this->totp()->credentialFor($user);
+                if ($cred === null) {
+                    return; // unreachable after reauthenticate(); fail closed
+                }
+                AdminMfaSession::startReplacement($user, $cred);
 
                 $this->replacing = true;
                 $this->replacementQr = (string) QrCode::size(200)->generate($enrollment['otpauth']);
                 $this->replacementKey = $enrollment['secret'];
 
-                AdminSecurityAudit::record('totp_replacement_started', $this->user(), 'success');
+                AdminSecurityAudit::record('totp_replacement_started', $user, 'success');
             });
     }
 
@@ -216,21 +228,33 @@ class AdminSecurityPage extends Page implements HasActions, HasForms
         $code = (string) $this->replacement_code;
         $this->replacement_code = null;
 
-        if (! $this->replacing) {
+        // Authorization = the server-side record, never Livewire state: a
+        // client-forged $replacing changes nothing. An invalid/expired/
+        // mismatched record tears the whole flow down, pending secret
+        // included.
+        if (! AdminMfaSession::replacementValid($user)) {
+            $this->teardownReplacement();
+            AdminSecurityAudit::record('totp_replacement_denied', $user, 'failure');
+            Notification::make()->title('جلسه جایگزینی معتبر نیست یا منقضی شده است. دوباره شروع کنید.')->danger()->send();
+
             return;
         }
 
         $result = $this->totp()->confirmEnrollment($user, $code);
         if ($result === null) {
+            // Wrong code on the new device: retry stays possible while the
+            // record is valid.
             Notification::make()->title('کد وارد شده معتبر نیست. کد را از دستگاه جدید وارد کنید.')->danger()->send();
 
             return;
         }
 
-        // New factor is live: the confirmed_at re-stamp already invalidated
+        // New factor is live — consume the record (one replacement per
+        // reauthentication). The confirmed_at re-stamp already invalidated
         // every OTHER session's marker and every step-up grant bound to the
         // old factor. Re-stamp THIS session's marker against the new version
         // and drop any local grant explicitly.
+        AdminMfaSession::clearReplacement();
         AdminStepUpService::clearGrant();
         $cred = $this->totp()->credentialFor($user);
         AdminMfaSession::markVerified($user, (int) $cred?->last_verified_timestep, 'totp');
@@ -246,6 +270,19 @@ class AdminSecurityPage extends Page implements HasActions, HasForms
 
     public function cancelReplacement(): void
     {
+        $this->teardownReplacement();
+    }
+
+    /**
+     * Abort a replacement everywhere it lives: the server-side record, the
+     * database pending secret + timestamp, and the QR/manual-key/code
+     * component state.
+     */
+    private function teardownReplacement(): void
+    {
+        AdminMfaSession::clearReplacement();
+        $this->totp()->abandonPendingSecret($this->user());
+
         $this->replacing = false;
         $this->replacementQr = null;
         $this->replacementKey = null;

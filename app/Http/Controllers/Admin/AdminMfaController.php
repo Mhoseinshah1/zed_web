@@ -157,12 +157,16 @@ class AdminMfaController extends Controller
 
         AdminSecurityAudit::record('mfa_enrollment_completed', $user, 'success');
 
-        // The confirmation code's time-step was consumed — carry it (a plain
-        // integer, no secret) to the acknowledge hand-off so login completes
-        // without a second prompt. Recovery codes are rendered DIRECTLY in
-        // this response, exactly once — never flashed into the session.
+        // The ONLY place an enrollment-completion record is created: a live
+        // code just proved possession and promoted the pending secret. The
+        // record (no secrets — ids, version, consumed step, expiry) is what
+        // authorizes the acknowledge hand-off. Recovery codes are rendered
+        // DIRECTLY in this response, exactly once — never flashed into the
+        // session.
         $cred = $this->totp->credentialFor($user);
-        AdminMfaSession::putPendingConfirmedStep((int) $cred?->last_verified_timestep);
+        if ($cred !== null) {
+            AdminMfaSession::putEnrollmentCompletion($user, $cred);
+        }
 
         return $this->noStore(response()->view('admin.mfa.recovery-codes', [
             'codes' => $result['codes'],
@@ -176,8 +180,15 @@ class AdminMfaController extends Controller
             return redirect('/zed-admin/login');
         }
 
-        $step = AdminMfaSession::pendingConfirmedStep();
-        if (! $this->totp->hasConfirmedCredential($user) || ($step === null && ! Auth::check())) {
+        // Only a one-time completion record minted by a successful
+        // confirmEnrollment() in THIS session, for THIS user, against the
+        // CURRENT credential version, and still inside its window may finish
+        // the login here. Being authenticated is NOT sufficient: an admin
+        // whose factor was already confirmed earlier takes the normal code
+        // challenge instead. The record is consumed on this attempt either
+        // way — it can never authorize twice.
+        $step = AdminMfaSession::consumeEnrollmentCompletion($user);
+        if ($step === null || ! $this->totp->hasConfirmedCredential($user)) {
             return redirect()->route('zed-admin.mfa.challenge');
         }
 

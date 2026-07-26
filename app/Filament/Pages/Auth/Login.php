@@ -17,6 +17,15 @@ use Illuminate\Validation\ValidationException;
 class Login extends \Filament\Pages\Auth\Login
 {
     /**
+     * Precomputed VALID bcrypt hash (cost 12, random preimage discarded at
+     * generation time) used to burn one real password verification when the
+     * username doesn't exist. Precomputed so the unknown-username path never
+     * pays bcrypt() twice (hash + check) while the known-username path pays
+     * it once — per-request hash generation was itself a timing signal.
+     */
+    private const TIMING_EQUALIZER_HASH = '$2y$12$9V/AYo80GSp8O.kYzSY6kOlzjOA3wQu.E1MkyYb9ojpgV2RKnTkb2';
+
+    /**
      * PHASE ONE of the mandatory two-phase admin login. A valid username +
      * password NEVER creates an authenticated session here — it only proves
      * the password, regenerates the session id (fixation), stores the
@@ -49,7 +58,7 @@ class Login extends \Filament\Pages\Auth\Login
         // burn one hash verification so response timing can't enumerate
         // accounts.
         if ($user === null) {
-            Hash::check((string) $credentials['password'], (string) bcrypt('zp-timing-equalizer'));
+            Hash::check((string) $credentials['password'], self::TIMING_EQUALIZER_HASH);
 
             $this->throwFailureValidationException();
         }

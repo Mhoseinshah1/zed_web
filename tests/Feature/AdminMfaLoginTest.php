@@ -127,9 +127,143 @@ class AdminMfaLoginTest extends TestCase
         // Still not authenticated until explicit acknowledgement.
         $this->assertGuest();
 
-        $this->post(route('zed-admin.mfa.enroll.acknowledge'))->assertRedirect('/zed-admin');
+        $this->withCurrentSessionId()
+            ->post(route('zed-admin.mfa.enroll.acknowledge'))->assertRedirect('/zed-admin');
         $this->assertAuthenticatedAs($admin);
         $this->assertTrue(AdminMfaSession::markerValid($admin->fresh()));
+    }
+
+    public function test_authenticated_admin_without_factor_can_enroll_and_acknowledge(): void
+    {
+        // Legitimate case: an admin already authenticated (e.g. via the
+        // customer form) who genuinely has no confirmed authenticator yet.
+        $admin = $this->admin();
+
+        $this->actingAsWithoutAdminMfa($admin)->get(route('zed-admin.mfa.enroll'))->assertOk();
+
+        $pending = $this->totp()->credentialFor($admin)->pending_secret;
+        $this->post(route('zed-admin.mfa.enroll.confirm'), [
+            'code' => $this->engine()->getCurrentOtp($pending),
+        ])->assertOk();
+
+        $this->withCurrentSessionId()
+            ->post(route('zed-admin.mfa.enroll.acknowledge'))->assertRedirect('/zed-admin');
+        $this->assertTrue(AdminMfaSession::markerValid($admin->fresh()));
+        $this->get('/zed-admin')->assertOk();
+    }
+
+    public function test_acknowledge_without_completion_record_is_rejected_even_when_authenticated(): void
+    {
+        // An authenticated admin who ALREADY has a confirmed factor must take
+        // the normal code challenge — being logged in is not a completion
+        // record, and no marker may be minted here.
+        $admin = $this->admin();
+        $this->provisionConfirmedAdminTotp($admin);
+
+        $this->actingAsWithoutAdminMfa($admin)
+            ->post(route('zed-admin.mfa.enroll.acknowledge'))
+            ->assertRedirect(route('zed-admin.mfa.challenge'));
+
+        $this->assertNull(session(AdminMfaSession::MARKER_KEY), 'no MFA marker without a completion record');
+        $this->get('/zed-admin')->assertRedirect(route('zed-admin.mfa.challenge'));
+    }
+
+    public function test_completion_record_is_consumed_by_one_acknowledgement(): void
+    {
+        $admin = $this->admin();
+        $this->pendingFor($admin)->get(route('zed-admin.mfa.enroll'))->assertOk();
+
+        $pending = $this->totp()->credentialFor($admin)->pending_secret;
+        $this->post(route('zed-admin.mfa.enroll.confirm'), [
+            'code' => $this->engine()->getCurrentOtp($pending),
+        ])->assertOk();
+        $this->assertNotNull(session(AdminMfaSession::ENROLLMENT_COMPLETION_KEY));
+
+        $this->withCurrentSessionId()
+            ->post(route('zed-admin.mfa.enroll.acknowledge'))->assertRedirect('/zed-admin');
+        $this->assertNull(session(AdminMfaSession::ENROLLMENT_COMPLETION_KEY), 'record consumed on success');
+
+        // A second acknowledgement has nothing to consume: challenge instead.
+        $this->post(route('zed-admin.mfa.enroll.acknowledge'))
+            ->assertRedirect(route('zed-admin.mfa.challenge'));
+    }
+
+    public function test_expired_completion_record_is_rejected(): void
+    {
+        $admin = $this->admin();
+        $this->pendingFor($admin)->get(route('zed-admin.mfa.enroll'))->assertOk();
+
+        $pending = $this->totp()->credentialFor($admin)->pending_secret;
+        $this->post(route('zed-admin.mfa.enroll.confirm'), [
+            'code' => $this->engine()->getCurrentOtp($pending),
+        ])->assertOk();
+
+        $this->travel(AdminMfaSession::ENROLLMENT_COMPLETION_TTL_MINUTES + 1)->minutes();
+
+        // Session id carried over: expiry is the ONLY thing rejecting here.
+        $this->withCurrentSessionId()
+            ->post(route('zed-admin.mfa.enroll.acknowledge'))
+            ->assertRedirect(route('zed-admin.mfa.challenge'));
+        $this->assertGuest();
+        $this->assertNull(session(AdminMfaSession::ENROLLMENT_COMPLETION_KEY), 'expired record consumed, not retryable');
+    }
+
+    public function test_completion_record_bound_to_another_session_or_user_is_rejected(): void
+    {
+        $admin = $this->admin();
+        $other = $this->admin();
+        $this->provisionConfirmedAdminTotp($admin);
+        $cred = $this->totp()->credentialFor($admin);
+
+        // Foreign session id.
+        $this->pendingFor($admin)->withSession([
+            AdminMfaSession::ENROLLMENT_COMPLETION_KEY => [
+                'user_id' => $admin->id,
+                'session_id' => 'some-other-session-id',
+                'version' => $cred->version(),
+                'step' => (int) $cred->last_verified_timestep,
+                'expires_at' => now()->addMinutes(5)->getTimestamp(),
+            ],
+        ])->post(route('zed-admin.mfa.enroll.acknowledge'))
+            ->assertRedirect(route('zed-admin.mfa.challenge'));
+        $this->assertGuest();
+
+        // Record minted for a DIFFERENT user than the pending subject.
+        $this->provisionConfirmedAdminTotp($other);
+        $otherCred = $this->totp()->credentialFor($other);
+        $this->pendingFor($admin)->withSession([
+            AdminMfaSession::ENROLLMENT_COMPLETION_KEY => [
+                'user_id' => $other->id,
+                'session_id' => session()->getId(),
+                'version' => $otherCred->version(),
+                'step' => (int) $otherCred->last_verified_timestep,
+                'expires_at' => now()->addMinutes(5)->getTimestamp(),
+            ],
+        ])->post(route('zed-admin.mfa.enroll.acknowledge'))
+            ->assertRedirect(route('zed-admin.mfa.challenge'));
+        $this->assertGuest();
+    }
+
+    public function test_completion_record_with_outdated_credential_version_is_rejected(): void
+    {
+        $admin = $this->admin();
+        $this->pendingFor($admin)->get(route('zed-admin.mfa.enroll'))->assertOk();
+
+        $pending = $this->totp()->credentialFor($admin)->pending_secret;
+        $this->post(route('zed-admin.mfa.enroll.confirm'), [
+            'code' => $this->engine()->getCurrentOtp($pending),
+        ])->assertOk();
+
+        // Factor reset + re-provisioned between confirm and acknowledge: the
+        // record is bound to a version that no longer exists.
+        $this->totp()->resetFor($admin);
+        $this->provisionConfirmedAdminTotp($admin);
+
+        // Session id carried over: the stale version is what rejects here.
+        $this->withCurrentSessionId()
+            ->post(route('zed-admin.mfa.enroll.acknowledge'))
+            ->assertRedirect(route('zed-admin.mfa.challenge'));
+        $this->assertGuest();
     }
 
     public function test_wrong_code_does_not_confirm_enrollment(): void
@@ -174,6 +308,7 @@ class AdminMfaLoginTest extends TestCase
             ->assertSessionHasErrors('code');
 
         $this->assertGuest();
+        $this->assertNull(session(AdminMfaSession::MARKER_KEY), 'no marker without a verified code');
     }
 
     public function test_a_replayed_login_code_fails_on_the_second_login(): void
@@ -346,6 +481,17 @@ class AdminMfaLoginTest extends TestCase
         $this->assertSame($unknownUser, $wrongPassword, 'unknown username and wrong password are indistinguishable');
         $this->assertSame($unknownUser, $nonAdmin, 'admin-ness is not disclosed');
         $this->assertGuest();
+    }
+
+    public function test_timing_equalizer_hash_is_a_precomputed_valid_bcrypt_hash(): void
+    {
+        $hash = (string) (new \ReflectionClassConstant(AdminLogin::class, 'TIMING_EQUALIZER_HASH'))->getValue();
+
+        // Structurally valid bcrypt: password_verify performs a REAL (failing)
+        // verification against it — no per-request bcrypt() generation needed.
+        $this->assertSame('bcrypt', password_get_info($hash)['algoName']);
+        $this->assertFalse(password_verify('any-guess', $hash));
+        $this->assertFalse(password_verify('zp-timing-equalizer', $hash));
     }
 
     public function test_admin_demoted_mid_session_loses_panel_access(): void

@@ -53,6 +53,17 @@ abstract class TestCase extends BaseTestCase
     }
 
     /**
+     * Carry the CURRENT session id into subsequent requests. Production keeps
+     * the id stable via the session cookie; the test harness omits it, so the
+     * id rotates every request — which breaks flows whose server-side records
+     * are legitimately bound to the session id.
+     */
+    public function withCurrentSessionId(): static
+    {
+        return $this->withCookie((string) config('session.cookie'), session()->getId());
+    }
+
+    /**
      * Ensure a CONFIRMED admin TOTP credential exists (enrolled through the
      * real service with a real generated code) and prime the session MFA
      * marker for the next request.
