@@ -374,13 +374,13 @@ class EmailVerificationService
             if (! $workerConsumedAfterStall) {
                 $persisted = $stalledDetectedAt->format('Y-m-d H:i:s');
                 if ($marker !== $persisted) {
-                    SiteSetting::set(self::STALL_MARKER_KEY, $persisted);
+                    $this->persistStallMarker($persisted);
                 }
 
                 return false;
             }
             if ($marker !== '') {
-                SiteSetting::set(self::STALL_MARKER_KEY, '');
+                $this->persistStallMarker('');
             }
         }
 
@@ -436,6 +436,33 @@ class EmailVerificationService
             return true;
         }
 
+        // PUBLICATION failures are judged BEFORE any delivery success: a
+        // job published before the queue broke can finalize `sent` LATE,
+        // landing among the latest outcomes — completion of an old job says
+        // nothing about publishing today, and must not outrank
+        // contemporaneous dispatch_failed rows. Queue recovery requires
+        // evidence of a successful PUBLICATION: any row that reached
+        // `queued` or beyond (everything except dispatch_failed — the
+        // dispatch catch converts failed publications immediately) CREATED
+        // after the newest publication failure. A mail test can never
+        // supply this — it sends synchronously and proves nothing about
+        // the queue.
+        $newestDispatchFailureAt = $recentOutcomes
+            ->filter(fn ($outcome) => $outcome->send_status === EmailVerificationCode::SEND_STATUS_DISPATCH_FAILED)
+            ->max('delivery_finalized_at');
+        if ($newestDispatchFailureAt !== null) {
+            $publishedAfterFailure = EmailVerificationCode::query()
+                ->where('send_status', '!=', EmailVerificationCode::SEND_STATUS_DISPATCH_FAILED)
+                ->where('created_at', '>', $newestDispatchFailureAt)
+                ->exists();
+            if (! $publishedAfterFailure) {
+                return false;
+            }
+            // Publication demonstrably works again — the dispatch failures
+            // are stale, and the transport verdict below stands on its own
+            // evidence.
+        }
+
         $anySuccess = $recentOutcomes->contains(
             fn ($outcome) => ! in_array($outcome->send_status, [
                 EmailVerificationCode::SEND_STATUS_FAILED,
@@ -446,30 +473,39 @@ class EmailVerificationService
             return true;
         }
 
-        // A QUEUE outage among the failures can never be cleared by a mail
-        // test: the admin test sends SYNCHRONOUSLY and proves nothing about
-        // queue publication — only an actual successful queued delivery (or
-        // the window expiring) may clear that category.
-        $anyDispatchFailure = $recentOutcomes->contains(
-            fn ($outcome) => $outcome->send_status === EmailVerificationCode::SEND_STATUS_DISPATCH_FAILED,
-        );
-        if ($anyDispatchFailure) {
-            return false;
-        }
-
         // Pure TRANSPORT failures may belong to an endpoint the operator has
         // since repaired: a successful admin transport test — which exercises
         // EVERY delivery leaf and is fingerprint-bound to the CURRENT
         // configuration — run AFTER the newest failure is positive live
         // evidence (test sends never create OTP outcome rows, so without
         // this the old failures would keep enforcement suspended for the
-        // rest of the window).
+        // rest of the window). Any dispatch failures in the set were proven
+        // stale above (publication has since succeeded), so the test may
+        // clear what remains: pure transport evidence.
         $newestFailureAt = $recentOutcomes->first()->delivery_finalized_at;
         $testAt = $this->mailTestVerifiedAt();
 
         return $testAt !== null
             && $testAt->gt($newestFailureAt)
             && $this->hasVerifiedMailTest();
+    }
+
+    /**
+     * Race-safe stall-marker write for the REQUEST path. Concurrent first
+     * detections all reach this while the row does not exist yet;
+     * SiteSetting::set()'s read-then-insert would let one racer die on the
+     * unique `key` constraint and turn a fail-open health check into a 500
+     * on a dashboard request or registration. An atomic upsert makes the
+     * losing writer update instead — both racers persist the same
+     * detection.
+     */
+    private function persistStallMarker(string $value): void
+    {
+        SiteSetting::query()->upsert(
+            [['key' => self::STALL_MARKER_KEY, 'value' => $value, 'created_at' => now(), 'updated_at' => now()]],
+            ['key'],
+            ['value', 'updated_at'],
+        );
     }
 
     // ── Transport-test proof ─────────────────────────────────────────────────

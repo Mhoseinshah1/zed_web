@@ -1432,6 +1432,89 @@ class EmailVerificationHardeningTest extends TestCase
         $this->travelBack();
     }
 
+    public function test_a_late_delivery_of_an_old_job_does_not_mask_a_publication_outage(): void
+    {
+        $svc = app(EmailVerificationService::class);
+        $user = $this->unverifiedUser();
+        $this->assertTrue($svc->isEnforceableNow(), 'healthy baseline');
+
+        // A job published BEFORE the queue broke finalizes `sent` LATE —
+        // its completion says nothing about publishing today.
+        $old = EmailVerificationCode::create([
+            'user_id' => $user->id, 'email' => $user->email,
+            'code_hash' => Hash::make('123456'), 'attempts' => 0,
+            'expires_at' => now()->addMinutes(10), 'used_at' => now(),
+            'send_status' => EmailVerificationCode::SEND_STATUS_SENT,
+            'delivery_finalized_at' => now(),
+            'delivery_config_fingerprint' => $svc->mailConfigFingerprint(),
+        ]);
+        EmailVerificationCode::whereKey($old->id)->update(['created_at' => now()->subMinutes(20)]);
+
+        // Meanwhile every NEW resend fails to publish.
+        foreach ([2, 1] as $minutesAgo) {
+            $failed = EmailVerificationCode::create([
+                'user_id' => $user->id, 'email' => $user->email,
+                'code_hash' => Hash::make('123456'), 'attempts' => 0,
+                'expires_at' => now()->addMinutes(10), 'used_at' => now(),
+                'send_status' => EmailVerificationCode::SEND_STATUS_DISPATCH_FAILED,
+                'send_error' => 'dispatch failed: queue down',
+                'delivery_finalized_at' => now()->subMinutes($minutesAgo),
+                'delivery_config_fingerprint' => $svc->mailConfigFingerprint(),
+            ]);
+            EmailVerificationCode::whereKey($failed->id)->update(['created_at' => now()->subMinutes($minutesAgo)]);
+        }
+
+        $this->assertFalse(
+            $svc->transportLooksLive(),
+            'an old job finishing late must not outrank contemporaneous publication failures',
+        );
+        $this->assertFalse($svc->isEnforceableNow());
+
+        // A row that actually REACHED the queue after the newest publication
+        // failure proves publishing works again — with the delivery success
+        // in the window, the pipeline is live immediately.
+        EmailVerificationCode::create([
+            'user_id' => $user->id, 'email' => $user->email,
+            'code_hash' => Hash::make('654321'), 'attempts' => 0,
+            'expires_at' => now()->addMinutes(10),
+            'send_status' => EmailVerificationCode::SEND_STATUS_QUEUED,
+        ]);
+        $this->assertTrue($svc->transportLooksLive(), 'a successful publication clears the queue outage');
+        $this->assertTrue($svc->isEnforceableNow());
+    }
+
+    public function test_stall_marker_writes_are_atomic_upserts(): void
+    {
+        $svc = app(EmailVerificationService::class);
+        $user = $this->unverifiedUser();
+
+        // The marker row may already exist (a concurrent first detection or
+        // an earlier cleared outage): both the detection write and the
+        // clear must go through the atomic upsert against the unique key —
+        // never a read-then-insert that can 500 a registration.
+        SiteSetting::set(EmailVerificationService::STALL_MARKER_KEY, '');
+
+        $stuck = EmailVerificationCode::create([
+            'user_id' => $user->id, 'email' => $user->email,
+            'code_hash' => Hash::make('123456'), 'attempts' => 0,
+            'expires_at' => now()->addMinutes(10),
+            'send_status' => EmailVerificationCode::SEND_STATUS_QUEUED,
+        ]);
+        EmailVerificationCode::whereKey($stuck->id)->update([
+            'created_at' => now()->subMinutes(EmailVerificationService::STALLED_QUEUE_MINUTES + 1),
+        ]);
+        $this->assertFalse($svc->transportLooksLive());
+        $this->assertNotSame('', SiteSetting::get(EmailVerificationService::STALL_MARKER_KEY, ''), 'detection upserted over the existing row');
+
+        EmailVerificationCode::whereKey($stuck->id)->update([
+            'send_status' => EmailVerificationCode::SEND_STATUS_SENT,
+            'delivery_finalized_at' => now(),
+            'delivery_config_fingerprint' => $svc->mailConfigFingerprint(),
+        ]);
+        $this->assertTrue($svc->transportLooksLive());
+        $this->assertSame('', SiteSetting::get(EmailVerificationService::STALL_MARKER_KEY, ''), 'clear upserted');
+    }
+
     public function test_lowering_the_attempt_limit_retires_over_limit_codes(): void
     {
         $svc = app(EmailVerificationService::class);
