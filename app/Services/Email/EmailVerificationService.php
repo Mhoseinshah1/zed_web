@@ -746,6 +746,19 @@ class EmailVerificationService
                 $record->increment('attempts');
 
                 if (! Hash::check($code, $record->code_hash)) {
+                    // The LAST permitted guess retires the code immediately:
+                    // an exhausted record must never stay actionable — it
+                    // would advertise a lifetime and hold the resend cooldown
+                    // while every further verify() is doomed (with a long
+                    // cooldown that strands the user for no benefit).
+                    if ($record->attempts >= $this->maxAttempts()) {
+                        EmailVerificationCode::whereKey($record->id)
+                            ->whereNull('used_at')
+                            ->update(['used_at' => now()]);
+
+                        return ['status' => 'too_many_attempts', 'message' => 'تعداد تلاش‌ها بیش از حد مجاز است. یک کد جدید درخواست کنید.'];
+                    }
+
                     return ['status' => 'invalid', 'message' => 'کد تایید اشتباه است.'];
                 }
 

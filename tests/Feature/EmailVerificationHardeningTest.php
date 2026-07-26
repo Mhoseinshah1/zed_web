@@ -1400,6 +1400,30 @@ class EmailVerificationHardeningTest extends TestCase
         $this->assertNull($user->fresh()->email_verified_at, 'no silent DateTimePicker-style assignment survives');
     }
 
+    public function test_last_failed_attempt_retires_the_code_and_frees_the_cooldown(): void
+    {
+        SiteSetting::set('email_otp_max_attempts', 2);
+        SiteSetting::set('email_otp_resend_cooldown_seconds', 3600);
+        $svc = app(EmailVerificationService::class);
+        $user = $this->unverifiedUser();
+        $record = EmailVerificationCode::create([
+            'user_id' => $user->id, 'email' => $user->email,
+            'code_hash' => Hash::make('123456'),
+            'expires_at' => now()->addMinutes(10), 'attempts' => 0,
+            'send_status' => EmailVerificationCode::SEND_STATUS_SENT,
+        ]);
+
+        $this->assertSame('invalid', $svc->verify($user, '000000')['status']);
+        // The LAST permitted wrong guess retires the code on the spot.
+        $this->assertSame('too_many_attempts', $svc->verify($user, '000000')['status']);
+
+        $fresh = $record->fresh();
+        $this->assertNotNull($fresh->used_at, 'exhausted codes are consumed, never left actionable');
+        // Freed: no advertised lifetime, no hour-long cooldown strand.
+        $this->assertNull($svc->activeCodeRemainingMinutes($user->fresh()));
+        $this->assertTrue($svc->canResend($user->fresh()), 'a replacement can be requested immediately');
+    }
+
     public function test_admin_require_verification_actually_enforces_for_unobligated_accounts(): void
     {
         // An account created OUTSIDE required mode (marker false) that the

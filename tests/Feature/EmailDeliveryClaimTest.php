@@ -9,6 +9,7 @@ use App\Models\User;
 use App\Services\Email\EmailVerificationService;
 use Illuminate\Contracts\Queue\Job;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Queue\Jobs\SyncJob;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Mail;
@@ -69,6 +70,49 @@ class EmailDeliveryClaimTest extends TestCase
         $this->assertNull($record->delivery_claimed_at);
         // The raw token never appears in serialized output.
         $this->assertArrayNotHasKey('delivery_claim_token', $record->toArray());
+    }
+
+    public function test_claim_skips_codes_without_a_usable_delivery_margin(): void
+    {
+        Mail::fake();
+        $user = $this->user();
+        $record = $this->queuedRecord($user);
+        // Unexpired — but with less validity left than the delivery margin: a
+        // backlogged job must not email a code that can die during (or right
+        // after) the SMTP exchange while the message calls it valid.
+        EmailVerificationCode::whereKey($record->id)->update(['expires_at' => now()->addSeconds(45)]);
+
+        $this->job($record, $user)->handle();
+
+        Mail::assertNothingSent();
+        $this->assertSame(EmailVerificationCode::SEND_STATUS_SKIPPED, $record->fresh()->send_status);
+    }
+
+    public function test_sync_job_lock_contention_throws_instead_of_silently_releasing(): void
+    {
+        Mail::fake();
+        $user = $this->user();
+        $record = $this->queuedRecord($user);
+
+        // SyncJob executes exactly once — release() is a no-op. Under lock
+        // contention the job must THROW (propagating into requestCode's
+        // dispatch catch → dispatch_failed) instead of returning as if a
+        // delayed retry existed while the record stays `queued` forever.
+        $job = $this->job($record, $user);
+        $job->setJob(new SyncJob(app(), json_encode([]), 'sync', 'sync'));
+
+        $lock = Cache::lock(EmailVerificationService::userLockKey($user->id), 60);
+        $this->assertTrue($lock->get());
+        try {
+            $job->handle();
+            $this->fail('sync lock contention must surface as a failure');
+        } catch (\RuntimeException $e) {
+            $this->assertStringContainsString('lock_contention', $e->getMessage());
+        } finally {
+            $lock->release();
+        }
+        Mail::assertNothingSent();
+        $this->assertSame(EmailVerificationCode::SEND_STATUS_QUEUED, $record->fresh()->send_status, 'unclaimed — failed() will close it out as dispatch_failed');
     }
 
     public function test_claim_token_changes_on_retry(): void

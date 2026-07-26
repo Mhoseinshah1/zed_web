@@ -85,6 +85,16 @@ class SendEmailOtpJob implements ShouldBeEncrypted, ShouldQueue
      */
     private const LOCK_TTL_SECONDS = 270;
 
+    /**
+     * Minimum remaining code validity required to CLAIM a delivery. Below
+     * this, the message would advertise a near-dead (or dead-on-arrival)
+     * code — the claim skips instead and the user simply requests a fresh
+     * one. A slow-but-progressing transport can still consume part of the
+     * remaining window after claim: that residual is unavoidable without
+     * extending the code's validity, which would widen the security window.
+     */
+    private const MIN_DELIVERY_MARGIN_SECONDS = 120;
+
     /** This attempt's delivery claim — in memory only, never serialized/logged. */
     private ?string $claimToken = null;
 
@@ -207,11 +217,15 @@ class SendEmailOtpJob implements ShouldBeEncrypted, ShouldQueue
                 return null;
             }
 
-            // Obsolete when: consumed/invalidated, expired, address changed
-            // (record- or user-side), user gone, user ALREADY verified, or a
-            // newer active code exists (only the newest may be delivered).
+            // Obsolete when: consumed/invalidated, expired or WITHOUT a
+            // usable delivery margin (a backlogged job claiming a code with
+            // seconds left would email something that can expire during the
+            // SMTP exchange while the message calls it valid), address
+            // changed (record- or user-side), user gone, user ALREADY
+            // verified, or a newer active code exists (only the newest may
+            // be delivered).
             $obsolete = $record->used_at !== null
-                || $record->expires_at->isPast()
+                || now()->diffInSeconds($record->expires_at, false) < self::MIN_DELIVERY_MARGIN_SECONDS
                 || strcasecmp($record->email, $this->email) !== 0
                 || $user === null
                 || $user->email_verified_at !== null
@@ -411,7 +425,11 @@ class SendEmailOtpJob implements ShouldBeEncrypted, ShouldQueue
      */
     private function releaseForRetry(int $delaySeconds): void
     {
-        if ($this->job !== null) {
+        // SyncJob executes exactly once: its release() is a no-op, so
+        // "releasing" would let dispatch() report success while the record
+        // stays `queued` forever — treat it exactly like having no queue
+        // context and surface the contention as a failure instead.
+        if ($this->job !== null && ! $this->job instanceof SyncJob) {
             $this->release($delaySeconds);
 
             return;
