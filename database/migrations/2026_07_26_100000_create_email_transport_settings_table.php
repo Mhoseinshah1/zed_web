@@ -25,6 +25,14 @@ return new class extends Migration
         Schema::create('email_transport_settings', function (Blueprint $table) {
             $table->id();
 
+            // DATABASE-ENFORCED singleton: every row carries the same fixed
+            // key under a unique index, so exactly one logical settings row
+            // can ever exist — concurrent first-time saves cannot create two,
+            // regardless of application-level checks. Portable across
+            // PostgreSQL and SQLite (plain unique column, no partial index).
+            $table->string('singleton_key', 16)->default('main');
+            $table->unique('singleton_key');
+
             // Panel override master switch — false = environment fallback.
             $table->boolean('enabled')->default(false);
 

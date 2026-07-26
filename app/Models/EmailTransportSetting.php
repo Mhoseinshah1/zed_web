@@ -27,6 +27,14 @@ use Illuminate\Support\Facades\Schema;
  */
 class EmailTransportSetting extends Model
 {
+    /**
+     * The one fixed identity every row must carry — the `singleton_key`
+     * unique index makes "exactly one logical row" a DATABASE invariant, not
+     * an application convention: concurrent first-time saves race on the
+     * same key and exactly one insert can win.
+     */
+    public const SINGLETON_KEY = 'main';
+
     /** Secrets are deliberately NOT fillable — explicit setters only. */
     protected $fillable = [
         'enabled',
@@ -91,12 +99,25 @@ class EmailTransportSetting extends Model
             return null;
         }
 
-        return static::query()->orderBy('id')->first();
+        return static::query()->where('singleton_key', self::SINGLETON_KEY)->first();
     }
 
     /** The singleton row, creating a disabled empty one when missing. */
     public static function instanceOrNew(): self
     {
         return static::instance() ?? new self(['enabled' => false]);
+    }
+
+    /**
+     * Every insert is forced onto the singleton identity — combined with the
+     * unique index, a second concurrent first-time save cannot create a
+     * second logical row (the losing insert violates the constraint instead
+     * of silently coexisting).
+     */
+    protected static function booted(): void
+    {
+        static::creating(function (self $row): void {
+            $row->singleton_key = self::SINGLETON_KEY;
+        });
     }
 }
