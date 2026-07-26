@@ -1168,8 +1168,37 @@ no OTP job is queued through it. The default `failover` (smtp → log) is
 **not** suitable for production OTP — use `MAIL_MAILER=smtp` for the current
 deployment. A composite that resolves to exactly one leaf is accepted.
 
-1. Edit the server's `.env` (SMTP credentials live ONLY here — never in the
-   database or the admin panel):
+There are TWO configuration sources; `.env` is the **bootstrap/fallback**
+source, not the only one:
+
+**Option A — panel-managed SMTP (recommended, no server access needed).**
+In the admin panel → «تنظیمات ایمیل و تایید ایمیل» (behind the fresh-TOTP
+step-up), fill the SMTP section (host, port, security `smtp`/`smtps`,
+username, password, From identity, timeout, optional EHLO domain) and enable
+«استفاده از تنظیمات SMTP پنل». Username and password are stored
+**APP_KEY-encrypted** in the dedicated `email_transport_settings` table —
+never in plaintext, and never in `.env`. Changes take effect
+**immediately**: web requests re-resolve the effective configuration at
+bootstrap and queue workers re-resolve before every job — **no**
+`optimize:clear`, **no** `config:cache`, **no** worker restart. While the
+override is enabled the `.env` MAIL_* values are ignored (but never
+modified); disabling the override returns to `.env` instantly.
+
+Fail-closed semantics: if the enabled panel configuration becomes unusable —
+structurally invalid, or its encrypted credentials can no longer be
+decrypted (e.g. after an **APP_KEY rotation**) — mail sending stops rather
+than silently falling back to old `.env` credentials, and *required* email
+verification automatically degrades to optional (the standard fail-safe).
+Recovery: open the email settings page (step-up), then either re-enter the
+password (and re-run a successful test email) or disable the override to
+return to the `.env` fallback. Nothing about this flow edits `.env`, runs
+shell commands, or requires a deploy.
+
+**Option B — environment (`.env`) fallback.** Used whenever the panel
+override is disabled (including every fresh install until an admin enables
+it):
+
+1. Edit the server's `.env`:
 
    ```
    MAIL_MAILER=smtp
@@ -1183,7 +1212,8 @@ deployment. A composite that resolves to exactly one leaf is accepted.
    MAIL_TIMEOUT=10
    ```
 
-2. Apply the change (config is cached in production):
+2. Apply the change (config is cached in production; this is only needed for
+   `.env` edits — panel saves apply themselves):
 
    ```
    php artisan optimize:clear
@@ -1191,9 +1221,13 @@ deployment. A composite that resolves to exactly one leaf is accepted.
    sudo supervisorctl restart zedproxy-worker:*   # queue workers pick up the new config
    ```
 
-3. In the admin panel → «تنظیمات ایمیل و تایید ایمیل» use **ارسال ایمیل تست**
-   to confirm real delivery, then enable verification (and, if desired,
-   make it required at registration).
+With either source, in the admin panel → «تنظیمات ایمیل و تایید ایمیل» use
+**ارسال ایمیل تست** to confirm real delivery, then enable verification (and,
+if desired, make it required at registration). The transport-test proof is
+bound to the **effective** configuration — changing any semantic mail
+setting (host, port, security, credentials, From identity, timeout, EHLO
+domain, or which source is active) invalidates it and required mode pauses
+until a new successful test.
 
 Existing users are grandfathered by a one-time migration (their
 `email_verified_at` is backfilled to their `created_at`), so enabling
