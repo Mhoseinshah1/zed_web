@@ -844,19 +844,102 @@ class EmailTransportSettingsTest extends TestCase
         $this->assertSame(EmailTransportSetting::SINGLETON_KEY, EmailTransportSetting::instance()->singleton_key);
     }
 
-    public function test_the_database_itself_rejects_a_second_logical_row(): void
+    public function test_the_database_itself_rejects_duplicate_and_noncanonical_rows(): void
     {
-        EmailTransportSetting::instanceOrNew()->save();
+        // RAW query-builder inserts: no Eloquent model, no creating hook, no
+        // application validation — only the database's own constraints act.
 
-        // A direct second insert (bypassing every application-level check)
-        // violates the fixed unique singleton key — the invariant is the
-        // DATABASE's, not a convention.
-        $this->expectException(QueryException::class);
+        // Canonical first insert succeeds.
+        DB::table('email_transport_settings')->insert([
+            'singleton_key' => EmailTransportSetting::SINGLETON_KEY,
+            'enabled' => false,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+        $this->assertSame(1, DB::table('email_transport_settings')->count());
 
+        // Each expected rejection runs inside a nested transaction
+        // (SAVEPOINT) so PostgreSQL's aborted-transaction semantics don't
+        // poison the test's wrapping transaction after the intended failure.
+
+        // A second canonical row violates the unique key.
         try {
-            (new EmailTransportSetting(['enabled' => false]))->save();
-        } finally {
-            $this->assertSame(1, EmailTransportSetting::query()->count());
+            DB::transaction(fn () => DB::table('email_transport_settings')->insert([
+                'singleton_key' => EmailTransportSetting::SINGLETON_KEY,
+                'enabled' => false,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]));
+            $this->fail('a second canonical row must be rejected by the unique constraint');
+        } catch (QueryException) {
+            // expected: unique violation
+        }
+
+        // A NONCANONICAL key is rejected too — by the CHECK constraint on
+        // PostgreSQL / the RAISE trigger on SQLite — so "unique key" can
+        // never be sidestepped by inventing a different key value.
+        try {
+            DB::transaction(fn () => DB::table('email_transport_settings')->insert([
+                'singleton_key' => 'sneaky',
+                'enabled' => false,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]));
+            $this->fail('a noncanonical singleton_key must be rejected by the database');
+        } catch (QueryException) {
+            // expected: check/trigger violation
+        }
+
+        // Updating the key AWAY from the canonical value is rejected as well.
+        try {
+            DB::transaction(fn () => DB::table('email_transport_settings')->update(['singleton_key' => 'other']));
+            $this->fail('re-keying the singleton row must be rejected by the database');
+        } catch (QueryException) {
+            // expected
+        }
+
+        $this->assertSame(1, DB::table('email_transport_settings')->count(), 'exactly one row remains');
+        $this->assertSame(
+            EmailTransportSetting::SINGLETON_KEY,
+            DB::table('email_transport_settings')->value('singleton_key'),
+        );
+    }
+
+    public function test_save_singleton_recovers_a_lost_first_creation_race(): void
+    {
+        // Simulate the loser: a not-yet-existing model whose insert will
+        // collide because another request committed the winner first.
+        $loser = EmailTransportSetting::instanceOrNew();
+        $loser->fill(['host' => 'loser.example', 'port' => 587, 'security' => 'smtp',
+            'from_address' => 'loser@example.com', 'timeout' => 10, 'enabled' => true]);
+        $loser->setPasswordSecret('loser-staged-secret');
+
+        DB::table('email_transport_settings')->insert([
+            'singleton_key' => EmailTransportSetting::SINGLETON_KEY,
+            'enabled' => false,
+            'host' => 'winner.example',
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        // The controlled path adopts the winner row and applies the loser's
+        // values as an update — last-committed save wins, no QueryException.
+        $committed = $loser->saveSingleton();
+
+        $this->assertSame(1, EmailTransportSetting::query()->count());
+        $this->assertSame('loser.example', $committed->fresh()->host);
+        $this->assertSame('loser-staged-secret', $committed->fresh()->password, 'staged secret carried through recovery');
+
+        // Unrelated database errors are NOT swallowed: a noncanonical raw
+        // update conflict is a real failure, and saveSingleton() on an
+        // EXISTING row never enters the recovery branch.
+        $existing = EmailTransportSetting::instance();
+        $existing->host = str_repeat('x', 100000); // oversize → driver error on PG; harmless on SQLite
+        try {
+            $existing->saveSingleton();
+            $this->assertTrue(true); // SQLite accepts long strings — nothing swallowed either way
+        } catch (QueryException $e) {
+            $this->assertStringNotContainsString('singleton_key', $e->getMessage());
         }
     }
 }

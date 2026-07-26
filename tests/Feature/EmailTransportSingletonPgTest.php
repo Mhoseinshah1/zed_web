@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Models\EmailTransportSetting;
+use App\Services\Email\EmailTransportSettingsService;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
 use Tests\TestCase;
@@ -60,15 +61,24 @@ class EmailTransportSingletonPgTest extends TestCase
 
                 try {
                     // Each child behaves like a fresh admin request performing
-                    // the very first save, with its own candidate host.
+                    // the very first save through the PRODUCTION persistence
+                    // path (the page calls saveSingleton()): race losers must
+                    // recover via the controlled adopt-the-winner update —
+                    // an unhandled unique violation is a FAILURE, not an
+                    // expected outcome.
                     $row = EmailTransportSetting::instanceOrNew();
-                    $row->fill(['host' => "child-{$i}.example"]);
-                    $row->save();
+                    $row->fill([
+                        'enabled' => true,
+                        'host' => "child-{$i}.example",
+                        'port' => 587,
+                        'security' => 'smtp',
+                        'from_address' => "child-{$i}@example.com",
+                        'timeout' => 10,
+                    ]);
+                    $row->saveSingleton();
                     $result = 'saved';
                 } catch (QueryException) {
-                    // The DATABASE refused a second logical row — expected for
-                    // race losers whose read predated the winner's commit.
-                    $result = 'refused';
+                    $result = 'unhandled-conflict';
                 } catch (\Throwable) {
                     $result = 'crash';
                 }
@@ -91,14 +101,27 @@ class EmailTransportSingletonPgTest extends TestCase
         }
         @rmdir($dir);
 
-        $this->assertNotContains('crash', $results, 'no child may crash ('.implode(',', $results).')');
-        $this->assertNotContains('missing', $results, 'every child must report ('.implode(',', $results).')');
-        $this->assertGreaterThanOrEqual(1, count(array_filter($results, fn (string $r) => $r === 'saved')));
+        // EVERY child must terminate in the controlled state: race losers
+        // recover through the adopt-the-winner update — no unhandled unique
+        // violation, no crash, no silent disappearance.
+        $this->assertSame(
+            ['saved', 'saved', 'saved', 'saved'],
+            $results,
+            'all children complete through the controlled path ('.implode(',', $results).')'
+        );
 
         // THE invariant: exactly one logical row, one authoritative config.
         $this->assertSame(1, EmailTransportSetting::query()->count(), 'exactly one singleton row may exist');
         $final = EmailTransportSetting::instance();
         $this->assertSame(EmailTransportSetting::SINGLETON_KEY, $final->singleton_key);
         $this->assertMatchesRegularExpression('/^child-[1-4]\.example$/', (string) $final->host);
+
+        // The committed row is structurally valid, and runtime resolution
+        // matches it — the effective configuration IS the authoritative row.
+        $svc = new EmailTransportSettingsService;
+        $this->assertTrue($svc->rowLooksStructurallyValid($final));
+        $resolved = $svc->resolve();
+        $this->assertSame(EmailTransportSettingsService::SOURCE_PANEL, $resolved['source']);
+        $this->assertSame((string) $final->host, $resolved['config']['host']);
     }
 }
