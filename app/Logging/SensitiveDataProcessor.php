@@ -132,7 +132,7 @@ class SensitiveDataProcessor implements ProcessorInterface
 
         $patterns = [
             // KEY=VALUE style assignments (APP_KEY=, DB_PASSWORD=, TOKEN=, ...).
-            '/([A-Za-z0-9_]*(?:PASSWORD|PASSWD|PASS|SECRET|TOKEN|APP_KEY|API[_-]?KEY|PGPASSWORD))[[:space:]]*=[[:space:]]*[^[:space:]"\'\\\\]+/i' => '$1='.self::REDACTED,
+            '/([A-Za-z0-9_]*(?:PASSWORD|PASSWD|PASS|SECRET|TOKEN|APP_KEY|API[_-]?KEY|PGPASSWORD|USERNAME|USER|LOGIN))[[:space:]]*=[[:space:]]*[^[:space:]"\'\\\\]+/i' => '$1='.self::REDACTED,
             // Authorization: Bearer / Basic <token>.
             '/(Authorization[[:space:]]*:[[:space:]]*)(Bearer|Basic)[[:space:]]+[A-Za-z0-9._~+\/=-]+/i' => '$1$2 '.self::REDACTED,
             // user:pass@host inside URLs.
@@ -145,9 +145,11 @@ class SensitiveDataProcessor implements ProcessorInterface
             // every credential-key variant must be covered here too.
             '/\b(username|user|login|password|passwd|pwd|secret|token|api[_-]?key|api[_-]?token|apikey|client[_-]?secret|access[_-]?token|refresh[_-]?token|app[_-]?key)\b[[:space:]]*[:=]?[[:space:]]*["\'][^"\']*["\']/i' => '$1 '.self::REDACTED,
             // UNQUOTED colon-delimited credentials in prose or headers, e.g.
-            // `password: hunter2`, `api_key: sk-abc123` — exception text from
-            // unknown transports formats secrets this way too.
-            '/\b(password|passwd|pwd|secret|token|api[_-]?key|api[_-]?token|apikey|client[_-]?secret|access[_-]?token|refresh[_-]?token)\b[[:space:]]*:[[:space:]]*[^[:space:]"\'][^[:space:]]*/i' => '$1: '.self::REDACTED,
+            // `password: hunter2`, `api_key: sk-abc123`, and SMTP logins like
+            // `username: mail-user@example.com` — exception text from unknown
+            // transports formats secrets this way too, and the quoted pattern
+            // above already treats usernames as credentials.
+            '/\b(username|user|login|password|passwd|pwd|secret|token|api[_-]?key|api[_-]?token|apikey|client[_-]?secret|access[_-]?token|refresh[_-]?token)\b[[:space:]]*:[[:space:]]*[^[:space:]"\'][^[:space:]]*/i' => '$1: '.self::REDACTED,
             // GitHub tokens.
             '/\b(?:gh[posur]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{20,})\b/' => self::REDACTED,
             // Telegram bot token: <digits>:<35+ chars>.

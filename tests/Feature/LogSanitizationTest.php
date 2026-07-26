@@ -72,6 +72,11 @@ class LogSanitizationTest extends TestCase
             'Authorization: Bearer ZP_CANARY_TOKEN_bearer',
             'connecting to postgres://user:ZP_CANARY_DB_SECRET_url@localhost:5432/db',
             'token ghp_ZP0CANARY0TOKEN0githubaaaaaaaaaa',
+            // Unquoted SMTP logins — transport exception text formats the
+            // login colon-delimited; .env dumps format it equals-delimited.
+            'Expected response code 235 but got 535, username: ZP_CANARY_SMTP_LOGIN_colon@example.com rejected',
+            'MAIL_USERNAME=ZP_CANARY_SMTP_LOGIN_env@example.com',
+            'login: ZP_CANARY_SMTP_LOGIN_login denied',
         ];
 
         foreach ($cases as $message) {
@@ -81,6 +86,7 @@ class LogSanitizationTest extends TestCase
             $this->assertStringNotContainsString('ZP_CANARY_DB_SECRET_url', $out->message);
             $this->assertStringNotContainsString('ZP_CANARY_TOKEN_bearer', $out->message);
             $this->assertStringNotContainsString('ZP_CANARY_ADMIN_SECRET_appkey', $out->message);
+            $this->assertStringNotContainsString('ZP_CANARY_SMTP_LOGIN', $out->message);
         }
     }
 
