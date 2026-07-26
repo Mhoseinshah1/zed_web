@@ -1135,6 +1135,20 @@ is delivered). Email verification sends a 6-digit OTP; it treats the `log`
 and `array` mailers as **unconfigured** in production, so "required at
 registration" cannot be enabled until a real transport works.
 
+**OTP delivery supports exactly ONE effective delivery leaf.** The delivery
+pipeline's timing invariant is strict — per-operation SMTP timeout ≤ 20 s,
+whole-job deadline 240 s, per-user lock TTL 270 s, queue redelivery horizon
+300 s — and it budgets for a single complete transport exchange. A
+`failover`/`roundrobin` mailer that resolves to **more than one** leaf could
+chain several full exchanges in one attempt, overrunning the job deadline and
+the lock TTL mid-send (worker killed during SMTP I/O, queue redelivery while
+a previous worker is still sending, duplicate OTP emails). Multi-leaf graphs
+are therefore rejected for OTP delivery: the mailer counts as unconfigured,
+required mode cannot be enabled, the test action refuses to certify it, and
+no OTP job is queued through it. The default `failover` (smtp → log) is
+**not** suitable for production OTP — use `MAIL_MAILER=smtp` for the current
+deployment. A composite that resolves to exactly one leaf is accepted.
+
 1. Edit the server's `.env` (SMTP credentials live ONLY here — never in the
    database or the admin panel):
 

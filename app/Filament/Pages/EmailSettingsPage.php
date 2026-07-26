@@ -77,6 +77,21 @@ class EmailSettingsPage extends Page implements HasActions, HasForms
         return app(EmailVerificationService::class)->isMailConfigured();
     }
 
+    /**
+     * More than ONE effective delivery leaf (multi-leaf failover/roundrobin):
+     * rejected for OTP delivery — the job/lock/redelivery time budget covers
+     * exactly one complete transport exchange. Never exposes secrets.
+     */
+    public function multiLeafMailer(): bool
+    {
+        $leaves = app(EmailVerificationService::class)->effectiveLeafMailers();
+
+        return $leaves !== null && count($leaves) > 1;
+    }
+
+    /** The dedicated Persian explanation for a rejected multi-leaf graph. */
+    public const MULTI_LEAF_MESSAGE = 'برای ارسال امن کد تایید، mailer انتخاب‌شده باید فقط یک مسیر ارسال نهایی داشته باشد. Failover یا Round-robin چندمسیره با محدودیت زمانی فعلی پشتیبانی نمی‌شود.';
+
     /** Last successful transport test, or null. Never exposes secrets. */
     public function lastMailTestAt(): ?string
     {
@@ -142,6 +157,15 @@ class EmailSettingsPage extends Page implements HasActions, HasForms
         // block turning the feature OFF — e.g. disabling verification during a
         // mail outage, when the proof has expired and could not be renewed.
         $requiredWillBeActive = $enabled && $requireOnRegister;
+
+        // ── Timing guard: a multi-leaf composite gets its OWN explanation —
+        //    the generic "unconfigured" wording would mislead an admin whose
+        //    SMTP settings are actually fine.
+        if ($requiredWillBeActive && $this->multiLeafMailer()) {
+            Notification::make()->title(self::MULTI_LEAF_MESSAGE)->danger()->send();
+
+            return;
+        }
 
         // ── Validation guard: never allow REQUIRED verification while the
         //    mailer is clearly unconfigured (users could never receive codes).
@@ -222,6 +246,15 @@ class EmailSettingsPage extends Page implements HasActions, HasForms
                 }
                 foreach ($limits as $limit) {
                     RateLimiter::hit($limit->key, $limit->decaySeconds);
+                }
+
+                // A multi-leaf composite can never be certified for OTP
+                // delivery (single-exchange time budget) — refuse with the
+                // dedicated explanation instead of a misleading generic one.
+                if ($this->multiLeafMailer()) {
+                    Notification::make()->title(self::MULTI_LEAF_MESSAGE)->danger()->send();
+
+                    return;
                 }
 
                 // A test through log/array (or a failover chain containing

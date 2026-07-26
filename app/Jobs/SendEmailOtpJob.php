@@ -118,6 +118,11 @@ class SendEmailOtpJob implements ShouldBeEncrypted, ShouldQueue
         private readonly string $email,
         private readonly string $code,
         private readonly int $ttlMinutes,
+        // The still-usable delivered code this issuance superseded (if any):
+        // travels in the ENCRYPTED payload so failed() can restore it after
+        // an async ZERO-transport exhaustion (all safety checks live in
+        // EmailVerificationService::restoreSupersededCode, under locks).
+        private readonly ?int $supersededCodeId = null,
     ) {
         // Dispatch only after the surrounding DB transaction commits.
         $this->afterCommit = true;
@@ -158,6 +163,33 @@ class SendEmailOtpJob implements ShouldBeEncrypted, ShouldQueue
                 return;
             }
 
+            // TRANSPORT-ATTEMPT EVIDENCE, stamped token-owned IMMEDIATELY
+            // before transport I/O and immutable once set (whereNull guard).
+            // NULL forever-after means no real Mail::send() ever began for
+            // this issuance — the invariant that allows a superseded
+            // delivered code to be restored after a zero-transport failure.
+            // If the stamp cannot be recorded, the send does NOT proceed
+            // (an unstampable attempt could later be misclassified as
+            // "no transport happened"): contention releases for a retry.
+            try {
+                DB::transaction(function () {
+                    DatabaseLockTimeout::applyLocal();
+                    EmailVerificationCode::whereKey($this->codeId)
+                        ->where('send_status', EmailVerificationCode::SEND_STATUS_SENDING)
+                        ->where('delivery_claim_token', $this->claimToken)
+                        ->whereNull('transport_attempted_at')
+                        ->update(['transport_attempted_at' => now()]);
+                });
+            } catch (QueryException $e) {
+                if (DatabaseLockTimeout::isLockTimeout($e)) {
+                    $this->releaseForRetry(10);
+
+                    return;
+                }
+
+                throw $e;
+            }
+
             // The transport conversation runs OUTSIDE any DB transaction — a
             // slow SMTP server must never pin row locks — but INSIDE the
             // per-user lock, so no address change can interleave mid-send.
@@ -174,7 +206,39 @@ class SendEmailOtpJob implements ShouldBeEncrypted, ShouldQueue
                 throw new RuntimeException(MailFailure::summarize('delivery failed', $e));
             }
 
-            $this->finalizeAccepted($lock);
+            // The transport ACCEPTED the message: from here on NO exception
+            // may surface as a delivery failure — a rethrow would retry the
+            // job (duplicate OTP email) or let failed() classify an accepted
+            // message as `failed`. finalizeAccepted() handles lock-timeout
+            // contention itself; anything unexpected past it gets ONE
+            // best-effort accepted_pending transition and is then contained.
+            try {
+                $this->finalizeAccepted($lock);
+            } catch (Throwable $finalizeError) {
+                try {
+                    DB::transaction(function () {
+                        DatabaseLockTimeout::applyLocal();
+                        EmailVerificationCode::whereKey($this->codeId)
+                            ->where('send_status', EmailVerificationCode::SEND_STATUS_SENDING)
+                            ->where('delivery_claim_token', $this->claimToken)
+                            ->update([
+                                'send_status' => EmailVerificationCode::SEND_STATUS_ACCEPTED_PENDING,
+                                'delivery_claim_token' => null,
+                                'delivery_claimed_at' => null,
+                                'delivery_finalized_at' => now(),
+                                'delivery_config_fingerprint' => $this->configFingerprint(),
+                            ]);
+                    });
+                } catch (Throwable) {
+                    // Stays `sending` under our token — the documented
+                    // at-least-once residual; never a false `failed`.
+                }
+                // Static sanitized signal only — no exception text.
+                Log::warning('Email OTP post-acceptance finalization failed', [
+                    'code_id' => $this->codeId,
+                    'outcome' => 'accepted_pending_best_effort',
+                ]);
+            }
         } finally {
             try {
                 // Owner-token release: never force-releases another worker's lock.
@@ -457,7 +521,9 @@ class SendEmailOtpJob implements ShouldBeEncrypted, ShouldQueue
     {
         // Final when no retry can follow: direct invocation, the sync driver
         // (executes exactly once — attempts() never advances), or the last
-        // allowed attempt of a real worker.
+        // allowed attempt of a real worker. With retries remaining the
+        // record deliberately stays `sending` under this attempt's token —
+        // the retry re-claims it with a fresh one.
         $isFinalAttempt = $this->job === null
             || $this->job instanceof SyncJob
             || $this->attempts() >= $this->tries;
@@ -467,17 +533,55 @@ class SendEmailOtpJob implements ShouldBeEncrypted, ShouldQueue
 
         $safe = MailFailure::summarize('delivery failed', $e);
 
-        EmailVerificationCode::whereKey($this->codeId)
-            ->where('send_status', EmailVerificationCode::SEND_STATUS_SENDING)
-            ->where('delivery_claim_token', $this->claimToken)
-            ->update([
-                'send_status' => EmailVerificationCode::SEND_STATUS_FAILED,
-                'send_error' => $safe,
-                'delivery_claim_token' => null,
-                'delivery_claimed_at' => null,
-                'delivery_finalized_at' => now(),
-                'delivery_config_fingerprint' => $this->configFingerprint(),
+        // BOUNDED failure bookkeeping with the full documented lock protocol
+        // (the per-user cache lock is already held by handle()): short
+        // transaction, SET LOCAL lock_timeout, User row first, OTP row
+        // second, timing-safe token check — an unrelated transaction holding
+        // the row can delay us only by the bounded wait, never until the
+        // database's default (unbounded) timeout kills the worker.
+        try {
+            DB::transaction(function () use ($safe) {
+                DatabaseLockTimeout::applyLocal();
+
+                $user = User::whereKey($this->userId)->lockForUpdate()->first();
+                $record = EmailVerificationCode::whereKey($this->codeId)->lockForUpdate()->first();
+
+                if (
+                    $record === null
+                    || $record->send_status !== EmailVerificationCode::SEND_STATUS_SENDING
+                    || ! hash_equals((string) $this->claimToken, (string) $record->delivery_claim_token)
+                    || $record->user_id !== $this->userId
+                ) {
+                    // A newer worker re-claimed (its token, its state) or the
+                    // row already reached a terminal status — monotonic,
+                    // never ours to touch.
+                    return;
+                }
+
+                $record->forceFill([
+                    'send_status' => EmailVerificationCode::SEND_STATUS_FAILED,
+                    'send_error' => $safe,
+                    'delivery_claim_token' => null,
+                    'delivery_claimed_at' => null,
+                    'delivery_finalized_at' => now(),
+                    'delivery_config_fingerprint' => $this->configFingerprint(),
+                ])->save();
+            });
+        } catch (QueryException $e2) {
+            if (! DatabaseLockTimeout::isLockTimeout($e2)) {
+                throw $e2;
+            }
+
+            // Bounded wait fired: no unbounded fallback UPDATE — leaving the
+            // row `sending` temporarily is safer than mutating state that
+            // may belong to another worker. failed() performs one final
+            // bounded cleanup after retries are exhausted. Static sanitized
+            // token-free signal only.
+            Log::warning('Email OTP transport-failure finalization contended', [
+                'code_id' => $this->codeId,
+                'outcome' => 'left_sending_for_failed_cleanup',
             ]);
+        }
     }
 
     /**
@@ -509,19 +613,25 @@ class SendEmailOtpJob implements ShouldBeEncrypted, ShouldQueue
      * token never survives into it — but by the time it fires every retry of
      * THIS job is exhausted, and claims on this codeId are only ever made by
      * this job's own attempts (retry_after > job timeout excludes a
-     * still-running attempt). Two token-free mutations are therefore safe:
+     * still-running attempt). Under the full bounded lock protocol (cache
+     * lock → transaction → SET LOCAL lock_timeout → User row → OTP row),
+     * exactly two narrowly-defined token-free terminalizations are allowed —
+     * and ONLY while delivery_finalized_at is still NULL (terminal states
+     * are monotonic; an accepted message whose finalization failed is never
+     * rewritten into a false `failed`):
      *
      *  - an UNOWNED `queued` record (contention exhausted before any claim,
-     *    ZERO transport attempts) → `dispatch_failed`, which the daily cap
-     *    and cooldown exclude — contention or a cache outage can never burn
-     *    a user's OTP allowance;
+     *    ZERO transport attempts) → `dispatch_failed`, preserving
+     *    queue_published_at; with no transport attempt the superseded
+     *    delivered code is restored;
      *  - an ABANDONED `sending` claim (an early attempt claimed, later
-     *    reservations burned out before re-claiming) → `failed` — a real
-     *    transport attempt happened, and the record must not stay actionable
-     *    until expiry advertising a code no transport accepted.
+     *    reservations burned out before re-claiming) → `failed`.
      *
-     * Real transport failures on the final attempt were already closed out
-     * token-matched inside handle() (failTransportAttempt).
+     * If the cache lock or the bounded row locks cannot be acquired, nothing
+     * is mutated (sanitized static log; the stalled/abandoned pipeline
+     * detector fails open). Real transport failures on the final attempt
+     * were already closed out token-matched inside handle()
+     * (failTransportAttempt).
      */
     public function failed(Throwable $e): void
     {
@@ -530,34 +640,113 @@ class SendEmailOtpJob implements ShouldBeEncrypted, ShouldQueue
             ? mb_substr($e->getMessage(), 0, MailFailure::MAX_LENGTH)
             : MailFailure::summarize('delivery failed', $e);
 
-        EmailVerificationCode::whereKey($this->codeId)
-            ->where('send_status', EmailVerificationCode::SEND_STATUS_QUEUED)
-            ->update([
-                'send_status' => EmailVerificationCode::SEND_STATUS_DISPATCH_FAILED,
-                'send_error' => $safe,
-                'delivery_finalized_at' => now(),
-                'delivery_config_fingerprint' => $this->configFingerprint(),
+        // Same bounded protocol as every other mutation: per-user cache lock
+        // → short transaction → SET LOCAL lock_timeout → User row → OTP row.
+        // If the cache lock cannot be acquired, NOTHING is mutated — an
+        // unserialized lock-free write could race a live claim; the stalled/
+        // abandoned pipeline detector fails open instead.
+        try {
+            $lock = Cache::lock(EmailVerificationService::userLockKey($this->userId), self::LOCK_TTL_SECONDS);
+            $lock->block(EmailVerificationService::LOCK_WAIT_SECONDS);
+        } catch (Throwable) {
+            Log::warning('Email OTP failed() could not acquire the per-user lock', [
+                'code_id' => $this->codeId,
+                'outcome' => 'left_unchanged_fail_open',
             ]);
 
-        // An ABANDONED `sending` claim (an early attempt claimed, then the
-        // remaining reservations burned out on contention before re-claiming)
-        // must not stay actionable until expiry — the notice would advertise
-        // a code no transport ever accepted while the cooldown blocks a
-        // replacement. Claims for this codeId are made ONLY by this job's own
-        // attempts, and retry_after (300s) > job timeout (240s) guarantees no
-        // attempt is still running when retries are exhausted — so a leftover
-        // `sending` here is demonstrably ours and safely final: a REAL
-        // transport attempt happened, honest terminal state `failed` (counts
-        // toward the cap).
-        EmailVerificationCode::whereKey($this->codeId)
-            ->where('send_status', EmailVerificationCode::SEND_STATUS_SENDING)
-            ->update([
-                'send_status' => EmailVerificationCode::SEND_STATUS_FAILED,
-                'send_error' => $safe,
-                'delivery_claim_token' => null,
-                'delivery_claimed_at' => null,
-                'delivery_finalized_at' => now(),
-                'delivery_config_fingerprint' => $this->configFingerprint(),
+            return;
+        }
+
+        $restoreSuperseded = false;
+
+        try {
+            DB::transaction(function () use ($safe, &$restoreSuperseded) {
+                DatabaseLockTimeout::applyLocal();
+
+                $user = User::whereKey($this->userId)->lockForUpdate()->first();
+                $record = EmailVerificationCode::whereKey($this->codeId)->lockForUpdate()->first();
+
+                // Terminal states are MONOTONIC: sent / accepted_pending /
+                // failed / skipped / dispatch_failed (all stamp
+                // delivery_finalized_at) are never rewritten here — including
+                // an accepted message whose only failure was finalization.
+                if ($record === null || $record->delivery_finalized_at !== null) {
+                    return;
+                }
+
+                if ($record->send_status === EmailVerificationCode::SEND_STATUS_QUEUED) {
+                    // Never claimed, ZERO transport attempts, all retries
+                    // exhausted. queue_published_at is PRESERVED untouched:
+                    // NULL here means publication itself failed (or the sync
+                    // driver never entered a real queue) — admissible queue-
+                    // outage evidence; non-NULL means publication succeeded
+                    // and processing exhausted before transport — health must
+                    // not classify it as a publication failure.
+                    $record->forceFill([
+                        'send_status' => EmailVerificationCode::SEND_STATUS_DISPATCH_FAILED,
+                        'send_error' => $safe,
+                        'delivery_finalized_at' => now(),
+                        'delivery_config_fingerprint' => $this->configFingerprint(),
+                    ])->save();
+
+                    // A dead replacement with no transport attempt: restore
+                    // the delivered code it superseded (after the lock is
+                    // released — restore acquires the same per-user lock).
+                    if ($record->transport_attempted_at === null) {
+                        // Consume it so it neither advertises a lifetime nor
+                        // blocks the restore's newer-issuance guard.
+                        EmailVerificationCode::whereKey($this->codeId)
+                            ->whereNull('used_at')
+                            ->update(['used_at' => now()]);
+                        $restoreSuperseded = true;
+                    }
+
+                    return;
+                }
+
+                if ($record->send_status === EmailVerificationCode::SEND_STATUS_SENDING) {
+                    // ABANDONED claim: an early attempt claimed, later
+                    // reservations burned out before re-claiming. Claims on
+                    // this codeId are made ONLY by this job's own attempts,
+                    // and retry_after (300s) > job timeout (240s) guarantees
+                    // no attempt is still running at retry exhaustion — the
+                    // leftover claim is demonstrably ours and safely final.
+                    // The row must not stay actionable until expiry
+                    // advertising a code no transport accepted.
+                    $record->forceFill([
+                        'send_status' => EmailVerificationCode::SEND_STATUS_FAILED,
+                        'send_error' => $safe,
+                        'delivery_claim_token' => null,
+                        'delivery_claimed_at' => null,
+                        'delivery_finalized_at' => now(),
+                        'delivery_config_fingerprint' => $this->configFingerprint(),
+                    ])->save();
+                }
+                // Any other (unknown/future) status: leave untouched.
+            });
+        } catch (QueryException $e2) {
+            if (! DatabaseLockTimeout::isLockTimeout($e2)) {
+                // Unrelated database errors are NEVER silently swallowed.
+                throw $e2;
+            }
+
+            Log::warning('Email OTP failed() cleanup contended', [
+                'code_id' => $this->codeId,
+                'outcome' => 'left_unchanged_fail_open',
             ]);
+        } finally {
+            try {
+                $lock->release();
+            } catch (Throwable) {
+                // TTL reclaims the lock.
+            }
+        }
+
+        // Outside the lock: restoreSupersededCode() re-acquires the per-user
+        // lock itself and re-validates EVERY safety condition under it.
+        if ($restoreSuperseded && $this->supersededCodeId !== null) {
+            app(EmailVerificationService::class)
+                ->restoreSupersededCode($this->supersededCodeId, $this->userId);
+        }
     }
 }

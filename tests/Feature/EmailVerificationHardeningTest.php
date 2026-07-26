@@ -1372,6 +1372,7 @@ class EmailVerificationHardeningTest extends TestCase
         ]);
         EmailVerificationCode::whereKey($stuck->id)->update([
             'created_at' => now()->subMinutes(EmailVerificationService::STALLED_QUEUE_MINUTES + 1),
+            'queue_published_at' => now()->subMinutes(EmailVerificationService::STALLED_QUEUE_MINUTES + 1),
         ]);
 
         $this->assertFalse($svc->transportLooksLive(), 'a stalled queued backlog is pipeline downtime');
@@ -1398,6 +1399,7 @@ class EmailVerificationHardeningTest extends TestCase
             'expires_at' => now()->addMinutes(2),
             'send_status' => EmailVerificationCode::SEND_STATUS_QUEUED,
         ]);
+        EmailVerificationCode::whereKey($tombstone->id)->update(['queue_published_at' => now()]);
         $this->travel(EmailVerificationService::STALLED_QUEUE_MINUTES + 3)->minutes();
         $this->assertFalse(
             $svc->transportLooksLive(),
@@ -1473,12 +1475,13 @@ class EmailVerificationHardeningTest extends TestCase
         // A row that actually REACHED the queue after the newest publication
         // failure proves publishing works again — with the delivery success
         // in the window, the pipeline is live immediately.
-        EmailVerificationCode::create([
+        $republished = EmailVerificationCode::create([
             'user_id' => $user->id, 'email' => $user->email,
             'code_hash' => Hash::make('654321'), 'attempts' => 0,
             'expires_at' => now()->addMinutes(10),
             'send_status' => EmailVerificationCode::SEND_STATUS_QUEUED,
         ]);
+        EmailVerificationCode::whereKey($republished->id)->update(['queue_published_at' => now()]);
         $this->assertTrue($svc->transportLooksLive(), 'a successful publication clears the queue outage');
         $this->assertTrue($svc->isEnforceableNow());
     }
@@ -1526,12 +1529,13 @@ class EmailVerificationHardeningTest extends TestCase
 
         // A row that actually REACHES the queue after the newest publication
         // failure proves publishing works again.
-        EmailVerificationCode::create([
+        $republished = EmailVerificationCode::create([
             'user_id' => $user->id, 'email' => $user->email,
             'code_hash' => Hash::make('654321'), 'attempts' => 0,
             'expires_at' => now()->addMinutes(10),
             'send_status' => EmailVerificationCode::SEND_STATUS_QUEUED,
         ]);
+        EmailVerificationCode::whereKey($republished->id)->update(['queue_published_at' => now()]);
         $this->assertTrue($svc->transportLooksLive(), 'a successful publication clears the queue outage');
         $this->assertTrue($svc->isEnforceableNow());
     }
@@ -1595,6 +1599,7 @@ class EmailVerificationHardeningTest extends TestCase
         ]);
         EmailVerificationCode::whereKey($stuck->id)->update([
             'created_at' => now()->subMinutes(EmailVerificationService::STALLED_QUEUE_MINUTES + 1),
+            'queue_published_at' => now()->subMinutes(EmailVerificationService::STALLED_QUEUE_MINUTES + 1),
         ]);
         $this->assertFalse($svc->transportLooksLive());
         $this->assertNotSame('', SiteSetting::get(EmailVerificationService::STALL_MARKER_KEY, ''), 'detection upserted over the existing row');
@@ -1651,6 +1656,7 @@ class EmailVerificationHardeningTest extends TestCase
         ]);
         EmailVerificationCode::whereKey($stuck->id)->update([
             'created_at' => now()->subMinutes(EmailVerificationService::STALLED_QUEUE_MINUTES + 2),
+            'queue_published_at' => now()->subMinutes(EmailVerificationService::STALLED_QUEUE_MINUTES + 2),
         ]);
         EmailVerificationCode::create([
             'user_id' => $user->id, 'email' => $user->email,
@@ -1696,6 +1702,7 @@ class EmailVerificationHardeningTest extends TestCase
         ]);
         EmailVerificationCode::whereKey($stuck->id)->update([
             'created_at' => now()->subMinutes(EmailVerificationService::STALLED_QUEUE_MINUTES + 1),
+            'queue_published_at' => now()->subMinutes(EmailVerificationService::STALLED_QUEUE_MINUTES + 1),
         ]);
         $this->assertFalse($svc->transportLooksLive(), 'a stalled queued backlog is pipeline downtime');
         $this->assertNotSame('', SiteSetting::get(EmailVerificationService::STALL_MARKER_KEY, ''), 'the detection is persisted');
@@ -1750,6 +1757,7 @@ class EmailVerificationHardeningTest extends TestCase
         ]);
         EmailVerificationCode::whereKey($retired->id)->update([
             'created_at' => now()->subMinutes(EmailVerificationService::STALLED_QUEUE_MINUTES + 1),
+            'queue_published_at' => now()->subMinutes(EmailVerificationService::STALLED_QUEUE_MINUTES + 1),
         ]);
         EmailVerificationCode::create([
             'user_id' => $user->id, 'email' => $user->email,
@@ -1855,7 +1863,7 @@ class EmailVerificationHardeningTest extends TestCase
         $svc->recordSuccessfulMailTest();
         $this->assertFalse($svc->transportLooksLive(), 'a synchronous mail test never clears a queue outage');
 
-        EmailVerificationCode::create([
+        $recovered = EmailVerificationCode::create([
             'user_id' => $user->id, 'email' => $user->email,
             'code_hash' => Hash::make('123456'), 'attempts' => 0,
             'expires_at' => now()->addMinutes(10), 'used_at' => now(),
@@ -1863,6 +1871,7 @@ class EmailVerificationHardeningTest extends TestCase
             'delivery_finalized_at' => now(),
             'delivery_config_fingerprint' => app(EmailVerificationService::class)->mailConfigFingerprint(),
         ]);
+        EmailVerificationCode::whereKey($recovered->id)->update(['queue_published_at' => now()]);
         $this->assertTrue($svc->transportLooksLive(), 'a real queued delivery clears it');
         $this->travelBack();
     }

@@ -80,6 +80,12 @@ class EmailVerificationCode extends Model
         'used_at' => 'datetime',
         'delivery_claimed_at' => 'datetime',
         'delivery_finalized_at' => 'datetime',
+        // Queue-publication / transport-attempt evidence. Deliberately NOT
+        // fillable: both are stamped once through explicit trusted updates
+        // (requestCode metadata phase; the job's pre-send stamp), are
+        // immutable after first set, and must never be mass-assignable.
+        'queue_published_at' => 'datetime',
+        'transport_attempted_at' => 'datetime',
         'attempts' => 'integer',
     ];
 

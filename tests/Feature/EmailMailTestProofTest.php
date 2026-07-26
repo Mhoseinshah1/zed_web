@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Filament\Pages\EmailSettingsPage;
+use App\Models\EmailVerificationCode;
 use App\Models\SiteSetting;
 use App\Models\User;
 use App\Services\Email\EmailVerificationService;
@@ -170,8 +171,9 @@ class EmailMailTestProofTest extends TestCase
         $this->assertFalse($this->svc()->hasVerifiedMailTest(), 'an operational timeout change demands a fresh test');
     }
 
-    public function test_every_composite_leaf_is_exercised_and_one_broken_leaf_blocks_the_proof(): void
+    public function test_multi_leaf_composites_are_rejected_for_otp_delivery(): void
     {
+        $svc = $this->svc();
         config([
             'mail.default' => 'combo',
             'mail.mailers.combo' => ['transport' => 'roundrobin', 'mailers' => ['smtp_a', 'smtp_b']],
@@ -179,35 +181,84 @@ class EmailMailTestProofTest extends TestCase
             'mail.mailers.smtp_b' => ['transport' => 'smtp', 'host' => 'b.example.com', 'port' => 587],
         ]);
 
-        // Healthy graph: BOTH leaves receive the certification test — a
-        // roundrobin routes real OTPs to either child, so one send through
-        // the composite would leave a sibling unproven.
+        // The delivery time budget (job timeout 240s = claim margin < lock
+        // TTL 270s < redelivery horizon 300s) covers exactly ONE complete
+        // transport exchange — every multi-leaf routing policy is rejected,
+        // never silently reduced to its first child.
+        $this->assertFalse($svc->isMailConfigured(), 'two roundrobin leaves exceed the single-exchange budget');
+
+        config(['mail.mailers.combo.transport' => 'failover']);
+        $this->assertFalse($svc->isMailConfigured(), 'failover smtp+smtp is rejected');
+
+        config([
+            'mail.default' => 'outer',
+            'mail.mailers.outer' => ['transport' => 'failover', 'mailers' => ['combo']],
+        ]);
+        $this->assertFalse($svc->isMailConfigured(), 'nesting cannot launder a multi-leaf graph');
+
+        // The certification action refuses: no mail is sent, no proof stored.
+        config(['mail.default' => 'combo']);
         Mail::fake();
         Livewire::actingAs($this->admin())
             ->test(EmailSettingsPage::class)
             ->callAction('testEmail', ['test_email' => 'probe@example.com']);
-        Mail::assertSentCount(2);
-        $this->assertTrue($this->svc()->hasVerifiedMailTest());
+        Mail::assertNothingSent();
+        $this->assertFalse($svc->hasVerifiedMailTest(), 'an unsafe composite earns no proof');
 
-        // ONE broken leaf: the whole certification fails — no fresh proof.
-        SiteSetting::set('email_mail_test_fingerprint', '');
-        $sends = 0;
-        Mail::clearResolvedInstances();
-        $pending = \Mockery::mock();
-        $pending->shouldReceive('send')->andReturnUsing(function () use (&$sends) {
-            if (++$sends === 2) {
-                throw new \RuntimeException('connection refused');
-            }
-        });
-        Mail::shouldReceive('mailer')->andReturnSelf();
-        Mail::shouldReceive('to')->andReturn($pending);
+        // No OTP row and no queued job may ever be created through it.
+        $user = User::factory()->create(['email_verified_at' => null]);
+        $this->assertSame('error', $svc->requestCode($user)['status']);
+        $this->assertSame(0, EmailVerificationCode::query()->count(), 'no issuance under an unsafe timing graph');
+    }
+
+    public function test_a_composite_resolving_to_one_leaf_is_accepted_and_graph_growth_revokes_it(): void
+    {
+        $svc = $this->svc();
+        config([
+            'mail.default' => 'solo',
+            'mail.mailers.solo' => ['transport' => 'failover', 'mailers' => ['smtp_a']],
+            'mail.mailers.smtp_a' => ['transport' => 'smtp', 'host' => 'a.example.com', 'port' => 587],
+            'mail.mailers.smtp_b' => ['transport' => 'smtp', 'host' => 'b.example.com', 'port' => 587],
+        ]);
+
+        // DOCUMENTED CHOICE: a composite that RESOLVES to exactly one leaf
+        // performs at most one exchange — accepted.
+        $this->assertTrue($svc->isMailConfigured(), 'a single-leaf composite is inside the time budget');
+
+        $svc->recordSuccessfulMailTest();
+        $this->assertTrue($svc->hasVerifiedMailTest());
+
+        // Growing the certified single-leaf graph into a multi-leaf one
+        // both invalidates the stored proof (fingerprint/topology) and
+        // rejects the configuration outright.
+        config(['mail.mailers.solo.mailers' => ['smtp_a', 'smtp_b']]);
+        $this->assertFalse($svc->hasVerifiedMailTest(), 'the single-leaf proof does not survive graph growth');
+        $this->assertFalse($svc->isMailConfigured());
+    }
+
+    public function test_required_mode_cannot_be_enabled_with_an_unsafe_composite(): void
+    {
+        config([
+            'mail.default' => 'combo',
+            'mail.mailers.combo' => ['transport' => 'failover', 'mailers' => ['smtp_a', 'smtp_b']],
+            'mail.mailers.smtp_a' => ['transport' => 'smtp', 'host' => 'a.example.com', 'port' => 587],
+            'mail.mailers.smtp_b' => ['transport' => 'smtp', 'host' => 'b.example.com', 'port' => 587],
+        ]);
+        // Even with a (stale) proof present, the save guard refuses.
+        $this->svc()->recordSuccessfulMailTest();
 
         Livewire::actingAs($this->admin())
             ->test(EmailSettingsPage::class)
-            ->callAction('testEmail', ['test_email' => 'probe@example.com']);
+            ->fillForm([
+                'email_verification_enabled' => true,
+                'email_verification_required_on_register' => true,
+            ])
+            ->call('save');
 
-        $this->assertSame(2, $sends, 'the second leaf WAS attempted');
-        $this->assertFalse($this->svc()->hasVerifiedMailTest(), 'a partially proven composite earns no proof');
+        $this->assertFalse(
+            (bool) SiteSetting::get('email_verification_required_on_register', false),
+            'required mode is refused for a multi-leaf graph',
+        );
     }
 
     public function test_composite_topology_changes_invalidate_the_proof(): void

@@ -41,6 +41,12 @@
         </div>
     @endif
 
+    @if($page->multiLeafMailer())
+        <div class="rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-800 dark:border-amber-700 dark:bg-amber-900/30 dark:text-amber-200">
+            ⚠ {{ \App\Filament\Pages\EmailSettingsPage::MULTI_LEAF_MESSAGE }} برای استقرار فعلی از <code>MAIL_MAILER=smtp</code> استفاده کنید.
+        </div>
+    @endif
+
     @unless($page->mailLooksConfigured())
         <div class="rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-800 dark:border-amber-700 dark:bg-amber-900/30 dark:text-amber-200">
             ⚠ پیکربندی ارسال ایمیل کامل نیست (mailer «log» یا «array» در حالت production پذیرفته نمی‌شود). مقادیر MAIL_* را در فایل .env سرور تنظیم کنید، سپس <code>optimize:clear</code> و <code>config:cache</code> را اجرا و worker صف را ری‌استارت کنید. تا آن زمان نمی‌توانید تایید ایمیل را اجباری کنید.

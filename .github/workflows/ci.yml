@@ -222,6 +222,27 @@ jobs:
       - name: Queued-job User-row lock ordering (PostgreSQL)
         run: php artisan test --testsuite=Feature --filter='EmailJobLockOrderPgTest'
 
+      - name: Queue publication health race (PostgreSQL)
+        # An uncommitted queue_published_at stamp on an independent
+        # connection must neither block transportLooksLive() nor count as
+        # publication-recovery evidence until it commits.
+        run: php artisan test --testsuite=Feature --filter='EmailQueuePublicationPgTest'
+
+      - name: Transport-failure finalization lock timeout (PostgreSQL)
+        # Failure bookkeeping (failTransportAttempt + failed()) uses the
+        # bounded lock protocol: held User/OTP rows delay it only by the
+        # SET LOCAL lock_timeout, tokens stay owner-exclusive, output stays
+        # sanitized.
+        env:
+          CACHE_STORE: redis
+        run: php artisan test --testsuite=Feature --filter='EmailFailureFinalizePgTest'
+
+      - name: Sync/pre-transport superseded-code restoration
+        # queue_published_at / transport_attempted_at evidence semantics and
+        # the zero-transport restoration paths (sync contention, async
+        # published exhaustion, real-transport refusal, idempotency).
+        run: php artisan test --testsuite=Feature --filter='EmailQueuePublicationTest'
+
       - name: Scheduler locking + Redis-outage resilience
         run: php artisan test --testsuite=Feature --filter='SchedulerTest'
 

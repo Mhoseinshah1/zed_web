@@ -17,6 +17,7 @@ use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Validation\ValidationException;
 use Symfony\Component\Mailer\Bridge\Mailgun\Transport\MailgunTransportFactory;
 use Symfony\Component\Mailer\Bridge\Postmark\Transport\PostmarkTransportFactory;
@@ -62,12 +63,15 @@ class EmailVerificationService
      * draining the queue: a live worker claims within seconds (contention
      * retries within ~100s), so publication-succeeded-but-never-consumed is
      * pipeline downtime that dispatch_failed (publication errors only)
-     * cannot see. The evidence covers rows still `queued` AND rows the web
-     * side retired unconsumed (skipped with a NULL delivery_claimed_at —
-     * sub-threshold resends must not launder the signal), deliberately
-     * OUTLIVES the code's expiry, and clears only on positive proof a
-     * worker consumed a job after the stall became detectable (see
-     * transportLooksLive()).
+     * cannot see. The evidence clock is queue_published_at — the CONFIRMED
+     * dispatch handoff — never created_at: a row whose publication was
+     * never confirmed may not be in the queue at all and can never become
+     * stalled-worker evidence. The evidence covers rows still `queued` AND
+     * rows the web side retired unconsumed (skipped with a NULL
+     * delivery_claimed_at — sub-threshold resends must not launder the
+     * signal), deliberately OUTLIVES the code's expiry, and clears only on
+     * positive proof a worker consumed a job after the stall became
+     * detectable (see transportLooksLive()).
      */
     public const STALLED_QUEUE_MINUTES = 4;
 
@@ -280,18 +284,25 @@ class EmailVerificationService
         // stamps delivery_claimed_at on it (claim() / markSkipped), removing
         // it from this set — so "retired then consumed" (healthy) never
         // counts, while "published and never consumed" always does.
+        // Only a CONFIRMED publication can prove a dead worker: a row whose
+        // dispatch never completed (queue_published_at NULL — dispatch still
+        // in flight, failed, or its metadata stamp was lost) was possibly
+        // never in the queue at all, so its age proves nothing about
+        // consumption. The evidence clock is queue_published_at, never
+        // created_at.
         $stalledQueuedSince = EmailVerificationCode::query()
             ->where(function ($q) {
                 $q->where(function ($q2) {
                     $q2->where('send_status', EmailVerificationCode::SEND_STATUS_QUEUED)
                         ->whereNull('used_at');
                 })->orWhere(function ($q2) {
-                    $q2->where('send_status', EmailVerificationCode::SEND_STATUS_SKIPPED)
-                        ->whereNull('delivery_claimed_at');
+                    $q2->where('send_status', EmailVerificationCode::SEND_STATUS_SKIPPED);
                 });
             })
-            ->where('created_at', '<=', now()->subMinutes(self::STALLED_QUEUE_MINUTES))
-            ->max('created_at');
+            ->whereNull('delivery_claimed_at')
+            ->whereNotNull('queue_published_at')
+            ->where('queue_published_at', '<=', now()->subMinutes(self::STALLED_QUEUE_MINUTES))
+            ->max('queue_published_at');
 
         // ABANDONED claims are the same outage one step later: a worker
         // claimed (queued → sending), was killed before finalizing, and
@@ -388,20 +399,23 @@ class EmailVerificationService
         // truncated transport scan below: enough late-finalizing pre-outage
         // jobs can fill the latest-N outcome set with `sent` rows and expel
         // every dispatch_failed from it — completion of old jobs says
-        // nothing about publishing today. Queue recovery requires a row
-        // that actually REACHED the queue (any status but dispatch_failed —
-        // the dispatch catch converts failed publications immediately)
-        // CREATED after the newest publication failure in the window; a
-        // mail test can never supply this (it sends synchronously,
-        // bypassing the queue).
+        // nothing about publishing today. Only REAL publication failures
+        // count (queue_published_at NULL): a dispatch_failed row whose
+        // publication succeeded (failed() exhausting a published job before
+        // any transport) is a processing outcome, not queue evidence. Queue
+        // recovery is proven ONLY by a CONFIRMED publication — a row whose
+        // queue_published_at postdates the newest failure. Never admissible
+        // as publication proof: a merely-created queued row (dispatch may
+        // still fail), an old job completing, created_at by itself, or a
+        // mail test (it sends synchronously, bypassing the queue).
         $newestDispatchFailureAt = EmailVerificationCode::query()
             ->where('send_status', EmailVerificationCode::SEND_STATUS_DISPATCH_FAILED)
+            ->whereNull('queue_published_at')
             ->where('delivery_finalized_at', '>=', now()->subMinutes(self::OUTAGE_WINDOW_MINUTES))
             ->max('delivery_finalized_at');
         if ($newestDispatchFailureAt !== null) {
             $publishedAfterFailure = EmailVerificationCode::query()
-                ->where('send_status', '!=', EmailVerificationCode::SEND_STATUS_DISPATCH_FAILED)
-                ->where('created_at', '>', Carbon::parse($newestDispatchFailureAt))
+                ->where('queue_published_at', '>', Carbon::parse($newestDispatchFailureAt))
                 ->exists();
             if (! $publishedAfterFailure) {
                 return false;
@@ -418,11 +432,17 @@ class EmailVerificationService
             ->where(function ($q) use ($currentFingerprint) {
                 // QUEUE-publication outcomes are independent of the MAIL
                 // configuration: a broken queue blocks codes no matter which
-                // transport is configured, so dispatch failures count
-                // regardless of fingerprint — changing a mail setting (which
-                // rotates the fingerprint) must never hide a live queue
-                // outage.
-                $q->where('send_status', EmailVerificationCode::SEND_STATUS_DISPATCH_FAILED)
+                // transport is configured, so REAL publication failures
+                // (queue_published_at NULL) count regardless of fingerprint —
+                // changing a mail setting (which rotates the fingerprint)
+                // must never hide a live queue outage. A dispatch_failed row
+                // whose publication SUCCEEDED (a published job exhausted
+                // before transport) is neither queue nor transport evidence
+                // and is excluded from the scan entirely.
+                $q->where(function ($qd) {
+                    $qd->where('send_status', EmailVerificationCode::SEND_STATUS_DISPATCH_FAILED)
+                        ->whereNull('queue_published_at');
+                })
                     // TRANSPORT outcomes count only when PROVABLY produced
                     // under the current configuration: a long-lived worker
                     // still running a replaced config — including
@@ -696,6 +716,27 @@ class EmailVerificationService
         // an invalid graph is NEVER "configured".
         $transports = $this->effectiveTransports((string) config('mail.default'));
         if ($transports === null || $transports === []) {
+            return false;
+        }
+
+        // OTP DELIVERY TIME BUDGET — single effective leaf only. Every bound
+        // in the pipeline (job timeout 240s, per-user lock TTL 270s,
+        // redelivery horizon 300s, claim margin = job timeout) is sized for
+        // ONE complete transport exchange. A failover/roundrobin graph with
+        // several leaves can chain multiple full exchanges inside a single
+        // attempt — two SMTP leaves at the 20s per-operation cap already
+        // exceed the whole-job budget — risking worker termination
+        // mid-transport, lock expiry during SMTP I/O, queue redelivery while
+        // a previous worker is still sending, and duplicate OTP delivery.
+        // Until a validator proves the COMPLETE worst-case timing invariant
+        // (per-leaf exchange cost incl. API client timeouts < job timeout <
+        // lock TTL < redelivery horizon, and claim-time validity ≥ job
+        // timeout), multi-leaf graphs are rejected for OTP delivery — never
+        // silently reduced to their first child, and never certified as if
+        // the composite were safe. A composite that RESOLVES to exactly one
+        // leaf (e.g. failover with a single child) is accepted: it performs
+        // at most one exchange.
+        if (count($transports) > 1) {
             return false;
         }
 
@@ -1071,38 +1112,44 @@ class EmailVerificationService
             // afterCommit inside the job: it is dispatched only after the
             // surrounding database transaction (if any) commits. The address
             // comes from the RECORD (written under the lock) — never from the
-            // possibly-stale caller model.
-            SendEmailOtpJob::dispatch($record->id, $record->user_id, $record->email, $code, $this->ttlMinutes());
+            // possibly-stale caller model. The superseded id travels in the
+            // encrypted payload so failed() can restore the delivered code
+            // after an async ZERO-transport exhaustion too.
+            SendEmailOtpJob::dispatch(
+                $record->id,
+                $record->user_id,
+                $record->email,
+                $code,
+                $this->ttlMinutes(),
+                $outcome['superseded_id'] ?? null,
+            );
         } catch (Throwable $e) {
             // NEVER pretend the code was sent when the dispatch failed — but
-            // distinguish WHERE it failed. On the sync driver, dispatch()
-            // executes the handler inline: a transport exception propagates
-            // here AFTER the job's own failed() hook already recorded the
-            // honest `failed` outcome (a REAL delivery attempt, which must
-            // keep counting toward the daily cap). Only when the record is
-            // still `queued` did publication itself fail — no handler ever
-            // ran — and only then is it marked dispatch_failed and consumed
-            // (so a never-queued attempt can't hold the cooldown). The stored
-            // error is a SANITIZED category — raw transport/queue exception
-            // text can echo credentials.
-            $record->refresh();
-            if ($record->send_status === EmailVerificationCode::SEND_STATUS_QUEUED) {
-                $record->forceFill([
-                    'send_status' => EmailVerificationCode::SEND_STATUS_DISPATCH_FAILED,
-                    'send_error' => MailFailure::summarize('queue dispatch failed', $e),
-                    'used_at' => now(),
-                    'delivery_finalized_at' => now(),
-                    'delivery_config_fingerprint' => $this->mailConfigFingerprint(),
-                ])->save();
-
-                // DEFINITE pre-publication failure: the replacement never
-                // existed for delivery, so the code it superseded is restored
-                // — the user must not lose an already-delivered usable OTP
-                // and receive nothing in exchange.
-                $this->restoreSupersededCode($outcome['superseded_id'] ?? null, $record->user_id);
-            }
+            // distinguish WHERE it failed. The stored error is a SANITIZED
+            // category — raw transport/queue exception text can echo
+            // credentials.
+            $this->handleDispatchFailure($record, $outcome['superseded_id'] ?? null, $e);
 
             return ['status' => 'error', 'message' => 'ارسال ایمیل با خطا مواجه شد. لطفاً دوباره تلاش کنید.', 'email_sent' => false];
+        }
+
+        // PUBLICATION METADATA — a separate bounded write, strictly AFTER
+        // dispatch() returned successfully: queue_published_at is the only
+        // admissible queue-publication evidence (a merely-created row proves
+        // nothing while dispatch may still fail). NO status condition — a
+        // fast worker or the sync driver may already have moved the row to a
+        // terminal state, and publication still succeeded. Immutable via the
+        // whereNull guard. If this stamp itself fails, dispatch already
+        // succeeded: never mark dispatch_failed, never dispatch again — log
+        // a static sanitized warning and leave NULL (health conservatively
+        // fails open, since recovery cannot be proven by this issuance).
+        try {
+            $this->recordQueuePublication($record->id);
+        } catch (Throwable $metadataError) {
+            Log::warning('Email OTP queue-publication metadata could not be recorded', [
+                'code_id' => $record->id,
+                'outcome' => 'queue_published_at_left_null',
+            ]);
         }
 
         // HONEST wording: the code is QUEUED for delivery — nothing has been
@@ -1111,14 +1158,84 @@ class EmailVerificationService
     }
 
     /**
-     * Restores the code a failed resend superseded — ONLY on the definite
-     * pre-publication path (the replacement was never handed to any worker).
-     * Re-validated under the standard locks: same user, unchanged address,
-     * still unverified, consumed (by our supersession), unexpired, and in an
-     * actionable send status. Best-effort: on contention or a cache outage
-     * the user simply requests a fresh code.
+     * The bounded queue-publication metadata write (immutable via the
+     * whereNull guard; no status condition — a fast worker or the sync
+     * driver may already have finalized the row, and publication still
+     * succeeded). Protected so tests can exercise requestCode()'s
+     * metadata-failure containment.
      */
-    private function restoreSupersededCode(?int $codeId, int $userId): void
+    protected function recordQueuePublication(int $codeId): void
+    {
+        EmailVerificationCode::whereKey($codeId)
+            ->whereNull('queue_published_at')
+            ->update(['queue_published_at' => now()]);
+    }
+
+    /**
+     * dispatch() threw: classify WHERE the replacement issuance failed and
+     * restore the superseded delivered code whenever the failure is provably
+     * ZERO-transport.
+     *
+     *  - still `queued`: publication itself failed — no handler ever ran.
+     *    Marked dispatch_failed + consumed (a never-queued attempt must not
+     *    hold the cooldown), then the superseded code is restored.
+     *  - `dispatch_failed` with transport_attempted_at NULL: the sync driver
+     *    executed inline and failed() already closed the replacement out
+     *    (lock contention exhausted before any claim/transport). No mail
+     *    transport call ever began — consume the dead replacement and
+     *    restore.
+     *  - anything else (`failed` after a real attempt, `sent`,
+     *    `accepted_pending`, or transport_attempted_at set): a transport was
+     *    — or may have been — reached. NEVER restore: the inbox state is
+     *    unknown, and the honest outcome already stands.
+     */
+    private function handleDispatchFailure(EmailVerificationCode $record, ?int $supersededId, Throwable $e): void
+    {
+        $record->refresh();
+
+        if ($record->send_status === EmailVerificationCode::SEND_STATUS_QUEUED) {
+            $record->forceFill([
+                'send_status' => EmailVerificationCode::SEND_STATUS_DISPATCH_FAILED,
+                'send_error' => MailFailure::summarize('queue dispatch failed', $e),
+                'used_at' => now(),
+                'delivery_finalized_at' => now(),
+                'delivery_config_fingerprint' => $this->mailConfigFingerprint(),
+            ])->save();
+
+            $this->restoreSupersededCode($supersededId, $record->user_id);
+
+            return;
+        }
+
+        if (
+            $record->send_status === EmailVerificationCode::SEND_STATUS_DISPATCH_FAILED
+            && $record->transport_attempted_at === null
+        ) {
+            // Consume the dead replacement (idempotent) so it can neither be
+            // advertised nor block the restore's newer-issuance guard.
+            EmailVerificationCode::whereKey($record->id)
+                ->whereNull('used_at')
+                ->update(['used_at' => now()]);
+
+            $this->restoreSupersededCode($supersededId, $record->user_id);
+        }
+    }
+
+    /**
+     * Restores the code a failed resend superseded — ONLY on a definite
+     * ZERO-transport path (the replacement never reached any mail transport).
+     * Re-validated under the standard locks: same user, unchanged address,
+     * still unverified, consumed (by our supersession), unexpired, in an
+     * actionable send status, and with NO newer unused actionable issuance
+     * (a concurrent retry's replacement is the user's live path). IDEMPOTENT:
+     * a second call finds used_at already NULL and changes nothing. The old
+     * email is never re-dispatched. Best-effort: on contention or a cache
+     * outage the user simply requests a fresh code.
+     *
+     * PUBLIC because SendEmailOtpJob::failed() restores after an async
+     * zero-transport exhaustion; every safety check lives HERE, under locks.
+     */
+    public function restoreSupersededCode(?int $codeId, int $userId): void
     {
         if ($codeId === null) {
             return;
@@ -1141,16 +1258,20 @@ class EmailVerificationService
                         || $record->used_at === null
                         || $record->expires_at->isPast()
                         || ! in_array($record->send_status, EmailVerificationCode::ACTIONABLE_STATUSES, true)
-                        // A NEWER issuance exists: between our dispatch_failed
-                        // finalization and this lock, a concurrent retry saw no
-                        // actionable code and created a replacement. Restoring
-                        // now would leave TWO unused actionable rows — verify()
-                        // always selects the newest, so the restored code would
-                        // be dead weight that only mis-advertises a lifetime.
-                        // The newer issuance is the user's live path; refuse.
+                        // A NEWER unused ACTIONABLE issuance exists: between
+                        // our dispatch_failed finalization and this lock, a
+                        // concurrent retry saw no actionable code and created
+                        // a replacement. Restoring now would leave TWO unused
+                        // actionable rows — verify() always selects the
+                        // newest, so the restored code would be dead weight
+                        // that only mis-advertises a lifetime. The newer
+                        // issuance is the user's live path; refuse. (Dead
+                        // terminal replacements — dispatch_failed/failed —
+                        // never block a restore.)
                         || EmailVerificationCode::where('user_id', $userId)
                             ->whereNull('used_at')
                             ->where('id', '>', $record->id)
+                            ->whereIn('send_status', EmailVerificationCode::ACTIONABLE_STATUSES)
                             ->exists()
                     ) {
                         return;
