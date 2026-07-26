@@ -37,8 +37,13 @@ final class AdminMfaSession
     /** Window between confirming enrollment and acknowledging the codes. */
     public const ENROLLMENT_COMPLETION_TTL_MINUTES = 5;
 
-    /** Window for confirming an authenticator replacement on the new device. */
-    public const REPLACEMENT_TTL_MINUTES = 10;
+    /**
+     * Window for confirming an authenticator replacement on the new device —
+     * at most FIVE minutes, matching the sensitive-operation budget. The
+     * pending secret itself may live longer internally, but it can never be
+     * promoted after this authorization expires.
+     */
+    public const REPLACEMENT_TTL_MINUTES = 5;
 
     // ── Pending (password OK, MFA outstanding) ───────────────────────────────
 

@@ -195,6 +195,57 @@ class AdminMfaManagementTest extends TestCase
         $this->assertSame($oldVersion, $this->totp()->credentialFor($admin)->version());
     }
 
+    public function test_replacement_record_is_valid_just_under_five_minutes_and_dead_just_after(): void
+    {
+        // Boundary proof for the five-minute maximum, in seconds (no minute
+        // rounding): still confirmable 10s before the limit, refused 10s
+        // after — and the expiry tears the whole attempt down.
+        $admin = $this->admin();
+        $this->grantCommunicationsStepUp($admin);
+        $this->be($admin);
+        $oldVersion = $this->totp()->credentialFor($admin)->version();
+
+        // Just UNDER the window: the confirmation still succeeds.
+        $component = Livewire::actingAs($admin)->test(AdminSecurityPage::class)
+            ->callAction('startReplacement', [
+                'current_password' => 'secret123',
+                'totp_code' => $this->currentAdminTotpCode($admin),
+            ]);
+        $pending = $this->totp()->credentialFor($admin)->pending_secret;
+        $this->travel(AdminMfaSession::REPLACEMENT_TTL_MINUTES * 60 - 10)->seconds();
+        $this->assertTrue(AdminMfaSession::replacementValid($admin));
+        $component->set('replacement_code', app(Google2FA::class)->getCurrentOtp($pending))
+            ->call('confirmReplacement')
+            ->assertSet('replacing', false);
+        $this->assertNotSame($oldVersion, $this->totp()->credentialFor($admin)->version(), 'in-window replacement promotes');
+
+        // Fresh attempt, just OVER the window: refused, torn down, the
+        // (new) active factor untouched and still usable.
+        $this->travelBack();
+        $this->grantCommunicationsStepUp($admin); // re-prime marker for the rotated factor
+        $activeVersion = $this->totp()->credentialFor($admin)->version();
+        $component = Livewire::actingAs($admin)->test(AdminSecurityPage::class)
+            ->callAction('startReplacement', [
+                'current_password' => 'secret123',
+                'totp_code' => $this->currentAdminTotpCode($admin),
+            ]);
+        $pending = $this->totp()->credentialFor($admin)->pending_secret;
+        $this->travel(AdminMfaSession::REPLACEMENT_TTL_MINUTES * 60 + 10)->seconds();
+        $this->assertFalse(AdminMfaSession::replacementValid($admin));
+        $component->set('replacement_code', app(Google2FA::class)->getCurrentOtp($pending))
+            ->call('confirmReplacement')
+            ->assertSet('replacing', false)
+            ->assertSet('replacementQr', null)
+            ->assertSet('replacementKey', null);
+
+        $cred = $this->totp()->credentialFor($admin);
+        $this->assertSame($activeVersion, $cred->version(), 'active factor unchanged after expiry');
+        $this->assertNull(session(AdminMfaSession::REPLACEMENT_KEY), 'server-side record cleared');
+        $this->assertNull($cred->pending_secret, 'pending secret cleared');
+        $this->assertNull($cred->pending_secret_generated_at, 'pending timestamp cleared');
+        $this->assertTrue($this->totp()->hasConfirmedCredential($admin), 'existing authenticator stays active');
+    }
+
     public function test_expired_replacement_record_is_rejected_and_torn_down(): void
     {
         $admin = $this->admin();
