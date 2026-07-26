@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\Admin\AdminMfaController;
 use App\Http\Controllers\Auth\AuthController;
 use App\Http\Controllers\Auth\EmailVerificationController;
 use App\Http\Controllers\CentralPayController;
@@ -46,6 +47,23 @@ Route::get('/payments/centralpay/callback', [CentralPayController::class, 'callb
 Route::post('/telegram/webhook', [TelegramWebhookController::class, 'handle'])
     ->middleware('noindex')
     ->name('telegram.webhook');
+
+// ── Administrator MFA (TOTP challenge + forced enrollment) ───────────────────
+// Outside the Filament panel: the pending-login subject is NOT authenticated
+// yet, so panel routes reject it. Independent rate limits per challenge type;
+// responses are no-store; all errors are one generic Persian message.
+Route::prefix('zed-admin/mfa')->name('zed-admin.mfa.')->middleware('noindex')->group(function () {
+    Route::get('/challenge', [AdminMfaController::class, 'challenge'])->name('challenge');
+    Route::post('/challenge', [AdminMfaController::class, 'verify'])
+        ->middleware('throttle:admin-totp')->name('verify');
+    Route::get('/recovery', [AdminMfaController::class, 'recovery'])->name('recovery');
+    Route::post('/recovery', [AdminMfaController::class, 'verifyRecovery'])
+        ->middleware('throttle:admin-recovery')->name('recovery.verify');
+    Route::get('/enroll', [AdminMfaController::class, 'enroll'])->name('enroll');
+    Route::post('/enroll', [AdminMfaController::class, 'confirmEnroll'])
+        ->middleware('throttle:admin-totp')->name('enroll.confirm');
+    Route::post('/enroll/acknowledge', [AdminMfaController::class, 'acknowledgeRecoveryCodes'])->name('enroll.acknowledge');
+});
 
 // Public health probes are registered STATELESS in routes/health.php (outside
 // the `web` group) via bootstrap/app.php, so they never start a session or set

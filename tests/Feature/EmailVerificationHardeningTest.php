@@ -204,7 +204,13 @@ class EmailVerificationHardeningTest extends TestCase
 
     private function admin(): User
     {
-        return User::factory()->create(['is_admin' => true, 'email_verified_at' => now()]);
+        $admin = User::factory()->create(['is_admin' => true, 'email_verified_at' => now()]);
+
+        // The settings page now sits behind the communications step-up; the
+        // tests here exercise the verification logic itself, so pre-grant it.
+        $this->grantCommunicationsStepUp($admin);
+
+        return $admin;
     }
 
     public function test_test_email_refused_when_mail_unconfigured_never_false_success(): void

@@ -243,6 +243,17 @@ jobs:
         # published exhaustion, real-transport refusal, idempotency).
         run: php artisan test --testsuite=Feature --filter='EmailQueuePublicationTest'
 
+      - name: Admin TOTP MFA + step-up (PostgreSQL)
+        # Mandatory panel-login MFA, forced enrollment, recovery codes, the
+        # sensitive-settings step-up scope, and the management/CLI flows —
+        # all against real PostgreSQL row locking.
+        run: php artisan test --testsuite=Feature --filter='AdminTotpCredentialTest|AdminMfaLoginTest|AdminStepUpTest|AdminMfaManagementTest'
+
+      - name: Admin TOTP same-code concurrency (PostgreSQL)
+        # REAL parallel submissions (pcntl_fork, fresh connections): the same
+        # TOTP code and the same recovery code must have exactly one winner.
+        run: php artisan test --testsuite=Feature --filter='AdminTotpConcurrencyPgTest'
+
       - name: Scheduler locking + Redis-outage resilience
         run: php artisan test --testsuite=Feature --filter='SchedulerTest'
 

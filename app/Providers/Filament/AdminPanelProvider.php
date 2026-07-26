@@ -4,6 +4,7 @@ namespace App\Providers\Filament;
 
 use App\Filament\Pages\Auth\Login;
 use App\Filament\Pages\Dashboard;
+use App\Http\Middleware\EnsureAdminMfaVerified;
 use App\Http\Middleware\NoIndexHeaders;
 use App\Services\Theme\AdminAppearanceResolver;
 use App\Services\Theme\AppearanceManager;
@@ -88,7 +89,12 @@ class AdminPanelProvider extends PanelProvider
             ])
             ->authMiddleware([
                 Authenticate::class,
-            ]);
+                // MANDATORY MFA: an authenticated session must also carry the
+                // server-side marker bound to this admin + current credential
+                // version. Persistent → Livewire /livewire/update round-trips
+                // re-run it too, so no component action is reachable either.
+                EnsureAdminMfaVerified::class,
+            ], isPersistent: true);
     }
 
     /**

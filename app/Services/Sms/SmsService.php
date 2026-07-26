@@ -7,6 +7,7 @@ use App\Services\Sms\Providers\CustomSmsProvider;
 use App\Services\Sms\Providers\FarazSmsProvider;
 use App\Services\Sms\Providers\KavenegarSmsProvider;
 use App\Services\Sms\Providers\SmsIrProvider;
+use App\Support\SmsFailure;
 use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\Log;
 
@@ -136,7 +137,17 @@ class SmsService
     }
 
     /**
-     * Decrypted API key. Returns '' when unset; tolerates legacy plaintext.
+     * Decrypted API key. Returns '' when unset.
+     *
+     * Legacy plaintext (stored before encryption existed) is a BOUNDED
+     * compatibility path, not a silent normal: a value that structurally IS a
+     * Laravel ciphertext but fails to decrypt means corruption or an APP_KEY
+     * change — that fails CLOSED (treated as unset, sanitized warning). Only
+     * a value that structurally is NOT a ciphertext is accepted as legacy
+     * plaintext, and it is immediately re-encrypted in place so the fallback
+     * self-retires on first use. (Removal plan: once installations have read
+     * the key once post-upgrade, this branch is dead code and can be
+     * dropped.)
      */
     public function apiKey(): string
     {
@@ -148,9 +159,30 @@ class SmsService
         try {
             return Crypt::decryptString($raw);
         } catch (\Throwable) {
-            // Value was stored before encryption was introduced — use as-is.
+            if (self::looksLikeCiphertext($raw)) {
+                Log::warning('SmsService: stored API key cannot be decrypted (APP_KEY change or corruption) — treating as unset');
+
+                return '';
+            }
+
+            Log::warning('SmsService: migrating legacy plaintext SMS API key to encrypted storage');
+            SiteSetting::set('sms_api_key', Crypt::encryptString($raw));
+
             return $raw;
         }
+    }
+
+    /** Structural check for a Laravel encrypter payload (iv/value/mac JSON). */
+    private static function looksLikeCiphertext(string $raw): bool
+    {
+        $decoded = base64_decode($raw, true);
+        if (! is_string($decoded)) {
+            return false;
+        }
+
+        $json = json_decode($decoded, true);
+
+        return is_array($json) && isset($json['iv'], $json['value'], $json['mac']);
     }
 
     /**
@@ -182,10 +214,13 @@ class SmsService
         try {
             return (bool) $send($this->provider());
         } catch (\Throwable $e) {
+            // Adapter intent ("we keep credentials out of messages") is not a
+            // guarantee — HTTP client exceptions can echo URLs/headers, so
+            // failures go through the dedicated sanitizer before logging.
             Log::error('SmsService: send failed', [
                 'provider' => (string) SiteSetting::get('sms_provider', ''),
                 'phone' => $this->maskPhone($normalizedPhone),
-                'error' => $e->getMessage(), // adapters keep credentials out of messages
+                'error' => SmsFailure::summarize('sms send failed', $e),
             ]);
 
             return false;

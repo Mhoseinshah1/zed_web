@@ -6,6 +6,7 @@ use App\Models\User;
 use App\Services\Auth\LoginThrottleSettings;
 use Filament\Pages\Auth\Login;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Livewire\Livewire;
 use Tests\TestCase;
 
 class UserAuthTest extends TestCase
@@ -259,22 +260,33 @@ class UserAuthTest extends TestCase
         $response->assertOk();
     }
 
-    public function test_filament_admin_login_inherits_built_in_throttling(): void
+    public function test_filament_admin_login_keeps_password_stage_throttling(): void
     {
-        // The custom admin Login overrides only the username field / credentials /
-        // failure message — NOT authenticate(), so Filament's built-in
-        // $this->rateLimit(5) brute-force protection stays active.
-        $authenticate = new \ReflectionMethod(\App\Filament\Pages\Auth\Login::class, 'authenticate');
-        $this->assertSame(
-            Login::class,
-            $authenticate->getDeclaringClass()->getName(),
-            'Custom admin Login must not override authenticate() or it would bypass Filament throttling.'
-        );
-
-        // The inherited authenticate() does call the rate limiter.
+        // The custom admin Login now overrides authenticate() for the
+        // mandatory two-phase MFA flow — the override's FIRST statement must
+        // remain Filament's built-in $this->rateLimit(5) brute-force
+        // protection. Prove it functionally: the sixth attempt in a minute is
+        // throttled instead of evaluated.
         $source = (string) file_get_contents(
-            (new \ReflectionClass(Login::class))->getFileName()
+            (new \ReflectionMethod(\App\Filament\Pages\Auth\Login::class, 'authenticate'))->getFileName()
         );
-        $this->assertStringContainsString('$this->rateLimit(', $source);
+        $this->assertStringContainsString('$this->rateLimit(5)', $source);
+
+        foreach (range(1, 5) as $i) {
+            Livewire::test(\App\Filament\Pages\Auth\Login::class)
+                ->fillForm(['username' => 'nobody', 'password' => 'wrong'])
+                ->call('authenticate')
+                ->assertHasFormErrors(['username']);
+        }
+
+        // Attempt #6: rate-limited — the generic credential error is NOT
+        // produced because authenticate() bailed out at the limiter.
+        Livewire::test(\App\Filament\Pages\Auth\Login::class)
+            ->fillForm(['username' => 'nobody', 'password' => 'wrong'])
+            ->call('authenticate')
+            ->assertHasNoFormErrors()
+            ->assertNotified();
+
+        $this->assertGuest();
     }
 }

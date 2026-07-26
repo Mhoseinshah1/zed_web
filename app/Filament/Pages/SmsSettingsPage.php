@@ -2,9 +2,12 @@
 
 namespace App\Filament\Pages;
 
+use App\Filament\Pages\Concerns\RequiresCommunicationsStepUp;
 use App\Models\SiteSetting;
+use App\Services\AdminMfa\AdminSecurityAudit;
 use App\Services\Sms\SmsService;
 use App\Support\PhoneNumber;
+use App\Support\SmsFailure;
 use Filament\Actions\Action;
 use Filament\Actions\Concerns\InteractsWithActions;
 use Filament\Actions\Contracts\HasActions;
@@ -14,6 +17,7 @@ use Filament\Forms\Contracts\HasForms;
 use Filament\Forms\Form;
 use Filament\Notifications\Notification;
 use Filament\Pages\Page;
+use Illuminate\Support\Facades\Log;
 
 /**
  * Admin settings for the SMS gateway, OTP rules and phone verification.
@@ -24,6 +28,7 @@ class SmsSettingsPage extends Page implements HasActions, HasForms
 {
     use InteractsWithActions;
     use InteractsWithForms;
+    use RequiresCommunicationsStepUp;
 
     protected static string $view = 'filament.pages.sms-settings';
 
@@ -44,6 +49,14 @@ class SmsSettingsPage extends Page implements HasActions, HasForms
 
     public function mount(): void
     {
+        // Step-up gate BEFORE any hydration: while locked, no setting is
+        // read into the form, no placeholder is derived, and the Livewire
+        // snapshot carries nothing sensitive.
+        $this->initializeStepUpState();
+        if (! $this->stepUpUnlocked) {
+            return;
+        }
+
         $this->form->fill([
             'sms_enabled' => (bool) SiteSetting::get('sms_enabled', false),
             'sms_provider' => (string) SiteSetting::get('sms_provider', 'kavenegar'),
@@ -65,7 +78,9 @@ class SmsSettingsPage extends Page implements HasActions, HasForms
 
     public function hasApiKey(): bool
     {
-        return app(SmsService::class)->apiKey() !== '';
+        // Presence check only — the stored key is NEVER decrypted just to
+        // compute a placeholder (and never before step-up).
+        return (string) SiteSetting::get('sms_api_key', '') !== '';
     }
 
     public function form(Form $form): Form
@@ -173,6 +188,13 @@ class SmsSettingsPage extends Page implements HasActions, HasForms
 
     public function save(): void
     {
+        // Server-side step-up assertion FIRST — before dehydrating form
+        // state, before any validation, transaction, or write. A crafted
+        // Livewire call or an expired stale tab mutates nothing.
+        if (! $this->assertStepUpForAction()) {
+            return;
+        }
+
         $data = $this->form->getState();
 
         $smsEnabled = ! empty($data['sms_enabled']);
@@ -230,7 +252,15 @@ class SmsSettingsPage extends Page implements HasActions, HasForms
         // Don't keep the plaintext key in the Livewire component state.
         $this->data['sms_api_key_new'] = null;
 
+        AdminSecurityAudit::record('sms_settings_changed', $this->stepUpUser(), 'success');
+
         Notification::make()->title('تنظیمات ذخیره شد.')->success()->send();
+    }
+
+    /** Drop the in-memory plaintext key when a step-up assertion fails. */
+    protected function clearTransientSecretState(): void
+    {
+        $this->data['sms_api_key_new'] = null;
     }
 
     public function testSmsAction(): Action
@@ -246,6 +276,12 @@ class SmsSettingsPage extends Page implements HasActions, HasForms
                     ->placeholder('مثلاً 09123456789'),
             ])
             ->action(function (array $data) {
+                // Step-up re-asserted immediately before the external call —
+                // an expired grant sends nothing.
+                if (! $this->assertStepUpForAction()) {
+                    return;
+                }
+
                 $normalized = PhoneNumber::normalize($data['test_phone'] ?? '');
                 if ($normalized === null) {
                     Notification::make()->title('شماره موبایل معتبر نیست.')->danger()->send();
@@ -253,12 +289,22 @@ class SmsSettingsPage extends Page implements HasActions, HasForms
                     return;
                 }
 
+                AdminSecurityAudit::record('test_sms_requested', $this->stepUpUser(), 'success');
+
                 try {
                     app(SmsService::class)->sendTest($normalized, 'این یک پیامک تست از زدپروکسی است.');
                     Notification::make()->title('پیامک تست با موفقیت ارسال شد.')->success()->send();
                 } catch (\Throwable $e) {
+                    // NEVER echo raw provider text — it can carry API keys,
+                    // Authorization headers, or credentialed URLs. Category
+                    // only; sanitized detail goes to the (masked) log.
+                    $category = SmsFailure::categorize($e);
+                    Log::warning('Admin test SMS failed', [
+                        'error' => SmsFailure::summarize('test sms failed', $e),
+                    ]);
+
                     Notification::make()
-                        ->title('ارسال پیامک تست ناموفق بود: '.$e->getMessage())
+                        ->title('ارسال پیامک تست ناموفق بود ('.$category.'). جزئیات در لاگ سرور ثبت شد.')
                         ->danger()->send();
                 }
             });

@@ -6,6 +6,7 @@ use App\Filament\Pages\Auth\Login as AdminLogin;
 use App\Filament\Pages\WalletSettings;
 use App\Models\SiteText;
 use App\Models\User;
+use App\Services\AdminMfa\AdminMfaSession;
 use Database\Seeders\WalletSettingsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Cache;
@@ -94,7 +95,7 @@ class AdminPanelTest extends TestCase
 
     // ── Authentication ───────────────────────────────────────────────────────
 
-    public function test_admin_can_login_with_username_and_password(): void
+    public function test_valid_password_leads_to_mfa_challenge_without_authenticating(): void
     {
         $admin = User::factory()->create([
             'username' => 'testadmin',
@@ -109,9 +110,16 @@ class AdminPanelTest extends TestCase
                 'password' => 'secret123',
             ])
             ->call('authenticate')
-            ->assertHasNoFormErrors();
+            ->assertHasNoFormErrors()
+            ->assertRedirect(route('zed-admin.mfa.challenge'));
 
-        $this->assertAuthenticatedAs($admin);
+        // Mandatory MFA: a valid password alone NEVER creates an
+        // authenticated session — only the pending-MFA state.
+        $this->assertGuest();
+        $this->assertSame(
+            $admin->id,
+            (int) session(AdminMfaSession::PENDING_KEY)['user_id']
+        );
     }
 
     public function test_non_admin_user_cannot_access_panel_after_login(): void
