@@ -39,5 +39,24 @@ class AppServiceProvider extends ServiceProvider
         RateLimiter::for('purchase-submit', fn (Request $request) => Limit::perMinute(12)->by(
             $request->user()?->getAuthIdentifier() ?: $request->ip()
         ));
+
+        // Email-verification endpoints: TWO independent buckets per limiter —
+        // one per authenticated user (followed across IPs, so a distributed
+        // attack on one account is still capped) and one per client IP (so one
+        // machine cycling accounts is still capped). A concatenated user|IP
+        // key would mint a fresh bucket for every pair and enforce neither.
+        $emailVerificationLimits = function (Request $request, string $prefix, int $decayMinutes, int $maxAttempts): array {
+            $ip = (string) $request->ip();
+            $userKey = (string) ($request->user()?->getAuthIdentifier() ?? 'ip:'.$ip);
+
+            return [
+                Limit::perMinutes($decayMinutes, $maxAttempts)->by($prefix.':u:'.$userKey),
+                Limit::perMinutes($decayMinutes, $maxAttempts)->by($prefix.':ip:'.$ip),
+            ];
+        };
+        RateLimiter::for('email-verification-verify', fn (Request $request) => $emailVerificationLimits($request, 'evv', 1, 10));
+        RateLimiter::for('email-verification-resend', fn (Request $request) => $emailVerificationLimits($request, 'evr', 10, 5));
+        RateLimiter::for('email-verification-change', fn (Request $request) => $emailVerificationLimits($request, 'evc', 10, 5));
+        RateLimiter::for('email-test-send', fn (Request $request) => $emailVerificationLimits($request, 'ets', 10, 3));
     }
 }

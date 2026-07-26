@@ -3,6 +3,7 @@
 namespace App\Filament\Resources\UserResource\Pages;
 
 use App\Filament\Resources\UserResource;
+use App\Services\Email\EmailVerificationService;
 use Filament\Actions;
 use Filament\Resources\Pages\EditRecord;
 use Illuminate\Database\Eloquent\Model;
@@ -19,21 +20,15 @@ class EditUser extends EditRecord
     }
 
     /**
-     * is_admin is intentionally not mass-assignable on the model, so set it
-     * explicitly here (this is the trusted admin panel). Every other field
-     * still goes through normal mass assignment.
+     * The WHOLE admin edit — a possible email change (with the explicit
+     * verified/unverified choice), is_admin, and every other field — commits
+     * ATOMICALLY through one lock-protected service transaction: either the
+     * complete edit lands or nothing does. Email uniqueness races and lock
+     * contention surface as normal `data.email` field errors, never a 500;
+     * unrelated database errors still rethrow.
      */
     protected function handleRecordUpdate(Model $record, array $data): Model
     {
-        if (array_key_exists('is_admin', $data)) {
-            $isAdmin = (bool) $data['is_admin'];
-            unset($data['is_admin']);
-            $record->forceFill(['is_admin' => $isAdmin]);
-        }
-
-        $record->fill($data);
-        $record->save();
-
-        return $record;
+        return app(EmailVerificationService::class)->applyAdminUpdate($record, $data);
     }
 }

@@ -68,6 +68,9 @@ class User extends Authenticatable implements FilamentUser
             'email_verified_at' => 'datetime',
             'phone_verified_at' => 'datetime',
             'profile_completed_at' => 'datetime',
+            // Immutable registration policy marker — set once (forceFill) in
+            // the registration transaction, never recalculated later.
+            'email_verification_required_at_registration' => 'boolean',
             'password' => 'hashed',
             'is_admin' => 'boolean',
             'wallet_balance_toman' => 'integer',
@@ -98,6 +101,13 @@ class User extends Authenticatable implements FilamentUser
                 $user->normalized_phone = $user->phone
                     ? PhoneNumber::normalize($user->phone)
                     : null;
+            }
+
+            // Safety net: EVERY writer (registration, admin edits, imports,
+            // commands, future code) stores the canonical lowercase address —
+            // the DB's lower(email) unique index assumes it.
+            if ($user->isDirty('email') && is_string($user->email)) {
+                $user->email = strtolower(trim($user->email));
             }
         });
     }
@@ -209,6 +219,16 @@ class User extends Authenticatable implements FilamentUser
     public function phoneVerificationCodes(): HasMany
     {
         return $this->hasMany(PhoneVerificationCode::class);
+    }
+
+    public function hasVerifiedEmailAddress(): bool
+    {
+        return $this->email_verified_at !== null;
+    }
+
+    public function emailVerificationCodes(): HasMany
+    {
+        return $this->hasMany(EmailVerificationCode::class);
     }
 
     public function activeServicesCount(): int

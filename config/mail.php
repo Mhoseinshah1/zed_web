@@ -45,7 +45,14 @@ return [
             'port' => env('MAIL_PORT', 2525),
             'username' => env('MAIL_USERNAME'),
             'password' => env('MAIL_PASSWORD'),
-            'timeout' => null,
+            // Bounded PER-OPERATION timeout (each stream read/write, NOT the
+            // whole conversation) so a hung SMTP server can never freeze a
+            // queue worker. Capped at 20s; SendEmailOtpJob::$timeout (240s)
+            // is sized for a complete exchange of ~10 such operations at this
+            // cap, so the worker never kills a slow-but-progressing send
+            // mid-conversation (which could duplicate an already-accepted
+            // OTP email on retry).
+            'timeout' => min(20, max(1, (int) env('MAIL_TIMEOUT', 10))),
             'local_domain' => env('MAIL_EHLO_DOMAIN', parse_url((string) env('APP_URL', 'http://localhost'), PHP_URL_HOST)),
         ],
 

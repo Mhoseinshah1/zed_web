@@ -117,6 +117,44 @@ class ReferralCommissionTest extends TestCase
         $this->assertDatabaseHas('users', ['username' => 'refuser', 'referred_by_user_id' => $referrer->id]);
     }
 
+    public function test_session_referral_survives_a_rolled_back_registration(): void
+    {
+        $this->setMode(ReferralSettings::MODE_ALL_USERS);
+        $referrer = User::factory()->create();
+
+        // Force the registration transaction to roll back AFTER the referral
+        // source was read — the same shape as the handled email-uniqueness
+        // race. The session referral must NOT be consumed by the failed
+        // attempt: the user's retry still carries the referrer.
+        $this->mock(ReferralService::class)
+            ->shouldReceive('attachReferrer')
+            ->andThrow(new \RuntimeException('forced rollback'));
+
+        $this->withSession(['referral_code' => $referrer->referral_code])
+            ->post('/register', [
+                'name' => 'Rollback', 'username' => 'rollback1', 'email' => 'rollback1@example.com',
+                'phone' => '09120005555', 'password' => 'password123', 'password_confirmation' => 'password123',
+            ])->assertStatus(500);
+
+        $this->assertDatabaseMissing('users', ['username' => 'rollback1']);
+        $this->assertSame($referrer->referral_code, session('referral_code'), 'the retry still carries the referrer');
+    }
+
+    public function test_session_referral_is_consumed_only_after_successful_registration(): void
+    {
+        $this->setMode(ReferralSettings::MODE_ALL_USERS);
+        $referrer = User::factory()->create();
+
+        $this->withSession(['referral_code' => $referrer->referral_code])
+            ->post('/register', [
+                'name' => 'SessRef', 'username' => 'sessref', 'email' => 'sessref@example.com',
+                'phone' => '09120006666', 'password' => 'password123', 'password_confirmation' => 'password123',
+            ]);
+
+        $this->assertDatabaseHas('users', ['username' => 'sessref', 'referred_by_user_id' => $referrer->id]);
+        $this->assertNull(session('referral_code'), 'the committed registration consumes the session referral');
+    }
+
     public function test_invalid_ref_code_does_not_crash_registration(): void
     {
         $this->post('/register', [

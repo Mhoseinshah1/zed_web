@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Middleware\EnsureEmailIsVerified;
 use App\Http\Middleware\EnsureProfileComplete;
 use App\Http\Middleware\NoIndexHeaders;
 use Illuminate\Foundation\Application;
@@ -44,6 +45,7 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->alias([
             'profile.complete' => EnsureProfileComplete::class,
             'noindex' => NoIndexHeaders::class,
+            'email.verified' => EnsureEmailIsVerified::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {

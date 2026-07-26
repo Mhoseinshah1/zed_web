@@ -40,7 +40,10 @@ return [
             'connection' => env('DB_QUEUE_CONNECTION'),
             'table' => env('DB_QUEUE_TABLE', 'jobs'),
             'queue' => env('DB_QUEUE', 'default'),
-            'retry_after' => (int) env('DB_QUEUE_RETRY_AFTER', 90),
+            // Must exceed the largest job timeout (SendEmailOtpJob: 240s) or
+            // a still-running job would be handed to a second worker —
+            // duplicating an OTP email mid-SMTP-conversation.
+            'retry_after' => (int) env('DB_QUEUE_RETRY_AFTER', 300),
             'after_commit' => false,
         ],
 
@@ -48,12 +51,20 @@ return [
             'driver' => 'beanstalkd',
             'host' => env('BEANSTALKD_QUEUE_HOST', 'localhost'),
             'queue' => env('BEANSTALKD_QUEUE', 'default'),
-            'retry_after' => (int) env('BEANSTALKD_QUEUE_RETRY_AFTER', 90),
+            // See the database connection's retry_after note (> 240s job timeout).
+            'retry_after' => (int) env('BEANSTALKD_QUEUE_RETRY_AFTER', 300),
             'block_for' => 0,
             'after_commit' => false,
         ],
 
         'sqs' => [
+            // NOT used by this deployment (redis/database/sync are). If you
+            // switch to SQS: the QUEUE's visibility timeout (an AWS-side
+            // setting — SQS defaults to 30s; there is no retry_after here)
+            // MUST exceed SendEmailOtpJob::$timeout (240s), like the other
+            // drivers' retry_after (300s). Below it, SQS redelivers the job
+            // mid-SMTP-exchange: the redeliveries burn $tries and failed()
+            // would finalize the FIRST worker's still-active sending claim.
             'driver' => 'sqs',
             'key' => env('AWS_ACCESS_KEY_ID'),
             'secret' => env('AWS_SECRET_ACCESS_KEY'),
@@ -68,7 +79,8 @@ return [
             'driver' => 'redis',
             'connection' => env('REDIS_QUEUE_CONNECTION', 'default'),
             'queue' => env('REDIS_QUEUE', 'default'),
-            'retry_after' => (int) env('REDIS_QUEUE_RETRY_AFTER', 90),
+            // See the database connection's retry_after note (> 240s job timeout).
+            'retry_after' => (int) env('REDIS_QUEUE_RETRY_AFTER', 300),
             'block_for' => null,
             'after_commit' => false,
         ],

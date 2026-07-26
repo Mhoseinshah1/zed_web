@@ -1128,6 +1128,60 @@ Upcoming sections (in future development phases):
 - Monitoring — live server status
 - Renew / extra traffic — update Marzban user after renewal
 
+## Email (SMTP) configuration and email-OTP verification
+
+Outbound mail defaults to `MAIL_MAILER=log` (messages go to the log — nothing
+is delivered). Email verification sends a 6-digit OTP; it treats the `log`
+and `array` mailers as **unconfigured** in production, so "required at
+registration" cannot be enabled until a real transport works.
+
+**OTP delivery supports exactly ONE effective delivery leaf.** The delivery
+pipeline's timing invariant is strict — per-operation SMTP timeout ≤ 20 s,
+whole-job deadline 240 s, per-user lock TTL 270 s, queue redelivery horizon
+300 s — and it budgets for a single complete transport exchange. A
+`failover`/`roundrobin` mailer that resolves to **more than one** leaf could
+chain several full exchanges in one attempt, overrunning the job deadline and
+the lock TTL mid-send (worker killed during SMTP I/O, queue redelivery while
+a previous worker is still sending, duplicate OTP emails). Multi-leaf graphs
+are therefore rejected for OTP delivery: the mailer counts as unconfigured,
+required mode cannot be enabled, the test action refuses to certify it, and
+no OTP job is queued through it. The default `failover` (smtp → log) is
+**not** suitable for production OTP — use `MAIL_MAILER=smtp` for the current
+deployment. A composite that resolves to exactly one leaf is accepted.
+
+1. Edit the server's `.env` (SMTP credentials live ONLY here — never in the
+   database or the admin panel):
+
+   ```
+   MAIL_MAILER=smtp
+   MAIL_HOST=smtp.example.com
+   MAIL_PORT=587
+   MAIL_SCHEME=null
+   MAIL_USERNAME=your-user
+   MAIL_PASSWORD=your-pass
+   MAIL_FROM_ADDRESS=noreply@yourdomain.com
+   MAIL_FROM_NAME="ZedProxy"
+   MAIL_TIMEOUT=10
+   ```
+
+2. Apply the change (config is cached in production):
+
+   ```
+   php artisan optimize:clear
+   php artisan config:cache
+   sudo supervisorctl restart zedproxy-worker:*   # queue workers pick up the new config
+   ```
+
+3. In the admin panel → «تنظیمات ایمیل و تایید ایمیل» use **ارسال ایمیل تست**
+   to confirm real delivery, then enable verification (and, if desired,
+   make it required at registration).
+
+Existing users are grandfathered by a one-time migration (their
+`email_verified_at` is backfilled to their `created_at`), so enabling
+required verification never locks out accounts that existed before the
+feature shipped. The installer preserves your mail configuration on re-runs
+and never prints or logs `MAIL_PASSWORD`.
+
 ## Updating ZedProxy
 
 The `update.sh` script performs a safe, zero-data-loss update of a running ZedProxy installation.

@@ -57,6 +57,17 @@ class SensitiveDataProcessor implements ProcessorInterface
         'telegram_token',
     ];
 
+    /**
+     * Scrub a free-text string outside the logging pipeline (e.g. before
+     * persisting a delivery error to the database). Same pattern set as the
+     * log processor — credentials, tokens, DSNs and Authorization headers are
+     * masked.
+     */
+    public static function scrub(string $value): string
+    {
+        return (new self)->maskString($value);
+    }
+
     public function __invoke(LogRecord $record): LogRecord
     {
         $message = $this->maskString($record->message);
@@ -121,13 +132,24 @@ class SensitiveDataProcessor implements ProcessorInterface
 
         $patterns = [
             // KEY=VALUE style assignments (APP_KEY=, DB_PASSWORD=, TOKEN=, ...).
-            '/([A-Za-z0-9_]*(?:PASSWORD|PASSWD|PASS|SECRET|TOKEN|APP_KEY|API[_-]?KEY|PGPASSWORD))[[:space:]]*=[[:space:]]*[^[:space:]"\'\\\\]+/i' => '$1='.self::REDACTED,
+            '/([A-Za-z0-9_]*(?:PASSWORD|PASSWD|PASS|SECRET|TOKEN|APP_KEY|API[_-]?KEY|PGPASSWORD|USERNAME|USER|LOGIN))[[:space:]]*=[[:space:]]*[^[:space:]"\'\\\\]+/i' => '$1='.self::REDACTED,
             // Authorization: Bearer / Basic <token>.
             '/(Authorization[[:space:]]*:[[:space:]]*)(Bearer|Basic)[[:space:]]+[A-Za-z0-9._~+\/=-]+/i' => '$1$2 '.self::REDACTED,
             // user:pass@host inside URLs.
             '#([A-Za-z][A-Za-z0-9+.-]*://)[^/@\s:]+:[^/@\s]+@#' => '$1'.self::REDACTED.'@',
             // JSON "field": "value" pairs for credential-ish keys.
             '/("?(?:password|passwd|secret|token|api[_-]?key|api[_-]?token|access[_-]?token|refresh[_-]?token|authorization|signature)"?[[:space:]]*:[[:space:]]*")[^"]*"/i' => '$1'.self::REDACTED.'"',
+            // Quoted credentials in prose or assignments — `password "y"`,
+            // `API_KEY='sk-…'`, `token="…"`, `client_secret='…'`: the
+            // KEY=VALUE pattern above deliberately skips quoted values, so
+            // every credential-key variant must be covered here too.
+            '/\b(username|user|login|password|passwd|pwd|secret|token|api[_-]?key|api[_-]?token|apikey|client[_-]?secret|access[_-]?token|refresh[_-]?token|app[_-]?key)\b[[:space:]]*[:=]?[[:space:]]*["\'][^"\']*["\']/i' => '$1 '.self::REDACTED,
+            // UNQUOTED colon-delimited credentials in prose or headers, e.g.
+            // `password: hunter2`, `api_key: sk-abc123`, and SMTP logins like
+            // `username: mail-user@example.com` — exception text from unknown
+            // transports formats secrets this way too, and the quoted pattern
+            // above already treats usernames as credentials.
+            '/\b(username|user|login|password|passwd|pwd|secret|token|api[_-]?key|api[_-]?token|apikey|client[_-]?secret|access[_-]?token|refresh[_-]?token)\b[[:space:]]*:[[:space:]]*[^[:space:]"\'][^[:space:]]*/i' => '$1: '.self::REDACTED,
             // GitHub tokens.
             '/\b(?:gh[posur]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{20,})\b/' => self::REDACTED,
             // Telegram bot token: <digits>:<35+ chars>.

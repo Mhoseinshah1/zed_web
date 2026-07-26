@@ -187,6 +187,62 @@ jobs:
       - name: Order idempotency + real-concurrency (PostgreSQL)
         run: php artisan test --testsuite=Feature --filter='OrderIdempotencyTest|OrderIdempotencyPgTest'
 
+      - name: Email OTP registration + verification flows (PostgreSQL)
+        # Default array cache store: each test gets a FRESH rate-limiter
+        # state. (A shared Redis store here would let the per-IP registration
+        # and verification throttles accumulate across tests into 429s.)
+        run: php artisan test --testsuite=Feature --filter='EmailVerificationTest|EmailVerificationHardeningTest|EmailMailTestProofTest'
+
+      - name: Email OTP real concurrency (PostgreSQL + Redis locks)
+        # Real Redis-backed Cache::lock so the bounded per-user serialization
+        # lock is exercised ACROSS the forked worker processes, on top of the
+        # PostgreSQL row locks (EmailConcurrencyPgTest skips on SQLite).
+        env:
+          CACHE_STORE: redis
+        run: php artisan test --testsuite=Feature --filter='EmailConcurrencyPgTest'
+
+      - name: Concurrent email-address collisions (PostgreSQL)
+        env:
+          CACHE_STORE: redis
+        run: php artisan test --testsuite=Feature --filter='EmailChangeCollisionPgTest'
+
+      - name: Email row-lock timeout behavior (PostgreSQL)
+        run: php artisan test --testsuite=Feature --filter='EmailLockTimeoutPgTest'
+
+      - name: Atomic admin email update behavior (PostgreSQL)
+        run: php artisan test --testsuite=Feature --filter='EmailAdminUpdatePgTest'
+
+      - name: OTP delivery claim + finalization concurrency (PostgreSQL)
+        # Redis-backed Cache::lock so the cache-lock-expiry vs finalization
+        # race runs against a real lock backend.
+        env:
+          CACHE_STORE: redis
+        run: php artisan test --testsuite=Feature --filter='EmailDeliveryClaimTest|EmailDeliveryFinalizePgTest'
+
+      - name: Queued-job User-row lock ordering (PostgreSQL)
+        run: php artisan test --testsuite=Feature --filter='EmailJobLockOrderPgTest'
+
+      - name: Queue publication health race (PostgreSQL)
+        # An uncommitted queue_published_at stamp on an independent
+        # connection must neither block transportLooksLive() nor count as
+        # publication-recovery evidence until it commits.
+        run: php artisan test --testsuite=Feature --filter='EmailQueuePublicationPgTest'
+
+      - name: Transport-failure finalization lock timeout (PostgreSQL)
+        # Failure bookkeeping (failTransportAttempt + failed()) uses the
+        # bounded lock protocol: held User/OTP rows delay it only by the
+        # SET LOCAL lock_timeout, tokens stay owner-exclusive, output stays
+        # sanitized.
+        env:
+          CACHE_STORE: redis
+        run: php artisan test --testsuite=Feature --filter='EmailFailureFinalizePgTest'
+
+      - name: Sync/pre-transport superseded-code restoration
+        # queue_published_at / transport_attempted_at evidence semantics and
+        # the zero-transport restoration paths (sync contention, async
+        # published exhaustion, real-transport refusal, idempotency).
+        run: php artisan test --testsuite=Feature --filter='EmailQueuePublicationTest'
+
       - name: Scheduler locking + Redis-outage resilience
         run: php artisan test --testsuite=Feature --filter='SchedulerTest'
 
