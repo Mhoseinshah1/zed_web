@@ -55,14 +55,61 @@ class EmailTransportSettingsService
 
     public const SOURCE_PANEL_INVALID = 'panel_invalid';
 
+    /**
+     * Sentinel applied-version for the pre-first-apply storage outage: the
+     * process could never determine whether a panel override exists, so it
+     * fails CLOSED instead of silently trusting the environment transport.
+     */
+    public const STORAGE_FAIL_CLOSED_VERSION = 'storage-unavailable-fail-closed';
+
     /** Version of the configuration THIS process last applied (memo). */
     private ?string $appliedVersion = null;
 
-    /** Env-backed baseline captured before the first override application. */
-    private ?array $envBaseline = null;
+    /** True while the process is in the pre-first-apply fail-closed state. */
+    private bool $storageFailClosed = false;
+
+    /**
+     * IMMUTABLE environment-backed baseline, captured ONCE PER PROCESS at the
+     * first touch of any service instance — strictly before this service
+     * performs its first mutation. Static so a freshly constructed service in
+     * the same (already mutated) process resolves the exact same fallback
+     * values and fingerprint as the long-lived singleton: fallbacks are never
+     * derived from config keys the panel application itself rewrote.
+     */
+    private static ?array $processEnvBaseline = null;
 
     /** Diagnostics for tests: how many times the cached mailer was purged. */
     private int $purgeCount = 0;
+
+    /**
+     * The immutable environment baseline (capturing it on first touch — every
+     * caller goes through here BEFORE any config mutation this service makes).
+     */
+    private function envBaseline(): array
+    {
+        return self::$processEnvBaseline ??= [
+            'default' => config('mail.default'),
+            'from_address' => config('mail.from.address'),
+            'from_name' => config('mail.from.name'),
+            'smtp_local_domain' => config('mail.mailers.smtp.local_domain'),
+            // The dedicated name is reserved for the panel — but if a
+            // deployment's own config defines it, that ORIGINAL definition
+            // must survive an enable→disable cycle exactly.
+            'managed_smtp_existed' => config()->has('mail.mailers.'.self::MAILER),
+            'managed_smtp_original' => config('mail.mailers.'.self::MAILER),
+        ];
+    }
+
+    /**
+     * TEST-ONLY: forget the captured process baseline so a test can stage its
+     * own environment values and have them captured as the baseline (this
+     * simulates a process booted under that environment). Production never
+     * calls this — the baseline is immutable for the life of the process.
+     */
+    public static function resetProcessBaselineForTesting(): void
+    {
+        self::$processEnvBaseline = null;
+    }
 
     /**
      * Resolve the effective source and (for the panel source) the transport
@@ -73,6 +120,13 @@ class EmailTransportSettingsService
      */
     public function resolve(): array
     {
+        // Capture the immutable environment baseline BEFORE any resolution:
+        // optional-value fallbacks below must come from the true environment,
+        // never from `mail.from.name` etc. after a previous panel apply()
+        // rewrote them (that feedback loop made a cleared panel From name
+        // keep resolving to the stale panel value).
+        $baseline = $this->envBaseline();
+
         $row = EmailTransportSetting::instance();
 
         if ($row === null || ! $row->enabled) {
@@ -104,11 +158,14 @@ class EmailTransportSettingsService
                 'username' => $username === '' ? null : $username,
                 'password' => $password === '' ? null : $password,
                 'timeout' => min(self::MAX_TIMEOUT, max(self::MIN_TIMEOUT, (int) $row->timeout)),
-                'local_domain' => (string) ($row->local_domain ?: config('mail.mailers.smtp.local_domain')),
+                'local_domain' => (string) ($row->local_domain ?: $baseline['smtp_local_domain']),
             ],
             'from' => [
                 'address' => (string) $row->from_address,
-                'name' => (string) ($row->from_name ?: config('mail.from.name')),
+                // Blank optional panel name → the ORIGINAL environment name,
+                // immediately and in every process — never the previously
+                // applied panel name echoed back out of runtime config.
+                'name' => (string) ($row->from_name ?: $baseline['from_name']),
             ],
         ];
     }
@@ -141,28 +198,46 @@ class EmailTransportSettingsService
      */
     public function apply(): void
     {
+        // Baseline capture FIRST — even the failure paths below mutate config
+        // and must never poison a later capture.
+        $this->envBaseline();
+
         try {
             $resolved = $this->resolve();
         } catch (Throwable) {
-            // Storage unavailable mid-process (transient DB failure inside a
-            // worker): keep the last successfully applied configuration —
-            // never guess, never reset.
+            // Configuration/decryption corruption never reaches here —
+            // resolve() classifies it as SOURCE_PANEL_INVALID. This catch is
+            // storage-level failure (unreachable database) only.
+            if ($this->appliedVersion === self::STORAGE_FAIL_CLOSED_VERSION) {
+                return; // already failed closed — no repeated purges
+            }
+
+            if ($this->appliedVersion !== null) {
+                // Mid-process transient failure AFTER a successful apply:
+                // keep the last successfully applied configuration — never
+                // guess, never reset.
+                return;
+            }
+
+            // The process has NEVER resolved a configuration: it cannot know
+            // whether a panel override exists, so continuing with the
+            // environment transport could silently send through credentials
+            // the administrator replaced. Fail CLOSED until storage answers.
+            $this->applyFailClosed();
+            Mail::purge(self::MAILER);
+            $this->purgeCount++;
+            $this->appliedVersion = self::STORAGE_FAIL_CLOSED_VERSION;
+            $this->storageFailClosed = true;
+
             return;
         }
+
+        $this->storageFailClosed = false;
 
         $version = $this->version($resolved);
         if ($version === $this->appliedVersion) {
             return;
         }
-
-        // Snapshot the untouched environment-backed values ONCE, before the
-        // first mutation this process makes, so a later disable restores the
-        // true .env identity inside the same long-lived worker.
-        $this->envBaseline ??= [
-            'default' => config('mail.default'),
-            'from.address' => config('mail.from.address'),
-            'from.name' => config('mail.from.name'),
-        ];
 
         match ($resolved['source']) {
             self::SOURCE_PANEL => $this->applyPanel($resolved),
@@ -209,14 +284,33 @@ class EmailTransportSettingsService
         ]);
     }
 
-    /** Override disabled/absent: restore the environment-backed identity. */
+    /**
+     * Override disabled/absent: restore the environment-backed identity from
+     * the IMMUTABLE baseline — including the reserved mailer name. When the
+     * deployment's own config defined `managed_smtp`, that original
+     * definition is restored exactly; otherwise the runtime definition is
+     * neutralized so stale panel credentials can never remain reachable (or
+     * silently authoritative when the environment default happens to carry
+     * the reserved name).
+     */
     private function applyEnvBaseline(): void
     {
+        $baseline = $this->envBaseline();
+
         config([
-            'mail.default' => $this->envBaseline['default'],
-            'mail.from.address' => $this->envBaseline['from.address'],
-            'mail.from.name' => $this->envBaseline['from.name'],
+            'mail.default' => $baseline['default'],
+            'mail.from.address' => $baseline['from_address'],
+            'mail.from.name' => $baseline['from_name'],
+            'mail.mailers.'.self::MAILER => $baseline['managed_smtp_existed']
+                ? $baseline['managed_smtp_original']
+                : null,
         ]);
+    }
+
+    /** True while the pre-first-apply storage outage keeps mail fail-closed. */
+    public function isStorageFailClosed(): bool
+    {
+        return $this->storageFailClosed;
     }
 
     /**
