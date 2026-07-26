@@ -172,13 +172,14 @@ class EmailVerificationService
      */
     public function transportLooksLive(): bool
     {
-        // Windowed and ordered by updated_at — the FINALIZATION time (every
-        // terminal transition writes it) — not issuance id: queued jobs
-        // routinely finalize out of issuance order, and an older code
-        // succeeding AFTER three newer failures is exactly the recovery
-        // signal that must clear the outage immediately.
+        // Windowed and ordered by delivery_finalized_at — the DEDICATED,
+        // immutable delivery-outcome timestamp every terminal transition
+        // stamps — never issuance id (jobs finalize out of issuance order)
+        // and never updated_at (a general mutation time: verify() or
+        // invalidateCodes() touching an old `sent` row must not make it look
+        // like a freshly finalized success during a live outage).
         $recentOutcomes = EmailVerificationCode::query()
-            ->where('updated_at', '>=', now()->subMinutes(self::OUTAGE_WINDOW_MINUTES))
+            ->where('delivery_finalized_at', '>=', now()->subMinutes(self::OUTAGE_WINDOW_MINUTES))
             ->where(function ($q) {
                 $q->whereIn('send_status', [
                     EmailVerificationCode::SEND_STATUS_SENT,
@@ -198,7 +199,7 @@ class EmailVerificationService
                             });
                     });
             })
-            ->orderByDesc('updated_at')
+            ->orderByDesc('delivery_finalized_at')
             ->orderByDesc('id')
             ->limit(self::OUTAGE_MIN_FAILURES)
             ->pluck('send_status');
@@ -417,6 +418,20 @@ class EmailVerificationService
         }
 
         return true;
+    }
+
+    /**
+     * The DELIVERY LEAVES of the current mailer graph (mailer-name ⇒
+     * transport), or null when the graph is invalid. Composite policies
+     * (failover/roundrobin) route different sends to different leaves, so a
+     * transport test must exercise EVERY leaf — one healthy child accepting
+     * a single test proves nothing about its siblings.
+     *
+     * @return array<string,string>|null
+     */
+    public function effectiveLeafMailers(): ?array
+    {
+        return $this->effectiveTransports((string) config('mail.default'));
     }
 
     /**
@@ -750,6 +765,7 @@ class EmailVerificationService
                     'send_status' => EmailVerificationCode::SEND_STATUS_DISPATCH_FAILED,
                     'send_error' => MailFailure::summarize('queue dispatch failed', $e),
                     'used_at' => now(),
+                    'delivery_finalized_at' => now(),
                 ])->save();
             }
 
@@ -1081,6 +1097,19 @@ class EmailVerificationService
     /** Mark every unused code for this user as consumed. */
     public function invalidateCodes(User $user): void
     {
+        // Superseded-but-never-claimed queued rows will never see a transport
+        // attempt (a later claim would only skip them): finalize them as
+        // `skipped` NOW so the daily cap stays honest while a queue backlog
+        // drains — repeated resends must not exhaust the allowance with rows
+        // that produced zero deliveries.
+        EmailVerificationCode::where('user_id', $user->id)
+            ->whereNull('used_at')
+            ->where('send_status', EmailVerificationCode::SEND_STATUS_QUEUED)
+            ->update([
+                'send_status' => EmailVerificationCode::SEND_STATUS_SKIPPED,
+                'delivery_finalized_at' => now(),
+            ]);
+
         EmailVerificationCode::where('user_id', $user->id)
             ->whereNull('used_at')
             ->update(['used_at' => now()]);

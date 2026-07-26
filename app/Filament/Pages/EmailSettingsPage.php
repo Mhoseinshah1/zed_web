@@ -234,9 +234,18 @@ class EmailSettingsPage extends Page implements HasActions, HasForms
                 try {
                     // Dedicated harmless test message (never a fake OTP), sent
                     // synchronously so the result is the transport's own
-                    // verdict. Never includes secrets.
-                    Mail::to((string) $data['test_email'])
-                        ->send(new TestEmailMail);
+                    // verdict. EVERY delivery leaf of the mailer graph is
+                    // exercised: a composite (failover/roundrobin) routes
+                    // different sends to different children, and one healthy
+                    // child accepting a single test proves nothing about the
+                    // siblings real OTPs may be routed to. Never includes
+                    // secrets.
+                    $leaves = array_keys(app(EmailVerificationService::class)->effectiveLeafMailers() ?? []);
+                    foreach ($leaves as $leafMailer) {
+                        Mail::mailer($leafMailer)
+                            ->to((string) $data['test_email'])
+                            ->send(new TestEmailMail);
+                    }
 
                     // The transport accepted the message: record the NON-SECRET
                     // proof (config fingerprint + timestamp) that required
@@ -246,7 +255,9 @@ class EmailSettingsPage extends Page implements HasActions, HasForms
                     // HONEST wording: the transport ACCEPTED the message —
                     // inbox delivery can never be confirmed from here.
                     Notification::make()
-                        ->title('سرور ایمیل پیام تست را پذیرفت. رسیدن به صندوق ورودی را در مقصد بررسی کنید.')
+                        ->title(count($leaves) > 1
+                            ? 'همه '.count($leaves).' مسیر ارسال پیام تست را پذیرفتند. رسیدن به صندوق ورودی را در مقصد بررسی کنید.'
+                            : 'سرور ایمیل پیام تست را پذیرفت. رسیدن به صندوق ورودی را در مقصد بررسی کنید.')
                         ->success()->send();
                 } catch (\Throwable $e) {
                     // NEVER show or log raw transport text (it can echo SMTP

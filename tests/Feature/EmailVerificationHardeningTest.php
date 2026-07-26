@@ -1150,6 +1150,7 @@ class EmailVerificationHardeningTest extends TestCase
                 'code_hash' => Hash::make('123456'), 'attempts' => 0,
                 'expires_at' => now()->addMinutes(10), 'used_at' => now(),
                 'send_status' => EmailVerificationCode::SEND_STATUS_FAILED,
+                'delivery_finalized_at' => now(),
             ]);
         }
 
@@ -1166,6 +1167,7 @@ class EmailVerificationHardeningTest extends TestCase
             'code_hash' => Hash::make('123456'), 'attempts' => 0,
             'expires_at' => now()->addMinutes(10), 'used_at' => now(),
             'send_status' => EmailVerificationCode::SEND_STATUS_SENT,
+            'delivery_finalized_at' => now(),
         ]);
         $this->assertTrue($svc->transportLooksLive());
         $this->assertTrue($svc->isEnforceableNow());
@@ -1193,6 +1195,7 @@ class EmailVerificationHardeningTest extends TestCase
                 'code_hash' => Hash::make('123456'), 'attempts' => 0,
                 'expires_at' => now()->addMinutes(10), 'used_at' => now(),
                 'send_status' => EmailVerificationCode::SEND_STATUS_FAILED,
+                'delivery_finalized_at' => now(),
             ]);
         }
         $this->assertFalse($svc->transportLooksLive());
@@ -1202,10 +1205,64 @@ class EmailVerificationHardeningTest extends TestCase
         // though every failure has a higher issuance id.
         $this->travel(1)->minutes();
         EmailVerificationCode::whereKey($older->id)
-            ->update(['send_status' => EmailVerificationCode::SEND_STATUS_SENT, 'updated_at' => now()]);
+            ->update(['send_status' => EmailVerificationCode::SEND_STATUS_SENT, 'delivery_finalized_at' => now()]);
         $this->travelBack();
 
         $this->assertTrue($svc->transportLooksLive(), 'out-of-order success is still a recovery');
+    }
+
+    public function test_general_mutations_of_old_outcomes_never_fake_a_recovery(): void
+    {
+        $svc = app(EmailVerificationService::class);
+        $user = $this->unverifiedUser();
+
+        // An old success finalized LONG before the outage …
+        $old = EmailVerificationCode::create([
+            'user_id' => $user->id, 'email' => $user->email,
+            'code_hash' => Hash::make('123456'), 'attempts' => 0,
+            'expires_at' => now()->addMinutes(10),
+            'send_status' => EmailVerificationCode::SEND_STATUS_SENT,
+            'delivery_finalized_at' => now()->subHours(2),
+        ]);
+        // … then the endpoint dies: three fresh failures.
+        foreach (range(1, 3) as $i) {
+            EmailVerificationCode::create([
+                'user_id' => $user->id, 'email' => $user->email,
+                'code_hash' => Hash::make('123456'), 'attempts' => 0,
+                'expires_at' => now()->addMinutes(10), 'used_at' => now(),
+                'send_status' => EmailVerificationCode::SEND_STATUS_FAILED,
+                'delivery_finalized_at' => now(),
+            ]);
+        }
+        $this->assertFalse($svc->transportLooksLive());
+
+        // Invalidating (or verifying) the OLD sent row moves updated_at but
+        // NOT its delivery outcome — the outage must persist.
+        $svc->invalidateCodes($user->fresh());
+        $this->assertNotNull($old->fresh()->used_at);
+        $this->assertFalse($svc->transportLooksLive(), 'a general mutation is not a fresh delivery success');
+    }
+
+    public function test_superseded_queued_codes_never_burn_the_daily_cap(): void
+    {
+        Queue::fake();
+        SiteSetting::set('email_otp_resend_cooldown_seconds', 0);
+        SiteSetting::set('email_otp_daily_cap', 3);
+        $svc = app(EmailVerificationService::class);
+        $user = $this->unverifiedUser();
+
+        // A backlog: jobs never run, every resend supersedes a still-queued
+        // record. Those rows produced ZERO deliveries — the cap must ignore
+        // them, or the user exhausts the allowance while the backlog drains.
+        foreach (range(1, 3) as $i) {
+            $this->assertSame('queued', $svc->requestCode($user->fresh())['status'], "resend #{$i} within the cap");
+        }
+
+        $superseded = EmailVerificationCode::where('user_id', $user->id)
+            ->where('send_status', EmailVerificationCode::SEND_STATUS_SKIPPED)
+            ->count();
+        $this->assertSame(2, $superseded, 'every superseded queued row was finalized as skipped');
+        $this->assertFalse($svc->reachedDailyCap($user->fresh()), 'only the single live queued row counts');
     }
 
     public function test_policy_capture_recreates_missing_rows_so_the_lock_has_a_target(): void
@@ -1238,6 +1295,7 @@ class EmailVerificationHardeningTest extends TestCase
                 'expires_at' => now()->addMinutes(10), 'used_at' => now(),
                 'send_status' => EmailVerificationCode::SEND_STATUS_FAILED,
                 'send_error' => 'delivery failed: recipient_rejected (TransportException)',
+                'delivery_finalized_at' => now(),
             ]);
         }
 

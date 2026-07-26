@@ -142,6 +142,10 @@ class SensitiveDataProcessor implements ProcessorInterface
             // Quoted credentials in prose, e.g. SMTP transport errors like
             // `authentication failed: username "x" / password "y"`.
             '/\b(username|user|login|password|passwd)\b[[:space:]]*[:=]?[[:space:]]*["\'][^"\']*["\']/i' => '$1 '.self::REDACTED,
+            // UNQUOTED colon-delimited credentials in prose or headers, e.g.
+            // `password: hunter2`, `api_key: sk-abc123` — exception text from
+            // unknown transports formats secrets this way too.
+            '/\b(password|passwd|pwd|secret|token|api[_-]?key|api[_-]?token|apikey|client[_-]?secret|access[_-]?token|refresh[_-]?token)\b[[:space:]]*:[[:space:]]*[^[:space:]"\'][^[:space:]]*/i' => '$1: '.self::REDACTED,
             // GitHub tokens.
             '/\b(?:gh[posur]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{20,})\b/' => self::REDACTED,
             // Telegram bot token: <digits>:<35+ chars>.

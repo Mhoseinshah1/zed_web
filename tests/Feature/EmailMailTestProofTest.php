@@ -92,6 +92,7 @@ class EmailMailTestProofTest extends TestCase
 
     public function test_failed_test_does_not_store_proof(): void
     {
+        Mail::shouldReceive('mailer')->andReturnSelf();
         Mail::shouldReceive('to')->andThrow(new \RuntimeException('connection refused'));
 
         Livewire::actingAs($this->admin())
@@ -100,6 +101,46 @@ class EmailMailTestProofTest extends TestCase
 
         $this->assertSame('', (string) SiteSetting::get('email_mail_test_fingerprint', ''));
         $this->assertFalse($this->svc()->hasVerifiedMailTest());
+    }
+
+    public function test_every_composite_leaf_is_exercised_and_one_broken_leaf_blocks_the_proof(): void
+    {
+        config([
+            'mail.default' => 'combo',
+            'mail.mailers.combo' => ['transport' => 'roundrobin', 'mailers' => ['smtp_a', 'smtp_b']],
+            'mail.mailers.smtp_a' => ['transport' => 'smtp', 'host' => 'a.example.com', 'port' => 587],
+            'mail.mailers.smtp_b' => ['transport' => 'smtp', 'host' => 'b.example.com', 'port' => 587],
+        ]);
+
+        // Healthy graph: BOTH leaves receive the certification test — a
+        // roundrobin routes real OTPs to either child, so one send through
+        // the composite would leave a sibling unproven.
+        Mail::fake();
+        Livewire::actingAs($this->admin())
+            ->test(EmailSettingsPage::class)
+            ->callAction('testEmail', ['test_email' => 'probe@example.com']);
+        Mail::assertSentCount(2);
+        $this->assertTrue($this->svc()->hasVerifiedMailTest());
+
+        // ONE broken leaf: the whole certification fails — no fresh proof.
+        SiteSetting::set('email_mail_test_fingerprint', '');
+        $sends = 0;
+        Mail::clearResolvedInstances();
+        $pending = \Mockery::mock();
+        $pending->shouldReceive('send')->andReturnUsing(function () use (&$sends) {
+            if (++$sends === 2) {
+                throw new \RuntimeException('connection refused');
+            }
+        });
+        Mail::shouldReceive('mailer')->andReturnSelf();
+        Mail::shouldReceive('to')->andReturn($pending);
+
+        Livewire::actingAs($this->admin())
+            ->test(EmailSettingsPage::class)
+            ->callAction('testEmail', ['test_email' => 'probe@example.com']);
+
+        $this->assertSame(2, $sends, 'the second leaf WAS attempted');
+        $this->assertFalse($this->svc()->hasVerifiedMailTest(), 'a partially proven composite earns no proof');
     }
 
     public function test_composite_topology_changes_invalidate_the_proof(): void

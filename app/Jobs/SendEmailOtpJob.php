@@ -270,6 +270,7 @@ class SendEmailOtpJob implements ShouldBeEncrypted, ShouldQueue
                 'send_status' => EmailVerificationCode::SEND_STATUS_SKIPPED,
                 'delivery_claim_token' => null,
                 'delivery_claimed_at' => null,
+                'delivery_finalized_at' => now(),
             ]);
     }
 
@@ -321,6 +322,7 @@ class SendEmailOtpJob implements ShouldBeEncrypted, ShouldQueue
                         'send_status' => EmailVerificationCode::SEND_STATUS_SKIPPED,
                         'delivery_claim_token' => null,
                         'delivery_claimed_at' => null,
+                        'delivery_finalized_at' => now(),
                     ])->save();
 
                     return;
@@ -342,6 +344,7 @@ class SendEmailOtpJob implements ShouldBeEncrypted, ShouldQueue
                         'send_error' => null,
                         'delivery_claim_token' => null,
                         'delivery_claimed_at' => null,
+                        'delivery_finalized_at' => now(),
                     ])->save();
                 } else {
                     // Transport accepted, ownership uncertain: honest terminal
@@ -350,6 +353,7 @@ class SendEmailOtpJob implements ShouldBeEncrypted, ShouldQueue
                         'send_status' => EmailVerificationCode::SEND_STATUS_ACCEPTED_PENDING,
                         'delivery_claim_token' => null,
                         'delivery_claimed_at' => null,
+                        'delivery_finalized_at' => now(),
                     ])->save();
                 }
             });
@@ -370,6 +374,7 @@ class SendEmailOtpJob implements ShouldBeEncrypted, ShouldQueue
                             'send_status' => EmailVerificationCode::SEND_STATUS_ACCEPTED_PENDING,
                             'delivery_claim_token' => null,
                             'delivery_claimed_at' => null,
+                            'delivery_finalized_at' => now(),
                         ]);
                 });
             } catch (QueryException $e2) {
@@ -421,6 +426,7 @@ class SendEmailOtpJob implements ShouldBeEncrypted, ShouldQueue
                 'send_error' => $safe,
                 'delivery_claim_token' => null,
                 'delivery_claimed_at' => null,
+                'delivery_finalized_at' => now(),
             ]);
     }
 
@@ -473,6 +479,7 @@ class SendEmailOtpJob implements ShouldBeEncrypted, ShouldQueue
             ->update([
                 'send_status' => EmailVerificationCode::SEND_STATUS_DISPATCH_FAILED,
                 'send_error' => $safe,
+                'delivery_finalized_at' => now(),
             ]);
     }
 }

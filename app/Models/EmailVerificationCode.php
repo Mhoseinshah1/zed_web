@@ -20,6 +20,7 @@ class EmailVerificationCode extends Model
         'attempts',
         'send_status',
         'send_error',
+        'delivery_finalized_at',
         'ip_address',
         'user_agent',
     ];
@@ -76,6 +77,7 @@ class EmailVerificationCode extends Model
         'expires_at' => 'datetime',
         'used_at' => 'datetime',
         'delivery_claimed_at' => 'datetime',
+        'delivery_finalized_at' => 'datetime',
         'attempts' => 'integer',
     ];
 
