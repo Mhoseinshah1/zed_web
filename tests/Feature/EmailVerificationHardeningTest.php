@@ -1316,6 +1316,68 @@ class EmailVerificationHardeningTest extends TestCase
         $this->travelBack();
     }
 
+    public function test_a_queue_outage_pauses_enforcement_like_a_mail_outage(): void
+    {
+        $svc = app(EmailVerificationService::class);
+        $user = $this->unverifiedUser();
+
+        // The queue connection is down: every resend dies BEFORE any
+        // transport attempt. Users cannot receive codes either way — the
+        // delivery pipeline is broken, so enforcement must fail open.
+        foreach (range(1, 3) as $i) {
+            EmailVerificationCode::create([
+                'user_id' => $user->id, 'email' => $user->email,
+                'code_hash' => Hash::make('123456'), 'attempts' => 0,
+                'expires_at' => now()->addMinutes(10), 'used_at' => now(),
+                'send_status' => EmailVerificationCode::SEND_STATUS_DISPATCH_FAILED,
+                'delivery_finalized_at' => now(),
+            ]);
+        }
+
+        $this->assertFalse($svc->transportLooksLive(), 'dispatch failures are pipeline-outage evidence');
+        $this->assertFalse($svc->isEnforceableNow());
+        auth()->logout();
+        $this->app['auth']->forgetGuards();
+        $this->actingAs($user)->get('/dashboard')->assertOk();
+    }
+
+    public function test_stale_config_failures_never_suspend_the_current_configuration(): void
+    {
+        $svc = app(EmailVerificationService::class);
+        $user = $this->unverifiedUser();
+
+        // A long-lived worker still running a REPLACED configuration
+        // finalizes its failures late — stamped with the OLD fingerprint.
+        foreach (range(1, 3) as $i) {
+            EmailVerificationCode::create([
+                'user_id' => $user->id, 'email' => $user->email,
+                'code_hash' => Hash::make('123456'), 'attempts' => 0,
+                'expires_at' => now()->addMinutes(10), 'used_at' => now(),
+                'send_status' => EmailVerificationCode::SEND_STATUS_FAILED,
+                'delivery_finalized_at' => now(),
+                'delivery_config_fingerprint' => str_repeat('0', 64),
+            ]);
+        }
+
+        // Outcomes of a config that is no longer in use say nothing about
+        // the CURRENT one — enforcement stays armed.
+        $this->assertTrue($svc->transportLooksLive(), 'stale-config failures are filtered out');
+        $this->assertTrue($svc->isEnforceableNow());
+    }
+
+    public function test_intended_destination_is_stored_relative_never_with_the_request_host(): void
+    {
+        $user = $this->unverifiedUser();
+
+        // A proxy accepting arbitrary Host values must not let the header
+        // become an absolute post-verification redirect target.
+        $this->actingAs($user)
+            ->get('http://evil.attacker.example/dashboard')
+            ->assertRedirect(route('verification.notice'));
+
+        $this->assertSame('/dashboard', session('url.intended'), 'relative target only — no attacker-influenced host');
+    }
+
     public function test_recipient_rejections_never_fabricate_a_global_outage(): void
     {
         $svc = app(EmailVerificationService::class);

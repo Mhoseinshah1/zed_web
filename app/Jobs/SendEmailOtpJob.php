@@ -103,6 +103,15 @@ class SendEmailOtpJob implements ShouldBeEncrypted, ShouldQueue
     /** This attempt's delivery claim — in memory only, never serialized/logged. */
     private ?string $claimToken = null;
 
+    /** Memoized non-secret fingerprint of the config THIS process delivers with. */
+    private ?string $configFingerprint = null;
+
+    /** The mail-config fingerprint stamped onto finalized outcomes (see transportLooksLive). */
+    private function configFingerprint(): string
+    {
+        return $this->configFingerprint ??= app(EmailVerificationService::class)->mailConfigFingerprint();
+    }
+
     public function __construct(
         private readonly int $codeId,
         private readonly int $userId,
@@ -229,7 +238,16 @@ class SendEmailOtpJob implements ShouldBeEncrypted, ShouldQueue
             // changed (record- or user-side), user gone, user ALREADY
             // verified, or a newer active code exists (only the newest may
             // be delivered).
+            // The DELIVERY POLICY is re-validated at claim time too: an admin
+            // disabling verification (or the mailer degrading to a
+            // non-deliverable graph — e.g. production log/array, which would
+            // write the plaintext OTP into application logs while "sending")
+            // must also stop the queued backlog, not only new issuance.
+            $service = app(EmailVerificationService::class);
+
             $obsolete = $record->used_at !== null
+                || ! $service->isEnabled()
+                || ! $service->isMailConfigured()
                 || now()->diffInSeconds($record->expires_at, false) < self::MIN_DELIVERY_MARGIN_SECONDS
                 || strcasecmp($record->email, $this->email) !== 0
                 || $user === null
@@ -350,6 +368,7 @@ class SendEmailOtpJob implements ShouldBeEncrypted, ShouldQueue
                         'delivery_claim_token' => null,
                         'delivery_claimed_at' => null,
                         'delivery_finalized_at' => now(),
+                        'delivery_config_fingerprint' => $this->configFingerprint(),
                     ])->save();
                 } else {
                     // Transport accepted, ownership uncertain: honest terminal
@@ -359,6 +378,7 @@ class SendEmailOtpJob implements ShouldBeEncrypted, ShouldQueue
                         'delivery_claim_token' => null,
                         'delivery_claimed_at' => null,
                         'delivery_finalized_at' => now(),
+                        'delivery_config_fingerprint' => $this->configFingerprint(),
                     ])->save();
                 }
             });
@@ -380,6 +400,7 @@ class SendEmailOtpJob implements ShouldBeEncrypted, ShouldQueue
                             'delivery_claim_token' => null,
                             'delivery_claimed_at' => null,
                             'delivery_finalized_at' => now(),
+                            'delivery_config_fingerprint' => $this->configFingerprint(),
                         ]);
                 });
             } catch (QueryException $e2) {
@@ -432,6 +453,7 @@ class SendEmailOtpJob implements ShouldBeEncrypted, ShouldQueue
                 'delivery_claim_token' => null,
                 'delivery_claimed_at' => null,
                 'delivery_finalized_at' => now(),
+                'delivery_config_fingerprint' => $this->configFingerprint(),
             ]);
     }
 
@@ -491,6 +513,7 @@ class SendEmailOtpJob implements ShouldBeEncrypted, ShouldQueue
                 'send_status' => EmailVerificationCode::SEND_STATUS_DISPATCH_FAILED,
                 'send_error' => $safe,
                 'delivery_finalized_at' => now(),
+                'delivery_config_fingerprint' => $this->configFingerprint(),
             ]);
 
         // An ABANDONED `sending` claim (an early attempt claimed, then the
@@ -511,6 +534,7 @@ class SendEmailOtpJob implements ShouldBeEncrypted, ShouldQueue
                 'delivery_claim_token' => null,
                 'delivery_claimed_at' => null,
                 'delivery_finalized_at' => now(),
+                'delivery_config_fingerprint' => $this->configFingerprint(),
             ]);
     }
 }

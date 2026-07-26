@@ -139,6 +139,29 @@ class EmailDeliveryClaimTest extends TestCase
         $this->assertNull($fresh->delivery_claim_token, 'terminal — never re-claimable into a re-send');
     }
 
+    public function test_claim_revalidates_the_delivery_policy_before_sending(): void
+    {
+        Mail::fake();
+        $user = $this->user();
+
+        // Admin disables verification while the job sits in the backlog: the
+        // stale job must skip, not deliver.
+        $disabled = $this->queuedRecord($user);
+        SiteSetting::set('email_verification_enabled', 'false');
+        $this->job($disabled, $user)->handle();
+        $this->assertSame(EmailVerificationCode::SEND_STATUS_SKIPPED, $disabled->fresh()->send_status);
+
+        // Mailer degrades to a non-deliverable graph: sending would only
+        // pretend (and with log/array could leak the plaintext OTP) — skip.
+        SiteSetting::set('email_verification_enabled', 'true');
+        $undeliverable = $this->queuedRecord($user);
+        config(['mail.default' => 'not-a-real-mailer']);
+        $this->job($undeliverable, $user)->handle();
+        $this->assertSame(EmailVerificationCode::SEND_STATUS_SKIPPED, $undeliverable->fresh()->send_status);
+
+        Mail::assertNothingSent();
+    }
+
     public function test_claim_token_changes_on_retry(): void
     {
         Mail::fake();

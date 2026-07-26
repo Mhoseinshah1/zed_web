@@ -103,6 +103,23 @@ class EmailMailTestProofTest extends TestCase
         $this->assertFalse($this->svc()->hasVerifiedMailTest());
     }
 
+    public function test_changing_the_smtp_timeout_invalidates_the_proof(): void
+    {
+        config([
+            'mail.default' => 'smtp',
+            'mail.mailers.smtp.host' => 'mail.example.com',
+            'mail.mailers.smtp.port' => 587,
+            'mail.mailers.smtp.timeout' => 10,
+        ]);
+        $this->svc()->recordSuccessfulMailTest();
+        $this->assertTrue($this->svc()->hasVerifiedMailTest());
+
+        // Shrinking the per-operation timeout can make real OTP sends time
+        // out where the certification succeeded — the proof must not survive.
+        config(['mail.mailers.smtp.timeout' => 1]);
+        $this->assertFalse($this->svc()->hasVerifiedMailTest(), 'an operational timeout change demands a fresh test');
+    }
+
     public function test_every_composite_leaf_is_exercised_and_one_broken_leaf_blocks_the_proof(): void
     {
         config([

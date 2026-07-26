@@ -178,12 +178,27 @@ class EmailVerificationService
         // and never updated_at (a general mutation time: verify() or
         // invalidateCodes() touching an old `sent` row must not make it look
         // like a freshly finalized success during a live outage).
+        $currentFingerprint = $this->mailConfigFingerprint();
+
         $recentOutcomes = EmailVerificationCode::query()
             ->where('delivery_finalized_at', '>=', now()->subMinutes(self::OUTAGE_WINDOW_MINUTES))
+            // Only outcomes produced UNDER the current configuration: a
+            // long-lived worker still running a replaced config must not
+            // finalize a stale failure after the admin certified the new one
+            // and re-suspend enforcement. Legacy rows (null) stay counted
+            // until they age out of the window.
+            ->where(function ($q) use ($currentFingerprint) {
+                $q->where('delivery_config_fingerprint', $currentFingerprint)
+                    ->orWhereNull('delivery_config_fingerprint');
+            })
             ->where(function ($q) {
                 $q->whereIn('send_status', [
                     EmailVerificationCode::SEND_STATUS_SENT,
                     EmailVerificationCode::SEND_STATUS_ACCEPTED_PENDING,
+                    // A broken QUEUE is a broken delivery pipeline: users
+                    // cannot receive codes either way — dispatch failures are
+                    // outage evidence exactly like transport failures.
+                    EmailVerificationCode::SEND_STATUS_DISPATCH_FAILED,
                 ])
                     // Only ENDPOINT/configuration failures count as outage
                     // evidence. Recipient-scoped rejections (sanitized
@@ -209,7 +224,10 @@ class EmailVerificationService
         }
 
         $anySuccess = $recentOutcomes->contains(
-            fn ($outcome) => $outcome->send_status !== EmailVerificationCode::SEND_STATUS_FAILED,
+            fn ($outcome) => ! in_array($outcome->send_status, [
+                EmailVerificationCode::SEND_STATUS_FAILED,
+                EmailVerificationCode::SEND_STATUS_DISPATCH_FAILED,
+            ], true),
         );
         if ($anySuccess) {
             return true;
@@ -279,6 +297,10 @@ class EmailVerificationService
                     // The EHLO identity affects deliverability: servers can
                     // reject a changed local_domain (defaults from APP_URL).
                     'local_domain' => (string) config("mail.mailers.{$mailerName}.local_domain"),
+                    // Operational too: shrinking the per-operation timeout
+                    // after a successful test can make normal OTP sends time
+                    // out — the old proof must not survive the change.
+                    'timeout' => (int) config("mail.mailers.{$mailerName}.timeout"),
                     'has_username' => (string) config("mail.mailers.{$mailerName}.username") !== '',
                 ],
                 'sendmail' => [
@@ -783,6 +805,7 @@ class EmailVerificationService
                     'send_error' => MailFailure::summarize('queue dispatch failed', $e),
                     'used_at' => now(),
                     'delivery_finalized_at' => now(),
+                    'delivery_config_fingerprint' => $this->mailConfigFingerprint(),
                 ])->save();
             }
 

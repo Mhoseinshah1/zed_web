@@ -54,10 +54,14 @@ class EnsureEmailIsVerified
             ], 403);
         }
 
-        // Preserve the intended destination (same-app URL of THIS request —
-        // never attacker-controlled input, so no open redirect is possible).
+        // Preserve the intended destination as a RELATIVE target only: an
+        // absolute URL would embed the request's Host header, and on a
+        // deployment whose proxy accepts arbitrary Host values that is
+        // attacker-influenced — redirect()->intended() would then leave the
+        // site after verification. A leading-slash path (never `//host`)
+        // cannot escape the application.
         if ($request->isMethod('GET')) {
-            session(['url.intended' => $request->fullUrl()]);
+            session(['url.intended' => '/'.ltrim($request->getRequestUri(), '/')]);
         }
 
         return redirect()->route('verification.notice');

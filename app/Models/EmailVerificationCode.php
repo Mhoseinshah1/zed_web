@@ -21,6 +21,7 @@ class EmailVerificationCode extends Model
         'send_status',
         'send_error',
         'delivery_finalized_at',
+        'delivery_config_fingerprint',
         'ip_address',
         'user_agent',
     ];
