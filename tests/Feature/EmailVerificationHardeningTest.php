@@ -1432,6 +1432,31 @@ class EmailVerificationHardeningTest extends TestCase
         $this->travelBack();
     }
 
+    public function test_lowering_the_attempt_limit_retires_over_limit_codes(): void
+    {
+        $svc = app(EmailVerificationService::class);
+        $user = $this->unverifiedUser();
+
+        // Issued while the limit allowed 5 attempts; the admin then lowers
+        // it to 3 — every further submission is doomed, so the code must be
+        // consumed on the next attempt instead of staying actionable
+        // (advertising a lifetime and holding the resend cooldown).
+        $code = EmailVerificationCode::create([
+            'user_id' => $user->id, 'email' => $user->email,
+            'code_hash' => Hash::make('123456'), 'attempts' => 3,
+            'expires_at' => now()->addMinutes(10),
+            'send_status' => EmailVerificationCode::SEND_STATUS_SENT,
+        ]);
+        SiteSetting::set('email_otp_max_attempts', 3);
+
+        $this->assertNotNull($svc->activeCodeRemainingMinutes($user), 'advertised before the attempt');
+
+        $result = $svc->verify($user, '123456');
+        $this->assertSame('too_many_attempts', $result['status'], 'even the correct code is rejected over the limit');
+        $this->assertNotNull($code->fresh()->used_at, 'the over-limit code is consumed');
+        $this->assertNull($svc->activeCodeRemainingMinutes($user->fresh()), 'no longer advertised — a replacement can be requested');
+    }
+
     public function test_pre_outage_worker_activity_is_not_recovery_evidence(): void
     {
         $svc = app(EmailVerificationService::class);

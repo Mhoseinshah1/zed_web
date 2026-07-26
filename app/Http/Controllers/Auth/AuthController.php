@@ -159,8 +159,12 @@ class AuthController extends Controller
             return back()->withErrors(['phone' => 'این شماره موبایل قبلاً ثبت شده است.'])->onlyInput('name', 'username', 'email');
         }
 
+        // Read the session referral NON-destructively: the registration
+        // transaction below can still roll back (email-uniqueness race), and
+        // a pull() here would silently drop the referrer from the user's
+        // retry. It is forgotten only after a successful commit.
         $referralCode = $request->input('ref')
-            ?? $request->session()->pull('referral_code')
+            ?? $request->session()->get('referral_code')
             ?? $request->cookie('referral_code');
 
         // ONE effective-policy decision for this whole registration: the
@@ -214,7 +218,11 @@ class AuthController extends Controller
             EmailUniqueViolationProbe::translateOrRethrow($e);
         }
 
+        // Consume the referral sources only now — the registration COMMITTED.
+        // A rolled-back attempt keeps both, so the retry still carries the
+        // referrer and no attribution (or commission) is silently lost.
         Cookie::queue(Cookie::forget('referral_code'));
+        $request->session()->forget('referral_code');
 
         // Admin Telegram — new registration (safe summary only; no
         // credentials). After commit: a rolled-back registration never

@@ -1202,6 +1202,16 @@ class EmailVerificationService
                 }
 
                 if ($record->attempts >= $this->maxAttempts()) {
+                    // Reachable only when an admin LOWERED the attempt limit
+                    // below this record's count (the last permitted guess
+                    // retires the code in the branch below): consume it now —
+                    // an exhausted record must never stay actionable,
+                    // advertising a lifetime and holding the resend cooldown
+                    // while every further submission is doomed.
+                    EmailVerificationCode::whereKey($record->id)
+                        ->whereNull('used_at')
+                        ->update(['used_at' => now()]);
+
                     return ['status' => 'too_many_attempts', 'message' => 'تعداد تلاش‌ها بیش از حد مجاز است. یک کد جدید درخواست کنید.'];
                 }
 
