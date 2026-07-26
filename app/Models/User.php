@@ -9,6 +9,7 @@ use Filament\Panel;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 
@@ -152,6 +153,16 @@ class User extends Authenticatable implements FilamentUser
     public function canAccessPanel(Panel $panel): bool
     {
         return $this->is_admin === true;
+    }
+
+    /**
+     * Mandatory admin TOTP credential (one-to-one). Access alone never means
+     * MFA passed — the panel additionally requires the session marker
+     * enforced by EnsureAdminMfaVerified.
+     */
+    public function adminTwoFactorCredential(): HasOne
+    {
+        return $this->hasOne(AdminTwoFactorCredential::class);
     }
 
     // ── Referral / representative ────────────────────────────────────────────
