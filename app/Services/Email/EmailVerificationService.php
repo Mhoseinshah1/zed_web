@@ -215,35 +215,42 @@ class EmailVerificationService
 
         $recentOutcomes = EmailVerificationCode::query()
             ->where('delivery_finalized_at', '>=', now()->subMinutes(self::OUTAGE_WINDOW_MINUTES))
-            // Only outcomes PROVABLY produced under the current configuration
-            // count: a long-lived worker still running a replaced config —
-            // including pre-fingerprint code during a rolling deployment,
-            // whose rows carry NULL — must not finalize a stale failure after
-            // the admin certified the new one and re-suspend enforcement.
-            // Ignoring unscoped legacy rows costs at most one health window
-            // of old evidence right after deployment; fresh outcomes replace
-            // it immediately.
-            ->where('delivery_config_fingerprint', $currentFingerprint)
-            ->where(function ($q) {
-                $q->whereIn('send_status', [
-                    EmailVerificationCode::SEND_STATUS_SENT,
-                    EmailVerificationCode::SEND_STATUS_ACCEPTED_PENDING,
-                    // A broken QUEUE is a broken delivery pipeline: users
-                    // cannot receive codes either way — dispatch failures are
-                    // outage evidence exactly like transport failures.
-                    EmailVerificationCode::SEND_STATUS_DISPATCH_FAILED,
-                ])
-                    // Only ENDPOINT/configuration failures count as outage
-                    // evidence. Recipient-scoped rejections (sanitized
-                    // category `recipient_rejected`) are excluded entirely —
-                    // otherwise three deliberately rejectable addresses could
-                    // fabricate a "site-wide outage" and switch required
-                    // verification off for everyone.
-                    ->orWhere(function ($q2) {
-                        $q2->where('send_status', EmailVerificationCode::SEND_STATUS_FAILED)
+            ->where(function ($q) use ($currentFingerprint) {
+                // QUEUE-publication outcomes are independent of the MAIL
+                // configuration: a broken queue blocks codes no matter which
+                // transport is configured, so dispatch failures count
+                // regardless of fingerprint — changing a mail setting (which
+                // rotates the fingerprint) must never hide a live queue
+                // outage.
+                $q->where('send_status', EmailVerificationCode::SEND_STATUS_DISPATCH_FAILED)
+                    // TRANSPORT outcomes count only when PROVABLY produced
+                    // under the current configuration: a long-lived worker
+                    // still running a replaced config — including
+                    // pre-fingerprint code during a rolling deployment, whose
+                    // rows carry NULL — must not finalize a stale failure
+                    // after the admin certified the new one and re-suspend
+                    // enforcement. Ignoring unscoped legacy rows costs at
+                    // most one health window of old evidence.
+                    ->orWhere(function ($q2) use ($currentFingerprint) {
+                        $q2->where('delivery_config_fingerprint', $currentFingerprint)
                             ->where(function ($q3) {
-                                $q3->whereNull('send_error')
-                                    ->orWhere('send_error', 'not like', '%recipient_rejected%');
+                                $q3->whereIn('send_status', [
+                                    EmailVerificationCode::SEND_STATUS_SENT,
+                                    EmailVerificationCode::SEND_STATUS_ACCEPTED_PENDING,
+                                ])
+                                    // Only ENDPOINT/configuration failures
+                                    // count. Recipient-scoped rejections are
+                                    // excluded entirely — three deliberately
+                                    // rejectable addresses must not fabricate
+                                    // a "site-wide outage" and switch required
+                                    // verification off for everyone.
+                                    ->orWhere(function ($q4) {
+                                        $q4->where('send_status', EmailVerificationCode::SEND_STATUS_FAILED)
+                                            ->where(function ($q5) {
+                                                $q5->whereNull('send_error')
+                                                    ->orWhere('send_error', 'not like', '%recipient_rejected%');
+                                            });
+                                    });
                             });
                     });
             })
@@ -483,7 +490,11 @@ class EmailVerificationService
             return false;
         }
 
-        if (app()->environment('production') && array_intersect($transports, ['log', 'array']) !== []) {
+        // Non-delivery transports are acceptable ONLY in explicit local/
+        // testing environments. Anything else — production, staging, a typo'd
+        // APP_ENV — must reject them: a `log`/`array` "success" would record
+        // a valid proof while no user can receive an OTP.
+        if (! app()->environment(['local', 'testing']) && array_intersect($transports, ['log', 'array']) !== []) {
             return false;
         }
 
@@ -612,8 +623,8 @@ class EmailVerificationService
     private function transportLooksUsable(string $mailerName, string $transport): bool
     {
         return match ($transport) {
-            // Non-delivery transports: rejected in production by the caller;
-            // in dev/test they are intentionally accepted.
+            // Non-delivery transports: rejected outside local/testing by the
+            // caller; in those two environments they are intentionally usable.
             'log', 'array' => true,
             'smtp' => (string) config("mail.mailers.{$mailerName}.host") !== ''
                 && (int) config("mail.mailers.{$mailerName}.port") > 0,

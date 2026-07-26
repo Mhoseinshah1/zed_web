@@ -41,8 +41,11 @@ class EnsureEmailIsVerified
             $user === null
             || $user->email_verified_at !== null
             || $user->is_admin
-            || ! $verification->isEnforceableNow()
+            // The cheap per-user marker FIRST: unobligated users (the common
+            // case) short-circuit before the pipeline-health probe touches
+            // settings, the lock backend, or the outcome table.
             || ! $user->email_verification_required_at_registration
+            || ! $verification->isEnforceableNow()
         ) {
             return $next($request);
         }

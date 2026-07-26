@@ -1366,6 +1366,50 @@ class EmailVerificationHardeningTest extends TestCase
         $this->travelBack();
     }
 
+    public function test_a_mail_config_change_never_hides_a_queue_outage(): void
+    {
+        $svc = app(EmailVerificationService::class);
+        $user = $this->unverifiedUser();
+
+        // Queue down: three dispatch failures recorded under the OLD mail
+        // fingerprint (the operator then changes a mail setting).
+        foreach (range(1, 3) as $i) {
+            EmailVerificationCode::create([
+                'user_id' => $user->id, 'email' => $user->email,
+                'code_hash' => Hash::make('123456'), 'attempts' => 0,
+                'expires_at' => now()->addMinutes(10), 'used_at' => now(),
+                'send_status' => EmailVerificationCode::SEND_STATUS_DISPATCH_FAILED,
+                'delivery_finalized_at' => now(),
+                'delivery_config_fingerprint' => str_repeat('0', 64),
+            ]);
+        }
+
+        // Queue health is independent of the MAIL configuration: rotating
+        // the fingerprint (and even certifying the new transport) must not
+        // hide the dispatch failures — jobs still cannot be published.
+        $this->travel(1)->minutes();
+        $svc->recordSuccessfulMailTest();
+        $this->assertFalse($svc->transportLooksLive(), 'a mail-config change cannot clear a queue outage');
+        $this->travelBack();
+    }
+
+    public function test_non_delivery_mailers_are_rejected_outside_local_and_testing(): void
+    {
+        $svc = app(EmailVerificationService::class);
+        // In `testing` the array mailer is intentionally usable.
+        $this->assertTrue($svc->isMailConfigured());
+
+        // Any OTHER environment (staging, a typo'd APP_ENV, production):
+        // a log/array "success" would certify a mailer no user can receive
+        // OTPs from — rejected.
+        $this->app['env'] = 'staging';
+        try {
+            $this->assertFalse($svc->isMailConfigured(), 'non-delivery transports certify nothing outside local/testing');
+        } finally {
+            $this->app['env'] = 'testing';
+        }
+    }
+
     public function test_unscoped_legacy_outcomes_never_count_against_the_current_config(): void
     {
         $svc = app(EmailVerificationService::class);
