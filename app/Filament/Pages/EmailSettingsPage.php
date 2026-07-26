@@ -173,7 +173,10 @@ class EmailSettingsPage extends Page implements HasActions, HasForms
         // ONE transaction: the enabled/required pair (and the OTP rules) commit
         // atomically, so a concurrent registration can never be stamped from a
         // half-applied policy — enabled from the new save, required from the
-        // old one. (The service reads the pair back in a single statement.)
+        // old one. (The service reads the pair back under shared locks in
+        // THIS same key order — enabled, then required — so the two
+        // transactions always acquire the rows in one deterministic order
+        // and can serialize but never deadlock.)
         DB::transaction(function () use ($data, $enabled, $requireOnRegister): void {
             SiteSetting::set('email_verification_enabled', $enabled ? 'true' : 'false');
             SiteSetting::set('email_verification_required_on_register', $requireOnRegister ? 'true' : 'false');

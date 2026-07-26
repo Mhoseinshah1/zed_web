@@ -138,10 +138,18 @@ class EmailVerificationService
             ['key' => 'email_verification_required_on_register', 'value' => 'false', 'created_at' => now(), 'updated_at' => now()],
         ]);
 
-        $flags = SiteSetting::query()
-            ->whereIn('key', ['email_verification_enabled', 'email_verification_required_on_register'])
-            ->sharedLock()
-            ->pluck('value', 'key');
+        // One row per statement, in the WRITER'S order (enabled → required —
+        // the exact sequence EmailSettingsPage::save() updates them in). A
+        // single whereIn statement lets PostgreSQL lock the pair in SCAN
+        // order, which can oppose the writer's and deadlock (40P01 → 500 on
+        // registration). Ordered acquisition removes the cycle, and the read
+        // stays tear-free: holding the shared lock on `enabled` blocks the
+        // save at its FIRST update, so `required` cannot have been rewritten
+        // by a save this read only partially observed.
+        $flags = collect(['email_verification_enabled', 'email_verification_required_on_register'])
+            ->mapWithKeys(fn (string $key) => [
+                $key => SiteSetting::query()->where('key', $key)->sharedLock()->value('value'),
+            ]);
 
         return $this->settingIsTrue($flags->get('email_verification_enabled'))
             && $this->settingIsTrue($flags->get('email_verification_required_on_register'))
@@ -225,17 +233,38 @@ class EmailVerificationService
         // STALLED workers first: queue publication succeeded but nothing
         // consumes (Supervisor stopped, null driver) — those rows never
         // finalize, so the outcome scan below cannot see the outage. An
-        // unexpired, unconsumed `queued` row past the stall threshold is
-        // downtime; it self-clears at code expiry (or the moment a recovered
-        // worker claims it).
-        $stalledQueue = EmailVerificationCode::query()
+        // unconsumed `queued` row past the stall threshold is downtime, and
+        // the evidence deliberately OUTLIVES the code's expiry: an expired
+        // stalled row proves nothing about queue recovery, and discarding it
+        // would resume enforcement against a still-dead worker (each retried
+        // resend burning the user's daily cap). Only positive proof that a
+        // worker consumed a job AFTER the newest stalled row clears it — a
+        // WORKER-stamped terminal outcome (sent / accepted_pending / failed;
+        // never web-stamped skipped or dispatch_failed) finalized after the
+        // stall, or the stalled row itself leaving `queued` when a recovered
+        // worker claims it. The user's next resend also retires the old row
+        // (invalidateCodes → skipped) and re-arms a fresh probe.
+        $stalledQueuedSince = EmailVerificationCode::query()
             ->where('send_status', EmailVerificationCode::SEND_STATUS_QUEUED)
             ->whereNull('used_at')
-            ->where('expires_at', '>', now())
             ->where('created_at', '<=', now()->subMinutes(self::STALLED_QUEUE_MINUTES))
-            ->exists();
-        if ($stalledQueue) {
-            return false;
+            ->max('created_at');
+        if ($stalledQueuedSince !== null) {
+            $stalledQueuedSince = Carbon::parse($stalledQueuedSince);
+            $workerConsumedAfterStall = EmailVerificationCode::query()
+                ->whereIn('send_status', [
+                    EmailVerificationCode::SEND_STATUS_SENT,
+                    EmailVerificationCode::SEND_STATUS_ACCEPTED_PENDING,
+                    EmailVerificationCode::SEND_STATUS_FAILED,
+                ])
+                // Queue-consumption proof, so no fingerprint or error-category
+                // scoping: even a recipient-bounced `failed` row proves the
+                // worker pulled a job off the queue after the stall began.
+                ->where('delivery_finalized_at', '>', $stalledQueuedSince)
+                ->exists();
+            if (! $workerConsumedAfterStall) {
+                return false;
+            }
         }
 
         $currentFingerprint = $this->mailConfigFingerprint();

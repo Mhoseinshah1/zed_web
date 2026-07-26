@@ -1379,8 +1379,7 @@ class EmailVerificationHardeningTest extends TestCase
         $this->actingAs($user)->get('/dashboard')->assertOk();
 
         // A recovered worker claiming the row (here: it finalizes as sent)
-        // clears the signal; equally, expiry alone would — a permanently
-        // lost job can never wedge enforcement open forever.
+        // clears the signal — the backlog left `queued`.
         EmailVerificationCode::whereKey($stuck->id)->update([
             'send_status' => EmailVerificationCode::SEND_STATUS_SENT,
             'delivery_finalized_at' => now(),
@@ -1388,19 +1387,48 @@ class EmailVerificationHardeningTest extends TestCase
         ]);
         $this->assertTrue($svc->transportLooksLive());
 
-        // Expiry variant: a fresh stuck row that then EXPIRES stops counting.
+        // EXPIRY does NOT clear the evidence: an expired stalled row proves
+        // nothing about queue recovery, and dropping it would resume
+        // enforcement against a still-dead worker — every retried resend
+        // burning the user's daily cap until they are locked out for the
+        // rest of the cap window.
         $tombstone = EmailVerificationCode::create([
             'user_id' => $user->id, 'email' => $user->email,
             'code_hash' => Hash::make('123456'), 'attempts' => 0,
-            'expires_at' => now()->addSeconds(30),
+            'expires_at' => now()->addMinutes(2),
             'send_status' => EmailVerificationCode::SEND_STATUS_QUEUED,
         ]);
-        EmailVerificationCode::whereKey($tombstone->id)->update([
-            'created_at' => now()->subMinutes(EmailVerificationService::STALLED_QUEUE_MINUTES + 1),
+        $this->travel(EmailVerificationService::STALLED_QUEUE_MINUTES + 3)->minutes();
+        $this->assertFalse(
+            $svc->transportLooksLive(),
+            'stalled-queue evidence outlives the code expiry until recovery is proven',
+        );
+        $this->assertFalse($svc->isEnforceableNow());
+
+        // A WEB-stamped terminal outcome (invalidateCodes → skipped) is not
+        // recovery proof — only a WORKER consuming a job is.
+        EmailVerificationCode::create([
+            'user_id' => $user->id, 'email' => $user->email,
+            'code_hash' => Hash::make('123456'), 'attempts' => 0,
+            'expires_at' => now()->addMinutes(10), 'used_at' => now(),
+            'send_status' => EmailVerificationCode::SEND_STATUS_SKIPPED,
+            'delivery_finalized_at' => now(),
+            'delivery_config_fingerprint' => $svc->mailConfigFingerprint(),
         ]);
-        $this->assertFalse($svc->transportLooksLive());
-        $this->travel(1)->minutes();
-        $this->assertTrue($svc->transportLooksLive(), 'an expired tombstone row no longer signals a stall');
+        $this->assertFalse($svc->transportLooksLive(), 'a web-stamped skip proves nothing about the worker');
+
+        // A worker-stamped terminal outcome finalized AFTER the stall began
+        // is the recovery proof that releases the (now expired) evidence.
+        EmailVerificationCode::create([
+            'user_id' => $user->id, 'email' => $user->email,
+            'code_hash' => Hash::make('123456'), 'attempts' => 0,
+            'expires_at' => now()->addMinutes(10), 'used_at' => now(),
+            'send_status' => EmailVerificationCode::SEND_STATUS_SENT,
+            'delivery_finalized_at' => now(),
+            'delivery_config_fingerprint' => $svc->mailConfigFingerprint(),
+        ]);
+        $this->assertTrue($svc->transportLooksLive(), 'a worker consuming a job after the stall proves recovery');
+        $this->assertTrue($svc->isEnforceableNow());
         $this->travelBack();
     }
 
