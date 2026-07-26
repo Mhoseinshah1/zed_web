@@ -249,6 +249,14 @@ jobs:
         # all against real PostgreSQL row locking.
         run: php artisan test --testsuite=Feature --filter='AdminTotpCredentialTest|AdminMfaLoginTest|AdminStepUpTest|AdminMfaManagementTest'
 
+      - name: Admin-managed SMTP runtime + singleton concurrency (PostgreSQL)
+        # The full panel-SMTP suite against real PostgreSQL (encrypted
+        # storage, runtime application, immutable env baseline, fail-closed
+        # storage outage, raw-insert singleton constraints) PLUS the
+        # pcntl_fork race proving concurrent first-time saves recover through
+        # the controlled path and leave exactly one authoritative row.
+        run: php artisan test --testsuite=Feature --filter='EmailTransportSettingsTest|EmailTransportSingletonPgTest'
+
       - name: Admin TOTP same-code concurrency (PostgreSQL)
         # REAL parallel submissions (pcntl_fork, fresh connections): the same
         # TOTP code and the same recovery code must have exactly one winner.

@@ -7,6 +7,7 @@ use App\Models\User as AppUser;
 use App\Services\AdminMfa\AdminMfaSession;
 use App\Services\AdminMfa\AdminStepUpService;
 use App\Services\AdminMfa\AdminTotpService;
+use App\Services\Email\EmailTransportSettingsService;
 use App\Services\Theme\ThemeSettingsService;
 use Illuminate\Contracts\Auth\Authenticatable as UserContract;
 use Illuminate\Foundation\Testing\TestCase as BaseTestCase;
@@ -16,6 +17,12 @@ abstract class TestCase extends BaseTestCase
 {
     protected function setUp(): void
     {
+        // BEFORE the app boots: the SMTP resolver's process-immutable
+        // environment baseline must be forgotten first — application boot
+        // runs apply(), and a baseline left over from the previous test
+        // would be written back into the freshly built config.
+        EmailTransportSettingsService::resetProcessBaselineForTesting();
+
         parent::setUp();
 
         // Stub Vite so view-rendering tests don't require a compiled asset
