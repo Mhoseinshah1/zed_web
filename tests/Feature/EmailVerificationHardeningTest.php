@@ -1106,13 +1106,72 @@ class EmailVerificationHardeningTest extends TestCase
         $user = $this->unverifiedUser();
         $svc = app(EmailVerificationService::class);
 
+        // The requested 1-minute TTL is clamped to the floor (codes must
+        // outlive the delivery-claim margin) — still far below the cooldown.
+        $this->assertSame(EmailVerificationService::MIN_TTL_MINUTES, $svc->ttlMinutes());
         $this->assertSame('queued', $svc->requestCode($user)['status']);
 
         // The code expires long before the (misconfigured) hour-long cooldown:
         // "request a new code" must actually be possible.
-        $this->travel(2)->minutes();
+        $this->travel(EmailVerificationService::MIN_TTL_MINUTES + 1)->minutes();
         $this->assertTrue($svc->canResend($user));
         $this->assertSame('queued', $svc->requestCode($user)['status']);
+    }
+
+    public function test_clamped_minimum_ttl_still_yields_a_deliverable_code(): void
+    {
+        Mail::fake();
+        SiteSetting::set('email_otp_ttl_minutes', 1);
+        $user = $this->unverifiedUser();
+
+        // The floor keeps every fresh code above the job's claim margin: it
+        // must actually SEND (sync queue), never skip as margin-starved.
+        $result = app(EmailVerificationService::class)->requestCode($user);
+        $this->assertTrue((bool) ($result['email_sent'] ?? false));
+        Mail::assertSentCount(1);
+        $this->assertSame(
+            EmailVerificationCode::SEND_STATUS_SENT,
+            EmailVerificationCode::latest('id')->first()->send_status,
+        );
+    }
+
+    public function test_a_live_transport_outage_suspends_enforcement_until_a_delivery_succeeds(): void
+    {
+        $svc = app(EmailVerificationService::class);
+        $user = $this->unverifiedUser();
+        $this->assertTrue($svc->isEnforceableNow(), 'healthy baseline (setUp proof)');
+        $this->actingAs($user)->get('/dashboard')->assertRedirect(route('verification.notice'));
+
+        // The endpoint dies WITHOUT any config change: the latest three
+        // finalized transport outcomes are all failures.
+        foreach (range(1, 3) as $i) {
+            EmailVerificationCode::create([
+                'user_id' => $user->id, 'email' => $user->email,
+                'code_hash' => Hash::make('123456'), 'attempts' => 0,
+                'expires_at' => now()->addMinutes(10), 'used_at' => now(),
+                'send_status' => EmailVerificationCode::SEND_STATUS_FAILED,
+            ]);
+        }
+
+        $this->assertFalse($svc->transportLooksLive());
+        $this->assertFalse($svc->isEnforceableNow(), 'live outage pauses enforcement');
+        $this->assertFalse($svc->isRequiredOnRegister(), 'registrations are not stamped during an outage');
+        auth()->logout();
+        $this->app['auth']->forgetGuards();
+        $this->actingAs($user)->get('/dashboard')->assertOk('obligated users are not blocked behind a dead mailer');
+
+        // One successful delivery clears the signal — enforcement resumes.
+        EmailVerificationCode::create([
+            'user_id' => $user->id, 'email' => $user->email,
+            'code_hash' => Hash::make('123456'), 'attempts' => 0,
+            'expires_at' => now()->addMinutes(10), 'used_at' => now(),
+            'send_status' => EmailVerificationCode::SEND_STATUS_SENT,
+        ]);
+        $this->assertTrue($svc->transportLooksLive());
+        $this->assertTrue($svc->isEnforceableNow());
+        auth()->logout();
+        $this->app['auth']->forgetGuards();
+        $this->actingAs($user)->get('/dashboard')->assertRedirect(route('verification.notice'));
     }
 
     // ── Honest lifetimes & synchronous delivery failures ─────────────────────

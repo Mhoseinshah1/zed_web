@@ -51,6 +51,12 @@ class EmailVerificationService
     /** A successful transport test is trusted for this many days. */
     public const MAIL_TEST_PROOF_MAX_DAYS = 30;
 
+    /** Live-outage detection window for transportLooksLive(). */
+    public const OUTAGE_WINDOW_MINUTES = 30;
+
+    /** Consecutive finalized transport failures that signal a live outage. */
+    public const OUTAGE_MIN_FAILURES = 3;
+
     /** Shown when the bounded per-user lock could not be acquired in time. */
     public const BUSY_MESSAGE = 'سیستم موقتاً مشغول است. لطفاً چند لحظه بعد دوباره تلاش کنید.';
 
@@ -85,7 +91,11 @@ class EmailVerificationService
         return $this->settingIsTrue($flags->get('email_verification_enabled'))
             && $this->settingIsTrue($flags->get('email_verification_required_on_register'))
             && $this->isMailConfigured()
-            && $this->hasVerifiedMailTest();
+            && $this->hasVerifiedMailTest()
+            // A LIVE outage (endpoint died without any config change) also
+            // suspends stamping: registrations during it are permanently
+            // exempt, exactly like the other fail-safe windows.
+            && $this->transportLooksLive();
     }
 
     /** Truthiness matching SiteSetting::get's coercion ('true' or numeric). */
@@ -110,7 +120,42 @@ class EmailVerificationService
     {
         return $this->isEnabled()
             && $this->isMailConfigured()
-            && $this->hasVerifiedMailTest();
+            && $this->hasVerifiedMailTest()
+            && $this->transportLooksLive();
+    }
+
+    /**
+     * LIVE transport-health signal: static configuration shape and a ≤30-day
+     * proof cannot see an endpoint that died WITHOUT any config change. This
+     * inspects actual recent delivery outcomes and reports an outage only on
+     * strong evidence — the latest OUTAGE_MIN_FAILURES finalized transport
+     * outcomes inside the window are ALL failures (any success among them
+     * clears it, as does sparse traffic). Fail-open by design: during a
+     * detected outage enforcement pauses and registrations are not stamped,
+     * exactly like an unconfigured mailer; the moment a delivery succeeds,
+     * enforcement resumes. Worst case of a false positive is verification
+     * temporarily degrading to optional — never a locked-out user.
+     */
+    public function transportLooksLive(): bool
+    {
+        $recentOutcomes = EmailVerificationCode::query()
+            ->where('created_at', '>=', now()->subMinutes(self::OUTAGE_WINDOW_MINUTES))
+            ->whereIn('send_status', [
+                EmailVerificationCode::SEND_STATUS_FAILED,
+                EmailVerificationCode::SEND_STATUS_SENT,
+                EmailVerificationCode::SEND_STATUS_ACCEPTED_PENDING,
+            ])
+            ->latest('id')
+            ->limit(self::OUTAGE_MIN_FAILURES)
+            ->pluck('send_status');
+
+        if ($recentOutcomes->count() < self::OUTAGE_MIN_FAILURES) {
+            return true;
+        }
+
+        return $recentOutcomes->contains(
+            fn ($status) => $status !== EmailVerificationCode::SEND_STATUS_FAILED,
+        );
     }
 
     // ── Transport-test proof ─────────────────────────────────────────────────
@@ -442,9 +487,16 @@ class EmailVerificationService
         };
     }
 
+    /**
+     * Codes must comfortably outlive the job's claim-time delivery margin
+     * (120s): a shorter TTL would make EVERY delivery claim skip the code and
+     * required-mode users could never receive a usable OTP.
+     */
+    public const MIN_TTL_MINUTES = 3;
+
     public function ttlMinutes(): int
     {
-        return max(1, (int) SiteSetting::get('email_otp_ttl_minutes', self::CODE_TTL_MINUTES));
+        return max(self::MIN_TTL_MINUTES, (int) SiteSetting::get('email_otp_ttl_minutes', self::CODE_TTL_MINUTES));
     }
 
     public function maxAttempts(): int
