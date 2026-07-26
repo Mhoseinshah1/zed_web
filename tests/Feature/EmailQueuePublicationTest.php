@@ -11,6 +11,7 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Queue\Events\JobExceptionOccurred;
 use Illuminate\Queue\Events\JobProcessing;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Log;
@@ -136,6 +137,61 @@ class EmailQueuePublicationTest extends TestCase
         Log::shouldHaveReceived('warning')->withArgs(
             fn ($message) => str_contains((string) $message, 'queue-publication metadata'),
         )->once();
+    }
+
+    public function test_every_http_entry_point_publishes_at_the_baseline_transaction_level(): void
+    {
+        Mail::fake();
+
+        // The audited production entry points that issue email OTPs:
+        // POST /register, POST /email/verification/resend, and
+        // PATCH /email/verification/change-address. Each must reach the
+        // publication boundary (the sync job executing INSIDE dispatch())
+        // with NO application transaction open — otherwise afterCommit would
+        // defer the real broker push past the moment queue_published_at is
+        // captured. The observed level is compared with the TEST BASELINE
+        // (the framework's own wrapping transaction), never assumed to be
+        // absolute zero.
+        $baseline = DB::transactionLevel();
+        $observedLevels = [];
+        Event::listen(JobProcessing::class, function (JobProcessing $event) use (&$observedLevels) {
+            if (str_contains($event->job->getRawBody(), 'SendEmailOtpJob')) {
+                $observedLevels[] = DB::transactionLevel();
+            }
+        });
+
+        // 1) Registration.
+        $this->post('/register', [
+            'name' => 'Boundary', 'username' => 'txboundary1', 'email' => 'txboundary1@example.com',
+            'phone' => '09120007771', 'password' => 'password123', 'password_confirmation' => 'password123',
+        ]);
+
+        // 2) Explicit resend (a fresh user with no cooldown in play).
+        auth()->logout();
+        $this->app['auth']->forgetGuards();
+        $resendUser = $this->user();
+        $this->actingAs($resendUser)->post(route('verification.resend'));
+
+        // 3) Address change during the active verification flow.
+        auth()->logout();
+        $this->app['auth']->forgetGuards();
+        $changeUser = User::factory()->create([
+            'email_verified_at' => null,
+            'password' => Hash::make('password123'),
+        ]);
+        $this->actingAs($changeUser)->patch(route('verification.change'), [
+            'password' => 'password123',
+            'email' => 'txboundary-changed@example.com',
+        ]);
+
+        $this->assertCount(3, $observedLevels, 'each entry point published exactly one OTP job');
+        foreach ($observedLevels as $i => $level) {
+            $this->assertSame(
+                $baseline,
+                $level,
+                "entry point #{$i} reached the publication boundary with an application transaction still open",
+            );
+        }
     }
 
     public function test_a_created_but_unpublished_row_is_never_stall_or_recovery_evidence(): void

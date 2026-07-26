@@ -6,6 +6,7 @@ use App\Models\EmailVerificationCode;
 use App\Models\SiteSetting;
 use App\Models\User;
 use App\Services\Email\EmailVerificationService;
+use App\Support\DatabaseLockTimeout;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
@@ -148,76 +149,165 @@ class EmailQueuePublicationPgTest extends TestCase
         $this->assertNotNull($delivered->fresh()->used_at, 'the superseded code is NOT restored');
     }
 
-    public function test_a_blocked_publication_stamp_keeps_its_captured_handoff_time_and_cannot_clear_a_later_outage(): void
+    /**
+     * THE real production interleaving, with exactly ONE metadata write:
+     *
+     *   1. publication A succeeds — its handoff time T1 is captured;
+     *   2. A's one and only recordQueuePublication() invocation (a forked
+     *      child process on a fresh connection) BLOCKS on the held row lock
+     *      (proven via pg_stat_activity, not sleeps);
+     *   3. publication B fails and finalizes dispatch_failed at T2 > T1;
+     *   4. the blocker releases BEFORE the 2500 ms SET LOCAL lock_timeout;
+     *   5. the original invocation resumes and commits — storing T1, the
+     *      captured handoff time, never the lock-release moment;
+     *   6. T1 < T2, so the resumed stamp cannot masquerade as recovery.
+     */
+    public function test_a_blocked_publication_stamp_resumes_before_timeout_and_stores_the_captured_handoff_time(): void
     {
+        if (! \function_exists('pcntl_fork')) {
+            $this->markTestSkipped('pcntl extension required for the fork-based race test.');
+        }
+
         $svc = app(EmailVerificationService::class);
         $user = User::create([
             'name' => 'P', 'username' => self::PREFIX.'stamp',
             'email' => self::PREFIX.'stamp@test.com', 'password' => bcrypt('x'),
         ]);
 
-        // Publication A succeeded and its handoff moment was CAPTURED…
+        // Publication A succeeded; T1 is captured BEFORE the metadata
+        // mutation starts (requestCode() captures it right after dispatch()).
         $published = EmailVerificationCode::create([
             'user_id' => $user->id, 'email' => $user->email,
             'code_hash' => Hash::make('123456'), 'attempts' => 0,
             'expires_at' => now()->addMinutes(10),
             'send_status' => EmailVerificationCode::SEND_STATUS_QUEUED,
         ]);
-        $handoffAt = now()->subSeconds(10);
+        $handoffAtT1 = now()->subSeconds(10);
 
-        // …but its metadata UPDATE blocks behind a held row lock, and while
-        // it waits, publication B FAILS and finalizes dispatch_failed.
+        // The blocker holds A's row; the parent works over a SEPARATE
+        // observer connection resolved AFTER the fork boundary is set up,
+        // because the child's connection purge terminates the connection it
+        // inherited from the parent.
         $blocker = DB::connection('pgsql_blocker');
         $blocker->beginTransaction();
         $blocker->select('select id from email_verification_codes where id = ? for update', [$published->id]);
+        config(['database.connections.pgsql_observer' => config('database.connections.'.config('database.default'))]);
 
-        EmailVerificationCode::create([
+        // ONE child process = A's one and only metadata write.
+        $pid = pcntl_fork();
+        if ($pid === -1) {
+            $this->fail('pcntl_fork failed');
+        }
+        if ($pid === 0) {
+            DB::purge();
+            DB::reconnect();
+            try {
+                app('cache')->forgetDriver((string) config('cache.default'));
+            } catch (\Throwable) {
+                // Array store — nothing to purge.
+            }
+            try {
+                $record = new \ReflectionMethod($svc, 'recordQueuePublication');
+                $record->invoke($svc, $published->id, $handoffAtT1);
+                exit(0);
+            } catch (\Throwable) {
+                exit(9);
+            }
+        }
+
+        $observer = DB::connection('pgsql_observer');
+
+        // DETERMINISTIC proof the child's UPDATE is waiting on the row lock:
+        // PostgreSQL lock-state observation, never a bare sleep.
+        $deadline = microtime(true) + 8.0;
+        $childBlocked = false;
+        while (microtime(true) < $deadline) {
+            $waiting = $observer->selectOne(
+                "select count(*) as c from pg_stat_activity where wait_event_type = 'Lock' and state = 'active' and query ilike '%update%email_verification_codes%'"
+            );
+            if ((int) $waiting->c > 0) {
+                $childBlocked = true;
+                break;
+            }
+            usleep(10_000);
+        }
+        $this->assertTrue($childBlocked, 'the one metadata write is observably blocked on the row lock');
+
+        // While A's write waits: publication B FAILS and finalizes at T2.
+        $failedAtT2 = now();
+        $this->assertTrue($failedAtT2->gt($handoffAtT1), 'T2 is strictly later than T1');
+        EmailVerificationCode::on('pgsql_observer')->create([
             'user_id' => $user->id, 'email' => $user->email,
             'code_hash' => Hash::make('654321'), 'attempts' => 0,
             'expires_at' => now()->addMinutes(10), 'used_at' => now(),
             'send_status' => EmailVerificationCode::SEND_STATUS_DISPATCH_FAILED,
             'send_error' => 'dispatch failed: queue down',
-            'delivery_finalized_at' => now(),
+            'delivery_finalized_at' => $failedAtT2,
             'delivery_config_fingerprint' => $svc->mailConfigFingerprint(),
         ]);
 
-        // The blocked stamp waits only the bounded SET LOCAL lock_timeout,
-        // then fails — queue_published_at stays NULL (fail-open metadata).
-        $record = new \ReflectionMethod($svc, 'recordQueuePublication');
-        $started = microtime(true);
-        try {
-            $record->invoke($svc, $published->id, $handoffAt);
-            $this->fail('the blocked metadata write must time out bounded');
-        } catch (QueryException) {
-            // bounded 55P03 — exactly what requestCode() contains fail-open.
-        }
-        $this->assertLessThan(10, microtime(true) - $started, 'the metadata wait is bounded');
-        $this->assertNull($published->fresh()->queue_published_at);
-
-        // The lock clears and the stamp RESUMES with the CAPTURED handoff
-        // time — older than the failure, so it can never masquerade as
-        // post-outage recovery.
+        // Release WELL BEFORE the 2500 ms lock timeout: the original write
+        // resumes and commits.
         $blocker->rollBack();
-        $record->invoke($svc, $published->id, $handoffAt);
+        pcntl_waitpid($pid, $status);
+        $this->assertSame(0, pcntl_wexitstatus($status), 'the blocked metadata write resumed and committed successfully');
+        DB::reconnect();
+
+        // It stored T1 — the captured handoff time — not the release moment…
         $this->assertSame(
-            $handoffAt->format('Y-m-d H:i:s'),
+            $handoffAtT1->format('Y-m-d H:i:s'),
             $published->fresh()->queue_published_at?->format('Y-m-d H:i:s'),
-            'the stamp records the true handoff moment, not the lock-acquisition moment',
+            'the resumed stamp records the true handoff moment',
         );
+        // …so a pre-outage publication can never masquerade as recovery.
         $this->assertFalse(
             $svc->transportLooksLive(),
-            'a pre-outage publication finally stamped cannot clear the later failure',
+            'the resumed pre-outage stamp (T1 < T2) cannot clear the later publication failure',
         );
 
-        // Only a publication that actually postdates the failure recovers.
-        $fresh = EmailVerificationCode::create([
+        DB::purge('pgsql_observer');
+    }
+
+    public function test_a_publication_stamp_lock_timeout_is_bounded_and_changes_nothing(): void
+    {
+        $svc = app(EmailVerificationService::class);
+        $user = User::create([
+            'name' => 'P', 'username' => self::PREFIX.'bound',
+            'email' => self::PREFIX.'bound@test.com', 'password' => bcrypt('x'),
+        ]);
+        $published = EmailVerificationCode::create([
             'user_id' => $user->id, 'email' => $user->email,
-            'code_hash' => Hash::make('999999'), 'attempts' => 0,
+            'code_hash' => Hash::make('123456'), 'attempts' => 0,
             'expires_at' => now()->addMinutes(10),
             'send_status' => EmailVerificationCode::SEND_STATUS_QUEUED,
         ]);
-        $record->invoke($svc, $fresh->id, now());
-        $this->assertTrue($svc->transportLooksLive(), 'a genuinely later publication proves recovery');
+
+        // The blocker stays held BEYOND the local lock timeout.
+        $blocker = DB::connection('pgsql_blocker');
+        $blocker->beginTransaction();
+        $blocker->select('select id from email_verification_codes where id = ? for update', [$published->id]);
+
+        $record = new \ReflectionMethod($svc, 'recordQueuePublication');
+        $started = microtime(true);
+        try {
+            $record->invoke($svc, $published->id, now()->subSeconds(10));
+            $this->fail('the blocked metadata write must time out bounded');
+        } catch (QueryException $e) {
+            $this->assertTrue(
+                DatabaseLockTimeout::isLockTimeout($e),
+                'the failure is specifically the PostgreSQL lock timeout (55P03)',
+            );
+        }
+        $elapsed = microtime(true) - $started;
+        // 2500 ms SET LOCAL lock_timeout + a fixed CI margin.
+        $this->assertLessThan(5.0, $elapsed, 'the metadata wait is bounded by the configured lock timeout');
+
+        $blocker->rollBack();
+        // The failed stamp changed NOTHING: metadata stays NULL (fail-open),
+        // the delivery state is untouched, and no publication is retried.
+        $fresh = $published->fresh();
+        $this->assertNull($fresh->queue_published_at, 'queue_published_at remains NULL after the bounded timeout');
+        $this->assertSame(EmailVerificationCode::SEND_STATUS_QUEUED, $fresh->send_status, 'delivery status is untouched');
     }
 
     private function cleanup(): void
