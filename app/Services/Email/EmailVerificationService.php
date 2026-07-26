@@ -57,6 +57,17 @@ class EmailVerificationService
     /** Consecutive finalized transport failures that signal a live outage. */
     public const OUTAGE_MIN_FAILURES = 3;
 
+    /**
+     * An UNEXPIRED `queued` row this old proves no worker is consuming: a
+     * live worker claims within seconds (contention retries within ~100s),
+     * so publication-succeeded-but-never-claimed is pipeline downtime that
+     * dispatch_failed (publication errors only) cannot see. Deliberately
+     * BELOW the 5-minute TTL floor: the evidence self-clears when the code
+     * expires, so a permanently lost job can never wedge enforcement open
+     * forever — while a live stall keeps producing fresh stuck rows.
+     */
+    public const STALLED_QUEUE_MINUTES = 4;
+
     /** Shown when the bounded per-user lock could not be acquired in time. */
     public const BUSY_MESSAGE = 'سیستم موقتاً مشغول است. لطفاً چند لحظه بعد دوباره تلاش کنید.';
 
@@ -211,6 +222,22 @@ class EmailVerificationService
         // and never updated_at (a general mutation time: verify() or
         // invalidateCodes() touching an old `sent` row must not make it look
         // like a freshly finalized success during a live outage).
+        // STALLED workers first: queue publication succeeded but nothing
+        // consumes (Supervisor stopped, null driver) — those rows never
+        // finalize, so the outcome scan below cannot see the outage. An
+        // unexpired, unconsumed `queued` row past the stall threshold is
+        // downtime; it self-clears at code expiry (or the moment a recovered
+        // worker claims it).
+        $stalledQueue = EmailVerificationCode::query()
+            ->where('send_status', EmailVerificationCode::SEND_STATUS_QUEUED)
+            ->whereNull('used_at')
+            ->where('expires_at', '>', now())
+            ->where('created_at', '<=', now()->subMinutes(self::STALLED_QUEUE_MINUTES))
+            ->exists();
+        if ($stalledQueue) {
+            return false;
+        }
+
         $currentFingerprint = $this->mailConfigFingerprint();
 
         $recentOutcomes = EmailVerificationCode::query()

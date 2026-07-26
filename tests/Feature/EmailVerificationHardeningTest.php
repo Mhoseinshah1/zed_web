@@ -1355,6 +1355,55 @@ class EmailVerificationHardeningTest extends TestCase
         $this->assertSame('verified', $svc->verify($user->fresh(), '123456')['status'], 'and it still verifies');
     }
 
+    public function test_a_stalled_queue_worker_pauses_enforcement_until_the_backlog_clears(): void
+    {
+        $svc = app(EmailVerificationService::class);
+        $user = $this->unverifiedUser();
+        $this->assertTrue($svc->isEnforceableNow(), 'healthy baseline');
+
+        // Publication succeeded but NO worker consumes: the row sits queued,
+        // unconsumed and unexpired, past the stall threshold — downtime that
+        // dispatch_failed (publication errors only) can never see.
+        $stuck = EmailVerificationCode::create([
+            'user_id' => $user->id, 'email' => $user->email,
+            'code_hash' => Hash::make('123456'), 'attempts' => 0,
+            'expires_at' => now()->addMinutes(10),
+            'send_status' => EmailVerificationCode::SEND_STATUS_QUEUED,
+        ]);
+        EmailVerificationCode::whereKey($stuck->id)->update([
+            'created_at' => now()->subMinutes(EmailVerificationService::STALLED_QUEUE_MINUTES + 1),
+        ]);
+
+        $this->assertFalse($svc->transportLooksLive(), 'a stalled queued backlog is pipeline downtime');
+        $this->assertFalse($svc->isEnforceableNow());
+        $this->actingAs($user)->get('/dashboard')->assertOk();
+
+        // A recovered worker claiming the row (here: it finalizes as sent)
+        // clears the signal; equally, expiry alone would — a permanently
+        // lost job can never wedge enforcement open forever.
+        EmailVerificationCode::whereKey($stuck->id)->update([
+            'send_status' => EmailVerificationCode::SEND_STATUS_SENT,
+            'delivery_finalized_at' => now(),
+            'delivery_config_fingerprint' => $svc->mailConfigFingerprint(),
+        ]);
+        $this->assertTrue($svc->transportLooksLive());
+
+        // Expiry variant: a fresh stuck row that then EXPIRES stops counting.
+        $tombstone = EmailVerificationCode::create([
+            'user_id' => $user->id, 'email' => $user->email,
+            'code_hash' => Hash::make('123456'), 'attempts' => 0,
+            'expires_at' => now()->addSeconds(30),
+            'send_status' => EmailVerificationCode::SEND_STATUS_QUEUED,
+        ]);
+        EmailVerificationCode::whereKey($tombstone->id)->update([
+            'created_at' => now()->subMinutes(EmailVerificationService::STALLED_QUEUE_MINUTES + 1),
+        ]);
+        $this->assertFalse($svc->transportLooksLive());
+        $this->travel(1)->minutes();
+        $this->assertTrue($svc->transportLooksLive(), 'an expired tombstone row no longer signals a stall');
+        $this->travelBack();
+    }
+
     public function test_a_queue_outage_pauses_enforcement_like_a_mail_outage(): void
     {
         $svc = app(EmailVerificationService::class);
