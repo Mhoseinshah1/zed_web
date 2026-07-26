@@ -317,7 +317,7 @@ class EmailSettingsPage extends Page implements HasActions, HasForms
         //    mailer is clearly unconfigured (users could never receive codes).
         if ($requiredWillBeActive && ! $this->mailLooksConfigured()) {
             Notification::make()
-                ->title('برای اجباری کردن تایید ایمیل، ابتدا باید پیکربندی ایمیل سرور (.env) کامل و قابل استفاده باشد. mailer فعلی: '.$this->mailerName())
+                ->title('برای اجباری کردن تایید ایمیل، ابتدا باید پیکربندی مؤثر ایمیل کامل و قابل استفاده باشد — تنظیمات SMTP پنل در صورت فعال بودن، وگرنه تنظیمات .env سرور. mailer فعلی: '.$this->mailerName())
                 ->danger()->send();
 
             return;
