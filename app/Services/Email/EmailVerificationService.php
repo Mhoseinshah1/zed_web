@@ -641,7 +641,11 @@ class EmailVerificationService
                 && (string) config('services.ses.region') !== '',
             'postmark' => class_exists(PostmarkTransportFactory::class)
                 && (string) config('services.postmark.key') !== '',
-            'resend' => class_exists(\Resend::class)
+            // Laravel's MailManager instantiates the SDK's `\Resend` entry
+            // class (`use Resend;` + Resend::client()); accept a namespaced
+            // variant too so an SDK relocation can never wrongly reject a
+            // working Resend setup.
+            'resend' => (class_exists(\Resend::class) || class_exists(\Resend\Resend::class))
                 && (string) config('services.resend.key') !== '',
             'mailgun' => class_exists(MailgunTransportFactory::class)
                 && (string) config('services.mailgun.secret') !== ''
