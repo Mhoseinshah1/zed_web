@@ -325,6 +325,25 @@ Then log in at `/zed-admin`.
 
 Alternatively, the `install.sh` script creates the admin user automatically during installation using the credentials you enter at the prompts.
 
+### 8. Administrator two-factor authentication (mandatory)
+
+Every administrator account **must** use TOTP two-factor authentication (RFC 6238 — Google Authenticator, Microsoft Authenticator, Authy, or any standards-compatible app):
+
+- **First login (fresh installs and existing admins alike):** after username + password, the panel forces a one-time enrollment — scan the locally rendered QR code (or type the manual setup key), confirm with a live 6-digit code, and store the single-use recovery codes shown exactly once. No panel page is reachable before enrollment completes.
+- **Every login:** username + password, then a fresh TOTP code. There is no "remember this device" bypass. Recovery codes can complete a login (once each), but not the sensitive-settings unlock.
+- **Sensitive communication settings** (`/zed-admin/settings/email` and `/zed-admin/settings/sms`) additionally require a **fresh** TOTP code — the code used at login is not accepted again. A successful step-up unlocks both pages for at most **5 minutes** (server-side grant, re-checked before every save/test action), with an explicit "قفل کردن همین حالا" relock button.
+- **Self-management:** the «امنیت حساب ادمین» page (سیستم group) shows non-secret MFA state and supports recovery-code regeneration and authenticator replacement — both require the current password plus a live code, and the new authenticator is confirmed **before** the old one is removed.
+- **Emergency reset** (authenticator *and* recovery codes lost): a server operator can clear an admin's second factor so the next login forces fresh enrollment:
+
+  ```bash
+  php artisan zedproxy:admin-2fa-reset <username>          # interactive confirmation
+  php artisan zedproxy:admin-2fa-reset <username> --force  # scripted recovery
+  ```
+
+  The command never prints secrets, rotates the remember token, and immediately invalidates the panel access of every session bound to the old factor.
+
+TOTP secrets are stored encrypted with `APP_KEY` (recovery codes only as one-way hashes) — **changing `APP_KEY` invalidates every enrolled authenticator**; plan on the emergency reset command after a key rotation. QR codes are rendered locally; the secret never leaves the server.
+
 ## Continuous Integration (CI)
 
 All checks run from a single GitHub Actions workflow, **`.github/workflows/ci.yml`** (workflow name **CI**). It triggers on pushes to `main`, `fix/**`, `feat/**`, `chore/**`, and `hardening/**`, on pull requests targeting `main`, and via manual `workflow_dispatch`. Superseded runs on the same ref are auto-cancelled (`concurrency`), and the workflow uses least-privilege permissions (`contents: read` by default).
