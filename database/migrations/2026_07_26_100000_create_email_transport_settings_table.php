@@ -2,6 +2,7 @@
 
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 
 /**
@@ -25,11 +26,13 @@ return new class extends Migration
         Schema::create('email_transport_settings', function (Blueprint $table) {
             $table->id();
 
-            // DATABASE-ENFORCED singleton: every row carries the same fixed
-            // key under a unique index, so exactly one logical settings row
-            // can ever exist — concurrent first-time saves cannot create two,
-            // regardless of application-level checks. Portable across
-            // PostgreSQL and SQLite (plain unique column, no partial index).
+            // DATABASE-ENFORCED singleton, part 1: the key is NOT NULL,
+            // defaults to the canonical value, and is unique — two rows can
+            // never share it. Part 2 (below, after create) makes the
+            // canonical value the ONLY permitted one, so "unique key" plus
+            // "only one legal key value" = at most one row, enforced by the
+            // database against raw inserts too — never only by Eloquent
+            // hooks or application validation.
             $table->string('singleton_key', 16)->default('main');
             $table->unique('singleton_key');
 
@@ -56,6 +59,36 @@ return new class extends Migration
 
             $table->timestamps();
         });
+
+        // Part 2 of the singleton invariant: the database rejects ANY row
+        // whose key is not the canonical 'main' — including raw query-builder
+        // or psql/sqlite3 inserts that never touch Eloquent. PostgreSQL uses
+        // a CHECK constraint; SQLite cannot ALTER TABLE .. ADD CONSTRAINT,
+        // so equivalent BEFORE INSERT/UPDATE triggers raise instead (both are
+        // dropped together with the table on rollback). The column is NOT
+        // NULL, so the equality comparison can never be bypassed via NULL.
+        if (Schema::getConnection()->getDriverName() === 'sqlite') {
+            DB::statement(<<<'SQL'
+                CREATE TRIGGER email_transport_settings_singleton_ins
+                BEFORE INSERT ON email_transport_settings
+                FOR EACH ROW WHEN NEW.singleton_key <> 'main'
+                BEGIN
+                    SELECT RAISE(ABORT, 'email_transport_settings.singleton_key must be ''main''');
+                END
+                SQL);
+            DB::statement(<<<'SQL'
+                CREATE TRIGGER email_transport_settings_singleton_upd
+                BEFORE UPDATE ON email_transport_settings
+                FOR EACH ROW WHEN NEW.singleton_key <> 'main'
+                BEGIN
+                    SELECT RAISE(ABORT, 'email_transport_settings.singleton_key must be ''main''');
+                END
+                SQL);
+        } else {
+            DB::statement(
+                "alter table email_transport_settings add constraint email_transport_settings_singleton_check check (singleton_key = 'main')"
+            );
+        }
     }
 
     public function down(): void
