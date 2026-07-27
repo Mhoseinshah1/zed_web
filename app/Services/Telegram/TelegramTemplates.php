@@ -161,6 +161,11 @@ class TelegramTemplates
                 'message' => "💾 <b>بکاپ با موفقیت انجام شد</b>\n📦 حجم: {size} مگابایت\n⏱ مدت: {duration} ثانیه\n🗂 محل ذخیره: {path}\n🧹 پاک‌سازی قدیمی: {cleaned}",
                 'variables' => '{size}, {duration}, {path}, {cleaned}',
             ],
+            'queue_job_failed' => [
+                'title' => '🛑 شکست نهایی جاب صف',
+                'message' => "🛑 <b>شکست نهایی جاب صف</b>\n⚙️ جاب: {job}\n🧵 صف: {queue} ({connection})\n🔁 تعداد تلاش: {attempts}\n🧨 کلاس خطا: {exception}\n🆔 کد رخداد: {fingerprint}\n🕒 زمان: {failed_at}",
+                'variables' => '{job}, {connection}, {queue}, {attempts}, {exception}, {fingerprint}, {failed_at}',
+            ],
             'backup_failed' => [
                 'title' => '❌ بکاپ ناموفق',
                 'message' => "❌ <b>بکاپ ناموفق بود</b>\n📝 خطا: {error}",

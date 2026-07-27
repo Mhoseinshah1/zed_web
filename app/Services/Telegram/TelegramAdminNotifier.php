@@ -40,6 +40,7 @@ class TelegramAdminNotifier
         'service_renewed' => ['services', 'services'],
         'service_failed' => ['errors', 'errors'],
         'service_sync_failed' => ['errors', 'errors'],
+        'queue_job_failed' => ['errors', 'errors'],
         'panel_down' => ['panels', 'panels'],
         'panel_recovered' => ['panels', 'panels'],
         'panel_auth_failed' => ['panels', 'panels'],
@@ -53,6 +54,19 @@ class TelegramAdminNotifier
 
     /** Noisy categories that are throttled harder when rate-limiting is on. */
     private const NOISY = ['panels', 'services', 'errors', 'system'];
+
+    /**
+     * Events whose EMITTER already owns mandatory deduplication (e.g. the
+     * failed-job listener's unconditional 600s window). For these, send()
+     * must NOT run its own cache-based throttle: a cache outage would
+     * otherwise be hit a second time here and silently suppress a critical,
+     * already-deduplicated alert. Every gate that does not need the cache
+     * (enabled/config, category, topic, escaping, audit logging, queued
+     * dispatch) still applies unchanged.
+     *
+     * @var list<string>
+     */
+    private const PRE_DEDUPLICATED_EVENTS = ['queue_job_failed'];
 
     public function __construct(
         private readonly TelegramSettings $settings,
@@ -108,7 +122,10 @@ class TelegramAdminNotifier
             }
 
             // ── Dedupe / throttle for repeated alerts ───────────────────────
-            if ($this->throttled($eventKey, $category, $relatedType, $relatedId, $message)) {
+            // Pre-deduplicated events skip this second cache dependency
+            // entirely — their emitter is the sole dedup owner.
+            if (! in_array($eventKey, self::PRE_DEDUPLICATED_EVENTS, true)
+                && $this->throttled($eventKey, $category, $relatedType, $relatedId, $message)) {
                 return $this->log($eventKey, $topicKey, $title, $message, $relatedType, $relatedId, $metadata, TelegramAdminNotificationLog::STATUS_MUTED, 'throttled duplicate', $topic->message_thread_id);
             }
 
