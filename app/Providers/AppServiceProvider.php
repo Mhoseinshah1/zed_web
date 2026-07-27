@@ -4,9 +4,11 @@ namespace App\Providers;
 
 use App\Services\AdminMfa\AdminMfaSession;
 use App\Services\Email\EmailTransportSettingsService;
+use App\Services\Queue\FailedJobAlerter;
 use App\Services\Seo\SeoManager;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Http\Request;
+use Illuminate\Queue\Events\JobFailed;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\ServiceProvider;
@@ -52,6 +54,21 @@ class AppServiceProvider extends ServiceProvider
         }
         Queue::before(function () {
             app(EmailTransportSettingsService::class)->apply();
+        });
+
+        // TERMINAL queue-job failures (retries exhausted / explicitly failed):
+        // alert admins on Telegram. Registration stays minimal — classification,
+        // sanitization, recursion exclusion and the 600s dedup all live in
+        // FailedJobAlerter, which never throws, so Laravel's own failed-job
+        // handling (failed_jobs row, the job's failed() method) is untouched.
+        // Runs on normal boot, so long-running workers pick it up without any
+        // config-cache rebuild.
+        Queue::failing(function (JobFailed $event) {
+            try {
+                app(FailedJobAlerter::class)->handle($event);
+            } catch (\Throwable) {
+                // Monitoring must never alter the worker's failure handling.
+            }
         });
 
         // Lightweight rate limit for the public health probes — enough for
