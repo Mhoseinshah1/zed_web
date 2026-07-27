@@ -158,7 +158,7 @@ class TelegramTemplates
             ],
             'backup_success' => [
                 'title' => '💾 بکاپ موفق',
-                'message' => "💾 <b>بکاپ با موفقیت انجام شد</b>\n📦 حجم: {size} مگابایت\n⏱ مدت: {duration} ثانیه\n🗂 مسیر: {path}\n🧹 پاک‌سازی قدیمی: {cleaned}",
+                'message' => "💾 <b>بکاپ با موفقیت انجام شد</b>\n📦 حجم: {size} مگابایت\n⏱ مدت: {duration} ثانیه\n🗂 محل ذخیره: {path}\n🧹 پاک‌سازی قدیمی: {cleaned}",
                 'variables' => '{size}, {duration}, {path}, {cleaned}',
             ],
             'backup_failed' => [

@@ -117,11 +117,13 @@ class BackupSettingsPage extends Page implements HasActions, HasForms
 
                 Forms\Components\TextInput::make('backup_retention_days')->label('روزهای نگهداری بکاپ')->numeric()->minValue(1)->default(7),
                 Forms\Components\TextInput::make('backup_storage_path')->label('مسیر ذخیره بکاپ (اختیاری)')
-                    ->placeholder(storage_path('app/backups'))->columnSpanFull()
+                    ->placeholder('پیش‌فرض: storage/app/backups')->columnSpanFull()
                     ->helperText('باید یک مسیر مطلق باشد (با / شروع شود). برای استفاده از مسیر پیش‌فرض خالی بگذارید.')
                     ->rule(fn () => function (string $attribute, mixed $value, \Closure $fail): void {
                         try {
-                            app(BackupPathPolicy::class)->resolve((string) $value);
+                            // Raw value in — the policy rejects control
+                            // characters BEFORE any trimming/normalization.
+                            app(BackupPathPolicy::class)->normalizeForStorage((string) $value);
                         } catch (BackupFailure $e) {
                             $fail($e->publicMessage());
                         }
@@ -186,11 +188,11 @@ class BackupSettingsPage extends Page implements HasActions, HasForms
         SiteSetting::set('backup_schedule_time', $this->validTime($data['backup_schedule_time'] ?? '03:00', '03:00'));
         SiteSetting::set('backup_retention_days', (int) max(1, (int) ($data['backup_retention_days'] ?? 7)));
 
-        // Same authoritative policy the runtime uses: store either '' (use
-        // default) or a validated NORMALIZED absolute path — never a raw value.
-        $rawPath = trim((string) ($data['backup_storage_path'] ?? ''));
+        // Same authoritative policy the runtime uses: the RAW submitted value
+        // goes in (control characters are rejected before any trimming) and
+        // either '' (use default) or the normalized absolute path comes out.
         try {
-            $storedPath = $rawPath === '' ? '' : app(BackupPathPolicy::class)->validateAbsolute($rawPath);
+            $storedPath = app(BackupPathPolicy::class)->normalizeForStorage((string) ($data['backup_storage_path'] ?? ''));
         } catch (BackupFailure $e) {
             Notification::make()->title($e->publicMessage())->danger()->send();
 
