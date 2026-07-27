@@ -13,6 +13,7 @@ use App\Services\Backup\BackupService;
 use App\Services\Backup\BackupSettings;
 use App\Services\Telegram\TelegramAdminNotifier;
 use App\Services\Telegram\TelegramSettings;
+use Illuminate\Encryption\Encrypter;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
@@ -672,6 +673,305 @@ class BackupPathAndAtomicityTest extends TestCase
         $this->assertSame(BackupLog::STATUS_SUCCESS, $result['status']);
         $this->assertStringStartsWith((string) realpath($this->tmp).'/', (string) $result['path']);
         $this->assertSame([], glob($this->tmp.'/.work_*'));
+    }
+
+    // ── Fail-closed encryption configuration ─────────────────────────────────
+
+    public function test_settings_page_refuses_first_encryption_activation_without_password(): void
+    {
+        $admin = User::factory()->create(['is_admin' => true]);
+
+        Livewire::actingAs($admin)
+            ->test(BackupSettingsPage::class)
+            ->fillForm(['backup_encrypt_enabled' => true, 'backup_password_new' => null])
+            ->call('save');
+
+        // Refused before ANY persistence: "enabled without a password" is
+        // never stored.
+        $this->assertFalse(app(BackupSettings::class)->encryptEnabled());
+        $this->assertSame(BackupSettings::PASSWORD_NONE, app(BackupSettings::class)->passwordState());
+    }
+
+    public function test_settings_page_activates_encryption_with_a_new_password(): void
+    {
+        $admin = User::factory()->create(['is_admin' => true]);
+
+        Livewire::actingAs($admin)
+            ->test(BackupSettingsPage::class)
+            ->fillForm(['backup_encrypt_enabled' => true, 'backup_password_new' => 'Str0ng-Backup-Pass'])
+            ->call('save');
+
+        $this->assertTrue(app(BackupSettings::class)->encryptEnabled());
+        $this->assertSame(BackupSettings::PASSWORD_OK, app(BackupSettings::class)->passwordState());
+        $this->assertSame('Str0ng-Backup-Pass', app(BackupSettings::class)->password());
+        // Stored encrypted, never plaintext.
+        $this->assertNotSame('Str0ng-Backup-Pass', (string) SiteSetting::get('backup_password', ''));
+    }
+
+    public function test_settings_page_keeps_encryption_enabled_with_existing_valid_password(): void
+    {
+        app(BackupSettings::class)->storePassword('Existing-Pass');
+        SiteSetting::set('backup_encrypt_enabled', 'true');
+        $storedCiphertext = (string) SiteSetting::get('backup_password', '');
+        $admin = User::factory()->create(['is_admin' => true]);
+
+        Livewire::actingAs($admin)
+            ->test(BackupSettingsPage::class)
+            ->fillForm(['backup_encrypt_enabled' => true, 'backup_password_new' => null])
+            ->call('save');
+
+        // No re-entry required; the stored password is NOT overwritten.
+        $this->assertTrue(app(BackupSettings::class)->encryptEnabled());
+        $this->assertSame($storedCiphertext, (string) SiteSetting::get('backup_password', ''));
+        $this->assertSame('Existing-Pass', app(BackupSettings::class)->password());
+    }
+
+    public function test_runtime_encryption_enabled_without_stored_password_fails_before_any_work(): void
+    {
+        Log::spy();
+        $this->configureBot();
+        $this->configureFileOnlyBackup();
+        SiteSetting::set('backup_encrypt_enabled', 'true'); // no password ever stored
+
+        $result = app(BackupService::class)->run(BackupLog::TYPE_MANUAL);
+
+        $this->assertSame(BackupLog::STATUS_FAILED, $result['status']);
+        $this->assertStringContainsString('رمز عبور', (string) $result['error']);
+        // Failed BEFORE any external process / workspace / commitment.
+        $this->assertSame([], glob($this->tmp.'/.work_*'));
+        $this->assertSame([], glob($this->tmp.'/zedproxy-backup-*'));
+
+        Log::shouldHaveReceived('error')->once()->withArgs(
+            fn (string $message, array $context = []) => ($context['category'] ?? null) === BackupFailure::CATEGORY_CONFIG
+                && ($context['reason'] ?? null) === 'encryption_password_missing',
+        );
+    }
+
+    public function test_runtime_encryption_with_corrupt_ciphertext_fails_closed(): void
+    {
+        Log::spy();
+        $this->configureBot();
+        $this->configureFileOnlyBackup();
+        SiteSetting::set('backup_encrypt_enabled', 'true');
+        SiteSetting::set('backup_password', 'CANARY-corrupt-ciphertext-blob');
+
+        $result = app(BackupService::class)->run(BackupLog::TYPE_MANUAL);
+
+        $this->assertSame(BackupLog::STATUS_FAILED, $result['status']);
+        // Distinguishable internally from "encryption disabled" AND from
+        // "never stored" — via the reason code, not via any exposed detail.
+        Log::shouldHaveReceived('error')->once()->withArgs(
+            function (string $message, array $context = []): bool {
+                $blob = $message.' '.json_encode($context);
+
+                return ($context['reason'] ?? null) === 'encryption_password_unreadable'
+                    && ! str_contains($blob, 'CANARY');
+            },
+        );
+        // No plaintext OR encrypted artifact was committed; nothing leaked.
+        $this->assertSame([], glob($this->tmp.'/zedproxy-backup-*'));
+        $this->assertStringNotContainsString('CANARY', (string) $result['error']);
+        $this->assertStringNotContainsString('CANARY', (string) BackupLog::latestLog()->error);
+        foreach ($this->notificationMessages() as $message) {
+            $this->assertStringNotContainsString('CANARY', $message);
+        }
+    }
+
+    public function test_runtime_encryption_with_foreign_app_key_ciphertext_fails_closed(): void
+    {
+        $this->configureFileOnlyBackup();
+        SiteSetting::set('backup_encrypt_enabled', 'true');
+        // Valid ciphertext — but produced under a DIFFERENT application key
+        // (key rotation / migrated database).
+        $foreign = new Encrypter(random_bytes(32), 'AES-256-CBC');
+        SiteSetting::set('backup_password', $foreign->encryptString('Old-Pass'));
+
+        $result = app(BackupService::class)->run(BackupLog::TYPE_MANUAL);
+
+        $this->assertSame(BackupLog::STATUS_FAILED, $result['status']);
+        $this->assertStringContainsString('رمز عبور', (string) $result['error']);
+        $this->assertSame(BackupSettings::PASSWORD_INVALID, app(BackupSettings::class)->passwordState());
+        $this->assertSame([], glob($this->tmp.'/zedproxy-backup-*'));
+        $this->assertSame([], glob($this->tmp.'/.work_*'));
+        // The toggle is NOT silently cleared and the ciphertext survives.
+        $this->assertTrue(app(BackupSettings::class)->encryptEnabled());
+        $this->assertNotSame('', (string) SiteSetting::get('backup_password', ''));
+    }
+
+    // ── Filament never renders the real archive path ─────────────────────────
+
+    public function test_backup_status_page_shows_filename_but_never_the_absolute_path(): void
+    {
+        if (! $this->hasTar()) {
+            $this->markTestSkipped('tar not available');
+        }
+        $this->configureFileOnlyBackup();
+
+        $result = app(BackupService::class)->run(BackupLog::TYPE_MANUAL);
+        $this->assertSame(BackupLog::STATUS_SUCCESS, $result['status']);
+
+        // Internal record keeps the REAL path for Telegram document dispatch.
+        $log = BackupLog::latestLog();
+        $this->assertSame($result['path'], $log->file_path);
+        $this->assertFileExists((string) $log->file_path);
+
+        $admin = User::factory()->create(['is_admin' => true]);
+        $html = $this->actingAs($admin)->get('/zed-admin/backup/settings')->getContent();
+
+        // The page may show the archive BASENAME…
+        $this->assertStringContainsString(basename((string) $log->file_path), $html);
+        // …but never the absolute location (configured root, storage_path,
+        // common server roots, or work-directory names).
+        $this->assertStringNotContainsString($this->tmp, $html);
+        $this->assertStringNotContainsString(storage_path(), $html);
+        $this->assertStringNotContainsString('/var/www', $html);
+        $this->assertStringNotContainsString('.work_', $html);
+    }
+
+    // ── Cleanup can never escape run() ───────────────────────────────────────
+
+    public function test_cleanup_enumeration_exception_cannot_escape_run_and_keeps_committed_success(): void
+    {
+        Log::spy();
+        $this->configureFileOnlyBackup();
+
+        $svc = $this->partialService();
+        $svc->shouldReceive('createArchive')->once()->andReturnUsing(
+            fn (string $dest) => file_put_contents($dest, 'archive-bytes'),
+        );
+        $svc->shouldReceive('listDirChecked')->andThrow(new \RuntimeException('/secret/internal/path leaked via scandir'));
+
+        $result = $svc->run(BackupLog::TYPE_MANUAL); // must NOT throw
+
+        // The committed backup stays successful — cleanup failed AFTER commit.
+        $this->assertSame(BackupLog::STATUS_SUCCESS, $result['status']);
+        $this->assertFileExists((string) $result['path']);
+        $this->assertSame(BackupLog::STATUS_SUCCESS, BackupLog::latestLog()->status);
+
+        // Logged with safe fields only: stage, reason, exception CLASS — the
+        // exception message (with its internal path) appears nowhere.
+        Log::shouldHaveReceived('warning')->withArgs(
+            function (string $message, array $context = []): bool {
+                $blob = $message.' '.json_encode($context);
+
+                return ($context['reason'] ?? null) === 'cleanup_exception'
+                    && ($context['stage'] ?? null) === 'workdir_cleanup'
+                    && ($context['exception'] ?? null) === \RuntimeException::class
+                    && ! str_contains($blob, '/secret')
+                    && ! str_contains($blob, $this->tmp);
+            },
+        );
+    }
+
+    public function test_cleanup_enumeration_exception_preserves_the_original_failure(): void
+    {
+        $this->configureFileOnlyBackup();
+
+        $svc = $this->partialService();
+        $svc->shouldReceive('createArchive')->once()->andThrow(BackupFailure::archive('process_failed', 2));
+        $svc->shouldReceive('listDirChecked')->andThrow(new \RuntimeException('cleanup blew up too'));
+
+        $result = $svc->run(BackupLog::TYPE_MANUAL); // must NOT throw
+
+        // The ORIGINAL archive failure is what gets recorded — the cleanup
+        // exception neither replaces it nor escapes.
+        $this->assertSame(BackupLog::STATUS_FAILED, $result['status']);
+        $this->assertStringContainsString('آرشیو', (string) $result['error']);
+        $this->assertStringContainsString('آرشیو', (string) BackupLog::latestLog()->error);
+    }
+
+    public function test_cleanup_enumeration_returning_false_is_handled_without_failing_the_backup(): void
+    {
+        Log::spy();
+        $this->configureFileOnlyBackup();
+
+        $svc = $this->partialService();
+        $svc->shouldReceive('createArchive')->once()->andReturnUsing(
+            fn (string $dest) => file_put_contents($dest, 'archive-bytes'),
+        );
+        $svc->shouldReceive('listDirChecked')->andReturn(false);
+
+        $result = $svc->run(BackupLog::TYPE_MANUAL);
+
+        $this->assertSame(BackupLog::STATUS_SUCCESS, $result['status']);
+        Log::shouldHaveReceived('warning')->withArgs(
+            fn (string $message, array $context = []) => ($context['reason'] ?? null) === 'scandir_failed'
+                && ! str_contains(json_encode($context) ?: '', $this->tmp),
+        );
+    }
+
+    public function test_symlink_inside_work_dir_is_removed_as_a_link_and_never_followed(): void
+    {
+        $this->configureFileOnlyBackup();
+
+        $outside = $this->tmp.'_other';
+        mkdir($outside, 0777, true);
+        file_put_contents($outside.'/victim.txt', 'must-survive-cleanup');
+
+        $svc = $this->partialService();
+        $svc->shouldReceive('createArchive')->once()->andReturnUsing(
+            function (string $dest) use ($outside): void {
+                file_put_contents($dest, 'archive-bytes');
+                // Malicious symlink planted inside the work directory,
+                // pointing OUTSIDE it.
+                symlink($outside, dirname($dest).'/evil_link');
+            },
+        );
+
+        $result = $svc->run(BackupLog::TYPE_MANUAL);
+
+        $this->assertSame(BackupLog::STATUS_SUCCESS, $result['status']);
+        // Cleanup removed the LINK, never traversed into its target.
+        $this->assertSame([], glob($this->tmp.'/.work_*'));
+        $this->assertFileExists($outside.'/victim.txt');
+        $this->assertSame('must-survive-cleanup', file_get_contents($outside.'/victim.txt'));
+    }
+
+    // ── Canonical roots resolving to the filesystem root ─────────────────────
+
+    public function test_symlinked_root_resolving_to_filesystem_root_is_rejected_before_workdir_creation(): void
+    {
+        $link = $this->tmp.'/rootlink';
+        symlink('/', $link);
+        SiteSetting::set('backup_enabled', 'true');
+        SiteSetting::set('backup_storage_path', $link);
+        SiteSetting::set('backup_include_database', 'false');
+        SiteSetting::set('backup_include_storage', 'true');
+
+        $result = app(BackupService::class)->run(BackupLog::TYPE_MANUAL);
+
+        $this->assertSame(BackupLog::STATUS_FAILED, $result['status']);
+        $this->assertStringContainsString('ریشه فایل‌سیستم', (string) $result['error']);
+        // The static message does not echo the configured or resolved path.
+        $this->assertStringNotContainsString($this->tmp, (string) $result['error']);
+        // No filesystem-root children were ever attempted.
+        $this->assertSame([], glob('/.work_*'));
+        $this->assertSame([], glob('/zedproxy-backup-*'));
+    }
+
+    public function test_symlinked_root_resolving_to_a_valid_directory_stays_supported(): void
+    {
+        $real = $this->tmp.'/realroot';
+        mkdir($real, 0777, true);
+        $link = $this->tmp.'/goodlink';
+        symlink($real, $link);
+        SiteSetting::set('backup_enabled', 'true');
+        SiteSetting::set('backup_storage_path', $link);
+        SiteSetting::set('backup_include_database', 'false');
+        SiteSetting::set('backup_include_storage', 'true');
+
+        $svc = $this->partialService();
+        $svc->shouldReceive('createArchive')->once()->andReturnUsing(
+            fn (string $dest) => file_put_contents($dest, 'archive-bytes'),
+        );
+
+        $result = $svc->run(BackupLog::TYPE_MANUAL);
+
+        $this->assertSame(BackupLog::STATUS_SUCCESS, $result['status']);
+        // Committed inside the CANONICAL non-root target.
+        $this->assertStringStartsWith((string) realpath($real).'/zedproxy-backup-', (string) $result['path']);
+        $this->assertCount(1, glob($real.'/zedproxy-backup-*'));
+        $this->assertSame([], glob($real.'/.work_*'));
     }
 
     // ── Filament page uses the same policy ──────────────────────────────────
