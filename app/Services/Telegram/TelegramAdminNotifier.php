@@ -40,6 +40,7 @@ class TelegramAdminNotifier
         'service_renewed' => ['services', 'services'],
         'service_failed' => ['errors', 'errors'],
         'service_sync_failed' => ['errors', 'errors'],
+        'queue_job_failed' => ['errors', 'errors'],
         'panel_down' => ['panels', 'panels'],
         'panel_recovered' => ['panels', 'panels'],
         'panel_auth_failed' => ['panels', 'panels'],
