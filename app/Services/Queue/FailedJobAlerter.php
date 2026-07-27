@@ -29,8 +29,15 @@ use Illuminate\Support\Facades\Log;
  *     excluded — otherwise a Telegram outage would fail the delivery job and
  *     enqueue yet another delivery job for the alert about that failure.
  *   • Flood control: an unconditional 600-second dedup window per
- *     (job class, exception class, connection, queue) identity, applied
- *     BEFORE the notifier's own category throttling.
+ *     (job class, exception class, connection, queue) identity. This
+ *     listener is the SOLE dedup owner for queue_job_failed — the generic
+ *     notifier deliberately skips its own cache throttle for this event, so
+ *     a cache outage is hit at most ONCE and fail-open genuinely reaches
+ *     the audit row and queue publication (when database/queue are up).
+ *   • Bounded display labels: every displayed label is control-character
+ *     stripped, whitespace-collapsed, secret-masked and length-bounded; the
+ *     dedup fingerprint is derived from the FULL raw identity values, never
+ *     from truncated display labels.
  */
 class FailedJobAlerter
 {
@@ -84,6 +91,15 @@ class FailedJobAlerter
      *
      * @return array{job:string,connection:string,queue:string,attempts:int,exception:string,fingerprint:string,failed_at:string}
      */
+    /** Display-label bounds (Unicode characters). */
+    public const MAX_JOB_LABEL = 120;
+
+    public const MAX_EXCEPTION_LABEL = 120;
+
+    public const MAX_CONNECTION_LABEL = 80;
+
+    public const MAX_QUEUE_LABEL = 80;
+
     private function context(JobFailed $event, string $jobClass): array
     {
         $exceptionClass = get_class($event->exception);
@@ -91,14 +107,35 @@ class FailedJobAlerter
         $queue = (string) ($event->job->getQueue() ?? '');
 
         return [
-            'job' => SecretMasker::mask(class_basename($jobClass)),
-            'connection' => SecretMasker::mask($connection),
-            'queue' => SecretMasker::mask($queue),
+            'job' => $this->label(class_basename($jobClass), self::MAX_JOB_LABEL),
+            'connection' => $this->label($connection, self::MAX_CONNECTION_LABEL),
+            'queue' => $this->label($queue, self::MAX_QUEUE_LABEL),
             'attempts' => (int) $event->job->attempts(),
-            'exception' => SecretMasker::mask(class_basename($exceptionClass)),
+            'exception' => $this->label(class_basename($exceptionClass), self::MAX_EXCEPTION_LABEL),
+            // Identity comes from the FULL raw values (below), never from the
+            // truncated display labels above — two distinct long identifiers
+            // sharing a displayed prefix still alert independently.
             'fingerprint' => $this->fingerprint($jobClass, $exceptionClass, $connection, $queue),
             'failed_at' => now()->format('Y-m-d H:i:s'),
         ];
+    }
+
+    /**
+     * THE one deterministic normalization for every displayed queue-failure
+     * label: strip ASCII + Unicode control characters (C0, DEL, C1) and the
+     * Unicode line/paragraph separators so a hostile display name cannot add
+     * Telegram lines or corrupt logs, collapse whitespace runs, trim, mask
+     * secrets, bound the length in Unicode characters, and fall back to a
+     * static 'unknown' when nothing displayable remains.
+     */
+    private function label(string $raw, int $max): string
+    {
+        $clean = (string) preg_replace('/[\x{0000}-\x{001F}\x{007F}-\x{009F}\x{2028}\x{2029}]/u', ' ', $raw);
+        $clean = trim((string) preg_replace('/\s+/u', ' ', $clean));
+        $clean = SecretMasker::mask($clean);
+        $clean = trim(mb_substr($clean, 0, $max));
+
+        return $clean === '' ? 'unknown' : $clean;
     }
 
     /**
@@ -119,8 +156,12 @@ class FailedJobAlerter
             // Cache::add returns false when the key already exists → duplicate.
             return Cache::add('tg:qfail:'.$fingerprint, 1, self::DEDUP_WINDOW_SECONDS);
         } catch (\Throwable $e) {
-            // Cache outage: fail OPEN (a duplicate alert beats silence); the
-            // notifier's own throttling still bounds the flood.
+            // Cache outage: fail OPEN (a duplicate alert beats silence). The
+            // notifier performs NO second cache operation for this event, so
+            // the alert still reaches the audit row and queue publication
+            // whenever the database and queue are available. (A total
+            // queue/Redis outage still cannot be reported through the same
+            // queue — documented limitation.)
             $this->safeLog('dedup', 'cache_unavailable', $e, $fingerprint);
 
             return true;
