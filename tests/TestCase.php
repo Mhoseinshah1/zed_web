@@ -50,13 +50,34 @@ abstract class TestCase extends BaseTestCase
             $this->withAdminMfaVerified($user);
         }
 
+        $this->stampSessionPasswordHash($user, $guard);
+
         return parent::actingAs($user, $guard);
     }
 
     /** Authenticate WITHOUT the MFA marker (for denial-path tests). */
     public function actingAsWithoutAdminMfa(UserContract $user)
     {
+        $this->stampSessionPasswordHash($user, null);
+
         return parent::actingAs($user);
+    }
+
+    /**
+     * AuthenticateSession binds every web session to the user's current
+     * password hash (a real login stamps it via the Login event). actingAs()
+     * means "an established authenticated session", so it stamps the same
+     * binding — otherwise switching test users in one session would trip a
+     * false credential-change logout. Tests that exercise stale-session
+     * rejection overwrite the stamp explicitly with withSession(), and the
+     * lazy-adoption test forgets it before the request.
+     */
+    private function stampSessionPasswordHash(UserContract $user, ?string $guard): void
+    {
+        if (($guard === null || $guard === 'web') && $user instanceof AppUser) {
+            // Raw-hash legacy format — accepted by validatePasswordHash().
+            session()->put('password_hash_web', (string) $user->getAuthPassword());
+        }
     }
 
     /**
