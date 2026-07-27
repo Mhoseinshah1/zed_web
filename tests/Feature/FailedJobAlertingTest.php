@@ -25,6 +25,7 @@ use Illuminate\Queue\WorkerOptions;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Str;
 use RuntimeException;
@@ -47,8 +48,9 @@ class FailedJobAlertingTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
-        Cache::flush(); // dedup + notifier throttle both use the cache
+        Cache::flush(); // listener dedup (and generic notifier throttles) use the cache
         AlwaysFailingTestJob::$attempts = 0;
+        AlwaysFailingTestJob::$failedCalls = 0;
     }
 
     private function configureBot(): void
@@ -184,6 +186,21 @@ class FailedJobAlertingTest extends TestCase
         $this->assertCount(4, $this->alertLogs());
     }
 
+    public function test_different_connection_names_alert_independently(): void
+    {
+        Queue::fake();
+        $this->configureBot();
+
+        // Identical job/exception/queue — only the CONNECTION differs: the
+        // connection is part of the dedup identity, so both alert.
+        $this->failJob(connection: 'redis');
+        $this->failJob(connection: 'database');
+
+        $logs = $this->alertLogs();
+        $this->assertCount(2, $logs);
+        $this->assertNotSame($logs[0]->metadata['fingerprint'], $logs[1]->metadata['fingerprint']);
+    }
+
     // ── Recursion prevention ────────────────────────────────────────────────
 
     public function test_failed_telegram_message_transport_job_creates_no_alert(): void
@@ -223,15 +240,72 @@ class FailedJobAlertingTest extends TestCase
         Queue::assertNothingPushed();
     }
 
-    public function test_cache_failure_inside_listener_never_throws(): void
+    public function test_cache_outage_still_creates_audit_row_and_publishes_one_transport_job(): void
     {
+        Log::spy();
         $this->configureBot();
         Queue::fake();
-        Cache::shouldReceive('add')->andThrow(new RuntimeException('cache down'));
+        // ->once() is the proof of the single cache dependency: the listener
+        // hits the cache exactly once, and the notifier performs NO second
+        // cache throttle for this pre-deduplicated event. (Proxy mock of the
+        // REAL manager so every other cache call keeps working.)
+        $cacheProxy = \Mockery::mock(Cache::getFacadeRoot());
+        $cacheProxy->shouldReceive('add')->once()
+            ->andThrow(new RuntimeException('redis://:s3cret@cache-host.internal:6379 down'));
+        Cache::swap($cacheProxy);
 
         $this->failJob(); // must not throw — Laravel's failure handling continues
 
-        $this->addToAssertionCount(1);
+        // Fail-open genuinely delivers: one audit row, one queued transport job.
+        $logs = $this->alertLogs();
+        $this->assertCount(1, $logs);
+        $this->assertSame(TelegramAdminNotificationLog::STATUS_PENDING, $logs->first()->status);
+        Queue::assertPushed(SendTelegramAdminMessageJob::class, 1);
+
+        // The monitoring warning carries only safe fields — no raw cache
+        // exception message, host, endpoint, or credential.
+        Log::shouldHaveReceived('warning')->withArgs(
+            function (string $message, array $context = []): bool {
+                $blob = $message.' '.json_encode($context);
+
+                return ($context['reason'] ?? null) === 'cache_unavailable'
+                    && ($context['stage'] ?? null) === 'dedup'
+                    && ! str_contains($blob, 'cache-host')
+                    && ! str_contains($blob, '6379')
+                    && ! str_contains($blob, 's3cret');
+            },
+        );
+    }
+
+    public function test_generic_events_keep_their_notifier_throttling(): void
+    {
+        Queue::fake();
+        $this->configureBot();
+
+        $notifier = app(TelegramAdminNotifier::class);
+        $notifier->send('backup_status', 'backup_server', 'بکاپ', 'same message');
+        $notifier->send('backup_status', 'backup_server', 'بکاپ', 'same message');
+
+        $rows = TelegramAdminNotificationLog::where('event_key', 'backup_status')->orderBy('id')->get();
+        $this->assertCount(2, $rows);
+        $this->assertSame(TelegramAdminNotificationLog::STATUS_PENDING, $rows[0]->status);
+        $this->assertSame(TelegramAdminNotificationLog::STATUS_MUTED, $rows[1]->status);
+        Queue::assertPushed(SendTelegramAdminMessageJob::class, 1);
+    }
+
+    public function test_queue_publication_failure_is_swallowed_and_audit_row_remains(): void
+    {
+        $this->configureBot();
+        // Publication itself blows up (e.g. Redis gone for the queue): the
+        // notifier's existing safety behavior swallows it.
+        Queue::partialMock()->shouldReceive('connection')
+            ->andThrow(new RuntimeException('Connection refused [tcp://127.0.0.1:6379]'));
+
+        $this->failJob(); // must not throw
+
+        // The audit row was created before publication was attempted; the
+        // failure is documented-limitation territory, not a crash.
+        $this->assertCount(1, $this->alertLogs());
     }
 
     public function test_notifier_failure_inside_listener_never_throws(): void
@@ -244,6 +318,76 @@ class FailedJobAlertingTest extends TestCase
         $this->failJob(); // must not throw
 
         $this->addToAssertionCount(1);
+    }
+
+    // ── Bounded, control-character-safe display labels ───────────────────────
+
+    public function test_overlong_labels_are_truncated_to_the_exact_configured_maximum(): void
+    {
+        Queue::fake();
+        $this->configureBot();
+
+        $this->failJob(
+            'App\\Jobs\\'.str_repeat('A', 200),
+            new ZpVeryLongExceptionClassNameMeantOnlyForTruncationBoundaryCoverageOfTheQueueFailureAlertLabelNormalizationRuleInThisTestSuiteX,
+            connection: str_repeat('c', 100),
+            queue: str_repeat('q', 100),
+        );
+
+        $meta = $this->alertLogs()->firstOrFail()->metadata;
+        $this->assertSame(FailedJobAlerter::MAX_JOB_LABEL, mb_strlen($meta['job']));
+        $this->assertSame(FailedJobAlerter::MAX_EXCEPTION_LABEL, mb_strlen($meta['exception']));
+        $this->assertSame(FailedJobAlerter::MAX_CONNECTION_LABEL, mb_strlen($meta['connection']));
+        $this->assertSame(FailedJobAlerter::MAX_QUEUE_LABEL, mb_strlen($meta['queue']));
+    }
+
+    public function test_control_characters_cannot_add_lines_or_corrupt_labels(): void
+    {
+        Queue::fake();
+        $this->configureBot();
+
+        $this->failJob(
+            "App\\Jobs\\Evil\nJob\tName\x00X\u{2028}Y\u{0085}Z",
+            queue: "que\r\nue",
+        );
+
+        $log = $this->alertLogs()->firstOrFail();
+        // Control characters and Unicode line separators collapse to single
+        // spaces — no extra Telegram lines, no corrupted metadata.
+        $this->assertSame('Evil Job Name X Y Z', $log->metadata['job']);
+        $this->assertSame('que ue', $log->metadata['queue']);
+        $this->assertStringNotContainsString("Evil\nJob", $log->message);
+        $this->assertStringNotContainsString("que\r\nue", $log->message);
+        foreach (['job', 'connection', 'queue', 'exception'] as $field) {
+            $this->assertSame(0, preg_match('/[\x00-\x1F\x7F]/u', (string) $log->metadata[$field]), $field);
+        }
+    }
+
+    public function test_all_control_character_label_falls_back_to_unknown(): void
+    {
+        Queue::fake();
+        $this->configureBot();
+
+        $this->failJob(queue: "\x01\x02\x03");
+
+        $this->assertSame('unknown', $this->alertLogs()->firstOrFail()->metadata['queue']);
+    }
+
+    public function test_fingerprints_derive_from_full_identity_not_truncated_labels(): void
+    {
+        Queue::fake();
+        $this->configureBot();
+
+        $sharedPrefix = 'App\\Jobs\\'.str_repeat('L', 150);
+        $this->failJob($sharedPrefix.'X');
+        $this->failJob($sharedPrefix.'Y');
+
+        // Both alert independently even though the truncated DISPLAY labels
+        // are identical — identity uses the full raw values.
+        $logs = $this->alertLogs();
+        $this->assertCount(2, $logs);
+        $this->assertSame($logs[0]->metadata['job'], $logs[1]->metadata['job']);
+        $this->assertNotSame($logs[0]->metadata['fingerprint'], $logs[1]->metadata['fingerprint']);
     }
 
     // ── Template behavior on existing installations ─────────────────────────
@@ -318,6 +462,9 @@ class FailedJobAlertingTest extends TestCase
             'connection' => 'database',
             '--stop-when-empty' => true,
             '--sleep' => 0,
+            // A long-lived PHPUnit process can exceed the worker's default
+            // 128MB self-check, which would stop the loop after one attempt.
+            '--memory' => 2048,
         ])->run();
 
         $this->assertSame(2, AlwaysFailingTestJob::$attempts);
@@ -326,11 +473,70 @@ class FailedJobAlertingTest extends TestCase
         $this->assertSame('AlwaysFailingTestJob', $logs->first()->metadata['job']);
         $this->assertSame(2, $logs->first()->metadata['attempts']);
         $this->assertSame(1, DB::table('failed_jobs')->count());
+        // The job's own failed() callback executed exactly once.
+        $this->assertSame(1, AlwaysFailingTestJob::$failedCalls);
 
         // The notification stays canary-free even though the exception message
         // and payload carried one.
         $this->assertStringNotContainsString(AlwaysFailingTestJob::ERROR, $logs->first()->message);
         $this->assertStringNotContainsString('abc123', $logs->first()->message.json_encode($logs->first()->metadata));
+    }
+
+    public function test_worker_terminal_failure_with_cache_outage_preserves_lifecycle_and_delivers(): void
+    {
+        $this->configureBot();
+        Http::fake(['*' => Http::response(['ok' => true, 'result' => ['message_id' => 9]], 200)]);
+        config(['queue.default' => 'database']);
+        // The dedup cache 'add' is down for the ENTIRE worker run (proxy mock
+        // of the real manager: the worker's own cache reads keep working).
+        $cacheProxy = \Mockery::mock(Cache::getFacadeRoot());
+        $cacheProxy->shouldReceive('add')->andThrow(new RuntimeException('cache down'));
+        Cache::swap($cacheProxy);
+
+        AlwaysFailingTestJob::dispatch();
+        $this->artisan('queue:work', [
+            'connection' => 'database',
+            '--stop-when-empty' => true,
+            '--sleep' => 0,
+            // A long-lived PHPUnit process can exceed the worker's default
+            // 128MB self-check, which would stop the loop after one attempt.
+            '--memory' => 2048,
+        ])->run();
+
+        // Laravel's terminal-failure lifecycle is untouched…
+        $this->assertSame(2, AlwaysFailingTestJob::$attempts);
+        $this->assertSame(1, AlwaysFailingTestJob::$failedCalls);
+        $this->assertSame(1, DB::table('failed_jobs')->count());
+        // …and fail-open delivery worked end-to-end: one audit row whose
+        // transport job was published to the (available) queue and executed
+        // against the faked Telegram API.
+        $logs = $this->alertLogs();
+        $this->assertCount(1, $logs);
+        $this->assertSame(TelegramAdminNotificationLog::STATUS_SENT, $logs->first()->status);
+    }
+
+    public function test_worker_terminal_failure_with_notifier_outage_preserves_lifecycle(): void
+    {
+        $this->configureBot();
+        config(['queue.default' => 'database']);
+        $broken = $this->createMock(TelegramAdminNotifier::class);
+        $broken->method('event')->willThrowException(new RuntimeException('notifier down'));
+        $this->app->instance(TelegramAdminNotifier::class, $broken);
+
+        AlwaysFailingTestJob::dispatch();
+        $this->artisan('queue:work', [
+            'connection' => 'database',
+            '--stop-when-empty' => true,
+            '--sleep' => 0,
+            // A long-lived PHPUnit process can exceed the worker's default
+            // 128MB self-check, which would stop the loop after one attempt.
+            '--memory' => 2048,
+        ])->run(); // completes normal failure handling; nothing escapes
+
+        $this->assertSame(2, AlwaysFailingTestJob::$attempts);
+        $this->assertSame(1, AlwaysFailingTestJob::$failedCalls);
+        $this->assertSame(1, DB::table('failed_jobs')->count());
+        $this->assertCount(0, $this->alertLogs());
     }
 }
 
@@ -387,6 +593,9 @@ class AlwaysFailingTestJob implements ShouldQueue
 
     public static int $attempts = 0;
 
+    /** Deterministic evidence that Laravel ran the job's own failed() hook. */
+    public static int $failedCalls = 0;
+
     public int $tries = 2;
 
     public function handle(): void
@@ -395,4 +604,12 @@ class AlwaysFailingTestJob implements ShouldQueue
 
         throw new RuntimeException(self::ERROR);
     }
+
+    public function failed(\Throwable $e): void
+    {
+        self::$failedCalls++;
+    }
 }
+
+/** Long-named exception used only to exercise the exception-label bound. */
+class ZpVeryLongExceptionClassNameMeantOnlyForTruncationBoundaryCoverageOfTheQueueFailureAlertLabelNormalizationRuleInThisTestSuiteX extends RuntimeException {}
