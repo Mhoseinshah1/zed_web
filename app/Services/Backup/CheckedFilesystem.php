@@ -64,4 +64,34 @@ final class CheckedFilesystem
             restore_error_handler();
         }
     }
+
+    /**
+     * Guarded glob for retention candidates — false on failure, never a
+     * warning. (glob() returning false and returning [] are distinct.)
+     *
+     * @return array<int,string>|false
+     */
+    public static function glob(string $pattern): array|false
+    {
+        set_error_handler(static fn (): bool => true);
+        try {
+            return glob($pattern);
+        } finally {
+            restore_error_handler();
+        }
+    }
+
+    /** Guarded modification-time read — false instead of a warning on a
+     *  file that vanished between enumeration and stat. */
+    public static function filemtime(string $path): int|false
+    {
+        set_error_handler(static fn (): bool => true);
+        try {
+            clearstatcache(true, $path);
+
+            return filemtime($path);
+        } finally {
+            restore_error_handler();
+        }
+    }
 }

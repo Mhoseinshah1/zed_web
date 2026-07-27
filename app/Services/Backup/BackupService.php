@@ -91,45 +91,38 @@ class BackupService
             // later in the run re-reads the mutable settings, so a concurrent
             // settings change cannot redirect commitment, retention cleanup
             // or reporting to a different directory.
-            $root = $this->settings->storagePath();
-            // A symlinked configured path may already exist and canonicalize
-            // to the filesystem root — reject that BEFORE touching the
-            // filesystem at all (and again after creation below), so no
-            // /.work_* or /zedproxy-backup-* path can ever be attempted.
-            $preExisting = realpath($root);
-            if ($preExisting !== false) {
-                $this->assertCanonicalRootAllowed($preExisting);
-            }
-            $this->pathPolicy()->ensureUsableRoot($root);
-            $canonical = realpath($root);
-            if ($canonical === false || ! is_dir($canonical)) {
+            $root = $this->resolveCanonicalRoot(true);
+            if ($root === null) {
+                // Unreachable for a backup run (the resolver throws instead),
+                // but keeps the shared-resolver contract explicit.
                 throw BackupFailure::permission(
                     'پوشه ذخیره بکاپ قابل استفاده نیست. دسترسی‌های مسیر تنظیم‌شده را بررسی کنید.',
                     'root_unresolvable',
                 );
             }
-            $this->assertCanonicalRootAllowed($canonical);
-            $root = rtrim($canonical, '/');
 
             // FAIL-CLOSED ENCRYPTION: enabled means MANDATORY. When no usable
             // password exists (never stored, corrupt ciphertext, or encrypted
             // under a different APP_KEY), the run fails HERE — before pg_dump,
             // tar, or any commitment — instead of silently producing a
             // plaintext backup. Encryption is never silently disabled and the
-            // toggle is never cleared.
+            // toggle is never cleared. The password comes from ONE read + ONE
+            // decrypt (resolvePassword) and the local copy is the immutable
+            // snapshot for this run — a concurrent settings change can no
+            // longer swap or clear it between a state check and a re-read.
             $encrypt = $this->settings->encryptEnabled();
             $password = '';
             if ($encrypt) {
-                $passwordState = $this->settings->passwordState();
-                if ($passwordState !== BackupSettings::PASSWORD_OK) {
+                $resolved = $this->settings->resolvePassword();
+                if ($resolved['state'] !== BackupSettings::PASSWORD_OK) {
                     throw BackupFailure::config(
                         'رمزگذاری بکاپ فعال است اما رمز عبور قابل استفاده‌ای ثبت نشده است. در صفحه «بکاپ و سرور» یک رمز عبور جدید ذخیره کنید.',
-                        $passwordState === BackupSettings::PASSWORD_NONE
+                        $resolved['state'] === BackupSettings::PASSWORD_NONE
                             ? 'encryption_password_missing'
                             : 'encryption_password_unreadable',
                     );
                 }
-                $password = $this->settings->password();
+                $password = $resolved['password'];
             }
             $locationLabel = $this->settings->storageLocationLabel();
 
@@ -191,11 +184,13 @@ class BackupService
 
             clearstatcache(true, $final);
             $size = (int) filesize($final);
-            // Retention cleanup ONLY after the new backup is committed, and
-            // ONLY against the pinned root — a failed run never reduces the
-            // set of existing valid backups, and a mid-run settings change
-            // can never point cleanup at a different directory.
-            $cleaned = $this->cleanupOld($root);
+            // The atomic commitment above IS the backup-success boundary.
+            // Retention cleanup runs after it, ONLY against the pinned root,
+            // and is NON-FATAL: no retention problem — exception, warning,
+            // race, or partial completion — may downgrade the committed
+            // backup to failed. Its safe structured outcome is recorded in
+            // the log metadata instead.
+            $cleanup = $this->safeRetentionCleanup($root, $log->id);
             $duration = (int) round((microtime(true) - $start) * 1000);
 
             $log->update([
@@ -204,10 +199,14 @@ class BackupService
                 'file_size' => $size,
                 'duration_ms' => $duration,
                 'finished_at' => now(),
-                'metadata' => ['cleaned' => $cleaned],
+                'metadata' => [
+                    'cleaned' => $cleanup['removed'],
+                    'cleanup_complete' => $cleanup['complete'],
+                    'cleanup_reason' => $cleanup['reason'],
+                ],
             ]);
 
-            $this->reportSuccess($log, $final, $size, $duration, $cleaned, $locationLabel, $forceSendFile);
+            $this->reportSuccess($log, $final, $size, $duration, $cleanup['removed'], $locationLabel, $forceSendFile);
 
             return ['status' => BackupLog::STATUS_SUCCESS, 'log_id' => $log->id, 'path' => $final, 'size' => $size, 'duration_ms' => $duration, 'error' => null];
         } catch (\Throwable $e) {
@@ -260,6 +259,61 @@ class BackupService
     private function pathPolicy(): BackupPathPolicy
     {
         return app(BackupPathPolicy::class);
+    }
+
+    /**
+     * THE one authoritative canonical-root resolution, shared by backup
+     * execution AND standalone/manual retention cleanup — no caller may
+     * resolve the configured storage path through a weaker route. It:
+     *  - reads + validates the configured path via BackupPathPolicy
+     *    (absolute-only, raw control-character rejection),
+     *  - rejects a pre-existing resolution to the filesystem root BEFORE
+     *    anything touches the filesystem,
+     *  - for a backup run ($createIfMissing = true) creates/verifies the
+     *    directory (recursive create, exists/dir/writable),
+     *  - canonicalizes symlinks once via realpath (valid non-root symlinked
+     *    locations stay supported),
+     *  - rejects an unresolved, empty, or filesystem-root canonical result,
+     *  - never echoes the configured or resolved path in any error.
+     *
+     * DOCUMENTED POLICY for standalone cleanup ($createIfMissing = false):
+     * a missing configured directory is NOT created — there is nothing to
+     * clean, so the resolver returns null and cleanup reports zero removals.
+     *
+     * @return string|null normalized non-root canonical directory, or null
+     *                     only in cleanup mode when the directory is absent
+     *
+     * @throws BackupFailure sanitized config/permission failure
+     */
+    protected function resolveCanonicalRoot(bool $createIfMissing): ?string
+    {
+        $configured = $this->settings->storagePath();
+
+        $preExisting = realpath($configured);
+        if ($preExisting !== false) {
+            $this->assertCanonicalRootAllowed($preExisting);
+        } elseif (! $createIfMissing) {
+            return null; // standalone cleanup never creates the directory
+        }
+
+        if ($createIfMissing) {
+            $this->pathPolicy()->ensureUsableRoot($configured);
+        }
+
+        $canonical = realpath($configured);
+        if ($canonical === false || ! is_dir($canonical)) {
+            if (! $createIfMissing) {
+                return null;
+            }
+
+            throw BackupFailure::permission(
+                'پوشه ذخیره بکاپ قابل استفاده نیست. دسترسی‌های مسیر تنظیم‌شده را بررسی کنید.',
+                'root_unresolvable',
+            );
+        }
+        $this->assertCanonicalRootAllowed($canonical);
+
+        return rtrim($canonical, '/');
     }
 
     /**
@@ -465,31 +519,124 @@ class BackupService
     }
 
     /**
-     * Delete archives older than the retention window. Returns count removed.
+     * Delete archives older than the retention window. Every filesystem
+     * interaction is checked and race-safe: enumeration and mtime lookups go
+     * through guarded wrappers, a candidate disappearing between operations
+     * counts as already absent, and one bad candidate never aborts the rest.
+     * Returns a structured SAFE outcome — never raw errors or paths.
+     *
      * During a run the PINNED canonical root is passed in; the parameterless
-     * form (admin "پاکسازی" action) resolves the setting fresh — that is a
-     * separate operation, not part of a backup run.
+     * form (admin "پاکسازی" action) goes through the SAME shared canonical
+     * resolver (resolveCanonicalRoot) — a symlink to the filesystem root is
+     * rejected there before any glob/stat/delete, and a missing directory
+     * means "nothing to clean" (it is deliberately never created here).
+     *
+     * @return array{removed:int, complete:bool, reason:?string}
+     *
+     * @throws BackupFailure only from standalone root resolution (invalid
+     *                       stored path / root resolving to "/") — callers
+     *                       surface it as a sanitized notification
      */
-    public function cleanupOld(?string $root = null): int
+    public function cleanupOld(?string $root = null): array
     {
-        $dir = rtrim($root ?? $this->settings->storagePath(), '/');
+        $dir = $root !== null ? rtrim($root, '/') : $this->resolveCanonicalRoot(false);
+        if ($dir === null || $dir === '') {
+            return ['removed' => 0, 'complete' => true, 'reason' => null];
+        }
+
         $cutoff = now()->subDays($this->settings->retentionDays())->getTimestamp();
         $removed = 0;
-        foreach (glob($dir.'/zedproxy-backup-*') ?: [] as $file) {
-            if (is_file($file) && filemtime($file) < $cutoff) {
-                // Non-critical housekeeping: a failed delete is logged (safe
-                // fields only) and excluded from the removed count.
-                if ($this->unlinkChecked($file)) {
-                    $removed++;
-                } else {
-                    Log::warning('Backup retention cleanup could not delete an expired archive', [
-                        'reason' => 'unlink_failed',
-                    ]);
+        $complete = true;
+        $reason = null;
+
+        $candidates = $this->globBackups($dir.'/zedproxy-backup-*');
+        if ($candidates === false) {
+            Log::warning('Backup retention cleanup could not enumerate archives', ['reason' => 'glob_failed']);
+
+            return ['removed' => 0, 'complete' => false, 'reason' => 'glob_failed'];
+        }
+
+        foreach ($candidates as $file) {
+            // Only regular files: a symlink named like a backup is not ours
+            // to follow or age-evaluate.
+            if (is_link($file) || ! is_file($file)) {
+                continue;
+            }
+
+            $mtime = $this->fileMtimeChecked($file);
+            if ($mtime === false) {
+                // Disappeared between enumeration and stat, or unreadable
+                // metadata: skip THIS candidate only.
+                clearstatcache(true, $file);
+                if (! is_link($file) && ! file_exists($file)) {
+                    continue; // already absent — deterministic non-event
                 }
+                $complete = false;
+                $reason ??= 'stat_failed';
+                Log::warning('Backup retention cleanup could not read archive metadata', ['reason' => 'stat_failed']);
+
+                continue;
+            }
+
+            if ($mtime >= $cutoff) {
+                continue;
+            }
+
+            clearstatcache(true, $file);
+            if (! is_link($file) && ! file_exists($file)) {
+                continue; // vanished before deletion — already absent, not "removed"
+            }
+
+            if ($this->unlinkChecked($file)) {
+                $removed++;
+            } else {
+                $complete = false;
+                $reason ??= 'unlink_failed';
+                Log::warning('Backup retention cleanup could not delete an expired archive', ['reason' => 'unlink_failed']);
             }
         }
 
-        return $removed;
+        return ['removed' => $removed, 'complete' => $complete, 'reason' => $reason];
+    }
+
+    /**
+     * NON-FATAL retention wrapper for the post-commitment phase of a run:
+     * the atomic archive commitment is the success boundary, so NOTHING that
+     * happens during retention — including an unexpected exception — may
+     * downgrade the committed backup. Logged with safe fields only.
+     *
+     * @return array{removed:int, complete:bool, reason:?string}
+     */
+    protected function safeRetentionCleanup(string $root, int $logId): array
+    {
+        try {
+            return $this->cleanupOld($root);
+        } catch (\Throwable $e) {
+            Log::warning('Backup retention cleanup failed', [
+                'backup_log_id' => $logId,
+                'stage' => 'retention',
+                'reason' => 'cleanup_exception',
+                'exception' => $e::class,
+            ]);
+
+            return ['removed' => 0, 'complete' => false, 'reason' => 'cleanup_exception'];
+        }
+    }
+
+    /**
+     * Checked enumeration seam for retention candidates (guarded glob).
+     *
+     * @return array<int,string>|false
+     */
+    protected function globBackups(string $pattern): array|false
+    {
+        return CheckedFilesystem::glob($pattern);
+    }
+
+    /** Checked mtime seam — false instead of a warning/exception on failure. */
+    protected function fileMtimeChecked(string $path): int|false
+    {
+        return CheckedFilesystem::filemtime($path);
     }
 
     // ── Telegram reporting ───────────────────────────────────────────────────
