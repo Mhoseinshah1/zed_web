@@ -73,6 +73,20 @@ class BackupSettings
         );
     }
 
+    /**
+     * Non-sensitive LOGICAL description of where backups are stored, for
+     * operator-facing channels (Telegram {path} placeholder). Never the real
+     * filesystem path.
+     */
+    public function storageLocationLabel(): string
+    {
+        $raw = trim((string) SiteSetting::get('backup_storage_path', ''), ' ');
+
+        return $raw === ''
+            ? 'مسیر پیش‌فرض برنامه (storage/app/backups)'
+            : 'مسیر سفارشی تنظیم‌شده در پنل';
+    }
+
     public function includeDatabase(): bool
     {
         return (bool) SiteSetting::get('backup_include_database', true);
