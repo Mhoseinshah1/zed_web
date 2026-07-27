@@ -32,8 +32,13 @@
                 </span>
                 @if($last->status === \App\Models\BackupLog::STATUS_SUCCESS)
                     <span><span class="font-semibold">حجم:</span> {{ $last->sizeMb() }} مگابایت</span>
+                    {{-- فقط نام فایل و وضعیت رمزگذاری — مسیر کامل سرور هرگز نمایش داده نمی‌شود --}}
                     @if($last->file_path)
-                        <span dir="ltr" class="text-xs text-content-muted self-center">{{ $last->file_path }}</span>
+                        <span dir="ltr" class="text-xs text-content-muted self-center">{{ basename($last->file_path) }}</span>
+                        <span class="text-xs text-content-muted self-center">
+                            {{ str_ends_with((string) $last->file_path, '.enc') ? '🔐 رمزگذاری‌شده' : '🔓 بدون رمزگذاری' }}
+                            — {{ $s->storageLocationLabel() }}
+                        </span>
                     @endif
                 @endif
             </div>
