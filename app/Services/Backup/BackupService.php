@@ -206,7 +206,13 @@ class BackupService
                 ],
             ]);
 
-            $this->reportSuccess($log, $final, $size, $duration, $cleanup['removed'], $locationLabel, $forceSendFile);
+            // ── POST-COMMIT NOTIFICATION BOUNDARY ───────────────────────────
+            // The successful backup is fully persisted ABOVE. Everything from
+            // here on is optional Telegram delivery behind its own boundary:
+            // deliverSuccessNotifications() NEVER throws, so no report,
+            // queue-publication, scheduling, or serialization exception can
+            // reach the main catch and overwrite a committed success.
+            $this->deliverSuccessNotifications($log, $final, $size, $duration, $cleanup['removed'], $locationLabel, $forceSendFile);
 
             return ['status' => BackupLog::STATUS_SUCCESS, 'log_id' => $log->id, 'path' => $final, 'size' => $size, 'duration_ms' => $duration, 'error' => null];
         } catch (\Throwable $e) {
@@ -639,33 +645,121 @@ class BackupService
         return CheckedFilesystem::filemtime($path);
     }
 
-    // ── Telegram reporting ───────────────────────────────────────────────────
+    // ── Telegram reporting (post-commit boundary — NEVER throws) ─────────────
 
-    private function reportSuccess(BackupLog $log, string $archive, int $size, int $durationMs, int $cleaned, string $locationLabel, ?bool $forceSendFile = null): void
+    /**
+     * Optional Telegram delivery for an ALREADY-PERSISTED successful backup.
+     * A locally successful backup and successful Telegram delivery are
+     * separate facts: nothing in here — report submission, document-job
+     * queue publication, topic lookup, settings reads, serialization — may
+     * throw into the caller or change the backup status. Each of the two
+     * delivery actions runs behind its own catch so a report failure cannot
+     * suppress the document dispatch (and vice versa), and the honest
+     * per-action state is merged into the log metadata WITHOUT clobbering
+     * the retention keys. Exactly one report and at most one document job
+     * are produced per run.
+     */
+    protected function deliverSuccessNotifications(BackupLog $log, string $archive, int $size, int $durationMs, int $cleaned, string $locationLabel, ?bool $forceSendFile = null): void
     {
-        $sendFile = $forceSendFile ?? $this->settings->sendFileToTelegram();
-        if ($this->settings->sendReportToTelegram()) {
-            $this->notifier->event('backup_success', [
-                'size' => number_format(round($size / 1048576, 2), 2),
-                'duration' => (string) round($durationMs / 1000, 1),
-                // {path} stays supported for admin-edited templates, but the
-                // value is a non-sensitive LOGICAL location label — never the
-                // real filesystem path.
-                'path' => $locationLabel,
-                'cleaned' => (string) $cleaned,
-            ], $log);
+        // 1) Success report. 'submitted' means handed to the notifier (which
+        //    itself queues fire-and-forget) — not "seen by Telegram".
+        try {
+            if ($this->settings->sendReportToTelegram()) {
+                $this->submitSuccessReport($log, [
+                    'size' => number_format(round($size / 1048576, 2), 2),
+                    'duration' => (string) round($durationMs / 1000, 1),
+                    // {path} stays supported for admin-edited templates, but
+                    // the value is a non-sensitive LOGICAL location label —
+                    // never the real filesystem path.
+                    'path' => $locationLabel,
+                    'cleaned' => (string) $cleaned,
+                ]);
+                $reportState = 'submitted';
+            } else {
+                $reportState = 'disabled';
+            }
+        } catch (\Throwable $e) {
+            $reportState = 'failed';
+            Log::warning('Backup success report could not be submitted', [
+                'backup_log_id' => $log->id,
+                'stage' => 'telegram_report',
+                'reason' => 'telegram_report_failed',
+                'exception' => $e::class,
+            ]);
         }
 
-        if ($sendFile && $this->fitsTelegramLimit($size) && is_file($archive)) {
-            $thread = TelegramAdminTopic::findByKey($this->settings->topicKey())?->message_thread_id;
-            SendTelegramDocumentJob::dispatch($archive, '💾 بکاپ زدپروکسی — '.now()->format('Y/m/d H:i'), $thread, $log->id);
+        // 2) Document dispatch. 'queued' means the job was PUBLISHED — actual
+        //    upload success is still only ever recorded by the job itself via
+        //    sent_to_telegram, never here.
+        try {
+            $sendFile = $forceSendFile ?? $this->settings->sendFileToTelegram();
+            if (! $sendFile) {
+                $documentState = 'disabled';
+            } elseif (! $this->fitsTelegramLimit($size)) {
+                $documentState = 'skipped_oversize';
+            } elseif (! is_file($archive)) {
+                $documentState = 'skipped_missing';
+            } else {
+                $this->dispatchDocumentJob($archive, $log);
+                $documentState = 'queued';
+            }
+        } catch (\Throwable $e) {
+            $documentState = 'dispatch_failed';
+            Log::warning('Backup archive could not be scheduled for Telegram delivery', [
+                'backup_log_id' => $log->id,
+                'stage' => 'telegram_document_dispatch',
+                'reason' => 'telegram_document_dispatch_failed',
+                'exception' => $e::class,
+            ]);
+        }
+
+        // 3) Persist honest delivery state (merge — never overwrite the
+        //    retention metadata written with the success update).
+        try {
+            $log->update(['metadata' => array_merge(
+                (array) ($log->metadata ?? []),
+                ['telegram_report' => $reportState, 'telegram_document' => $documentState],
+            )]);
+        } catch (\Throwable $e) {
+            Log::warning('Backup delivery state could not be persisted', [
+                'backup_log_id' => $log->id,
+                'stage' => 'delivery_state',
+                'reason' => 'delivery_state_persist_failed',
+                'exception' => $e::class,
+            ]);
         }
     }
 
+    /** Seam: hand the success report to the (fire-and-forget) notifier. */
+    protected function submitSuccessReport(BackupLog $log, array $context): void
+    {
+        $this->notifier->event('backup_success', $context, $log);
+    }
+
+    /** Seam: publish the document-upload job to the queue. */
+    protected function dispatchDocumentJob(string $archive, BackupLog $log): void
+    {
+        $thread = TelegramAdminTopic::findByKey($this->settings->topicKey())?->message_thread_id;
+        SendTelegramDocumentJob::dispatch($archive, '💾 بکاپ زدپروکسی — '.now()->format('Y/m/d H:i'), $thread, $log->id);
+    }
+
+    /**
+     * Failure report — same never-throws discipline: a Telegram/settings
+     * problem while reporting a failure must not escape run() either, and no
+     * second alert is pushed through the same failing Telegram path.
+     */
     private function reportFailure(string $error): void
     {
-        if ($this->settings->sendReportToTelegram()) {
-            $this->notifier->event('backup_failed', ['error' => $error]);
+        try {
+            if ($this->settings->sendReportToTelegram()) {
+                $this->notifier->event('backup_failed', ['error' => $error]);
+            }
+        } catch (\Throwable $e) {
+            Log::warning('Backup failure report could not be submitted', [
+                'stage' => 'telegram_report',
+                'reason' => 'telegram_report_failed',
+                'exception' => $e::class,
+            ]);
         }
     }
 

@@ -45,6 +45,12 @@
             @if($last->error)
                 <div class="text-xs text-content-muted">{{ \Illuminate\Support\Str::limit($last->error, 120) }}</div>
             @endif
+            {{-- بکاپ محلی موفق ولی تحویل تلگرام ثبت/تأیید نشده — بدون جزئیات داخلی --}}
+            @if($last->status === \App\Models\BackupLog::STATUS_SUCCESS
+                && ((($last->metadata['telegram_report'] ?? null) === 'failed')
+                    || (($last->metadata['telegram_document'] ?? null) === 'dispatch_failed')))
+                <div class="text-xs text-amber-500">بکاپ محلی با موفقیت انجام شد، اما ارسال گزارش/فایل به تلگرام ثبت نشد. جزئیات در لاگ سرور موجود است.</div>
+            @endif
         @else
             <div class="text-content-muted">هنوز بکاپی انجام نشده است.</div>
         @endif
