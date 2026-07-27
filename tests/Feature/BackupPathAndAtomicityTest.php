@@ -1264,6 +1264,161 @@ class BackupPathAndAtomicityTest extends TestCase
         $this->assertDirectoryDoesNotExist(base_path('relative-nonsense'));
     }
 
+    // ── Post-commit Telegram delivery boundary ───────────────────────────────
+
+    public function test_report_failure_after_commitment_keeps_backup_successful(): void
+    {
+        Log::spy();
+        $this->configureBot();
+        $this->configureFileOnlyBackup();
+
+        $svc = $this->partialService();
+        $svc->shouldReceive('createArchive')->once()->andReturnUsing(
+            fn (string $dest) => file_put_contents($dest, 'archive-bytes'),
+        );
+        $svc->shouldReceive('submitSuccessReport')->once()
+            ->andThrow(new \RuntimeException('redis at 127.0.0.1:6379 refused /internal/path'));
+
+        $result = $svc->run(BackupLog::TYPE_MANUAL); // must NOT throw
+
+        // The committed backup stays authoritative.
+        $this->assertSame(BackupLog::STATUS_SUCCESS, $result['status']);
+        $this->assertFileExists((string) $result['path']);
+        $log = BackupLog::latestLog();
+        $this->assertSame(BackupLog::STATUS_SUCCESS, $log->status);
+        $this->assertSame($result['path'], $log->file_path);
+        $this->assertNull($log->error);
+
+        // Honest, safe delivery state — and the safe log carries no Redis
+        // detail, path, or raw message.
+        $this->assertSame('failed', $log->metadata['telegram_report'] ?? null);
+        $this->assertStringNotContainsString('6379', json_encode($log->metadata) ?: '');
+        Log::shouldHaveReceived('warning')->withArgs(
+            function (string $message, array $context = []): bool {
+                $blob = $message.' '.json_encode($context);
+
+                return ($context['reason'] ?? null) === 'telegram_report_failed'
+                    && ($context['stage'] ?? null) === 'telegram_report'
+                    && is_int($context['backup_log_id'] ?? null)
+                    && ! str_contains($blob, '6379')
+                    && ! str_contains($blob, '/internal')
+                    && ! str_contains($blob, $this->tmp);
+            },
+        );
+    }
+
+    public function test_document_publication_failure_keeps_backup_successful_and_state_honest(): void
+    {
+        Log::spy();
+        $this->configureBot();
+        $this->configureFileOnlyBackup();
+        SiteSetting::set('backup_send_file_to_telegram', 'true');
+
+        $svc = $this->partialService();
+        $svc->shouldReceive('createArchive')->once()->andReturnUsing(
+            fn (string $dest) => file_put_contents($dest, 'archive-bytes'),
+        );
+        $svc->shouldReceive('dispatchDocumentJob')->once()
+            ->andThrow(new \RuntimeException('Connection refused [tcp://127.0.0.1:6379]'));
+
+        $result = $svc->run(BackupLog::TYPE_MANUAL); // must NOT throw
+
+        $this->assertSame(BackupLog::STATUS_SUCCESS, $result['status']);
+        $log = BackupLog::latestLog();
+        $this->assertSame(BackupLog::STATUS_SUCCESS, $log->status);
+        $this->assertFileExists((string) $log->file_path);
+        // Publication was NOT falsely recorded as success anywhere.
+        $this->assertFalse((bool) $log->sent_to_telegram);
+        $this->assertSame('dispatch_failed', $log->metadata['telegram_document'] ?? null);
+        // The report itself still went through its own boundary.
+        $this->assertSame('submitted', $log->metadata['telegram_report'] ?? null);
+        $this->assertStringNotContainsString('6379', json_encode($log->metadata) ?: '');
+        Log::shouldHaveReceived('warning')->withArgs(
+            function (string $message, array $context = []): bool {
+                $blob = $message.' '.json_encode($context);
+
+                return ($context['reason'] ?? null) === 'telegram_document_dispatch_failed'
+                    && ($context['stage'] ?? null) === 'telegram_document_dispatch'
+                    && is_int($context['backup_log_id'] ?? null)
+                    && ! str_contains($blob, '6379')
+                    && ! str_contains($blob, $this->tmp);
+            },
+        );
+    }
+
+    public function test_successful_delivery_produces_exactly_one_report_and_one_document_job(): void
+    {
+        $this->configureBot();
+        $this->configureFileOnlyBackup();
+        SiteSetting::set('backup_send_file_to_telegram', 'true');
+
+        $svc = $this->partialService();
+        $svc->shouldReceive('createArchive')->once()->andReturnUsing(
+            fn (string $dest) => file_put_contents($dest, 'archive-bytes'),
+        );
+
+        $result = $svc->run(BackupLog::TYPE_MANUAL);
+
+        $this->assertSame(BackupLog::STATUS_SUCCESS, $result['status']);
+        $this->assertSame(1, DB::table('telegram_admin_notification_logs')->where('event_key', 'backup_success')->count());
+        Queue::assertPushed(SendTelegramDocumentJob::class, 1);
+
+        $log = BackupLog::latestLog();
+        $this->assertSame('submitted', $log->metadata['telegram_report'] ?? null);
+        $this->assertSame('queued', $log->metadata['telegram_document'] ?? null);
+        // Queued ≠ uploaded: only the executed job may ever set this flag.
+        $this->assertFalse((bool) $log->sent_to_telegram);
+        // Retention metadata survived the delivery-state merge.
+        $this->assertArrayHasKey('cleaned', (array) $log->metadata);
+        $this->assertArrayHasKey('cleanup_complete', (array) $log->metadata);
+    }
+
+    public function test_disabled_report_and_document_channels_attempt_nothing(): void
+    {
+        $this->configureBot();
+        $this->configureFileOnlyBackup();
+        SiteSetting::set('backup_send_report_to_telegram', 'false');
+        SiteSetting::set('backup_send_file_to_telegram', 'false');
+
+        $svc = $this->partialService();
+        $svc->shouldReceive('createArchive')->once()->andReturnUsing(
+            fn (string $dest) => file_put_contents($dest, 'archive-bytes'),
+        );
+        $svc->shouldNotReceive('submitSuccessReport');
+        $svc->shouldNotReceive('dispatchDocumentJob');
+
+        $result = $svc->run(BackupLog::TYPE_MANUAL);
+
+        $this->assertSame(BackupLog::STATUS_SUCCESS, $result['status']);
+        Queue::assertNotPushed(SendTelegramDocumentJob::class);
+        $this->assertSame(0, DB::table('telegram_admin_notification_logs')->where('event_key', 'backup_success')->count());
+        $log = BackupLog::latestLog();
+        $this->assertSame('disabled', $log->metadata['telegram_report'] ?? null);
+        $this->assertSame('disabled', $log->metadata['telegram_document'] ?? null);
+    }
+
+    public function test_oversized_archive_is_not_dispatched_but_backup_stays_successful(): void
+    {
+        $this->configureBot();
+        $this->configureFileOnlyBackup();
+        SiteSetting::set('backup_send_file_to_telegram', 'true');
+        SiteSetting::set('backup_max_telegram_file_size_mb', '1');
+
+        $svc = $this->partialService();
+        $svc->shouldReceive('createArchive')->once()->andReturnUsing(
+            fn (string $dest) => file_put_contents($dest, str_repeat('x', 2 * 1048576)), // 2MB > 1MB limit
+        );
+        $svc->shouldNotReceive('dispatchDocumentJob');
+
+        $result = $svc->run(BackupLog::TYPE_MANUAL);
+
+        $this->assertSame(BackupLog::STATUS_SUCCESS, $result['status']);
+        Queue::assertNotPushed(SendTelegramDocumentJob::class);
+        $log = BackupLog::latestLog();
+        $this->assertSame('skipped_oversize', $log->metadata['telegram_document'] ?? null);
+        $this->assertFalse((bool) $log->sent_to_telegram);
+    }
+
     // ── Filament page uses the same policy ──────────────────────────────────
 
     public function test_settings_page_rejects_relative_path(): void
