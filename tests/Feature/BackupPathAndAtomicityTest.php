@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Filament\Pages\BackupSettingsPage;
+use App\Jobs\SendTelegramDocumentJob;
 use App\Models\BackupLog;
 use App\Models\SiteSetting;
 use App\Models\TelegramAdminTopic;
@@ -16,6 +17,7 @@ use App\Services\Telegram\TelegramSettings;
 use Illuminate\Encryption\Encrypter;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Process;
@@ -537,7 +539,10 @@ class BackupPathAndAtomicityTest extends TestCase
         // non-critical (this is an unencrypted run — no plaintext boundary).
         $this->assertSame(BackupLog::STATUS_SUCCESS, $result['status']);
         $this->assertFileExists((string) $result['path']);
-        $this->assertSame(0, (int) (BackupLog::latestLog()->metadata['cleaned'] ?? -1));
+        $log = BackupLog::latestLog();
+        $this->assertSame(0, (int) ($log->metadata['cleaned'] ?? -1));
+        $this->assertFalse((bool) ($log->metadata['cleanup_complete'] ?? true));
+        $this->assertSame('unlink_failed', $log->metadata['cleanup_reason'] ?? null);
         $this->assertFileExists($expired); // never silently counted as removed
     }
 
@@ -972,6 +977,291 @@ class BackupPathAndAtomicityTest extends TestCase
         $this->assertStringStartsWith((string) realpath($real).'/zedproxy-backup-', (string) $result['path']);
         $this->assertCount(1, glob($real.'/zedproxy-backup-*'));
         $this->assertSame([], glob($real.'/.work_*'));
+    }
+
+    // ── One-read one-decrypt encryption snapshot ─────────────────────────────
+
+    public function test_encrypted_run_reads_and_decrypts_the_password_exactly_once(): void
+    {
+        $this->configureFileOnlyBackup();
+        SiteSetting::set('backup_encrypt_enabled', 'true');
+        app(BackupSettings::class)->storePassword('Snap-Pass');
+
+        // A second decryptString call anywhere in the run fails this
+        // expectation — the state check and the password retrieval must be
+        // ONE resolution, not two reads.
+        Crypt::shouldReceive('decryptString')->once()->andReturn('Snap-Pass');
+
+        $captured = null;
+        $svc = $this->partialService();
+        $svc->shouldReceive('createArchive')->once()->andReturnUsing(
+            fn (string $dest) => file_put_contents($dest, 'plain-bytes'),
+        );
+        $svc->shouldReceive('encryptArchive')->once()->andReturnUsing(
+            function (string $in, string $out, string $password) use (&$captured): void {
+                $captured = $password;
+                file_put_contents($out, 'enc-bytes');
+            },
+        );
+
+        $result = $svc->run(BackupLog::TYPE_MANUAL);
+
+        $this->assertSame(BackupLog::STATUS_SUCCESS, $result['status']);
+        $this->assertSame('Snap-Pass', $captured);
+    }
+
+    public function test_settings_change_after_password_resolution_cannot_alter_the_run_password(): void
+    {
+        $this->configureFileOnlyBackup();
+        SiteSetting::set('backup_encrypt_enabled', 'true');
+        app(BackupSettings::class)->storePassword('Original-Pass');
+
+        $captured = null;
+        $svc = $this->partialService();
+        $svc->shouldReceive('createArchive')->once()->andReturnUsing(
+            function (string $dest): void {
+                // Concurrent admin mid-run: replaces the password AND turns
+                // encryption off. The running backup must not care.
+                app(BackupSettings::class)->storePassword('Hijacked-Pass');
+                SiteSetting::set('backup_encrypt_enabled', 'false');
+                file_put_contents($dest, 'plain-bytes');
+            },
+        );
+        $svc->shouldReceive('encryptArchive')->once()->andReturnUsing(
+            function (string $in, string $out, string $password) use (&$captured): void {
+                $captured = $password;
+                file_put_contents($out, 'enc-bytes');
+            },
+        );
+
+        $result = $svc->run(BackupLog::TYPE_MANUAL);
+
+        // Still encrypted, still with the ORIGINAL immutable snapshot.
+        $this->assertSame(BackupLog::STATUS_SUCCESS, $result['status']);
+        $this->assertSame('Original-Pass', $captured);
+        $this->assertStringEndsWith('.tar.gz.enc', (string) $result['path']);
+    }
+
+    public function test_password_storage_failure_leaves_previous_settings_state_intact(): void
+    {
+        $settings = Mockery::mock(BackupSettings::class)->makePartial();
+        $settings->shouldReceive('encryptPassword')
+            ->andThrow(new \RuntimeException('crypt backend unavailable'));
+        $this->app->instance(BackupSettings::class, $settings);
+        $admin = User::factory()->create(['is_admin' => true]);
+
+        Livewire::actingAs($admin)
+            ->test(BackupSettingsPage::class)
+            ->fillForm([
+                'backup_encrypt_enabled' => true,
+                'backup_password_new' => 'Brand-New-Pass',
+                'backup_enabled' => true,
+            ])
+            ->call('save');
+
+        // The save aborted BEFORE any write: no toggle, no password, and no
+        // unrelated setting moved.
+        $this->assertFalse(app(BackupSettings::class)->encryptEnabled());
+        $this->assertSame('', (string) SiteSetting::get('backup_password', ''));
+        $this->assertFalse(app(BackupSettings::class)->enabled());
+    }
+
+    // ── Retention failure never invalidates a committed backup ───────────────
+
+    public function test_retention_exception_after_commitment_keeps_success_and_telegram_delivery(): void
+    {
+        Log::spy();
+        $this->configureBot();
+        $this->configureFileOnlyBackup();
+        SiteSetting::set('backup_send_file_to_telegram', 'true');
+
+        $svc = $this->partialService();
+        $svc->shouldReceive('createArchive')->once()->andReturnUsing(
+            fn (string $dest) => file_put_contents($dest, 'archive-bytes'),
+        );
+        $svc->shouldReceive('cleanupOld')->once()->andThrow(new \RuntimeException('retention blew up'));
+
+        $result = $svc->run(BackupLog::TYPE_MANUAL);
+
+        // The atomic commitment is the success boundary: retention failure
+        // may not downgrade the run.
+        $this->assertSame(BackupLog::STATUS_SUCCESS, $result['status']);
+        $log = BackupLog::latestLog();
+        $this->assertSame(BackupLog::STATUS_SUCCESS, $log->status);
+        $this->assertFileExists((string) $log->file_path);
+        $this->assertFalse((bool) ($log->metadata['cleanup_complete'] ?? true));
+        $this->assertSame('cleanup_exception', $log->metadata['cleanup_reason'] ?? null);
+
+        // Success reporting AND document dispatch still happen.
+        $this->assertDatabaseHas('telegram_admin_notification_logs', ['event_key' => 'backup_success']);
+        Queue::assertPushed(SendTelegramDocumentJob::class);
+
+        Log::shouldHaveReceived('warning')->withArgs(
+            fn (string $message, array $context = []) => ($context['reason'] ?? null) === 'cleanup_exception'
+                && ($context['stage'] ?? null) === 'retention'
+                && is_int($context['backup_log_id'] ?? null)
+                && ! str_contains(json_encode($context) ?: '', $this->tmp),
+        );
+    }
+
+    public function test_retention_stat_failure_keeps_success_and_preserves_candidates(): void
+    {
+        Log::spy();
+        $this->configureFileOnlyBackup();
+
+        $expired = $this->tmp.'/zedproxy-backup-20200101-000000.tar.gz';
+        file_put_contents($expired, 'expired-backup');
+        touch($expired, time() - 30 * 86400);
+
+        $svc = $this->partialService();
+        $svc->shouldReceive('createArchive')->once()->andReturnUsing(
+            fn (string $dest) => file_put_contents($dest, 'archive-bytes'),
+        );
+        $svc->shouldReceive('fileMtimeChecked')->andReturn(false);
+
+        $result = $svc->run(BackupLog::TYPE_MANUAL);
+
+        $this->assertSame(BackupLog::STATUS_SUCCESS, $result['status']);
+        $this->assertFileExists((string) $result['path']);
+        $this->assertFileExists($expired); // unreadable metadata ⇒ skipped, not deleted
+        $log = BackupLog::latestLog();
+        $this->assertSame(0, (int) ($log->metadata['cleaned'] ?? -1));
+        $this->assertFalse((bool) ($log->metadata['cleanup_complete'] ?? true));
+        $this->assertSame('stat_failed', $log->metadata['cleanup_reason'] ?? null);
+        Log::shouldHaveReceived('warning')->withArgs(
+            fn (string $message, array $context = []) => ($context['reason'] ?? null) === 'stat_failed'
+                && ! str_contains(json_encode($context) ?: '', $this->tmp),
+        );
+    }
+
+    public function test_retention_enumeration_failure_keeps_success(): void
+    {
+        Log::spy();
+        $this->configureFileOnlyBackup();
+
+        $svc = $this->partialService();
+        $svc->shouldReceive('createArchive')->once()->andReturnUsing(
+            fn (string $dest) => file_put_contents($dest, 'archive-bytes'),
+        );
+        $svc->shouldReceive('globBackups')->andReturn(false);
+
+        $result = $svc->run(BackupLog::TYPE_MANUAL);
+
+        $this->assertSame(BackupLog::STATUS_SUCCESS, $result['status']);
+        $this->assertFileExists((string) $result['path']);
+        $this->assertSame('glob_failed', BackupLog::latestLog()->metadata['cleanup_reason'] ?? null);
+    }
+
+    public function test_candidate_disappearing_between_enumeration_and_stat_is_a_non_event(): void
+    {
+        $this->configureFileOnlyBackup();
+
+        $expired = $this->tmp.'/zedproxy-backup-20200101-000000.tar.gz';
+        file_put_contents($expired, 'expired-backup');
+        touch($expired, time() - 30 * 86400);
+
+        $svc = $this->partialService();
+        $svc->shouldReceive('createArchive')->once()->andReturnUsing(
+            fn (string $dest) => file_put_contents($dest, 'archive-bytes'),
+        );
+        $svc->shouldReceive('fileMtimeChecked')->andReturnUsing(
+            function (string $path): int|false {
+                unlink($path); // vanishes exactly between enumeration and stat
+
+                return false;
+            },
+        );
+
+        $result = $svc->run(BackupLog::TYPE_MANUAL);
+
+        // Already absent ⇒ deterministic non-event: complete, nothing counted.
+        $this->assertSame(BackupLog::STATUS_SUCCESS, $result['status']);
+        $log = BackupLog::latestLog();
+        $this->assertSame(0, (int) ($log->metadata['cleaned'] ?? -1));
+        $this->assertTrue((bool) ($log->metadata['cleanup_complete'] ?? false));
+        $this->assertNull($log->metadata['cleanup_reason'] ?? null);
+    }
+
+    // ── Standalone cleanup shares the canonical-root resolver ────────────────
+
+    public function test_standalone_cleanup_rejects_symlink_resolving_to_filesystem_root(): void
+    {
+        $link = $this->tmp.'/rootlink';
+        symlink('/', $link);
+        SiteSetting::set('backup_storage_path', $link);
+
+        try {
+            app(BackupService::class)->cleanupOld();
+            $this->fail('standalone cleanup must reject a root resolving to /');
+        } catch (BackupFailure $e) {
+            $this->assertSame(BackupFailure::CATEGORY_CONFIG, $e->category());
+            $this->assertStringContainsString('ریشه فایل‌سیستم', $e->publicMessage());
+            $this->assertStringNotContainsString($this->tmp, $e->publicMessage());
+        }
+
+        // The Filament manual action surfaces it as a sanitized notification
+        // instead of crashing — and never enumerates filesystem-root children.
+        $admin = User::factory()->create(['is_admin' => true]);
+        Livewire::actingAs($admin)
+            ->test(BackupSettingsPage::class)
+            ->callAction('cleanupOld');
+        $this->assertSame([], glob('/zedproxy-backup-*'));
+    }
+
+    public function test_standalone_cleanup_returns_zero_for_missing_directory_without_creating_it(): void
+    {
+        $absent = $this->tmp.'/never-created/subdir';
+        SiteSetting::set('backup_storage_path', $absent);
+
+        $outcome = app(BackupService::class)->cleanupOld();
+
+        // Documented policy: standalone cleanup never creates the directory.
+        $this->assertSame(['removed' => 0, 'complete' => true, 'reason' => null], $outcome);
+        $this->assertDirectoryDoesNotExist($absent);
+    }
+
+    public function test_standalone_cleanup_and_backup_run_resolve_the_same_canonical_root(): void
+    {
+        $real = $this->tmp.'/realroot';
+        mkdir($real, 0777, true);
+        $link = $this->tmp.'/goodlink';
+        symlink($real, $link);
+        SiteSetting::set('backup_enabled', 'true');
+        SiteSetting::set('backup_storage_path', $link);
+        SiteSetting::set('backup_include_database', 'false');
+        SiteSetting::set('backup_include_storage', 'true');
+
+        $expired = $real.'/zedproxy-backup-20200101-000000.tar.gz';
+        file_put_contents($expired, 'expired-backup');
+        touch($expired, time() - 30 * 86400);
+
+        // Standalone cleanup works through the symlink on the SAME canonical
+        // directory a backup run uses…
+        $outcome = app(BackupService::class)->cleanupOld();
+        $this->assertSame(1, $outcome['removed']);
+        $this->assertTrue($outcome['complete']);
+        $this->assertFileDoesNotExist($expired);
+
+        // …and a run commits into that same canonical directory.
+        $svc = $this->partialService();
+        $svc->shouldReceive('createArchive')->once()->andReturnUsing(
+            fn (string $dest) => file_put_contents($dest, 'archive-bytes'),
+        );
+        $result = $svc->run(BackupLog::TYPE_MANUAL);
+        $this->assertSame(BackupLog::STATUS_SUCCESS, $result['status']);
+        $this->assertStringStartsWith((string) realpath($real).'/zedproxy-backup-', (string) $result['path']);
+    }
+
+    public function test_standalone_cleanup_with_invalid_stored_path_notifies_safely(): void
+    {
+        SiteSetting::set('backup_storage_path', 'relative-nonsense');
+
+        $admin = User::factory()->create(['is_admin' => true]);
+        Livewire::actingAs($admin)
+            ->test(BackupSettingsPage::class)
+            ->callAction('cleanupOld'); // handled: sanitized danger notification, no crash
+
+        $this->assertDirectoryDoesNotExist(base_path('relative-nonsense'));
     }
 
     // ── Filament page uses the same policy ──────────────────────────────────
