@@ -117,6 +117,34 @@ class BackupSettings
         return (bool) SiteSetting::get('backup_encrypt_enabled', false);
     }
 
+    /** Password states: usable / never stored / stored but unreadable. */
+    public const PASSWORD_OK = 'ok';
+
+    public const PASSWORD_NONE = 'none';
+
+    public const PASSWORD_INVALID = 'invalid';
+
+    /**
+     * Distinguish "no password was ever stored" from "a password is stored
+     * but cannot be used" (corrupt ciphertext, or encrypted under a
+     * different APP_KEY) — WITHOUT exposing ciphertext, keys, or decrypt
+     * exception detail. Fail-closed encryption relies on this: enabled
+     * encryption with anything other than PASSWORD_OK must never fall back
+     * to a plaintext backup.
+     */
+    public function passwordState(): string
+    {
+        $raw = (string) SiteSetting::get('backup_password', '');
+        if ($raw === '') {
+            return self::PASSWORD_NONE;
+        }
+        try {
+            return (string) Crypt::decryptString($raw) !== '' ? self::PASSWORD_OK : self::PASSWORD_INVALID;
+        } catch (\Throwable) {
+            return self::PASSWORD_INVALID;
+        }
+    }
+
     /** Decrypted archive password, or '' if unset/undecryptable. Never shown. */
     public function password(): string
     {

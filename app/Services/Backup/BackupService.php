@@ -92,6 +92,14 @@ class BackupService
             // settings change cannot redirect commitment, retention cleanup
             // or reporting to a different directory.
             $root = $this->settings->storagePath();
+            // A symlinked configured path may already exist and canonicalize
+            // to the filesystem root — reject that BEFORE touching the
+            // filesystem at all (and again after creation below), so no
+            // /.work_* or /zedproxy-backup-* path can ever be attempted.
+            $preExisting = realpath($root);
+            if ($preExisting !== false) {
+                $this->assertCanonicalRootAllowed($preExisting);
+            }
             $this->pathPolicy()->ensureUsableRoot($root);
             $canonical = realpath($root);
             if ($canonical === false || ! is_dir($canonical)) {
@@ -100,10 +108,29 @@ class BackupService
                     'root_unresolvable',
                 );
             }
+            $this->assertCanonicalRootAllowed($canonical);
             $root = rtrim($canonical, '/');
 
-            $encrypt = $this->settings->encryptEnabled() && $this->settings->hasPassword();
-            $password = $encrypt ? $this->settings->password() : '';
+            // FAIL-CLOSED ENCRYPTION: enabled means MANDATORY. When no usable
+            // password exists (never stored, corrupt ciphertext, or encrypted
+            // under a different APP_KEY), the run fails HERE — before pg_dump,
+            // tar, or any commitment — instead of silently producing a
+            // plaintext backup. Encryption is never silently disabled and the
+            // toggle is never cleared.
+            $encrypt = $this->settings->encryptEnabled();
+            $password = '';
+            if ($encrypt) {
+                $passwordState = $this->settings->passwordState();
+                if ($passwordState !== BackupSettings::PASSWORD_OK) {
+                    throw BackupFailure::config(
+                        'رمزگذاری بکاپ فعال است اما رمز عبور قابل استفاده‌ای ثبت نشده است. در صفحه «بکاپ و سرور» یک رمز عبور جدید ذخیره کنید.',
+                        $passwordState === BackupSettings::PASSWORD_NONE
+                            ? 'encryption_password_missing'
+                            : 'encryption_password_unreadable',
+                    );
+                }
+                $password = $this->settings->password();
+            }
             $locationLabel = $this->settings->storageLocationLabel();
 
             $work = $this->createWorkDir($root);
@@ -210,9 +237,22 @@ class BackupService
             // EVERY exit path — success or failure — clears the work dir.
             // At this point plaintext material on encrypted runs is already
             // gone (security boundary above), so what remains here is
-            // NON-CRITICAL housekeeping: problems are logged, never thrown.
+            // NON-CRITICAL housekeeping. The catch-all guarantees the
+            // never-throws contract of run(): NO cleanup problem — mutation,
+            // enumeration, or anything unexpected — may escape, replace the
+            // recorded result, or flip a committed backup to failed. Only
+            // positive-listed safe fields are logged.
             if ($work !== null) {
-                $this->removeDir($work);
+                try {
+                    $this->removeDir($work);
+                } catch (\Throwable $cleanupError) {
+                    Log::warning('Backup cleanup failed', [
+                        'backup_log_id' => $log->id,
+                        'stage' => 'workdir_cleanup',
+                        'reason' => 'cleanup_exception',
+                        'exception' => $cleanupError::class,
+                    ]);
+                }
             }
         }
     }
@@ -220,6 +260,25 @@ class BackupService
     private function pathPolicy(): BackupPathPolicy
     {
         return app(BackupPathPolicy::class);
+    }
+
+    /**
+     * The canonical (realpath'd) backup root must never be the filesystem
+     * root: a configured symlink can resolve to "/", and trimming "/" yields
+     * an empty string whose children ("/.work_*", "/zedproxy-backup-*") would
+     * be filesystem-root entries. Checked BEFORE the work directory is
+     * created. The message stays static — the symlink target is not echoed.
+     *
+     * @throws BackupFailure config-category failure
+     */
+    private function assertCanonicalRootAllowed(string $canonical): void
+    {
+        if (rtrim($canonical, '/') === '') {
+            throw BackupFailure::config(
+                'مسیر ذخیره بکاپ به ریشه فایل‌سیستم منتهی می‌شود و مجاز نیست. یک زیرمسیر مطلق انتخاب کنید.',
+                'canonical_root_is_filesystem_root',
+            );
+        }
     }
 
     /**
@@ -470,13 +529,15 @@ class BackupService
     }
 
     /**
-     * Checked unlink: true when the file is verifiably gone afterwards.
-     * A missing file counts as success (nothing to remove).
+     * Checked unlink: true when the entry is verifiably gone afterwards.
+     * A missing entry counts as success — deterministic behavior for files
+     * that disappear between enumeration and deletion. Uses is_link() so a
+     * dangling symlink (file_exists() false) is still removed as a LINK.
      */
     protected function unlinkChecked(string $path): bool
     {
         clearstatcache(true, $path);
-        if (! file_exists($path)) {
+        if (! is_link($path) && ! file_exists($path)) {
             return true;
         }
         if (! CheckedFilesystem::unlink($path)) {
@@ -484,26 +545,59 @@ class BackupService
         }
         clearstatcache(true, $path);
 
-        return ! file_exists($path);
+        return ! is_link($path) && ! file_exists($path);
+    }
+
+    /** Checked directory enumeration seam (guarded scandir, never a warning). */
+    protected function listDirChecked(string $dir): array|false
+    {
+        return CheckedFilesystem::scandir($dir);
     }
 
     /**
      * NON-CRITICAL housekeeping cleanup: failures are logged with safe
-     * fields only, NEVER thrown — by the time this runs on an encrypted
-     * run, the security-critical plaintext removal has already happened
-     * (or the run has already failed).
+     * fields only (no paths, no raw errors), NEVER thrown — by the time
+     * this runs on an encrypted run, the security-critical plaintext removal
+     * has already happened (or the run has already failed).
+     *
+     * SYMLINK SAFETY: every entry is checked with is_link() FIRST and a
+     * symlink is removed as a LINK — recursion never follows it, so a
+     * malicious symlink planted inside a work directory can never make
+     * cleanup traverse (or delete) anything outside the work directory.
+     * Enumeration itself goes through the checked wrapper, so it cannot
+     * emit warnings or abort cleanup.
      */
     protected function removeDir(string $dir): void
     {
+        if (is_link($dir)) {
+            // Never treat a symlinked directory as ours to empty.
+            if (! $this->unlinkChecked($dir)) {
+                Log::warning('Backup cleanup could not delete a temporary file', [
+                    'reason' => 'unlink_failed',
+                ]);
+            }
+
+            return;
+        }
         if (! is_dir($dir)) {
             return;
         }
-        foreach (scandir($dir) ?: [] as $f) {
+
+        $entries = $this->listDirChecked($dir);
+        if ($entries === false) {
+            Log::warning('Backup cleanup could not enumerate a work directory', [
+                'reason' => 'scandir_failed',
+            ]);
+
+            return;
+        }
+
+        foreach ($entries as $f) {
             if ($f === '.' || $f === '..') {
                 continue;
             }
             $path = $dir.'/'.$f;
-            if (is_dir($path)) {
+            if (! is_link($path) && is_dir($path)) {
                 $this->removeDir($path);
             } elseif (! $this->unlinkChecked($path)) {
                 Log::warning('Backup cleanup could not delete a temporary file', [

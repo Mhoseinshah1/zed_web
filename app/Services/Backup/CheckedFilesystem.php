@@ -48,4 +48,20 @@ final class CheckedFilesystem
     {
         return self::guarded(static fn (): bool => rmdir($path));
     }
+
+    /**
+     * Guarded directory enumeration: cleanup READS are checked operations
+     * too. Returns the entries, or false on failure — never a warning.
+     *
+     * @return array<int,string>|false
+     */
+    public static function scandir(string $path): array|false
+    {
+        set_error_handler(static fn (): bool => true);
+        try {
+            return scandir($path);
+        } finally {
+            restore_error_handler();
+        }
+    }
 }

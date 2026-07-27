@@ -168,6 +168,23 @@ class BackupSettingsPage extends Page implements HasActions, HasForms
     {
         $data = $this->form->getState();
 
+        // FAIL-CLOSED ENCRYPTION ACTIVATION: turning encryption on requires a
+        // usable password. First activation (or activation while the stored
+        // ciphertext is unreadable) is refused unless a new password is
+        // submitted in the same save — nothing is persisted on refusal, so
+        // "enabled without a password" can never be stored. An existing valid
+        // password keeps working without re-entry, and this never clears the
+        // toggle or overwrites a stored password on its own.
+        if (! empty($data['backup_encrypt_enabled'])
+            && ! filled($data['backup_password_new'] ?? null)
+            && $this->settings()->passwordState() !== BackupSettings::PASSWORD_OK) {
+            Notification::make()
+                ->title('برای فعال‌کردن رمزگذاری بکاپ، ابتدا یک رمز عبور معتبر وارد و همراه همین ذخیره ثبت کنید.')
+                ->danger()->send();
+
+            return;
+        }
+
         foreach ([
             'backup_enabled', 'backup_auto_enabled', 'backup_include_database', 'backup_include_storage',
             'backup_include_uploads', 'backup_include_project_files', 'backup_encrypt_enabled',
