@@ -479,7 +479,49 @@ Backups are driven by the **Laravel scheduler** (`zedproxy:backup --scheduled`),
 configured from the admin panel — there is no separate backup cron. Make sure
 the scheduler cron below is installed (the installer does this automatically);
 everything else (backups, Telegram reports, panel health, Marzban sync) runs
-through it. Backups older than the configured retention are removed automatically.
+through it. Backups older than the configured retention are removed automatically
+— retention cleanup only runs **after** a new backup has been committed, so a
+failing backup never shrinks the set of existing valid backups.
+
+### Backup storage path rules
+
+The optional «مسیر ذخیره بکاپ» setting must be an **absolute** path (starting
+with `/`), with no `.`/`..` segments and no control characters. Leaving it
+empty uses the default `storage/app/backups`. Relative values are rejected —
+they are **not** auto-prefixed into an absolute path, because a relative path
+would resolve against the process working directory and behave differently
+under web, Artisan, the scheduler and Supervisor.
+
+**Recovery for an invalid stored value** (e.g. a legacy relative path saved
+before validation existed, or a value edited directly in the database): the
+backup run fails closed with a sanitized config error before `pg_dump`/`tar`
+execute. To fix it, open **بکاپ و سرور** in the admin panel and save an
+absolute path — or clear the field to fall back to the default. No manual
+database surgery or redeploy is required.
+
+Archives are built under a private per-run work directory inside the backup
+root and only appear under their final `zedproxy-backup-*.tar.gz(.enc)` name
+via one atomic rename after verification — a crashed or failed run never
+leaves a partial file that looks like a completed backup.
+
+Additional guarantees:
+
+- **One pinned root per run** — the configured path is resolved, validated and
+  canonicalized (symlinks followed once via `realpath`) at the start of each
+  run; workspace creation, final commitment, retention cleanup and reporting
+  all use that single pinned root. Changing the setting during a running
+  backup only affects future runs. A symlinked backup root remains supported.
+- **Encrypted runs never succeed with plaintext residue** — verified removal
+  of the plaintext database dump and unencrypted archive is part of the
+  success boundary: if it fails, nothing is committed and the run is recorded
+  as failed.
+- **Sanitized reporting everywhere** — Telegram/Filament/BackupLog receive
+  only short bounded Persian messages (no filesystem paths, no process
+  output), and the server log records only safe structured fields (failure
+  category, stage reason code, process exit code, exception class, backup-log
+  id) — raw `pg_dump`/`tar`/`openssl` output is never collected.
+- **Control characters are rejected on the raw configured value** before any
+  trimming or normalization; only ordinary surrounding spaces are tolerated.
 
 ## Scheduler (production-critical)
 

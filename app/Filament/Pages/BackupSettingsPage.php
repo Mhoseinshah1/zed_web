@@ -5,6 +5,8 @@ namespace App\Filament\Pages;
 use App\Jobs\RunBackupJob;
 use App\Models\BackupLog;
 use App\Models\SiteSetting;
+use App\Services\Backup\BackupFailure;
+use App\Services\Backup\BackupPathPolicy;
 use App\Services\Backup\BackupScheduler;
 use App\Services\Backup\BackupService;
 use App\Services\Backup\BackupSettings;
@@ -114,7 +116,18 @@ class BackupSettingsPage extends Page implements HasActions, HasForms
                         .' دقیقه. بکاپ با فاصله زمانی خیلی کوتاه ممکن است فشار زیادی به سرور وارد کند.'),
 
                 Forms\Components\TextInput::make('backup_retention_days')->label('روزهای نگهداری بکاپ')->numeric()->minValue(1)->default(7),
-                Forms\Components\TextInput::make('backup_storage_path')->label('مسیر ذخیره بکاپ (اختیاری)')->placeholder(storage_path('app/backups'))->columnSpanFull(),
+                Forms\Components\TextInput::make('backup_storage_path')->label('مسیر ذخیره بکاپ (اختیاری)')
+                    ->placeholder('پیش‌فرض: storage/app/backups')->columnSpanFull()
+                    ->helperText('باید یک مسیر مطلق باشد (با / شروع شود). برای استفاده از مسیر پیش‌فرض خالی بگذارید.')
+                    ->rule(fn () => function (string $attribute, mixed $value, \Closure $fail): void {
+                        try {
+                            // Raw value in — the policy rejects control
+                            // characters BEFORE any trimming/normalization.
+                            app(BackupPathPolicy::class)->normalizeForStorage((string) $value);
+                        } catch (BackupFailure $e) {
+                            $fail($e->publicMessage());
+                        }
+                    }),
             ])->columns(2),
 
             Forms\Components\Section::make('محتوای بکاپ')->schema([
@@ -155,6 +168,61 @@ class BackupSettingsPage extends Page implements HasActions, HasForms
     {
         $data = $this->form->getState();
 
+        // ── Phase 1: EVERYTHING that can fail happens BEFORE any write ─────
+        // A failure in this phase aborts the save with nothing persisted, so
+        // the previous settings state stays fully intact.
+
+        // FAIL-CLOSED ENCRYPTION ACTIVATION: turning encryption on requires a
+        // usable password. First activation (or activation while the stored
+        // ciphertext is unreadable) is refused unless a new password is
+        // submitted in the same save — "enabled without a password" can never
+        // be stored. An existing valid password keeps working without
+        // re-entry, and this never clears the toggle or overwrites a stored
+        // password on its own.
+        if (! empty($data['backup_encrypt_enabled'])
+            && ! filled($data['backup_password_new'] ?? null)
+            && $this->settings()->passwordState() !== BackupSettings::PASSWORD_OK) {
+            Notification::make()
+                ->title('برای فعال‌کردن رمزگذاری بکاپ، ابتدا یک رمز عبور معتبر وارد و همراه همین ذخیره ثبت کنید.')
+                ->danger()->send();
+
+            return;
+        }
+
+        // Same authoritative policy the runtime uses: the RAW submitted value
+        // goes in (control characters are rejected before any trimming) and
+        // either '' (use default) or the normalized absolute path comes out.
+        try {
+            $storedPath = app(BackupPathPolicy::class)->normalizeForStorage((string) ($data['backup_storage_path'] ?? ''));
+        } catch (BackupFailure $e) {
+            Notification::make()->title($e->publicMessage())->danger()->send();
+
+            return;
+        }
+
+        // Precompute the new password ciphertext BEFORE any setting is
+        // written: if encryption of the submitted password fails, the save
+        // aborts here and neither the toggle nor any other setting moves —
+        // "encryption enabled without usable stored credentials" cannot be
+        // produced by a partial save.
+        $newPasswordCiphertext = null;
+        if (filled($data['backup_password_new'] ?? null)) {
+            try {
+                $newPasswordCiphertext = $this->settings()->encryptPassword((string) $data['backup_password_new']);
+            } catch (\Throwable) {
+                Notification::make()
+                    ->title('ذخیره رمز عبور بکاپ ممکن نشد؛ هیچ تنظیمی تغییر نکرد. دوباره تلاش کنید.')
+                    ->danger()->send();
+
+                return;
+            }
+        }
+
+        // ── Phase 2: writes only (password FIRST, then the toggle) ─────────
+        if ($newPasswordCiphertext !== null) {
+            SiteSetting::set('backup_password', $newPasswordCiphertext);
+        }
+
         foreach ([
             'backup_enabled', 'backup_auto_enabled', 'backup_include_database', 'backup_include_storage',
             'backup_include_uploads', 'backup_include_project_files', 'backup_encrypt_enabled',
@@ -174,13 +242,11 @@ class BackupSettingsPage extends Page implements HasActions, HasForms
         ));
         SiteSetting::set('backup_schedule_time', $this->validTime($data['backup_schedule_time'] ?? '03:00', '03:00'));
         SiteSetting::set('backup_retention_days', (int) max(1, (int) ($data['backup_retention_days'] ?? 7)));
-        SiteSetting::set('backup_storage_path', (string) ($data['backup_storage_path'] ?? ''));
+        SiteSetting::set('backup_storage_path', $storedPath);
+        $this->data['backup_storage_path'] = $storedPath;
         SiteSetting::set('backup_max_telegram_file_size_mb', (int) max(1, min(50, (int) ($data['backup_max_telegram_file_size_mb'] ?? 50))));
         SiteSetting::set('daily_report_time', $this->validTime($data['daily_report_time'] ?? '21:00', '21:00'));
 
-        if (filled($data['backup_password_new'] ?? null)) {
-            $this->settings()->storePassword((string) $data['backup_password_new']);
-        }
         $this->data['backup_password_new'] = null;
 
         Notification::make()->title('تنظیمات بکاپ ذخیره شد.')->success()->send();
@@ -209,8 +275,20 @@ class BackupSettingsPage extends Page implements HasActions, HasForms
             ->requiresConfirmation()
             ->modalDescription('بکاپ‌های قدیمی‌تر از دوره نگهداری حذف می‌شوند.')
             ->action(function () {
-                $removed = app(BackupService::class)->cleanupOld();
-                Notification::make()->title("پاکسازی انجام شد ({$removed} فایل حذف شد).")->success()->send();
+                try {
+                    // Standalone cleanup goes through the SAME canonical-root
+                    // resolver as backup runs (symlink→/ rejected, missing
+                    // dir ⇒ nothing to clean).
+                    $outcome = app(BackupService::class)->cleanupOld();
+                } catch (BackupFailure $e) {
+                    Notification::make()->title($e->publicMessage())->danger()->send();
+
+                    return;
+                }
+                $note = Notification::make()->title("پاکسازی انجام شد ({$outcome['removed']} فایل حذف شد).");
+                $outcome['complete']
+                    ? $note->success()->send()
+                    : $note->warning()->body('برخی فایل‌ها قابل حذف نبودند؛ جزئیات در لاگ سرور ثبت شد.')->send();
             });
     }
 

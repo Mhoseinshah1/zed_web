@@ -58,11 +58,33 @@ class BackupSettings
         return max(1, (int) SiteSetting::get('backup_retention_days', 7));
     }
 
+    /**
+     * The validated absolute backup root. Goes through BackupPathPolicy, so a
+     * legacy/invalid stored value (relative path, control chars, traversal)
+     * fails closed here — even when it bypassed the admin form and was
+     * written straight into the database.
+     *
+     * @throws BackupFailure config-category failure for an invalid stored value
+     */
     public function storagePath(): string
     {
-        $p = trim((string) SiteSetting::get('backup_storage_path', ''));
+        return app(BackupPathPolicy::class)->resolve(
+            (string) SiteSetting::get('backup_storage_path', ''),
+        );
+    }
 
-        return $p !== '' ? $p : storage_path('app/backups');
+    /**
+     * Non-sensitive LOGICAL description of where backups are stored, for
+     * operator-facing channels (Telegram {path} placeholder). Never the real
+     * filesystem path.
+     */
+    public function storageLocationLabel(): string
+    {
+        $raw = trim((string) SiteSetting::get('backup_storage_path', ''), ' ');
+
+        return $raw === ''
+            ? 'مسیر پیش‌فرض برنامه (storage/app/backups)'
+            : 'مسیر سفارشی تنظیم‌شده در پنل';
     }
 
     public function includeDatabase(): bool
@@ -93,6 +115,61 @@ class BackupSettings
     public function encryptEnabled(): bool
     {
         return (bool) SiteSetting::get('backup_encrypt_enabled', false);
+    }
+
+    /** Password states: usable / never stored / stored but unreadable. */
+    public const PASSWORD_OK = 'ok';
+
+    public const PASSWORD_NONE = 'none';
+
+    public const PASSWORD_INVALID = 'invalid';
+
+    /**
+     * ONE-SHOT password resolution: the stored ciphertext is read exactly
+     * once and decrypted exactly once, and both the usability state and the
+     * plaintext come from that single operation. This is the ONLY resolution
+     * a backup run may use — a state check followed by a second read would
+     * be a time-of-check/time-of-use hole where a concurrent settings change
+     * swaps or clears the password between the two reads.
+     *
+     * States distinguish "no password was ever stored" from "a password is
+     * stored but cannot be used" (corrupt ciphertext, or encrypted under a
+     * different APP_KEY) — WITHOUT exposing ciphertext, keys, or decrypt
+     * exception detail.
+     *
+     * @return array{state:string, password:string}
+     */
+    public function resolvePassword(): array
+    {
+        $ciphertext = (string) SiteSetting::get('backup_password', '');
+        if ($ciphertext === '') {
+            return ['state' => self::PASSWORD_NONE, 'password' => ''];
+        }
+        try {
+            $plain = (string) Crypt::decryptString($ciphertext);
+        } catch (\Throwable) {
+            return ['state' => self::PASSWORD_INVALID, 'password' => ''];
+        }
+
+        return $plain !== ''
+            ? ['state' => self::PASSWORD_OK, 'password' => $plain]
+            : ['state' => self::PASSWORD_INVALID, 'password' => ''];
+    }
+
+    /** Usability state only (single internal resolution; see resolvePassword). */
+    public function passwordState(): string
+    {
+        return $this->resolvePassword()['state'];
+    }
+
+    /**
+     * Encrypt a submitted backup password WITHOUT persisting it — the save
+     * path precomputes the ciphertext first so a Crypt failure can abort the
+     * save before ANY setting (including the encryption toggle) is written.
+     */
+    public function encryptPassword(string $password): string
+    {
+        return Crypt::encryptString(trim($password));
     }
 
     /** Decrypted archive password, or '' if unset/undecryptable. Never shown. */
