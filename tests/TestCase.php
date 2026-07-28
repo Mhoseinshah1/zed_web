@@ -2,6 +2,7 @@
 
 namespace Tests;
 
+use App\Http\Middleware\EnsureSessionAuthVersion;
 use App\Models\AdminTwoFactorCredential;
 use App\Models\User as AppUser;
 use App\Services\AdminMfa\AdminMfaSession;
@@ -77,6 +78,10 @@ abstract class TestCase extends BaseTestCase
         if (($guard === null || $guard === 'web') && $user instanceof AppUser) {
             // Raw-hash legacy format — accepted by validatePasswordHash().
             session()->put('password_hash_web', (string) $user->getAuthPassword());
+            session()->put(
+                EnsureSessionAuthVersion::SESSION_KEY,
+                (int) ($user->auth_version ?? AppUser::INITIAL_AUTH_VERSION),
+            );
         }
     }
 

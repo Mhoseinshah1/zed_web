@@ -2,6 +2,7 @@
 
 use App\Http\Middleware\EnsureEmailIsVerified;
 use App\Http\Middleware\EnsureProfileComplete;
+use App\Http\Middleware\EnsureSessionAuthVersion;
 use App\Http\Middleware\NoIndexHeaders;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
@@ -53,6 +54,12 @@ return Application::configure(basePath: dirname(__DIR__))
         // panel already runs its own AuthenticateSession.
         $middleware->web(append: [
             AuthenticateSession::class,
+            // Authoritative monotonic session-revocation check (auth_version):
+            // unstamped pre-deployment sessions are adopted only while the
+            // account is on the initial version; any advancement (password
+            // reset) fails them closed. AuthenticateSession above stays as a
+            // second, hash-bound layer for legacy password-change paths.
+            EnsureSessionAuthVersion::class,
         ]);
 
         // Gate sensitive purchase actions behind a completed profile (phone).

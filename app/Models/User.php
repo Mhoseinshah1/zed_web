@@ -15,6 +15,14 @@ use Illuminate\Notifications\Notifiable;
 
 class User extends Authenticatable implements FilamentUser
 {
+    /**
+     * Documented initial monotonic authentication version for new AND
+     * pre-existing accounts. Unstamped (pre-deployment) sessions are adopted
+     * only while the account is still on this version; a password reset
+     * advances it, revoking every previously stamped or unstamped session.
+     */
+    public const INITIAL_AUTH_VERSION = 1;
+
     /** @use HasFactory<UserFactory> */
     use HasFactory, Notifiable;
 
