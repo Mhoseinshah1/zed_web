@@ -76,7 +76,12 @@ class BackupRestoreCommand extends Command
             return $fromEnv;
         }
 
-        if (! $this->input->isInteractive()) {
+        // A hidden prompt is only meaningful at a real terminal. `isInteractive()`
+        // alone is NOT enough: Artisan::call() and other programmatic callers use
+        // an ArrayInput that reports itself interactive, so prompting there would
+        // block forever on a stdin nobody is going to type into (CI, cron, a
+        // deploy script). Require an actual TTY, otherwise fail closed.
+        if (! $this->input->isInteractive() || ! defined('STDIN') || ! stream_isatty(STDIN)) {
             return null;
         }
 

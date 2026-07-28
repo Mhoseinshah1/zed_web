@@ -452,8 +452,12 @@ class BackupRestorePgTest extends TestCase
         $archive = $this->createBackup();
         $target = $this->createTargetDatabase();
 
-        // No password argument and no environment variable.
+        // No password argument and no environment variable. This also guards a
+        // real hang: Artisan::call() uses an ArrayInput that reports itself
+        // INTERACTIVE, so a prompt here would block forever on a stdin nobody
+        // will type into (CI, cron, a deploy script). The command must return.
         $this->assertSame(1, $this->restoreCommand($archive, $target));
+        $this->assertStringNotContainsString('Archive password', Artisan::output(), 'must never prompt without a TTY');
         $this->assertSame(0, (int) $this->target($target)->scalar(
             "select count(*) from information_schema.tables where table_schema='public'",
         ));
