@@ -7,6 +7,8 @@ use App\Models\PasswordResetChallenge;
 use App\Models\User;
 use App\Services\Email\EmailVerificationService;
 use App\Services\Sms\SmsService;
+use Illuminate\Contracts\Cache\LockTimeoutException;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Log;
@@ -33,12 +35,39 @@ use Illuminate\Support\Timebox;
  *       sha256 of a session-held one-time authorization proof, the account's
  *       current password-hash fingerprint, and a 10m authorization expiry)
  *     → consumed exactly once by the atomic finalize() transaction, which
- *       locks the user + challenge rows, revalidates every binding, updates
- *       the password, rotates remember_token (revoking remember-me), and
- *       supersedes every other active challenge for the user. The password
- *       hash itself is the account's credential version: the framework
- *       AuthenticateSession middleware rejects every session stamped with
- *       the previous hash, so all other authenticated sessions die.
+ *       locks the user + challenge rows IN THAT ORDER, revalidates every
+ *       binding, updates the password, rotates remember_token (revoking
+ *       remember-me), advances users.auth_version and supersedes every other
+ *       active challenge for the user.
+ *
+ * SESSION REVOCATION: `users.auth_version` is the AUTHORITATIVE monotonic
+ * credential version (EnsureSessionAuthVersion verifies it on every
+ * authenticated request). The framework's password-hash session binding is
+ * only a SECONDARY compatibility layer covering legacy password writers that
+ * do not advance the version.
+ *
+ * ══ LOCK HIERARCHY (the ONE global order; never reversed) ══════════════
+ *
+ *   1. per-user CACHE lock   (userLockKey — delivery coordination)
+ *   2. `users` row lock      (lockForUpdate)
+ *   3. `password_reset_challenges` row lock (lockForUpdate)
+ *
+ * | path                    | 1 cache | 2 user | 3 challenge |
+ * |-------------------------|---------|--------|-------------|
+ * | issueChallenge()        |   yes   |  yes   |     yes     |
+ * | verifyCode()            |    —    |  yes   |     yes     |
+ * | finalize()              |    —    |  yes   |     yes     |
+ * | SendPasswordResetOtpJob |   yes   |   —    |     yes     |
+ *
+ * A path may SKIP a level but never acquire one out of order, so the order
+ * is a strict partial order and no cycle (deadlock) is possible. finalize()
+ * and verifyCode() reach the challenge's user_id through an UNLOCKED
+ * navigation read whose only use is choosing which user row to lock — every
+ * security decision is made on the locked, reloaded records.
+ *
+ * NETWORK I/O is never performed inside a database transaction: the delivery
+ * job claims the row in a short transaction, commits, and only then talks to
+ * the transport while holding the per-user cache lock.
  */
 class PasswordResetService
 {
@@ -53,6 +82,26 @@ class PasswordResetService
     public const AUTHORIZATION_TTL_MINUTES = 10;
 
     public const MAX_ATTEMPTS = 5;
+
+    /** Bounded wait for the per-user coordination lock (seconds). */
+    public const LOCK_WAIT_SECONDS = 3;
+
+    /**
+     * Lease for the ISSUANCE side of the per-user lock. Short: issuance does
+     * only local work (supersede + insert) — never network I/O. An abandoned
+     * lock therefore self-heals within this bound. The DELIVERY side uses its
+     * own, longer lease (SendPasswordResetOtpJob::LOCK_TTL_SECONDS) because it
+     * holds the lock across a bounded transport attempt.
+     */
+    public const LOCK_TTL_SECONDS = 10;
+
+    /**
+     * A `sending` claim older than this is ABANDONED (worker crashed or was
+     * killed): the row becomes re-claimable, so a crash can never leave an
+     * account permanently unable to receive a code. Comfortably above the
+     * delivery job's own timeout.
+     */
+    public const ABANDONED_CLAIM_MINUTES = 10;
 
     /**
      * Precomputed bcrypt of a random throwaway value: verification against a
@@ -124,10 +173,24 @@ class PasswordResetService
             // correct concurrent submission can mint the authorization — an
             // already-authorized, consumed, expired or superseded challenge
             // is never authorized again.
-            return DB::transaction(function () use ($token, $code): ?string {
-                $challenge = is_string($token) && $token !== ''
-                    ? PasswordResetChallenge::where('token', $token)->lockForUpdate()->first()
-                    : null;
+            // NAVIGATION ONLY (unlocked): find which USER row to lock first.
+            // Nothing here authorizes anything — every decision below is made
+            // on the locked, reloaded records.
+            $userId = is_string($token) && $token !== ''
+                ? PasswordResetChallenge::where('token', $token)->value('user_id')
+                : null;
+
+            if ($userId === null) {
+                Hash::check($code, self::DUMMY_HASH); // uniform timing
+
+                return null;
+            }
+
+            return DB::transaction(function () use ($token, $code, $userId): ?string {
+                // Hierarchy level 2 → 3 (never reversed).
+                User::whereKey($userId)->lockForUpdate()->first();
+
+                $challenge = PasswordResetChallenge::where('token', $token)->lockForUpdate()->first();
 
                 if ($challenge === null
                     || $challenge->consumed_at !== null
@@ -183,10 +246,26 @@ class PasswordResetService
         }
 
         try {
-            return DB::transaction(function () use ($token, $proof, $newPassword): bool {
+            // NAVIGATION ONLY (unlocked): resolve which USER row to lock. This
+            // read never authorizes the reset — it only chooses the lock
+            // target, and the locked reload below re-validates everything.
+            $userId = PasswordResetChallenge::where('token', $token)->value('user_id');
+            if ($userId === null) {
+                return false;
+            }
+
+            return DB::transaction(function () use ($token, $proof, $newPassword, $userId): bool {
+                // HIERARCHY: user row FIRST, then the challenge row — the same
+                // order issuance uses, so replacement issuance and
+                // finalization for one account can never deadlock.
+                $user = User::whereKey($userId)->lockForUpdate()->first();
+
+                $this->raceBarrier('finalize.locks_acquired');
+
                 $challenge = PasswordResetChallenge::where('token', $token)->lockForUpdate()->first();
 
                 if ($challenge === null
+                    || $challenge->user_id !== $userId
                     || $challenge->authorized_at === null
                     || $challenge->consumed_at !== null
                     || $challenge->authorization_expires_at === null
@@ -194,8 +273,6 @@ class PasswordResetService
                     || ! hash_equals((string) $challenge->authorization_proof_hash, hash('sha256', $proof))) {
                     return false;
                 }
-
-                $user = User::whereKey($challenge->user_id)->lockForUpdate()->first();
 
                 // The account state must be EXACTLY what was authorized: a
                 // password change since authorization (including a concurrent
@@ -281,24 +358,48 @@ class PasswordResetService
         $code = (string) random_int(100000, 999999);
         $token = bin2hex(random_bytes(32));
 
-        $challenge = DB::transaction(function () use ($user, $channel, $code, $token): PasswordResetChallenge {
-            User::whereKey($user->id)->lockForUpdate()->first();
+        // HIERARCHY level 1: the per-user CACHE lock is held across the whole
+        // issuance transaction. An in-flight delivery worker holds the SAME
+        // lock across its transport attempt, so a replacement challenge can
+        // never become authoritative while an older code is mid-flight — and
+        // an older worker can never start a transport after this replacement
+        // commits. Serialization is mandatory: if the lock is unavailable
+        // (contention or a cache outage) issuance FAILS CLOSED and the caller
+        // returns the ordinary decoy token + generic message.
+        $challenge = $this->withUserLock($user->id, function () use ($user, $channel, $code, $token): PasswordResetChallenge {
+            $this->raceBarrier('issue.lock_acquired');
 
-            // Only one live challenge per account.
-            PasswordResetChallenge::where('user_id', $user->id)
-                ->whereNull('consumed_at')
-                ->update(['consumed_at' => now()]);
+            return DB::transaction(function () use ($user, $channel, $code, $token): PasswordResetChallenge {
+                // Hierarchy level 2 → 3.
+                User::whereKey($user->id)->lockForUpdate()->first();
 
-            return $this->persistChallenge($user, $channel, $code, $token);
+                // Only one live challenge per account (the
+                // password_reset_one_active partial unique index is the
+                // database-level authority for the same rule).
+                PasswordResetChallenge::where('user_id', $user->id)
+                    ->whereNull('consumed_at')
+                    ->update(['consumed_at' => now()]);
+
+                return $this->persistChallenge($user, $channel, $code, $token);
+            });
         });
+
+        if (! $challenge instanceof PasswordResetChallenge) {
+            $this->safeLog('issue', 'coordination_unavailable', $token, null);
+
+            throw new \RuntimeException('password reset issuance could not be serialized');
+        }
 
         // Publication strictly AFTER the commit. Honest delivery state: a
         // publication failure is recorded as dispatch_failed (no transport
         // attempt ever happened) and the public response stays generic. The
         // `queued` stamp is conditional so an inline (sync-queue) job's own
         // sent/failed result is never overwritten.
+        // Published AFTER the issuance transaction committed AND after the
+        // per-user lock was released: a sync-queue driver executes the job
+        // inline, and it takes the SAME lock.
         try {
-            SendPasswordResetOtpJob::dispatch($challenge->id, $channel, $destination, $code);
+            SendPasswordResetOtpJob::dispatch($challenge->id, $channel, $destination, $code, $user->id);
             PasswordResetChallenge::whereKey($challenge->id)
                 ->where('send_status', PasswordResetChallenge::SEND_STATUS_PENDING)
                 ->update(['send_status' => PasswordResetChallenge::SEND_STATUS_QUEUED]);
@@ -309,6 +410,58 @@ class PasswordResetService
         }
 
         return $token;
+    }
+
+    /**
+     * The per-user coordination lock key — shared with
+     * SendPasswordResetOtpJob so replacement issuance and an in-flight
+     * delivery attempt can never overlap. Level 1 of the lock hierarchy.
+     */
+    public static function userLockKey(int $userId): string
+    {
+        return 'password-reset:user:'.$userId;
+    }
+
+    /**
+     * Run $callback while holding the BOUNDED per-user cache lock (hierarchy
+     * level 1, always taken BEFORE any row lock). Returns the sentinel
+     * $onUnavailable when serialization cannot be guaranteed — contention or
+     * a cache-backend outage — so callers FAIL CLOSED instead of mutating
+     * unserialized. Release happens in `finally`; Laravel's lock owner token
+     * makes the release owner-safe (a worker can never release another
+     * holder's lock), and the TTL is the backstop for a crashed holder.
+     */
+    private function withUserLock(int $userId, callable $callback, mixed $onUnavailable = null): mixed
+    {
+        try {
+            $lock = Cache::lock(self::userLockKey($userId), self::LOCK_TTL_SECONDS);
+            $lock->block(self::LOCK_WAIT_SECONDS);
+        } catch (LockTimeoutException) {
+            return $onUnavailable;
+        } catch (\Throwable) {
+            return $onUnavailable;
+        }
+
+        try {
+            return $callback();
+        } finally {
+            try {
+                $lock->release();
+            } catch (\Throwable) {
+                // TTL expiry is the backstop for a failed release.
+            }
+        }
+    }
+
+    /**
+     * Deterministic-concurrency seam: a no-op in production, overridden by
+     * PostgreSQL race tests to park a process at a named point while holding
+     * its locks. Barriers — never timing sleeps — make the cross-flow
+     * orderings reproducible.
+     */
+    protected function raceBarrier(string $stage): void
+    {
+        // no-op
     }
 
     /** Seam: create the challenge row inside the issuance transaction. */

@@ -2,12 +2,17 @@
 
 namespace Tests\Feature;
 
+use App\Jobs\SendPasswordResetOtpJob;
 use App\Models\PasswordResetChallenge;
 use App\Models\User;
 use App\Services\Auth\PasswordResetService;
+use App\Services\Email\EmailVerificationService;
+use App\Services\Sms\SmsService;
 use Illuminate\Database\QueryException;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Timebox;
 use Tests\TestCase;
 
 /**
@@ -35,16 +40,128 @@ class PasswordResetConcurrencyPgTest extends TestCase
         if (! function_exists('pcntl_fork')) {
             $this->markTestSkipped('pcntl is required to run real parallel submissions.');
         }
+
+        // The per-user coordination lock must be REAL across processes. The
+        // suite's default `array` store lives in one process's memory, so a
+        // fork would never observe another's lock; the FILE store is a shared
+        // backend (same reason the scheduler uses SCHEDULER_LOCK_STORE=file)
+        // and stands in faithfully for production Redis.
+        config(['cache.default' => 'file']);
+        Cache::store('file')->clear();
+
+        PgBarrierResetService::$onBarrier = null;
+        PgBarrierDeliveryJob::$onBeforeClaim = null;
+        PgBarrierDeliveryJob::$onBeforeTransport = null;
     }
 
     protected function tearDown(): void
     {
+        if (DB::getDriverName() === 'pgsql') {
+            try {
+                Cache::store('file')->clear();
+            } catch (\Throwable) {
+                // best effort
+            }
+        }
+
         if (DB::getDriverName() === 'pgsql' && $this->userId !== null) {
             PasswordResetChallenge::where('user_id', $this->userId)->delete();
             User::whereKey($this->userId)->delete();
         }
 
         parent::tearDown();
+    }
+
+    /** File barrier: publish a named milestone for the other process. */
+    private function signal(string $dir, string $name): void
+    {
+        file_put_contents($dir.'/'.$name, '1');
+    }
+
+    /**
+     * Block until the other process publishes $name (bounded). A barrier —
+     * not a timing sleep — is what makes each interleaving deterministic:
+     * the poll interval only bounds how quickly the milestone is noticed,
+     * never which ordering occurs.
+     */
+    private function await(string $dir, string $name, int $timeoutSeconds = 15): bool
+    {
+        $deadline = microtime(true) + $timeoutSeconds;
+        while (microtime(true) < $deadline) {
+            if (is_file($dir.'/'.$name)) {
+                return true;
+            }
+            usleep(2000);
+        }
+
+        return false;
+    }
+
+    /** A shared barrier directory for one cross-flow race. */
+    private function barrierDir(): string
+    {
+        $dir = sys_get_temp_dir().'/zp-pwreset-barrier-'.uniqid();
+        mkdir($dir);
+
+        return $dir;
+    }
+
+    /** Bind a service whose raceBarrier() runs $onBarrier (child-side). */
+    private function bindBarrierService(\Closure $onBarrier): void
+    {
+        PgBarrierResetService::$onBarrier = $onBarrier;
+        $this->app->instance(PasswordResetService::class, new PgBarrierResetService(
+            app(EmailVerificationService::class),
+            app(SmsService::class),
+            app(Timebox::class),
+        ));
+    }
+
+    /** An AUTHORIZED challenge ready for finalize(); returns [token, proof]. */
+    private function makeAuthorizedChallenge(User $user): array
+    {
+        $token = bin2hex(random_bytes(32));
+        $proof = bin2hex(random_bytes(32));
+        PasswordResetChallenge::create([
+            'user_id' => $user->id,
+            'channel' => PasswordResetChallenge::CHANNEL_EMAIL,
+            'token' => $token,
+            'code_hash' => bcrypt('654321'),
+            'expires_at' => now()->addMinutes(10),
+            'attempts' => 1,
+            'send_status' => PasswordResetChallenge::SEND_STATUS_SENT,
+            'authorized_at' => now(),
+            'authorization_expires_at' => now()->addMinutes(10),
+            'authorization_proof_hash' => hash('sha256', $proof),
+            'password_fingerprint' => hash('sha256', (string) $user->password),
+        ]);
+
+        return [$token, $proof];
+    }
+
+    /**
+     * Assert the invariants that must hold after ANY cross-flow interleaving
+     * of replacement issuance and finalization.
+     *
+     * @param  string  $finalizeResult  'ok' (won) or 'lost' (documented safe loser)
+     */
+    private function assertCrossFlowInvariants(User $user, string $token, string $finalizeResult, string $winnerPassword): void
+    {
+        $fresh = User::findOrFail($user->id);
+        $initial = User::INITIAL_AUTH_VERSION;
+
+        if ($finalizeResult === 'ok') {
+            $this->assertTrue(Hash::check($winnerPassword, $fresh->password), 'winner password applied');
+            $this->assertSame($initial + 1, (int) $fresh->auth_version, 'auth_version advanced EXACTLY once');
+        } else {
+            $this->assertTrue(Hash::check('Old-Race-Pass-1', $fresh->password), 'password untouched by the loser');
+            $this->assertSame($initial, (int) $fresh->auth_version, 'auth_version never advanced by a loser');
+        }
+
+        // Exactly one active challenge, and the raced one is never resurrected.
+        $this->assertSame(1, PasswordResetChallenge::where('user_id', $user->id)->whereNull('consumed_at')->count());
+        $raced = PasswordResetChallenge::where('token', $token)->firstOrFail();
+        $this->assertNotNull($raced->consumed_at, 'the raced challenge stays consumed');
     }
 
     /** Fork N children, run $work(childIndex), collect their reports. */
@@ -200,6 +317,176 @@ class PasswordResetConcurrencyPgTest extends TestCase
         $this->assertNull($challenge->fresh()->authorized_at);
     }
 
+    // ── Cross-flow: replacement issuance vs finalization (lock hierarchy) ────
+
+    public function test_finalization_holding_its_locks_first_never_deadlocks_with_issuance(): void
+    {
+        $user = $this->makeUser();
+        [$token, $proof] = $this->makeAuthorizedChallenge($user);
+        $dir = $this->barrierDir();
+
+        // Child 1 = finalize: parks INSIDE its transaction holding the user
+        // (and about to take the challenge) lock. Child 2 = replacement
+        // issuance, which starts only after that.
+        $results = $this->race(2, function (int $i) use ($dir, $token, $proof, $user): string {
+            if ($i === 1) {
+                $this->bindBarrierService(function (string $stage) use ($dir): void {
+                    if ($stage === 'finalize.locks_acquired') {
+                        $this->signal($dir, 'finalize_locked');
+                        $this->await($dir, 'issuance_started');
+                    }
+                });
+
+                return app(PasswordResetService::class)->finalize($token, $proof, 'Cross-Flow-Pass-1') ? 'ok' : 'lost';
+            }
+
+            $this->await($dir, 'finalize_locked');
+            $this->signal($dir, 'issuance_started');
+            $issued = app(PasswordResetService::class)->request((string) $user->email);
+
+            return $issued !== '' ? 'issued' : 'failed';
+        });
+
+        exec('rm -rf '.escapeshellarg($dir));
+
+        // No deadlock, no crash: finalize wins (it held the locks first) and
+        // issuance completes right behind it.
+        $this->assertSame('ok', $results[1], 'children: '.implode(',', $results));
+        $this->assertSame('issued', $results[2], 'children: '.implode(',', $results));
+        $this->assertCrossFlowInvariants($user, $token, 'ok', 'Cross-Flow-Pass-1');
+    }
+
+    public function test_issuance_holding_the_lock_first_never_deadlocks_with_finalization(): void
+    {
+        $user = $this->makeUser();
+        [$token, $proof] = $this->makeAuthorizedChallenge($user);
+        $dir = $this->barrierDir();
+
+        // Reverse ordering: child 1 = replacement issuance parked right after
+        // taking the per-user coordination lock; child 2 = finalize.
+        $results = $this->race(2, function (int $i) use ($dir, $token, $proof, $user): string {
+            if ($i === 1) {
+                $this->bindBarrierService(function (string $stage) use ($dir): void {
+                    if ($stage === 'issue.lock_acquired') {
+                        $this->signal($dir, 'issuance_locked');
+                        $this->await($dir, 'finalize_started');
+                    }
+                });
+                $issued = app(PasswordResetService::class)->request((string) $user->email);
+
+                return $issued !== '' ? 'issued' : 'failed';
+            }
+
+            $this->await($dir, 'issuance_locked');
+            $this->signal($dir, 'finalize_started');
+
+            return app(PasswordResetService::class)->finalize($token, $proof, 'Cross-Flow-Pass-2') ? 'ok' : 'lost';
+        });
+
+        exec('rm -rf '.escapeshellarg($dir));
+
+        // ACCEPTED OUTCOMES (documented): issuance always completes; finalize
+        // either won the user row first ('ok') or found its challenge already
+        // superseded ('lost'). Both are correct — what must never happen is a
+        // deadlock, a crash, a partial write, or a double auth_version bump.
+        $this->assertSame('issued', $results[1], 'children: '.implode(',', $results));
+        $this->assertContains($results[2], ['ok', 'lost'], 'children: '.implode(',', $results));
+        $this->assertCrossFlowInvariants($user, $token, $results[2], 'Cross-Flow-Pass-2');
+    }
+
+    // ── Cross-flow: replacement issuance vs an in-flight delivery ────────────
+
+    public function test_replacement_issuance_before_the_claim_stops_a_cross_process_stale_send(): void
+    {
+        $user = $this->makeUser();
+        $old = PasswordResetChallenge::create([
+            'user_id' => $user->id,
+            'channel' => PasswordResetChallenge::CHANNEL_EMAIL,
+            'token' => bin2hex(random_bytes(32)),
+            'code_hash' => bcrypt('654321'),
+            'expires_at' => now()->addMinutes(10),
+            'send_status' => PasswordResetChallenge::SEND_STATUS_QUEUED,
+        ]);
+        $dir = $this->barrierDir();
+
+        $results = $this->race(2, function (int $i) use ($dir, $old, $user): string {
+            if ($i === 1) {
+                // The old worker is parked BEFORE it can claim.
+                PgBarrierDeliveryJob::$onBeforeClaim = function () use ($dir): void {
+                    $this->signal($dir, 'worker_ready');
+                    $this->await($dir, 'replacement_issued');
+                };
+                (new PgBarrierDeliveryJob($old->id, 'email', (string) $user->email, '654321', $user->id))
+                    ->handle(app(SmsService::class));
+
+                return (string) PasswordResetChallenge::whereKey($old->id)->value('send_status');
+            }
+
+            $this->await($dir, 'worker_ready');
+            app(PasswordResetService::class)->request((string) $user->email);
+            $this->signal($dir, 'replacement_issued');
+
+            return 'issued';
+        });
+
+        exec('rm -rf '.escapeshellarg($dir));
+
+        // The stale worker transported NOTHING: its challenge was superseded
+        // before it could claim, so it never reached `sending`/`sent`.
+        $this->assertSame('issued', $results[2], 'children: '.implode(',', $results));
+        $this->assertNotSame(PasswordResetChallenge::SEND_STATUS_SENT, $results[1], 'children: '.implode(',', $results));
+        $stale = PasswordResetChallenge::findOrFail($old->id);
+        $this->assertNotNull($stale->consumed_at);
+        $this->assertNotSame(PasswordResetChallenge::SEND_STATUS_SENT, $stale->send_status);
+        $this->assertNull($stale->delivery_claim_token);
+        $this->assertSame(1, PasswordResetChallenge::where('user_id', $user->id)->whereNull('consumed_at')->count());
+    }
+
+    public function test_an_in_flight_claim_serializes_a_concurrent_replacement_issuance(): void
+    {
+        $user = $this->makeUser();
+        $old = PasswordResetChallenge::create([
+            'user_id' => $user->id,
+            'channel' => PasswordResetChallenge::CHANNEL_EMAIL,
+            'token' => bin2hex(random_bytes(32)),
+            'code_hash' => bcrypt('654321'),
+            'expires_at' => now()->addMinutes(10),
+            'send_status' => PasswordResetChallenge::SEND_STATUS_QUEUED,
+        ]);
+        $dir = $this->barrierDir();
+
+        $results = $this->race(2, function (int $i) use ($dir, $old, $user): string {
+            if ($i === 1) {
+                // The worker WINS the claim and parks mid-transport while
+                // holding the per-user coordination lock.
+                PgBarrierDeliveryJob::$onBeforeTransport = function () use ($dir): void {
+                    $this->signal($dir, 'transport_started');
+                    $this->await($dir, 'issuance_attempted');
+                };
+                (new PgBarrierDeliveryJob($old->id, 'email', (string) $user->email, '654321', $user->id))
+                    ->handle(app(SmsService::class));
+
+                return (string) PasswordResetChallenge::whereKey($old->id)->value('send_status');
+            }
+
+            $this->await($dir, 'transport_started');
+            $token = app(PasswordResetService::class)->request((string) $user->email);
+            $this->signal($dir, 'issuance_attempted');
+
+            return PasswordResetChallenge::where('token', $token)->exists() ? 'replaced' : 'refused';
+        });
+
+        exec('rm -rf '.escapeshellarg($dir));
+
+        // The in-flight attempt completed exactly once, and the concurrent
+        // replacement could NOT become authoritative mid-flight — it failed
+        // closed behind the coordination lock (public response unchanged).
+        $this->assertSame(PasswordResetChallenge::SEND_STATUS_SENT, $results[1], 'children: '.implode(',', $results));
+        $this->assertSame('refused', $results[2], 'children: '.implode(',', $results));
+        $this->assertSame(1, PasswordResetChallenge::where('user_id', $user->id)->count());
+        $this->assertNull(PasswordResetChallenge::findOrFail($old->id)->consumed_at);
+    }
+
     public function test_concurrent_finalizations_produce_exactly_one_password_change(): void
     {
         $user = User::factory()->create([
@@ -271,5 +558,40 @@ class PasswordResetConcurrencyPgTest extends TestCase
         $this->assertNotNull($challenge->consumed_at);
         // No resurrected/active challenge survives for this user.
         $this->assertSame(0, PasswordResetChallenge::where('user_id', $user->id)->whereNull('consumed_at')->count());
+    }
+}
+
+/** The real service plus its deterministic race barrier (child-side hook). */
+class PgBarrierResetService extends PasswordResetService
+{
+    public static ?\Closure $onBarrier = null;
+
+    protected function raceBarrier(string $stage): void
+    {
+        if (self::$onBarrier !== null) {
+            (self::$onBarrier)($stage);
+        }
+    }
+}
+
+/** The real delivery job plus its claim/transport barriers. */
+class PgBarrierDeliveryJob extends SendPasswordResetOtpJob
+{
+    public static ?\Closure $onBeforeClaim = null;
+
+    public static ?\Closure $onBeforeTransport = null;
+
+    protected function beforeClaim(): void
+    {
+        if (self::$onBeforeClaim !== null) {
+            (self::$onBeforeClaim)();
+        }
+    }
+
+    protected function beforeTransport(): void
+    {
+        if (self::$onBeforeTransport !== null) {
+            (self::$onBeforeTransport)();
+        }
     }
 }
