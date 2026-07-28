@@ -2,13 +2,20 @@
 
 namespace App\Providers;
 
+use App\Http\Middleware\EnsureSessionAuthVersion;
+use App\Models\User;
 use App\Services\AdminMfa\AdminMfaSession;
+use App\Services\Auth\PasswordResetService;
+use App\Services\Auth\ResetIdentifier;
 use App\Services\Email\EmailTransportSettingsService;
 use App\Services\Queue\FailedJobAlerter;
 use App\Services\Seo\SeoManager;
+use Illuminate\Auth\Events\Login;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Http\Request;
 use Illuminate\Queue\Events\JobFailed;
+use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\ServiceProvider;
@@ -71,6 +78,37 @@ class AppServiceProvider extends ServiceProvider
             }
         });
 
+        // Stamp BOTH session credential bindings on every successful login —
+        // normal, registration auto-login, remember-me and the Filament panel
+        // all fire this event:
+        //  • auth_version — the AUTHORITATIVE monotonic credential version
+        //    checked by EnsureSessionAuthVersion;
+        //  • the password hash — the secondary AuthenticateSession layer.
+        // Stamping at login means a fresh session is immediately bound and a
+        // login that replaces a previous user's stamp never trips a false
+        // logout. Sessions predating this feature carry no stamp and are
+        // adopted lazily (only while the account is still on the initial
+        // version) — see EnsureSessionAuthVersion.
+        Event::listen(Login::class, function ($event): void {
+            $request = request();
+            if (! $request->hasSession()) {
+                return;
+            }
+            $hash = (string) $event->user->getAuthPassword();
+            try {
+                $hash = Auth::guard('web')->hashPasswordForCookie($hash);
+            } catch (\BadMethodCallException) {
+                // Older guard API: store the raw hash (middleware accepts both).
+            }
+            $request->session()->put('password_hash_web', $hash);
+            // Authoritative monotonic credential version (see
+            // EnsureSessionAuthVersion) — stamped on the same event.
+            $request->session()->put(
+                EnsureSessionAuthVersion::SESSION_KEY,
+                (int) ($event->user->auth_version ?? User::INITIAL_AUTH_VERSION),
+            );
+        });
+
         // Lightweight rate limit for the public health probes — enough for
         // orchestrators/monitors, low enough to blunt probing/abuse.
         RateLimiter::for('health', fn (Request $request) => Limit::perMinute(30)->by($request->ip()));
@@ -125,6 +163,32 @@ class AppServiceProvider extends ServiceProvider
                 Limit::perMinutes($decayMinutes, $maxAttempts * 3)->by($prefix.':ip:'.$ip),
             ];
         };
+        // Password reset: independent two-bucket limiters per stage. The
+        // SUBJECT is never a raw identifier. The REQUEST stage reduces the
+        // submitted email/phone through the SAME canonicalization boundary
+        // the account lookup uses (ResetIdentifier) and HMACs the canonical
+        // account identity — equivalent representations (case, whitespace,
+        // 0912…/+98912…/0098912…) share ONE bucket, so cycling formats
+        // cannot exceed the account-level limit. The verify/submit stages
+        // key on the opaque session challenge token, HMAC'd the same way.
+        $passwordResetLimits = function (Request $request, string $prefix, int $decayMinutes, int $maxAttempts): array {
+            $ip = (string) $request->ip();
+            if ($request->has('identifier')) {
+                $subject = ResetIdentifier::limiterSubject((string) $request->input('identifier'));
+            } else {
+                $raw = (string) (($request->hasSession() ? $request->session()->get(PasswordResetService::SESSION_TOKEN_KEY) : null) ?? 'ip:'.$ip);
+                $subject = hash_hmac('sha256', $raw, (string) config('app.key'));
+            }
+
+            return [
+                Limit::perMinutes($decayMinutes, $maxAttempts)->by($prefix.':s:'.$subject),
+                Limit::perMinutes($decayMinutes, $maxAttempts * 3)->by($prefix.':ip:'.$ip),
+            ];
+        };
+        RateLimiter::for('password-reset-request', fn (Request $request) => $passwordResetLimits($request, 'pwrr', 15, 3));
+        RateLimiter::for('password-reset-verify', fn (Request $request) => $passwordResetLimits($request, 'pwrv', 10, 10));
+        RateLimiter::for('password-reset-submit', fn (Request $request) => $passwordResetLimits($request, 'pwrs', 10, 5));
+
         RateLimiter::for('admin-totp', fn (Request $request) => $adminMfaLimits($request, 'atotp', 1, 5));
         RateLimiter::for('admin-recovery', fn (Request $request) => $adminMfaLimits($request, 'arec', 10, 5));
         // Consumed MANUALLY inside the sensitive-settings pages (Livewire

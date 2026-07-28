@@ -3,6 +3,7 @@
 use App\Http\Controllers\Admin\AdminMfaController;
 use App\Http\Controllers\Auth\AuthController;
 use App\Http\Controllers\Auth\EmailVerificationController;
+use App\Http\Controllers\Auth\PasswordResetController;
 use App\Http\Controllers\CentralPayController;
 use App\Http\Controllers\CheckoutController;
 use App\Http\Controllers\ContactController;
@@ -102,6 +103,19 @@ Route::middleware(['noindex', 'guest'])->group(function () {
     Route::get('/register', [AuthController::class, 'showRegister'])->name('register');
     // Throttle registration to curb automated/spam sign-ups (per IP).
     Route::post('/register', [AuthController::class, 'register'])->middleware('throttle:5,1');
+
+    // ── OTP password reset (guest-only, noindex, non-enumerating) ────────────
+    // The flow's only client-side state is one opaque token in the SESSION —
+    // no user id, identifier, or token ever appears in a URL.
+    Route::get('/forgot-password', [PasswordResetController::class, 'showRequest'])->name('password.request');
+    Route::post('/forgot-password', [PasswordResetController::class, 'sendCode'])
+        ->middleware('throttle:password-reset-request')->name('password.request.send');
+    Route::get('/reset-password/verify', [PasswordResetController::class, 'showVerify'])->name('password.verify');
+    Route::post('/reset-password/verify', [PasswordResetController::class, 'verifyCode'])
+        ->middleware('throttle:password-reset-verify')->name('password.verify.submit');
+    Route::get('/reset-password/new', [PasswordResetController::class, 'showReset'])->name('password.reset');
+    Route::post('/reset-password/new', [PasswordResetController::class, 'update'])
+        ->middleware('throttle:password-reset-submit')->name('password.update');
 });
 
 // Logout (any authenticated user)

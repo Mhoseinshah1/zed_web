@@ -14,6 +14,11 @@
         </div>
 
         <div class="bg-gray-900 border border-gray-800 rounded-2xl p-8">
+            @if (session('status'))
+                <div class="bg-green-500/10 border border-green-500/30 rounded-lg p-4 mb-6 text-sm text-green-300">
+                    {{ session('status') }}
+                </div>
+            @endif
             @if ($errors->any())
                 <div class="bg-red-500/10 border border-red-500/30 rounded-lg p-4 mb-6 text-sm text-red-300">
                     {{ $errors->first() }}
@@ -31,7 +36,7 @@
                 <div>
                     <div class="flex items-center justify-between mb-1.5">
                         <label for="password" class="block text-sm font-medium text-gray-300">رمز عبور</label>
-                        <a href="#" class="text-xs text-indigo-400 hover:text-indigo-300">فراموشی رمز؟</a>
+                        <a href="{{ route('password.request') }}" class="text-xs text-indigo-400 hover:text-indigo-300">فراموشی رمز؟</a>
                     </div>
                     <input type="password" id="password" name="password" required
                         class="w-full bg-gray-800 border border-gray-700 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 rounded-lg px-4 py-2.5 text-white text-sm outline-none transition"

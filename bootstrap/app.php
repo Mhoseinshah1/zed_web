@@ -2,12 +2,14 @@
 
 use App\Http\Middleware\EnsureEmailIsVerified;
 use App\Http\Middleware\EnsureProfileComplete;
+use App\Http\Middleware\EnsureSessionAuthVersion;
 use App\Http\Middleware\NoIndexHeaders;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
 use Illuminate\Http\Middleware\TrustProxies;
 use Illuminate\Http\Request;
+use Illuminate\Session\Middleware\AuthenticateSession;
 use Illuminate\Support\Facades\Route;
 
 return Application::configure(basePath: dirname(__DIR__))
@@ -39,6 +41,30 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->validateCsrfTokens(except: [
             'webhooks/nowpayments',
             'telegram/webhook',
+        ]);
+
+        // SESSION REVOCATION (two layers, in order):
+        //  1. AuthenticateSession — the framework's password-hash binding.
+        //     SECONDARY layer: it also revokes sessions for legacy password
+        //     writers that do not advance auth_version.
+        //  2. EnsureSessionAuthVersion — the AUTHORITATIVE monotonic
+        //     credential version (users.auth_version). A password reset
+        //     advances it inside its locked transaction, so every other
+        //     authenticated session and remember-me login dies on its next
+        //     request. Unstamped pre-deployment sessions are adopted only
+        //     while the account is still on the initial version.
+        // The Redis session driver cannot enumerate sessions per user, which
+        // is why a stamped version — not enumeration — is the mechanism. The
+        // Filament panel runs its own AuthenticateSession plus (below) the
+        // same version check.
+        $middleware->web(append: [
+            AuthenticateSession::class,
+            // Authoritative monotonic session-revocation check (auth_version):
+            // unstamped pre-deployment sessions are adopted only while the
+            // account is on the initial version; any advancement (password
+            // reset) fails them closed. AuthenticateSession above stays as a
+            // second, hash-bound layer for legacy password-change paths.
+            EnsureSessionAuthVersion::class,
         ]);
 
         // Gate sensitive purchase actions behind a completed profile (phone).
