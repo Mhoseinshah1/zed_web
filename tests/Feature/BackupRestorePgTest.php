@@ -9,6 +9,7 @@ use App\Models\User;
 use App\Services\Backup\BackupService;
 use App\Services\Backup\BackupSettings;
 use App\Services\Backup\DatabaseRestoreService;
+use App\Services\Backup\DumpScriptPolicy;
 use App\Services\Backup\RestoreFailure;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Config;
@@ -69,7 +70,9 @@ class BackupRestorePgTest extends TestCase
         }
 
         $this->marker = 'zprt'.bin2hex(random_bytes(6));
-        $this->tmp = sys_get_temp_dir().'/zp-restore-it-'.bin2hex(random_bytes(6));
+        // NOT `zp-restore-*`: that is the service's own work-directory prefix,
+        // and the leftover sweeps below glob for it.
+        $this->tmp = sys_get_temp_dir().'/zp-rstit-'.bin2hex(random_bytes(6));
         mkdir($this->tmp, 0700, true);
 
         $this->rememberSettings();
@@ -647,6 +650,378 @@ class BackupRestorePgTest extends TestCase
         $this->assertStringContainsString('process_failed', $logContents);
         $this->assertStringContainsString(basename($archive), $logContents);
         $this->assertStringContainsString($target, $logContents);
+    }
+
+    // ── Dangerous psql scripts (4.1) ───────────────────────────────────────
+
+    /** Wrap arbitrary SQL text as a top-level database.sql archive. */
+    private function archiveWithDump(string $sql, string $name): string
+    {
+        $dir = $this->tmp.'/'.$name;
+        mkdir($dir, 0700, true);
+        file_put_contents($dir.'/database.sql', $sql);
+        $archive = $this->tmp.'/'.$name.'.tar.gz';
+        exec('tar -czf '.escapeshellarg($archive).' -C '.escapeshellarg($dir).' database.sql');
+
+        return $archive;
+    }
+
+    public function test_a_shell_meta_command_is_refused_before_psql_and_runs_nothing(): void
+    {
+        $target = $this->createTargetDatabase();
+        $marker = $this->tmp.'/PWNED';
+
+        // Verified against PostgreSQL 16.13: `\!` in a -f script executes a
+        // local shell command even with --no-psqlrc and --single-transaction.
+        $archive = $this->archiveWithDump(
+            "CREATE TABLE alpha (id int);\n\\! touch ".escapeshellarg($marker)."\n",
+            'shell',
+        );
+
+        try {
+            app(DatabaseRestoreService::class)->restore($archive, $target);
+            $this->fail('a shell meta-command must be refused');
+        } catch (RestoreFailure $e) {
+            $this->assertSame(RestoreFailure::CATEGORY_CONTENT, $e->category());
+            $this->assertStringStartsWith('meta_command', $e->reason());
+        }
+
+        $this->assertFileDoesNotExist($marker, 'no shell command may ever run');
+        $this->assertSame(0, $this->objectCount($target), 'nothing may be restored');
+    }
+
+    public function test_a_connect_meta_command_cannot_redirect_to_the_live_database(): void
+    {
+        $target = $this->createTargetDatabase();
+        $live = (string) config('database.connections.'.config('database.default').'.database');
+        $before = (int) DB::table('users')->count();
+
+        $archive = $this->archiveWithDump(
+            "\\connect {$live}\nDROP TABLE IF EXISTS users;\n",
+            'connect',
+        );
+
+        try {
+            app(DatabaseRestoreService::class)->restore($archive, $target);
+            $this->fail('\\connect must be refused');
+        } catch (RestoreFailure $e) {
+            $this->assertSame('meta_command_connect', $e->reason());
+        }
+
+        $this->assertSame($before, (int) DB::table('users')->count(), 'the live database must be untouched');
+        $this->assertSame(0, $this->objectCount($target));
+    }
+
+    public function test_include_output_and_copy_meta_commands_are_refused(): void
+    {
+        $target = $this->createTargetDatabase();
+
+        $cases = [
+            'include' => ["\\i /etc/passwd\n", 'meta_command_i'],
+            'includerel' => ["\\ir other.sql\n", 'meta_command_ir'],
+            'output' => ["\\o /tmp/zp-out\n", 'meta_command_o'],
+            'clientcopy' => ["\\copy alpha from '/etc/passwd'\n", 'meta_command_copy'],
+            'setenv' => ["\\setenv PATH /tmp\n", 'meta_command_setenv'],
+            'backtick' => ["\\restrict `id`\n", 'meta_command_malformed'],
+        ];
+
+        foreach ($cases as $name => [$sql, $reason]) {
+            $archive = $this->archiveWithDump($sql, 'meta_'.$name);
+            try {
+                app(DatabaseRestoreService::class)->restore($archive, $target);
+                $this->fail("{$name} must be refused");
+            } catch (RestoreFailure $e) {
+                $this->assertSame($reason, $e->reason(), $name);
+            }
+            $this->assertSame(0, $this->objectCount($target), $name);
+        }
+    }
+
+    public function test_explicit_transaction_control_cannot_defeat_atomic_restore(): void
+    {
+        $target = $this->createTargetDatabase();
+
+        // Verified: with a bare COMMIT the outer --single-transaction is over,
+        // so a later error leaves tables behind. It must never reach psql.
+        $archive = $this->archiveWithDump(
+            "CREATE TABLE kept (id int);\nCOMMIT;\nCREATE TABLE after_commit (id int);\nSELECT 1/0;\n",
+            'commit',
+        );
+
+        try {
+            app(DatabaseRestoreService::class)->restore($archive, $target);
+            $this->fail('script-level transaction control must be refused');
+        } catch (RestoreFailure $e) {
+            $this->assertSame('transaction_control', $e->reason());
+        }
+
+        $this->assertSame(0, $this->objectCount($target), 'no table may survive');
+
+        foreach (['BEGIN;', 'ROLLBACK;', 'START TRANSACTION;', 'ABORT;'] as $i => $statement) {
+            $archive = $this->archiveWithDump("CREATE TABLE t (id int);\n{$statement}\n", 'txn'.$i);
+            try {
+                app(DatabaseRestoreService::class)->restore($archive, $target);
+                $this->fail($statement.' must be refused');
+            } catch (RestoreFailure $e) {
+                $this->assertSame('transaction_control', $e->reason(), $statement);
+            }
+        }
+    }
+
+    public function test_dangerous_text_inside_literals_comments_and_copy_data_is_not_misclassified(): void
+    {
+        $target = $this->createTargetDatabase();
+        $policy = app(DumpScriptPolicy::class);
+
+        $inert = [
+            'sql_string' => "INSERT INTO t VALUES ('\\! touch /tmp/x');\n",
+            'line_comment' => "-- \\! touch /tmp/x\nCREATE TABLE a (i int);\n",
+            'block_comment' => "/* \\! nope\n COMMIT; */\nCREATE TABLE a (i int);\n",
+            'dollar_body' => "CREATE FUNCTION f() RETURNS int AS \$\$\nBEGIN\n RETURN 1;\nEND;\n\$\$ LANGUAGE plpgsql;\n",
+            'copy_data' => "COPY t (c) FROM stdin;\n\\! touch /tmp/x\nCOMMIT;\n\\.\nCREATE TABLE a (i int);\n",
+            'case_end' => "SELECT CASE WHEN 1=1 THEN 2 ELSE 3 END;\n",
+            'escape_string' => "INSERT INTO t VALUES (E'a\\\\'' \\! touch /tmp/x');\n",
+        ];
+
+        foreach ($inert as $name => $sql) {
+            $file = $this->tmp.'/inert_'.$name.'.sql';
+            file_put_contents($file, $sql);
+            $policy->assertSafe($file); // must not throw
+            $this->addToAssertionCount(1);
+        }
+
+        $this->assertSame(0, $this->objectCount($target));
+    }
+
+    public function test_a_genuine_pg_dump_archive_including_restrict_framing_stays_compatible(): void
+    {
+        $this->configureDatabaseOnlyBackup(false);
+        $this->seedMarkers();
+        $archive = $this->createBackup();
+
+        // The real dump from the supported server: COPY blocks, `\.`
+        // terminators, and pg_dump's own \restrict/\unrestrict framing.
+        $work = $this->tmp.'/genuine';
+        mkdir($work, 0700, true);
+        exec('tar -xzf '.escapeshellarg($archive).' -C '.escapeshellarg($work).' database.sql');
+        $dump = $work.'/database.sql';
+        $this->assertFileExists($dump);
+
+        app(DumpScriptPolicy::class)->assertSafe($dump);
+        $this->addToAssertionCount(1);
+
+        // And it still restores end to end.
+        $target = $this->createTargetDatabase();
+        $this->assertSame(0, $this->restoreCommand($archive, $target), Artisan::output());
+    }
+
+    public function test_the_allowlist_accepts_only_the_exact_generated_restrict_form(): void
+    {
+        $policy = app(DumpScriptPolicy::class);
+
+        $good = $this->tmp.'/restrict_ok.sql';
+        file_put_contents($good, "\\restrict AbC123xyz\nCREATE TABLE a (i int);\n\\unrestrict AbC123xyz\n");
+        $policy->assertSafe($good);
+        $this->addToAssertionCount(1);
+
+        foreach ([
+            "\\restrict tok extra\n",
+            "\\restrict tok; \\! touch /tmp/x\n",
+            "\\restrict\n",
+            "\\restrict tok\\$(id)\n",
+        ] as $i => $sql) {
+            $bad = $this->tmp.'/restrict_bad'.$i.'.sql';
+            file_put_contents($bad, $sql);
+            try {
+                $policy->assertSafe($bad);
+                $this->fail('malformed restrict must be refused: '.$sql);
+            } catch (RestoreFailure $e) {
+                $this->assertStringStartsWith('meta_command', $e->reason());
+            }
+        }
+    }
+
+    // ── Complete target emptiness (4.4) ────────────────────────────────────
+
+    private function objectCount(string $database): int
+    {
+        return (int) $this->target($database)->scalar(
+            "select count(*) from (
+                select 1 from pg_class c join pg_namespace n on n.oid = c.relnamespace
+                 where n.nspname not in ('pg_catalog','information_schema') and n.nspname !~ '^pg_'
+                   and c.relkind in ('r','p','v','m','S','f')
+                union all
+                select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+                 where n.nspname not in ('pg_catalog','information_schema') and n.nspname !~ '^pg_'
+                union all
+                select 1 from pg_namespace n
+                 where n.nspname not in ('pg_catalog','information_schema','public') and n.nspname !~ '^pg_'
+            ) x",
+        );
+    }
+
+    public function test_every_user_object_category_makes_a_target_non_empty(): void
+    {
+        $this->configureDatabaseOnlyBackup(false);
+        $this->seedMarkers();
+        $archive = $this->createBackup();
+
+        $objects = [
+            'sequence' => ['create sequence zp_seq', "select count(*) from pg_class where relname='zp_seq'"],
+            'matview' => ['create materialized view zp_mv as select 1 as x', "select count(*) from pg_class where relname='zp_mv'"],
+            'function' => ['create function zp_fn() returns int as $$ select 1 $$ language sql', "select count(*) from pg_proc where proname='zp_fn'"],
+            'schema' => ['create schema zp_custom', "select count(*) from pg_namespace where nspname='zp_custom'"],
+        ];
+
+        foreach ($objects as $label => [$create, $probe]) {
+            $target = $this->createTargetDatabase();
+            $this->target($target)->statement($create);
+
+            try {
+                app(DatabaseRestoreService::class)->restore($archive, $target);
+                $this->fail("a target holding a {$label} must be refused");
+            } catch (RestoreFailure $e) {
+                $this->assertSame(RestoreFailure::CATEGORY_TARGET, $e->category(), $label);
+                $this->assertStringStartsWith('target_not_empty', $e->reason(), $label);
+            }
+
+            // The pre-existing object is untouched.
+            $this->assertSame(1, (int) $this->target($target)->scalar($probe), $label);
+            $this->dropTargetDatabase();
+        }
+    }
+
+    // ── Checked cleanup (4.2) ──────────────────────────────────────────────
+
+    public function test_cleanup_failures_are_reported_instead_of_being_swallowed(): void
+    {
+        $this->configureDatabaseOnlyBackup(true, 'Cleanup-Pass-1');
+        $this->seedMarkers();
+        $archive = $this->createBackup();
+
+        foreach (['sql', 'archive', 'directory', 'throwing'] as $mode) {
+            $target = $this->createTargetDatabase();
+
+            $service = new class(app(DumpScriptPolicy::class)) extends DatabaseRestoreService
+            {
+                public string $mode = '';
+
+                protected function unlinkFile(string $path): void
+                {
+                    if ($this->mode === 'sql' && str_ends_with($path, '.sql')) {
+                        return; // simulate a failed unlink
+                    }
+                    if ($this->mode === 'archive' && str_ends_with($path, '.tar.gz')) {
+                        return;
+                    }
+                    parent::unlinkFile($path);
+                }
+
+                protected function removeDirectory(string $path): void
+                {
+                    if ($this->mode === 'directory') {
+                        return;
+                    }
+                    if ($this->mode === 'throwing') {
+                        throw new \RuntimeException('rmdir blew up');
+                    }
+                    parent::removeDirectory($path);
+                }
+            };
+            $service->mode = $mode;
+
+            try {
+                $service->restore($archive, $target, 'Cleanup-Pass-1');
+                $this->fail("unverified cleanup ({$mode}) must not be reported as success");
+            } catch (RestoreFailure $e) {
+                $this->assertSame(RestoreFailure::CATEGORY_CLEANUP, $e->category(), $mode);
+                $this->assertContains($e->reason(), [
+                    'dump_not_removed', 'archive_not_removed',
+                    'work_directory_not_removed', 'rmdir_error',
+                ], $mode);
+                // The restore DID commit, so the operator must not be told the
+                // target is unchanged, and must be warned off a blind rerun.
+                $this->assertStringNotContainsString('هیچ تغییری', $e->publicMessage(), $mode);
+                $this->assertStringNotContainsString($this->tmp, $e->publicMessage(), $mode);
+            }
+
+            // Clean the forced-leftover directory ourselves.
+            foreach (glob(sys_get_temp_dir().'/zp-restore-*') ?: [] as $leftover) {
+                exec('rm -rf '.escapeshellarg($leftover));
+            }
+            $this->dropTargetDatabase();
+        }
+    }
+
+    public function test_a_successful_restore_verifies_that_no_plaintext_remains(): void
+    {
+        $before = glob(sys_get_temp_dir().'/zp-restore-*') ?: [];
+        $this->configureDatabaseOnlyBackup(true, 'Verified-Pass-1');
+        $this->seedMarkers();
+        $archive = $this->createBackup();
+        $target = $this->createTargetDatabase();
+
+        $this->assertSame(0, $this->restoreCommand($archive, $target, 'Verified-Pass-1'), Artisan::output());
+        $this->assertSame($before, glob(sys_get_temp_dir().'/zp-restore-*') ?: []);
+    }
+
+    // ── Sanitized unexpected failures + log injection (4.3) ────────────────
+
+    public function test_an_unexpected_exception_is_sanitized_into_a_generic_failure(): void
+    {
+        $this->configureDatabaseOnlyBackup(false);
+        $this->seedMarkers();
+        $archive = $this->createBackup();
+        $target = $this->createTargetDatabase();
+
+        $service = new class(app(DumpScriptPolicy::class)) extends DatabaseRestoreService
+        {
+            protected function beforeRestore(): void
+            {
+                throw new \RuntimeException('SECRET-INTERNAL-DETAIL /srv/private/path');
+            }
+        };
+
+        try {
+            $service->restore($archive, $target);
+            $this->fail('an unexpected exception must surface as a typed internal failure');
+        } catch (RestoreFailure $e) {
+            $this->assertSame(RestoreFailure::CATEGORY_INTERNAL, $e->category());
+            $this->assertStringNotContainsString('SECRET-INTERNAL-DETAIL', $e->publicMessage());
+            $this->assertStringNotContainsString('/srv/private', $e->publicMessage());
+        }
+
+        foreach (glob(sys_get_temp_dir().'/zp-restore-*') ?: [] as $leftover) {
+            exec('rm -rf '.escapeshellarg($leftover));
+        }
+    }
+
+    public function test_a_hostile_archive_name_cannot_inject_log_lines_or_fields(): void
+    {
+        $logFile = $this->tmp.'/inject-probe.log';
+        Config::set('logging.channels.zp_inject_probe', [
+            'driver' => 'single', 'path' => $logFile, 'level' => 'debug',
+        ]);
+        Config::set('logging.default', 'zp_inject_probe');
+        Log::forgetChannel('zp_inject_probe');
+
+        // A filename carrying newlines, a fake log prefix, and control chars.
+        $hostile = $this->tmp."/evil\n[2026-01-01 00:00:00] production.ERROR: FORGED\r\x07.tar.gz";
+        file_put_contents($hostile, random_bytes(64));
+
+        $target = $this->createTargetDatabase();
+        $this->assertSame(1, $this->restoreCommand($hostile, $target));
+
+        $contents = (string) file_get_contents($logFile);
+        $this->assertNotSame('', $contents);
+
+        // The label may still contain the attacker's WORDS — harmless inside a
+        // JSON string. What must be impossible is STRUCTURE: a second record,
+        // an extra line, or raw control characters.
+        $this->assertSame(1, substr_count($contents, '[backup-restore]'), 'exactly one log record');
+        $this->assertSame(1, count(array_filter(explode("\n", trim($contents)))), 'exactly one log line');
+        $this->assertDoesNotMatchRegularExpression('/[\x00-\x08\x0B\x0C\x0E-\x1F]/', $contents, 'no control characters');
+        $this->assertStringNotContainsString("\n[2026-01-01", $contents, 'no forged record start');
     }
 
     public function test_the_work_directory_is_shredded_on_success_and_failure(): void

@@ -49,6 +49,15 @@ class BackupRestoreCommand extends Command
             $this->safeLog($archive, $target, $e);
 
             return self::FAILURE;
+        } catch (\Throwable $e) {
+            // Belt and braces: the service already sanitizes, but nothing
+            // unexpected may ever reach the console or the log with its own
+            // message or stack trace.
+            $internal = RestoreFailure::internal('unexpected_error');
+            $this->error($internal->publicMessage());
+            $this->safeLog($archive, $target, $internal, class_basename($e));
+
+            return self::FAILURE;
         }
 
         $this->info(sprintf(
@@ -90,19 +99,42 @@ class BackupRestoreCommand extends Command
         return $typed !== '' ? $typed : null;
     }
 
-    /** Positive-listed log: stage, safe reason code, exit code, basename only. */
-    private function safeLog(string $archive, string $target, RestoreFailure $e): void
+    /** Positive-listed log: stage, safe reason code, exit code, safe labels. */
+    private function safeLog(string $archive, string $target, RestoreFailure $e, ?string $exceptionClass = null): void
     {
         try {
-            Log::warning('[backup-restore] failed', [
+            Log::warning('[backup-restore] failed', array_filter([
                 'stage' => $e->category(),
                 'reason' => $e->reason(),
                 'exit_code' => $e->exitCode(),
-                'archive' => basename($archive),
+                'archive' => $this->archiveLabel($archive),
                 'target' => preg_match(DatabaseRestoreService::NAME_PATTERN, $target) === 1 ? $target : 'rejected',
-            ]);
+                'exception' => $exceptionClass === null
+                    ? null
+                    : substr((string) preg_replace('/[^A-Za-z0-9_]/', '', $exceptionClass), 0, 60),
+            ], static fn ($value) => $value !== null));
         } catch (\Throwable) {
             // Logging must never mask the restore outcome.
         }
+    }
+
+    /**
+     * A filename is attacker-influenced text. Reduce it to a basename, strip
+     * control characters and Unicode line/paragraph separators (so it cannot
+     * forge extra log lines or fields), collapse whitespace, and bound the
+     * length. Falls back to a static label when nothing safe survives.
+     */
+    private function archiveLabel(string $archive): string
+    {
+        $label = basename($archive);
+        $label = (string) preg_replace('/[\p{C}\p{Zl}\p{Zp}]+/u', '', $label);
+        $label = (string) preg_replace('/\s+/u', ' ', $label);
+        $label = trim($label);
+
+        if ($label === '') {
+            return 'archive';
+        }
+
+        return function_exists('mb_substr') ? mb_substr($label, 0, 120) : substr($label, 0, 120);
     }
 }

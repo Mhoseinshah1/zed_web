@@ -22,7 +22,22 @@ touching production.
   scratch database yourself in step 2.
 * Enough free disk for the decrypted archive plus the extracted `database.sql`.
 
-## 1. Locate or copy a trusted backup
+## 1. Locate or copy a TRUSTED backup
+
+> **Provenance matters more than encryption.** A backup archive is an
+> executable input: its `database.sql` is fed to `psql`, and psql honours
+> client meta-commands found inside the file — `\!` runs a shell command,
+> `\connect` switches database, `\include` reads local files. This command
+> refuses every meta-command a genuine `pg_dump` does not emit, and refuses
+> script-level transaction control, so a hostile dump is rejected before psql
+> starts. That is a strong backstop, **not** a licence to restore archives of
+> unknown origin.
+>
+> Encryption proves only that the bytes were unreadable in transit — it says
+> nothing about **who produced them**. An attacker who can hand you an archive
+> can hand you an encrypted one. Restore only archives you can trace to your
+> own backup system and storage, and treat an archive from anywhere else as
+> untrusted input.
 
 Backups live under the configured backup storage path. Work on a **copy**, so
 the original artifact stays untouched:
@@ -50,8 +65,10 @@ lowercase letters, digits and underscores, not starting with a digit, at most
 63 characters.
 
 The command refuses: the live application database, `postgres`, `template0`,
-`template1`, malformed names, and any database that already contains tables or
-views in `public`.
+`template1`, malformed names, and any database that already contains **any**
+user-created object — tables, partitioned tables, views, materialized views,
+sequences, foreign tables, routines, user-defined types/domains, or a custom
+schema. Emptiness is re-checked immediately before the restore starts.
 
 ## 3. Supply the archive password without putting it in shell history
 
@@ -134,8 +151,11 @@ unset ZP_BACKUP_RESTORE_PASSWORD
 ```
 
 Also delete the copied archive and any decrypted artifact you created by hand.
-The command itself shreds its own work directory on every success and failure
-path.
+The command itself removes its own work directory on every success and failure
+path and **verifies** the removal: if a decrypted archive or extracted
+`database.sql` cannot be confirmed gone, the run reports a cleanup failure
+instead of success. Note this is deletion, not overwriting — on a journalling
+or copy-on-write filesystem the bytes may persist until the space is reused.
 
 ## 8. Plan a real cutover separately
 
