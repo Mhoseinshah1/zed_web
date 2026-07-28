@@ -80,6 +80,12 @@ class DumpScriptPolicy
     /** Statement-initial keywords that would break the outer transaction. */
     private const TRANSACTION_CONTROL = '/^(begin|commit|rollback|abort|end|start\s+transaction|prepare\s+transaction|savepoint)\b/i';
 
+    /**
+     * Statement-initial role switches. The restore refuses a dangerous role
+     * before it starts, so a dump must not be able to BECOME one afterwards.
+     */
+    private const ROLE_CHANGE = '/^(set\s+role|reset\s+role|set\s+session\s+authorization|reset\s+session\s+authorization|set\s+local\s+role)\b/i';
+
     /** Default hard ceiling on ONE physical line (bytes). */
     public const DEFAULT_MAX_LINE_BYTES = 1_048_576;
 
@@ -89,13 +95,6 @@ class DumpScriptPolicy
     /** Bytes requested per read. Physical lines are reassembled across chunks. */
     private const READ_CHUNK_BYTES = 65_536;
 
-    /**
-     * Only the LEADING bytes of a statement are retained — enough to classify
-     * transaction control and the COPY grammar. The rest is counted and
-     * discarded, so a semicolon-free statement cannot be used to grow memory.
-     */
-    private const STATEMENT_KEEP_BYTES = 4_096;
-
     public function __construct(
         private readonly int $maxLineBytes = self::DEFAULT_MAX_LINE_BYTES,
         private readonly int $maxStatementBytes = self::DEFAULT_MAX_STATEMENT_BYTES,
@@ -103,6 +102,11 @@ class DumpScriptPolicy
 
     // Lexer state, carried across lines.
     private bool $inCopy = false;
+
+    /** Constant-size COPY terminator state (never more than two bytes). */
+    private string $copyCandidate = '';
+
+    private bool $copyLineViable = true;
 
     private bool $inSingle = false;
 
@@ -134,24 +138,40 @@ class DumpScriptPolicy
         $this->reset();
 
         try {
-            // Read in BOUNDED chunks and reassemble physical lines, so neither
-            // a gigantic line nor a semicolon-free statement can grow memory
-            // without hitting a documented, enforced limit.
-            $pending = '';
+            // Outside COPY data, physical lines are reassembled under a hard
+            // ceiling. INSIDE COPY data nothing is buffered at all: a constant
+            // two-byte state machine looks for a line that is exactly `\.`, so
+            // a legitimate multi-megabyte row streams through without tripping
+            // the line limit (which previously rejected real backups).
+            $buffer = '';
 
-            while (($chunk = fgets($handle, self::READ_CHUNK_BYTES)) !== false) {
-                if (strlen($pending) + strlen($chunk) > $this->maxLineBytes) {
-                    throw RestoreFailure::content('ساختار نسخهٔ پایگاه‌داده نامعتبر است.', 'dump_line_too_long');
+            while (($chunk = fread($handle, self::READ_CHUNK_BYTES)) !== false && $chunk !== '') {
+                $length = strlen($chunk);
+                $offset = 0;
+
+                while ($offset < $length) {
+                    if ($this->inCopy) {
+                        $offset = $this->scanCopyData($chunk, $offset, $length);
+
+                        continue;
+                    }
+
+                    $newline = strpos($chunk, "\n", $offset);
+
+                    if ($newline === false) {
+                        $buffer .= substr($chunk, $offset);
+                        $this->assertLineWithinLimit($buffer);
+                        $offset = $length;
+
+                        continue;
+                    }
+
+                    $buffer .= substr($chunk, $offset, $newline - $offset);
+                    $this->assertLineWithinLimit($buffer);
+                    $this->scanLine(rtrim($buffer, "\r"));
+                    $buffer = '';
+                    $offset = $newline + 1;
                 }
-
-                $pending .= $chunk;
-
-                if (! str_ends_with($chunk, "\n")) {
-                    continue; // physical line continues in the next chunk
-                }
-
-                $this->consumeLine(rtrim($pending, "\r\n"));
-                $pending = '';
             }
 
             // Distinguish a clean EOF from a stream failure.
@@ -159,8 +179,8 @@ class DumpScriptPolicy
                 throw RestoreFailure::content('نسخهٔ پایگاه‌داده قابل بررسی نیست.', 'dump_read_failed');
             }
 
-            if ($pending !== '') {
-                $this->consumeLine(rtrim($pending, "\r\n"));
+            if ($buffer !== '') {
+                $this->scanLine(rtrim($buffer, "\r"));
             }
         } finally {
             fclose($handle);
@@ -177,27 +197,67 @@ class DumpScriptPolicy
         }
     }
 
-    /** One complete physical line, in whichever lexical state we are in. */
-    private function consumeLine(string $line): void
+    private function assertLineWithinLimit(string $buffer): void
     {
-        if ($this->inCopy) {
-            // Inside COPY data EVERYTHING is data until a line that is exactly
-            // `\.` — including text that looks like SQL or a meta-command.
-            if ($line === '\\.') {
-                $this->inCopy = false;
-                $this->resetStatement();
-            }
-
-            return;
+        if (strlen($buffer) > $this->maxLineBytes) {
+            throw RestoreFailure::content('ساختار نسخهٔ پایگاه‌داده نامعتبر است.', 'dump_line_too_long');
         }
-
-        $this->scanLine($line);
     }
 
     /**
-     * Count every significant byte but RETAIN only the leading window needed
-     * to classify the statement, and refuse a statement that runs past the
-     * configured ceiling without a semicolon.
+     * Stream COPY data with CONSTANT state. Only two bytes are ever held: the
+     * candidate `\.` at the start of the current physical line. Anything else
+     * on the line makes it data, so `\.x` stays data and a row of any size is
+     * fine. Returns the offset just past the terminator's newline, or the end
+     * of the chunk.
+     */
+    private function scanCopyData(string $chunk, int $offset, int $length): int
+    {
+        while ($offset < $length) {
+            $char = $chunk[$offset];
+
+            if ($char === "\n") {
+                $terminator = $this->copyCandidate === '\\.';
+                $this->copyCandidate = '';
+                $this->copyLineViable = true;
+                $offset++;
+
+                if ($terminator) {
+                    $this->inCopy = false;
+                    $this->resetStatement();
+
+                    return $offset;
+                }
+
+                continue;
+            }
+
+            if ($this->copyLineViable) {
+                if ($char === "\r" && $this->copyCandidate === '\\.') {
+                    $offset++; // tolerate CRLF on the terminator line
+
+                    continue;
+                }
+
+                $candidate = $this->copyCandidate.$char;
+                if ($candidate === '\\' || $candidate === '\\.') {
+                    $this->copyCandidate = $candidate;
+                } else {
+                    $this->copyLineViable = false;
+                    $this->copyCandidate = '';
+                }
+            }
+
+            $offset++;
+        }
+
+        return $offset;
+    }
+
+    /**
+     * Accumulate the statement's significant bytes and refuse one that runs
+     * past the configured ceiling without a semicolon. Security classification
+     * therefore always sees the complete grammar, never a truncated prefix.
      */
     private function appendToStatement(string $char): void
     {
@@ -210,9 +270,12 @@ class DumpScriptPolicy
             );
         }
 
-        if (strlen($this->statement) < self::STATEMENT_KEEP_BYTES) {
-            $this->statement .= $char;
-        }
+        // The WHOLE statement is retained, bounded by the ceiling above.
+        // Retaining only a prefix was a bypass: padding a statement with more
+        // leading whitespace than the window pushed `COMMIT`, `ROLLBACK`,
+        // `START TRANSACTION`, query-form COPY, `COPY … FROM PROGRAM` and
+        // server-file COPY out of view, and every one of them was accepted.
+        $this->statement .= $char;
     }
 
     private function resetStatement(): void
@@ -224,6 +287,8 @@ class DumpScriptPolicy
     private function reset(): void
     {
         $this->inCopy = false;
+        $this->copyCandidate = '';
+        $this->copyLineViable = true;
         $this->inSingle = false;
         $this->singleEscapes = false;
         $this->inDouble = false;
@@ -369,6 +434,8 @@ class DumpScriptPolicy
                 if ($this->statementStartsCopyFromStdin($this->statement)) {
                     // Data starts on the NEXT line.
                     $this->inCopy = true;
+                    $this->copyCandidate = '';
+                    $this->copyLineViable = true;
                 }
 
                 $this->resetStatement();
@@ -443,6 +510,13 @@ class DumpScriptPolicy
             throw RestoreFailure::content(
                 'نسخهٔ پایگاه‌داده کنترل تراکنش دارد و اتمی بودن بازیابی را از بین می‌برد.',
                 'transaction_control',
+            );
+        }
+
+        if (preg_match(self::ROLE_CHANGE, $normalized) === 1) {
+            throw RestoreFailure::content(
+                'نسخهٔ پایگاه‌داده نقش نشست را تغییر می‌دهد و پذیرفته نمی‌شود.',
+                'role_change',
             );
         }
     }
