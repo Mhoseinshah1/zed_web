@@ -187,13 +187,56 @@ class BackupRestorePgTest extends TestCase
 
     // ── Scratch target database ────────────────────────────────────────────
 
+    /**
+     * The restore role must be LEAST PRIVILEGE — the service refuses a
+     * superuser or a member of pg_execute_server_program /
+     * pg_read_server_files / pg_write_server_files. CI's own DB user is a
+     * superuser, so tests create a dedicated unprivileged role and point the
+     * restore at it. It owns each scratch target, which is exactly the flow
+     * the runbook documents (`createdb -O`).
+     */
+    private const LP_ROLE = 'zp_restore_lp';
+
+    private const LP_PASSWORD = 'zp-restore-lp-pass';
+
+    private function ensureLeastPrivilegeRole(): void
+    {
+        $exists = (int) DB::scalar('select count(*) from pg_roles where rolname = ?', [self::LP_ROLE]);
+        if ($exists === 0) {
+            DB::statement('CREATE ROLE '.self::LP_ROLE." LOGIN PASSWORD '".self::LP_PASSWORD."' NOSUPERUSER NOCREATEDB NOCREATEROLE");
+        } else {
+            DB::statement('ALTER ROLE '.self::LP_ROLE." WITH LOGIN PASSWORD '".self::LP_PASSWORD."' NOSUPERUSER NOCREATEDB NOCREATEROLE");
+        }
+    }
+
+    /** Run $work with the default connection pointed at the restore role. */
+    private function asLeastPrivilegeRole(callable $work): mixed
+    {
+        $connection = (string) config('database.default');
+        $original = (array) config('database.connections.'.$connection);
+
+        Config::set('database.connections.'.$connection.'.username', self::LP_ROLE);
+        Config::set('database.connections.'.$connection.'.password', self::LP_PASSWORD);
+        DB::purge('zp_restore_target');
+
+        try {
+            return $work();
+        } finally {
+            Config::set('database.connections.'.$connection, $original);
+            DB::purge('zp_restore_target');
+            DB::purge($connection);
+        }
+    }
+
     /** Create an EMPTY scratch database (the command never creates one). */
     private function createTargetDatabase(): string
     {
+        $this->ensureLeastPrivilegeRole();
+
         $name = 'zp_restore_'.bin2hex(random_bytes(6));
         $this->assertSame(1, preg_match(DatabaseRestoreService::NAME_PATTERN, $name));
 
-        DB::statement('CREATE DATABASE "'.$name.'"');
+        DB::statement('CREATE DATABASE "'.$name.'" OWNER '.self::LP_ROLE);
         $this->targetDatabase = $name;
 
         return $name;
@@ -234,10 +277,10 @@ class BackupRestorePgTest extends TestCase
         }
 
         try {
-            return Artisan::call('zedproxy:backup-restore', [
+            return (int) $this->asLeastPrivilegeRole(fn () => Artisan::call('zedproxy:backup-restore', [
                 'archive' => $archive,
                 '--target-database' => $database,
-            ]);
+            ]));
         } finally {
             putenv(DatabaseRestoreService::PASSWORD_ENV);
         }
@@ -361,7 +404,7 @@ class BackupRestorePgTest extends TestCase
 
         // … and through the service, with the precise refusal reason.
         try {
-            app(DatabaseRestoreService::class)->restore($archive, $current);
+            $this->asLeastPrivilegeRole(fn () => app(DatabaseRestoreService::class)->restore($archive, $current));
             $this->fail('the live application database must be refused');
         } catch (RestoreFailure $e) {
             $this->assertSame(RestoreFailure::CATEGORY_TARGET, $e->category());
@@ -391,7 +434,7 @@ class BackupRestorePgTest extends TestCase
 
         foreach ($rejects as $name => $reason) {
             try {
-                app(DatabaseRestoreService::class)->restore($archive, (string) $name);
+                $this->asLeastPrivilegeRole(fn () => app(DatabaseRestoreService::class)->restore($archive, (string) $name));
                 $this->fail('target must be refused: '.var_export($name, true));
             } catch (RestoreFailure $e) {
                 $this->assertSame($reason, $e->reason(), 'for target '.var_export($name, true));
@@ -410,7 +453,7 @@ class BackupRestorePgTest extends TestCase
         $this->target($target)->statement('create table occupied (id int primary key)');
 
         try {
-            app(DatabaseRestoreService::class)->restore($archive, $target);
+            $this->asLeastPrivilegeRole(fn () => app(DatabaseRestoreService::class)->restore($archive, $target));
             $this->fail('a non-empty target must be refused');
         } catch (RestoreFailure $e) {
             $this->assertSame('target_not_empty', $e->reason());
@@ -436,7 +479,7 @@ class BackupRestorePgTest extends TestCase
         $target = $this->createTargetDatabase();
 
         try {
-            app(DatabaseRestoreService::class)->restore($archive, $target, 'Wrong-Pass-2');
+            $this->asLeastPrivilegeRole(fn () => app(DatabaseRestoreService::class)->restore($archive, $target, 'Wrong-Pass-2'));
             $this->fail('a wrong archive password must fail');
         } catch (RestoreFailure $e) {
             $this->assertSame(RestoreFailure::CATEGORY_DECRYPTION, $e->category());
@@ -473,7 +516,7 @@ class BackupRestorePgTest extends TestCase
         $target = $this->createTargetDatabase();
 
         try {
-            app(DatabaseRestoreService::class)->restore($corrupt, $target);
+            $this->asLeastPrivilegeRole(fn () => app(DatabaseRestoreService::class)->restore($corrupt, $target));
             $this->fail('a corrupt archive must be refused');
         } catch (RestoreFailure $e) {
             $this->assertSame(RestoreFailure::CATEGORY_CONTENT, $e->category());
@@ -494,7 +537,7 @@ class BackupRestorePgTest extends TestCase
         exec('tar -czf '.escapeshellarg($linkArchive).' -C '.escapeshellarg($linkDir).' database.sql real.sql');
 
         try {
-            $service->restore($linkArchive, $target);
+            $this->asLeastPrivilegeRole(fn () => $service->restore($linkArchive, $target));
             $this->fail('a symlinked database.sql must be refused');
         } catch (RestoreFailure $e) {
             $this->assertSame('entry_link', $e->reason());
@@ -508,7 +551,7 @@ class BackupRestorePgTest extends TestCase
         exec('tar -czf '.escapeshellarg($travArchive).' -C '.escapeshellarg($travDir.'/inner').' ../inner/database.sql 2>/dev/null');
 
         try {
-            $service->restore($travArchive, $target);
+            $this->asLeastPrivilegeRole(fn () => $service->restore($travArchive, $target));
             $this->fail('a traversal entry must be refused');
         } catch (RestoreFailure $e) {
             $this->assertContains($e->reason(), ['entry_traversal', 'dump_nested', 'dump_missing', 'listing_failed']);
@@ -528,7 +571,7 @@ class BackupRestorePgTest extends TestCase
         exec('tar -czf '.escapeshellarg($noDump).' -C '.escapeshellarg($noDumpDir).' notes.txt');
 
         try {
-            $service->restore($noDump, $target);
+            $this->asLeastPrivilegeRole(fn () => $service->restore($noDump, $target));
             $this->fail('an archive without database.sql must be refused');
         } catch (RestoreFailure $e) {
             $this->assertSame('dump_missing', $e->reason());
@@ -542,7 +585,7 @@ class BackupRestorePgTest extends TestCase
         exec('tar -czf '.escapeshellarg($nested).' -C '.escapeshellarg($nestedDir).' backup');
 
         try {
-            $service->restore($nested, $target);
+            $this->asLeastPrivilegeRole(fn () => $service->restore($nested, $target));
             $this->fail('a nested database.sql must be refused');
         } catch (RestoreFailure $e) {
             $this->assertSame('dump_nested', $e->reason());
@@ -560,7 +603,7 @@ class BackupRestorePgTest extends TestCase
         exec('tar -czf '.escapeshellarg($archive).' -C '.escapeshellarg($dir).' database.sql');
 
         try {
-            app(DatabaseRestoreService::class)->restore($archive, $target);
+            $this->asLeastPrivilegeRole(fn () => app(DatabaseRestoreService::class)->restore($archive, $target));
             $this->fail('an empty database.sql must be refused');
         } catch (RestoreFailure $e) {
             $this->assertContains($e->reason(), ['dump_empty', 'dump_missing']);
@@ -588,7 +631,7 @@ class BackupRestorePgTest extends TestCase
         exec('tar -czf '.escapeshellarg($archive).' -C '.escapeshellarg($dir).' database.sql');
 
         try {
-            app(DatabaseRestoreService::class)->restore($archive, $target);
+            $this->asLeastPrivilegeRole(fn () => app(DatabaseRestoreService::class)->restore($archive, $target));
             $this->fail('a SQL error must fail the restore');
         } catch (RestoreFailure $e) {
             $this->assertSame(RestoreFailure::CATEGORY_RESTORE, $e->category());
@@ -679,7 +722,7 @@ class BackupRestorePgTest extends TestCase
         );
 
         try {
-            app(DatabaseRestoreService::class)->restore($archive, $target);
+            $this->asLeastPrivilegeRole(fn () => app(DatabaseRestoreService::class)->restore($archive, $target));
             $this->fail('a shell meta-command must be refused');
         } catch (RestoreFailure $e) {
             $this->assertSame(RestoreFailure::CATEGORY_CONTENT, $e->category());
@@ -702,7 +745,7 @@ class BackupRestorePgTest extends TestCase
         );
 
         try {
-            app(DatabaseRestoreService::class)->restore($archive, $target);
+            $this->asLeastPrivilegeRole(fn () => app(DatabaseRestoreService::class)->restore($archive, $target));
             $this->fail('\\connect must be refused');
         } catch (RestoreFailure $e) {
             $this->assertSame('meta_command_connect', $e->reason());
@@ -728,7 +771,7 @@ class BackupRestorePgTest extends TestCase
         foreach ($cases as $name => [$sql, $reason]) {
             $archive = $this->archiveWithDump($sql, 'meta_'.$name);
             try {
-                app(DatabaseRestoreService::class)->restore($archive, $target);
+                $this->asLeastPrivilegeRole(fn () => app(DatabaseRestoreService::class)->restore($archive, $target));
                 $this->fail("{$name} must be refused");
             } catch (RestoreFailure $e) {
                 $this->assertSame($reason, $e->reason(), $name);
@@ -749,7 +792,7 @@ class BackupRestorePgTest extends TestCase
         );
 
         try {
-            app(DatabaseRestoreService::class)->restore($archive, $target);
+            $this->asLeastPrivilegeRole(fn () => app(DatabaseRestoreService::class)->restore($archive, $target));
             $this->fail('script-level transaction control must be refused');
         } catch (RestoreFailure $e) {
             $this->assertSame('transaction_control', $e->reason());
@@ -760,7 +803,7 @@ class BackupRestorePgTest extends TestCase
         foreach (['BEGIN;', 'ROLLBACK;', 'START TRANSACTION;', 'ABORT;'] as $i => $statement) {
             $archive = $this->archiveWithDump("CREATE TABLE t (id int);\n{$statement}\n", 'txn'.$i);
             try {
-                app(DatabaseRestoreService::class)->restore($archive, $target);
+                $this->asLeastPrivilegeRole(fn () => app(DatabaseRestoreService::class)->restore($archive, $target));
                 $this->fail($statement.' must be refused');
             } catch (RestoreFailure $e) {
                 $this->assertSame('transaction_control', $e->reason(), $statement);
@@ -878,7 +921,7 @@ class BackupRestorePgTest extends TestCase
             $this->target($target)->statement($create);
 
             try {
-                app(DatabaseRestoreService::class)->restore($archive, $target);
+                $this->asLeastPrivilegeRole(fn () => app(DatabaseRestoreService::class)->restore($archive, $target));
                 $this->fail("a target holding a {$label} must be refused");
             } catch (RestoreFailure $e) {
                 $this->assertSame(RestoreFailure::CATEGORY_TARGET, $e->category(), $label);
@@ -931,7 +974,7 @@ class BackupRestorePgTest extends TestCase
             $service->mode = $mode;
 
             try {
-                $service->restore($archive, $target, 'Cleanup-Pass-1');
+                $this->asLeastPrivilegeRole(fn () => $service->restore($archive, $target, 'Cleanup-Pass-1'));
                 $this->fail("unverified cleanup ({$mode}) must not be reported as success");
             } catch (RestoreFailure $e) {
                 $this->assertSame(RestoreFailure::CATEGORY_CLEANUP, $e->category(), $mode);
@@ -983,7 +1026,7 @@ class BackupRestorePgTest extends TestCase
         };
 
         try {
-            $service->restore($archive, $target);
+            $this->asLeastPrivilegeRole(fn () => $service->restore($archive, $target));
             $this->fail('an unexpected exception must surface as a typed internal failure');
         } catch (RestoreFailure $e) {
             $this->assertSame(RestoreFailure::CATEGORY_INTERNAL, $e->category());
@@ -1024,16 +1067,374 @@ class BackupRestorePgTest extends TestCase
         $this->assertStringNotContainsString("\n[2026-01-01", $contents, 'no forged record start');
     }
 
-    public function test_the_work_directory_is_shredded_on_success_and_failure(): void
-    {
-        $before = glob(sys_get_temp_dir().'/zp-restore-*') ?: [];
+    // ── COPY-state parser bypass (follow-up 4.1) ───────────────────────────
 
-        $this->configureDatabaseOnlyBackup(true, 'Shred-Pass-1');
+    public function test_query_form_copy_cannot_smuggle_a_shell_meta_command(): void
+    {
+        $target = $this->createTargetDatabase();
+        $marker = $this->tmp.'/COPY_BYPASS_PWNED';
+
+        // Reproduced against PostgreSQL 16.13 on the MERGED implementation:
+        // the old matcher entered COPY-data mode for anything starting with
+        // COPY that merely contained "FROM stdin". This is QUERY-form COPY
+        // writing TO stdout, so psql never reads data — it executes the next
+        // line as a client meta-command, and the marker file appeared.
+        $archive = $this->archiveWithDump(
+            "CREATE TABLE stdin (id int);\n"
+            ."COPY (SELECT * FROM stdin) TO stdout;\n"
+            .'\! touch '.escapeshellarg($marker)."\n"
+            ."\\.\n",
+            'copybypass',
+        );
+
+        try {
+            $this->asLeastPrivilegeRole(fn () => app(DatabaseRestoreService::class)->restore($archive, $target));
+            $this->fail('query-form COPY must be refused');
+        } catch (RestoreFailure $e) {
+            $this->assertSame(RestoreFailure::CATEGORY_CONTENT, $e->category());
+            $this->assertSame('copy_form_unsupported', $e->reason());
+            $this->assertStringNotContainsString('stdin', $e->publicMessage());
+            $this->assertStringNotContainsString($this->tmp, $e->publicMessage());
+        }
+
+        $this->assertFileDoesNotExist($marker, 'no OS command may run');
+        $this->assertSame(0, $this->objectCount($target), 'target must stay empty');
+    }
+
+    public function test_only_the_exact_table_form_copy_from_stdin_is_accepted(): void
+    {
+        $policy = app(DumpScriptPolicy::class);
+
+        $refused = [
+            'query_form' => 'COPY (SELECT 1) TO stdout;',
+            'to_stdout' => 'COPY t TO stdout;',
+            'from_program' => "COPY t FROM PROGRAM 'id';",
+            'to_program' => "COPY t TO PROGRAM 'sh';",
+            'server_file_in' => "COPY t FROM '/etc/passwd';",
+            'server_file_out' => "COPY t TO '/tmp/out';",
+            'binary_with' => 'COPY t FROM stdin WITH (format binary);',
+            'malformed' => 'COPY;',
+        ];
+
+        foreach ($refused as $label => $sql) {
+            $file = $this->tmp.'/copy_bad_'.$label.'.sql';
+            file_put_contents($file, $sql."\n");
+            try {
+                $policy->assertSafe($file);
+                $this->fail("{$label} must be refused");
+            } catch (RestoreFailure $e) {
+                $this->assertSame('copy_form_unsupported', $e->reason(), $label);
+            }
+        }
+
+        // Genuine forms pg_dump really emits, including mixed case, a
+        // multiline column list, and quoted reserved-word identifiers.
+        $accepted = [
+            'plain' => "COPY public.users (id, name) FROM stdin;\n1\tbob\n\\.\n",
+            'mixed_case' => "copy Public.Users (id) from STDIN;\n1\n\\.\n",
+            'multiline' => "COPY public.t (\n  a,\n  b\n)\nFROM stdin;\n1\t2\n\\.\n",
+            'quoted_ident' => "COPY public.\"order\" (id, \"select\") FROM stdin;\n1\t2\n\\.\n",
+            'spaced_ident' => "COPY \"weird tbl\" FROM stdin;\ndata\n\\.\n",
+            'in_comment' => "-- COPY (SELECT * FROM stdin) TO stdout;\nCREATE TABLE a (i int);\n",
+            'in_string' => "INSERT INTO t VALUES ('COPY x FROM stdin');\n",
+        ];
+
+        foreach ($accepted as $label => $sql) {
+            $file = $this->tmp.'/copy_ok_'.$label.'.sql';
+            file_put_contents($file, $sql);
+            $policy->assertSafe($file);
+            $this->addToAssertionCount(1);
+        }
+    }
+
+    // ── Immutable archive staging (follow-up 4.2) ──────────────────────────
+
+    /**
+     * Swap the operator path the instant the source handle is open. A staged
+     * snapshot must be unaffected; the previous code reopened the path for
+     * both `tar -tvzf` and `tar -xzf`.
+     */
+    private function swappingService(string $benign, string $malicious): DatabaseRestoreService
+    {
+        $service = new class(app(DumpScriptPolicy::class)) extends DatabaseRestoreService
+        {
+            public string $from = '';
+
+            public string $to = '';
+
+            protected function afterOpenSource(): void
+            {
+                if ($this->from !== '' && $this->to !== '') {
+                    copy($this->from, $this->to);
+                }
+            }
+        };
+        $service->from = $malicious;
+        $service->to = $benign;
+
+        return $service;
+    }
+
+    public function test_a_plain_archive_is_staged_immutably_against_a_swap(): void
+    {
+        $this->configureDatabaseOnlyBackup(false);
+        $markers = $this->seedMarkers();
+        $benign = $this->createBackup();
+
+        // A DIFFERENT but perfectly valid archive. It must be valid: a hostile
+        // one would be caught by the dump validator, which would mask whether
+        // staging worked at all. The tell is which dump actually ran.
+        $swapped = $this->archiveWithDump("CREATE TABLE zp_swapped_in (id int);\n", 'swapplain');
+
+        $target = $this->createTargetDatabase();
+        $service = $this->swappingService($benign, $swapped);
+
+        try {
+            $this->asLeastPrivilegeRole(fn () => $service->restore($benign, $target));
+
+            // The STAGED snapshot is what ran: our markers are present …
+            $this->assertSame(
+                $this->marker.'@example.com',
+                $this->target($target)->table('users')->where('id', $markers['user']->id)->value('email'),
+                'the staged benign archive must be what was restored',
+            );
+            // … and nothing from the swapped-in archive exists.
+            $this->assertSame(
+                0,
+                (int) $this->target($target)->scalar(
+                    "select count(*) from information_schema.tables where table_name = 'zp_swapped_in'",
+                ),
+                'the swapped-in archive must never be extracted',
+            );
+        } catch (RestoreFailure $e) {
+            // Failing closed is equally acceptable — what is forbidden is
+            // inspecting one archive and extracting another.
+            $this->assertContains($e->category(), [
+                RestoreFailure::CATEGORY_STAGING,
+                RestoreFailure::CATEGORY_CONTENT,
+            ]);
+            $this->assertSame(0, $this->objectCount($target));
+        }
+    }
+
+    public function test_an_encrypted_archive_is_staged_immutably_against_a_swap(): void
+    {
+        $password = 'Swap-Pass-1';
+        $this->configureDatabaseOnlyBackup(true, $password);
+        $markers = $this->seedMarkers();
+        $benign = $this->createBackup();
+
+        // Encrypted under the SAME password, so decryption cannot be what
+        // rejects it — only staging can.
+        $plain = $this->archiveWithDump("CREATE TABLE zp_swapped_in (id int);\n", 'swapencplain');
+        $swapped = $this->tmp.'/swapenc.tar.gz.enc';
+        exec('ZP_SWAP_PASS='.escapeshellarg($password).' openssl enc -aes-256-cbc -salt -pbkdf2 -pass env:ZP_SWAP_PASS'
+            .' -in '.escapeshellarg($plain).' -out '.escapeshellarg($swapped));
+        $this->assertFileExists($swapped);
+
+        $target = $this->createTargetDatabase();
+        $service = $this->swappingService($benign, $swapped);
+
+        try {
+            $this->asLeastPrivilegeRole(fn () => $service->restore($benign, $target, $password));
+
+            $this->assertSame(
+                $this->marker.'@example.com',
+                $this->target($target)->table('users')->where('id', $markers['user']->id)->value('email'),
+            );
+            $this->assertSame(
+                0,
+                (int) $this->target($target)->scalar(
+                    "select count(*) from information_schema.tables where table_name = 'zp_swapped_in'",
+                ),
+                'the swapped-in archive must never be decrypted or extracted',
+            );
+        } catch (RestoreFailure $e) {
+            $this->assertContains($e->category(), [
+                RestoreFailure::CATEGORY_STAGING,
+                RestoreFailure::CATEGORY_CONTENT,
+                RestoreFailure::CATEGORY_DECRYPTION,
+            ]);
+            $this->assertSame(0, $this->objectCount($target));
+        }
+    }
+
+    public function test_a_swapped_in_hostile_archive_is_never_executed(): void
+    {
+        $this->configureDatabaseOnlyBackup(false);
+        $this->seedMarkers();
+        $benign = $this->createBackup();
+
+        $marker = $this->tmp.'/SWAP_PWNED';
+        $hostile = $this->archiveWithDump('\! touch '.escapeshellarg($marker)."\n", 'swaphostile');
+
+        $target = $this->createTargetDatabase();
+        $service = $this->swappingService($benign, $hostile);
+
+        try {
+            $this->asLeastPrivilegeRole(fn () => $service->restore($benign, $target));
+        } catch (RestoreFailure) {
+            // Either outcome is fine; the marker is the assertion that matters.
+        }
+
+        $this->assertFileDoesNotExist($marker, 'a swapped-in archive must never execute');
+    }
+
+    // ── Remaining catalog objects (follow-up 4.3) ──────────────────────────
+
+    public function test_composite_types_collations_and_extensions_make_a_target_non_empty(): void
+    {
+        $this->configureDatabaseOnlyBackup(false);
+        $this->seedMarkers();
+        $archive = $this->createBackup();
+
+        // Each of these scored ZERO under the merged policy.
+        $objects = [
+            'composite' => ['create type zp_comp as (a int, b text)', "select count(*) from pg_type where typname='zp_comp'"],
+            'domain' => ['create domain zp_dom as int', "select count(*) from pg_type where typname='zp_dom'"],
+            'enum' => ["create type zp_enum as enum ('a')", "select count(*) from pg_type where typname='zp_enum'"],
+            'range' => ['create type zp_range as range (subtype = int)', "select count(*) from pg_type where typname='zp_range'"],
+            'collation' => ["create collation zp_coll (locale='C')", "select count(*) from pg_collation where collname='zp_coll'"],
+            'extension' => ['create extension pg_trgm', "select count(*) from pg_extension where extname='pg_trgm'"],
+        ];
+
+        foreach ($objects as $label => [$create, $probe]) {
+            $target = $this->createTargetDatabase();
+            $this->target($target)->statement($create);
+
+            try {
+                $this->asLeastPrivilegeRole(fn () => app(DatabaseRestoreService::class)->restore($archive, $target));
+                $this->fail("a target holding a {$label} must be refused");
+            } catch (RestoreFailure $e) {
+                $this->assertSame(RestoreFailure::CATEGORY_TARGET, $e->category(), $label);
+                $this->assertStringStartsWith('target_not_empty', $e->reason(), $label);
+            }
+
+            $this->assertSame(1, (int) $this->target($target)->scalar($probe), $label.' must be untouched');
+            $this->dropTargetDatabase();
+        }
+    }
+
+    public function test_a_fresh_database_is_still_accepted_as_empty(): void
+    {
+        $this->configureDatabaseOnlyBackup(false);
         $this->seedMarkers();
         $archive = $this->createBackup();
         $target = $this->createTargetDatabase();
 
-        $this->assertSame(0, $this->restoreCommand($archive, $target, 'Shred-Pass-1'), Artisan::output());
+        $this->assertSame(0, $this->objectCount($target), 'the baseline must score zero');
+        $this->assertSame(0, $this->restoreCommand($archive, $target), Artisan::output());
+    }
+
+    // ── Bounded parsing (follow-up 4.4) ────────────────────────────────────
+
+    public function test_the_parser_enforces_line_and_statement_limits(): void
+    {
+        $tiny = new DumpScriptPolicy(maxLineBytes: 64, maxStatementBytes: 128);
+
+        $long = $this->tmp.'/long_line.sql';
+        file_put_contents($long, 'SELECT '.str_repeat('a', 200).";\n");
+        try {
+            $tiny->assertSafe($long);
+            $this->fail('an oversized physical line must be refused');
+        } catch (RestoreFailure $e) {
+            $this->assertSame('dump_line_too_long', $e->reason());
+        }
+
+        // Many short lines, but no semicolon: the STATEMENT limit must bite.
+        $runaway = $this->tmp.'/runaway_statement.sql';
+        file_put_contents($runaway, "SELECT\n".str_repeat("a\n", 200));
+        try {
+            $tiny->assertSafe($runaway);
+            $this->fail('an oversized semicolon-free statement must be refused');
+        } catch (RestoreFailure $e) {
+            $this->assertSame('dump_statement_too_long', $e->reason());
+        }
+
+        // Exactly at the boundary is fine.
+        $ok = $this->tmp.'/boundary.sql';
+        file_put_contents($ok, str_pad('SELECT 1;', 60, ' ', STR_PAD_RIGHT)."\n");
+        $tiny->assertSafe($ok);
+        $this->addToAssertionCount(1);
+    }
+
+    public function test_lexical_state_survives_chunk_boundaries(): void
+    {
+        // The read chunk is 64 KiB, so pad each construct past it and prove the
+        // classification is still correct on both sides.
+        $pad = str_repeat('x', 70_000);
+        $policy = app(DumpScriptPolicy::class);
+
+        $inert = [
+            'string' => "INSERT INTO t VALUES ('".$pad."\\! touch /tmp/x');\n",
+            'block_comment' => '/* '.$pad."\n \\! touch /tmp/x COMMIT; */\nCREATE TABLE a (i int);\n",
+            'dollar_body' => "CREATE FUNCTION f() RETURNS int AS \$\$\n".$pad."\nBEGIN RETURN 1; END;\n\$\$ LANGUAGE plpgsql;\n",
+            'copy_data' => "COPY public.t (c) FROM stdin;\n".$pad."\n\\! touch /tmp/x\n\\.\nCREATE TABLE a (i int);\n",
+        ];
+
+        foreach ($inert as $label => $sql) {
+            $file = $this->tmp.'/chunk_'.$label.'.sql';
+            file_put_contents($file, $sql);
+            $policy->assertSafe($file);
+            $this->addToAssertionCount(1);
+        }
+
+        // A real meta-command just past a chunk boundary is still caught.
+        $dangerous = $this->tmp.'/chunk_meta.sql';
+        file_put_contents($dangerous, '-- '.$pad."\n\\! touch /tmp/x\n");
+        try {
+            $policy->assertSafe($dangerous);
+            $this->fail('a meta-command near a chunk boundary must be refused');
+        } catch (RestoreFailure $e) {
+            $this->assertStringStartsWith('meta_command', $e->reason());
+        }
+    }
+
+    // ── Restore-role privilege policy (follow-up 4.5) ──────────────────────
+
+    public function test_a_dangerous_restore_role_is_refused_before_psql(): void
+    {
+        $this->configureDatabaseOnlyBackup(false);
+        $this->seedMarkers();
+        $archive = $this->createBackup();
+        $target = $this->createTargetDatabase();
+
+        // The suite's own CI user IS a superuser — restoring as it must be
+        // refused, without naming the role anywhere.
+        $this->assertTrue(
+            (bool) DB::scalar("select current_setting('is_superuser') = 'on'"),
+            'this assertion assumes the CI role is a superuser',
+        );
+
+        try {
+            app(DatabaseRestoreService::class)->restore($archive, $target);
+            $this->fail('a superuser restore role must be refused');
+        } catch (RestoreFailure $e) {
+            $this->assertSame(RestoreFailure::CATEGORY_TARGET, $e->category());
+            $this->assertSame('role_superuser', $e->reason());
+            $this->assertStringNotContainsString(
+                (string) config('database.connections.'.config('database.default').'.username'),
+                $e->publicMessage(),
+                'the role name must never be exposed',
+            );
+        }
+
+        $this->assertSame(0, $this->objectCount($target), 'nothing may be restored');
+
+        // …and the least-privilege role succeeds on the very same archive.
+        $this->assertSame(0, $this->restoreCommand($archive, $target), Artisan::output());
+    }
+
+    public function test_the_work_directory_is_removed_on_success_and_failure(): void
+    {
+        $before = glob(sys_get_temp_dir().'/zp-restore-*') ?: [];
+
+        $this->configureDatabaseOnlyBackup(true, 'Cleanup-Verified-1');
+        $this->seedMarkers();
+        $archive = $this->createBackup();
+        $target = $this->createTargetDatabase();
+
+        $this->assertSame(0, $this->restoreCommand($archive, $target, 'Cleanup-Verified-1'), Artisan::output());
         $this->assertSame($before, glob(sys_get_temp_dir().'/zp-restore-*') ?: [], 'success must leave no work directory');
 
         $this->assertSame(1, $this->restoreCommand($archive, $target, 'Wrong-Pass'));
