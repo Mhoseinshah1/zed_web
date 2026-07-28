@@ -76,6 +76,34 @@ class DatabaseRestoreService
 
     private const RESTORE_TIMEOUT = 1800;
 
+    /**
+     * Refuses the session outright when it is, or can become, dangerous.
+     * `pg_has_role(…, 'member')` is deliberately stronger than 'usage': it is
+     * true for a role the session can reach via SET ROLE even when the
+     * membership is NOINHERIT, so a "safe-looking" current_user whose
+     * session_user can regain privileges is still refused. Both session_user
+     * and current_user are checked.
+     */
+    private const ROLE_GUARD_SQL = <<<'SQL'
+        DO $zp_restore_guard$
+        BEGIN
+            IF current_setting('is_superuser') = 'on'
+               OR EXISTS (
+                   SELECT 1
+                     FROM unnest(ARRAY['pg_execute_server_program',
+                                       'pg_read_server_files',
+                                       'pg_write_server_files']) AS dangerous(name)
+                    WHERE to_regrole(dangerous.name) IS NOT NULL
+                      AND (pg_has_role(session_user, to_regrole(dangerous.name), 'member')
+                           OR pg_has_role(current_user, to_regrole(dangerous.name), 'member'))
+               )
+            THEN
+                RAISE EXCEPTION 'zp_restore_role_denied';
+            END IF;
+        END
+        $zp_restore_guard$;
+        SQL;
+
     /** Distinctive prefix so cleanup can never walk an unrelated directory. */
     private const WORK_PREFIX = 'zp-restore-';
 
@@ -186,7 +214,42 @@ class DatabaseRestoreService
             );
         }
 
-        return $cfg;
+        return $this->applyRestoreCredentials($cfg);
+    }
+
+    /**
+     * Overlay the DEDICATED restore credentials when they are configured.
+     *
+     * Host, port and database come from the verified application connection;
+     * only the identity changes. Both halves must be present — a half-set pair
+     * fails closed rather than silently falling back to the application role,
+     * which is exactly the confusion this exists to prevent. The password is
+     * read from configuration and travels via PGPASSWORD, never argv.
+     *
+     * When neither is set the application connection is used as before; the
+     * role preflight still refuses a dangerous identity, so this cannot become
+     * an accidental superuser restore.
+     *
+     * @param  array<string,mixed>  $cfg
+     * @return array<string,mixed>
+     */
+    private function applyRestoreCredentials(array $cfg): array
+    {
+        $username = trim((string) config('database.backup_restore.username', ''));
+        $password = (string) config('database.backup_restore.password', '');
+
+        if ($username === '' && $password === '') {
+            return $cfg;
+        }
+
+        if ($username === '' || $password === '') {
+            throw RestoreFailure::environment(
+                'تنظیمات نقش اختصاصی بازیابی ناقص است. نام کاربری و رمز عبور باید با هم تنظیم شوند.',
+                'restore_credentials_incomplete',
+            );
+        }
+
+        return array_merge($cfg, ['username' => $username, 'password' => $password]);
     }
 
     // ── Target database ────────────────────────────────────────────────────
@@ -297,6 +360,44 @@ class DatabaseRestoreService
                     select 1 from pg_extension e
                      where e.extname not in ('plpgsql')
                     union all
+                    select 1 from pg_publication
+                    union all
+                    select 1 from pg_ts_config t
+                      join pg_namespace n on n.oid = t.cfgnamespace
+                     where n.nspname not in ('pg_catalog', 'information_schema') and n.nspname !~ '^pg_'
+                    union all
+                    select 1 from pg_ts_dict d
+                      join pg_namespace n on n.oid = d.dictnamespace
+                     where n.nspname not in ('pg_catalog', 'information_schema') and n.nspname !~ '^pg_'
+                    union all
+                    select 1 from pg_ts_parser p2
+                      join pg_namespace n on n.oid = p2.prsnamespace
+                     where n.nspname not in ('pg_catalog', 'information_schema') and n.nspname !~ '^pg_'
+                    union all
+                    select 1 from pg_ts_template tt
+                      join pg_namespace n on n.oid = tt.tmplnamespace
+                     where n.nspname not in ('pg_catalog', 'information_schema') and n.nspname !~ '^pg_'
+                    union all
+                    select 1 from pg_conversion cv
+                      join pg_namespace n on n.oid = cv.connamespace
+                     where n.nspname not in ('pg_catalog', 'information_schema') and n.nspname !~ '^pg_'
+                    union all
+                    select 1 from pg_operator op
+                      join pg_namespace n on n.oid = op.oprnamespace
+                     where n.nspname not in ('pg_catalog', 'information_schema') and n.nspname !~ '^pg_'
+                    union all
+                    select 1 from pg_opclass oc
+                      join pg_namespace n on n.oid = oc.opcnamespace
+                     where n.nspname not in ('pg_catalog', 'information_schema') and n.nspname !~ '^pg_'
+                    union all
+                    select 1 from pg_opfamily of2
+                      join pg_namespace n on n.oid = of2.opfnamespace
+                     where n.nspname not in ('pg_catalog', 'information_schema') and n.nspname !~ '^pg_'
+                    union all
+                    select 1 from pg_foreign_data_wrapper
+                    union all
+                    select 1 from pg_foreign_server
+                    union all
                     select 1 from pg_namespace n
                      where n.nspname not in ('pg_catalog', 'information_schema', 'public')
                        and n.nspname !~ '^pg_'
@@ -403,25 +504,36 @@ class DatabaseRestoreService
         $out = @fopen($staged, 'wb');
         if ($out === false) {
             fclose($in);
+
             throw RestoreFailure::staging('ساخت نسخهٔ موقت فایل بکاپ ممکن نشد.', 'stage_create_failed');
         }
         @chmod($staged, 0600);
 
         try {
+            // Identity is pinned on the DESCRIPTOR, not the path: this is the
+            // inode we will actually read, whatever the path points at later.
             $before = fstat($in);
+            if ($before === false) {
+                throw RestoreFailure::staging('بررسی فایل بکاپ ممکن نشد.', 'stage_stat_failed');
+            }
+            if (($before['mode'] & 0170000) !== 0100000) {
+                throw RestoreFailure::archive('فایل بکاپ باید یک فایل معمولی باشد.', 'source_not_regular');
+            }
+
             $this->afterOpenSource();
 
             $copied = stream_copy_to_stream($in, $out);
-            if ($copied === false) {
+            if ($copied === false || fflush($out) === false) {
                 throw RestoreFailure::staging('کپی فایل بکاپ ناقص ماند.', 'stage_copy_failed');
             }
-            if (fflush($out) === false) {
-                throw RestoreFailure::staging('کپی فایل بکاپ ناقص ماند.', 'stage_flush_failed');
+            if ($copied <= 0) {
+                throw RestoreFailure::staging('فایل بکاپ خالی است.', 'stage_empty');
             }
 
-            // Same handle, so this describes the inode we actually read.
+            $this->afterCopySource();
+
             $after = fstat($in);
-            if ($before === false || $after === false) {
+            if ($after === false) {
                 throw RestoreFailure::staging('بررسی فایل بکاپ ممکن نشد.', 'stage_stat_failed');
             }
             if ($before['ino'] !== $after['ino'] || $before['dev'] !== $after['dev']) {
@@ -430,8 +542,23 @@ class DatabaseRestoreService
             if ($before['size'] !== $after['size'] || $copied !== $after['size']) {
                 throw RestoreFailure::staging('فایل بکاپ حین خواندن تغییر کرد.', 'source_size_changed');
             }
-            if ($copied <= 0) {
-                throw RestoreFailure::staging('فایل بکاپ خالی است.', 'stage_empty');
+
+            // Device/inode/size are NOT enough: a same-inode, same-length
+            // rewrite passes all three. Re-read the pinned descriptor and
+            // compare a cryptographic digest with the staged copy, so the
+            // bytes we accepted are provably the bytes we will inspect and
+            // extract.
+            if (rewind($in) === false) {
+                throw RestoreFailure::staging('بررسی فایل بکاپ ممکن نشد.', 'stage_rewind_failed');
+            }
+            $sourceDigest = $this->streamDigest($in);
+            $stagedDigest = @hash_file('sha256', $staged);
+
+            if ($sourceDigest === null || $stagedDigest === false) {
+                throw RestoreFailure::staging('بررسی فایل بکاپ ممکن نشد.', 'stage_digest_failed');
+            }
+            if (! hash_equals($sourceDigest, $stagedDigest)) {
+                throw RestoreFailure::staging('فایل بکاپ حین خواندن تغییر کرد.', 'source_content_changed');
             }
         } finally {
             fclose($in);
@@ -441,8 +568,27 @@ class DatabaseRestoreService
         return $staged;
     }
 
+    /** Streaming SHA-256 of an open handle, from its current position. */
+    private function streamDigest($handle): ?string
+    {
+        $context = hash_init('sha256');
+
+        while (! feof($handle)) {
+            $chunk = fread($handle, 262_144);
+            if ($chunk === false) {
+                return null;
+            }
+            hash_update($context, $chunk);
+        }
+
+        return hash_final($context);
+    }
+
     /** Seam: tests replace the source path here to prove staging is immutable. */
     protected function afterOpenSource(): void {}
+
+    /** Seam: tests mutate the pinned source here, after the bytes were copied. */
+    protected function afterCopySource(): void {}
 
     private function decrypt(string $archive, string $work, string $password): string
     {
@@ -609,6 +755,13 @@ class DatabaseRestoreService
                 '-v', 'ON_ERROR_STOP=1',
                 '--single-transaction',
                 '--no-password',
+                // AUTHORITATIVE role guard. psql executes -c before -f in the
+                // SAME session, inside the same single transaction, so the
+                // identity checked here is provably the identity that runs the
+                // dump — unlike a separate preflight connection, which could
+                // differ. A dangerous role raises and aborts before any dump
+                // statement executes.
+                '-c', self::ROLE_GUARD_SQL,
                 '--quiet',
                 '--no-psqlrc',
                 '-f', $dump,
@@ -780,9 +933,12 @@ class DatabaseRestoreService
         try {
             $row = DB::connection(self::TARGET_CONNECTION)->selectOne(
                 "select current_setting('is_superuser') = 'on' as is_super,
-                        coalesce(pg_has_role(current_user, to_regrole('pg_execute_server_program'), 'usage'), false) as can_program,
-                        coalesce(pg_has_role(current_user, to_regrole('pg_read_server_files'), 'usage'), false) as can_read_files,
-                        coalesce(pg_has_role(current_user, to_regrole('pg_write_server_files'), 'usage'), false) as can_write_files",
+                        coalesce(pg_has_role(session_user, to_regrole('pg_execute_server_program'), 'member'), false)
+                          or coalesce(pg_has_role(current_user, to_regrole('pg_execute_server_program'), 'member'), false) as can_program,
+                        coalesce(pg_has_role(session_user, to_regrole('pg_read_server_files'), 'member'), false)
+                          or coalesce(pg_has_role(current_user, to_regrole('pg_read_server_files'), 'member'), false) as can_read_files,
+                        coalesce(pg_has_role(session_user, to_regrole('pg_write_server_files'), 'member'), false)
+                          or coalesce(pg_has_role(current_user, to_regrole('pg_write_server_files'), 'member'), false) as can_write_files",
             );
         } catch (\Throwable) {
             throw RestoreFailure::target(
