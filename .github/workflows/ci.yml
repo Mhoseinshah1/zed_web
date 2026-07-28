@@ -272,6 +272,21 @@ jobs:
           CACHE_STORE: redis
         run: php artisan test --testsuite=Feature --filter='BackupSchedulingTest'
 
+      - name: Backup creation and restore verification (PostgreSQL)
+        # The REAL round trip with the genuine external tools — pg_dump, tar,
+        # openssl and psql — never a faked process layer: a committed marker
+        # dataset is backed up through the ordinary encrypted backup path, then
+        # decrypted, inspected, extracted and restored with psql into a
+        # separately prepared EMPTY scratch database, and the data, foreign
+        # keys, sequences and migration history are asserted on the target.
+        # Also proves the refusals (live/reserved/malformed/non-empty targets,
+        # wrong password, corrupt or unsafe archives) and that a SQL error
+        # leaves no partially restored schema. This is PostgreSQL-only and runs
+        # real subprocesses, so it is deliberately NOT in the SQLite job.
+        # --fail-on-skipped turns a missing client tool or driver
+        # misconfiguration into a hard failure instead of silent green.
+        run: php artisan test --testsuite=Feature --filter='BackupRestorePgTest' --fail-on-skipped
+
       - name: Password reset flow and concurrency (PostgreSQL)
         # The complete reset security suite against real PostgreSQL + Redis:
         # non-enumeration, canonical rate-limit identity, hash-only OTP rules,
