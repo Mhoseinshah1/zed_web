@@ -17,7 +17,9 @@ use Illuminate\Validation\Rules\Password;
  * status, redirect, message and validation shape whether or not the account
  * exists, is eligible, or its delivery channel works. The submitted
  * identifier never appears in logs, URLs or redirect query strings; the
- * flow's only client-side state is one opaque token in the SESSION.
+ * flow's only client-side state lives in the SESSION (an opaque challenge
+ * token, the post-OTP authorization proof, and a non-reversible
+ * canonical-subject binding used to recognise a same-account resend).
  *
  * All pages are noindex (route middleware) and the OTP/new-password
  * responses carry Cache-Control: no-store.
@@ -42,10 +44,25 @@ class PasswordResetController extends Controller
             'identifier.required' => 'ایمیل یا شماره موبایل خود را وارد کنید.',
         ]);
 
-        // Service is never-throw and returns a decoy token for nonexistent /
-        // ineligible accounts, so this path is IDENTICAL for everyone.
-        $token = $this->service->request((string) $request->input('identifier'));
-        $request->session()->put(PasswordResetService::SESSION_TOKEN_KEY, $token);
+        // The service is never-throw and yields a usable token for EVERY
+        // outcome, so this path is IDENTICAL for everyone. The outcome is
+        // server-internal: it only decides whether the session's existing
+        // challenge token survives.
+        $outcome = $this->service->request(
+            (string) $request->input('identifier'),
+            $this->sessionString($request, PasswordResetService::SESSION_TOKEN_KEY),
+            $this->sessionString($request, PasswordResetService::SESSION_SUBJECT_KEY),
+        );
+
+        // PRESERVED = a resend that could not create a new challenge while
+        // this session still holds a valid one (e.g. its OTP is in flight):
+        // replacing that token with a decoy would strand a code the user is
+        // about to receive. Everything else replaces the session state
+        // normally.
+        if ($outcome['outcome'] !== PasswordResetService::OUTCOME_PRESERVED) {
+            $request->session()->put(PasswordResetService::SESSION_TOKEN_KEY, $outcome['token']);
+            $request->session()->put(PasswordResetService::SESSION_SUBJECT_KEY, $outcome['subject']);
+        }
 
         return redirect()
             ->route('password.verify')
@@ -118,7 +135,7 @@ class PasswordResetController extends Controller
         if (! $ok) {
             // One generic terminal failure for every invalid/expired/stolen/
             // concurrent-loser state — restart the flow.
-            $request->session()->forget([PasswordResetService::SESSION_TOKEN_KEY, PasswordResetService::SESSION_PROOF_KEY]);
+            $this->forgetResetState($request);
 
             return redirect()
                 ->route('password.request')
@@ -127,13 +144,31 @@ class PasswordResetController extends Controller
 
         // Success: clear the guest reset state and rotate the session — and
         // deliberately DO NOT authenticate the user.
-        $request->session()->forget([PasswordResetService::SESSION_TOKEN_KEY, PasswordResetService::SESSION_PROOF_KEY]);
+        $this->forgetResetState($request);
         $request->session()->invalidate();
         $request->session()->regenerateToken();
 
         return redirect()
             ->route('login')
             ->with('status', 'رمز عبور با موفقیت تغییر کرد. اکنون می‌توانید وارد شوید.');
+    }
+
+    /** A session value only when it is a usable string. */
+    private function sessionString(Request $request, string $key): ?string
+    {
+        $value = $request->session()->get($key);
+
+        return is_string($value) && $value !== '' ? $value : null;
+    }
+
+    /** Drop every guest reset-flow key in one place. */
+    private function forgetResetState(Request $request): void
+    {
+        $request->session()->forget([
+            PasswordResetService::SESSION_TOKEN_KEY,
+            PasswordResetService::SESSION_PROOF_KEY,
+            PasswordResetService::SESSION_SUBJECT_KEY,
+        ]);
     }
 
     /** Sensitive step responses must never be cached anywhere. */

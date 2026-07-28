@@ -54,10 +54,15 @@ use Illuminate\Support\Timebox;
  *
  * | path                    | 1 cache | 2 user | 3 challenge |
  * |-------------------------|---------|--------|-------------|
- * | issueChallenge()        |   yes   |  yes   |     yes     |
+ * | issueChallenge()        |  yes*   |  yes   |     yes     |
  * | verifyCode()            |    —    |  yes   |     yes     |
  * | finalize()              |    —    |  yes   |     yes     |
  * | SendPasswordResetOtpJob |   yes   |   —    |     yes     |
+ *
+ * (*) PUBLIC issuance takes level 1 NON-BLOCKING: if the lock is held it
+ * gives up immediately and the request returns through the same
+ * fixed-minimum Timebox, so a real account never takes measurably longer
+ * than a decoy. Queue workers may wait briefly (LOCK_WAIT_SECONDS).
  *
  * A path may SKIP a level but never acquire one out of order, so the order
  * is a strict partial order and no cycle (deadlock) is possible. finalize()
@@ -77,14 +82,43 @@ class PasswordResetService
     /** Session key carrying the post-OTP reset-authorization proof. */
     public const SESSION_PROOF_KEY = 'pwreset_proof';
 
+    /**
+     * Session key carrying the NON-REVERSIBLE canonical-subject binding of
+     * the identifier this flow was started for (an APP_KEY-keyed HMAC — never
+     * the raw email address or phone number). It is the only thing that lets
+     * a contended resend recognise "same account as before".
+     */
+    public const SESSION_SUBJECT_KEY = 'pwreset_subject';
+
+    /** A brand-new authoritative challenge was created. */
+    public const OUTCOME_ISSUED = 'issued';
+
+    /** Issuance was not possible, but the session's challenge is still valid. */
+    public const OUTCOME_PRESERVED = 'preserved';
+
+    /** Nothing usable exists for this session — carry a decoy. */
+    public const OUTCOME_DECOY = 'decoy';
+
     public const CODE_TTL_MINUTES = 10;
 
     public const AUTHORIZATION_TTL_MINUTES = 10;
 
     public const MAX_ATTEMPTS = 5;
 
-    /** Bounded wait for the per-user coordination lock (seconds). */
+    /**
+     * Bounded wait used by QUEUE WORKERS only: background contention may
+     * legitimately block briefly.
+     */
     public const LOCK_WAIT_SECONDS = 3;
+
+    /**
+     * PUBLIC HTTP issuance never blocks. A real account whose delivery is
+     * in flight must not take measurably longer than a nonexistent one, so
+     * the request path attempts the lock IMMEDIATELY and — if it is held —
+     * returns through the very same fixed-minimum Timebox as every other
+     * outcome. (0 = try once, never wait.)
+     */
+    public const PUBLIC_LOCK_WAIT_SECONDS = 0;
 
     /**
      * Lease for the ISSUANCE side of the per-user lock. Short: issuance does
@@ -97,9 +131,10 @@ class PasswordResetService
 
     /**
      * A `sending` claim older than this is ABANDONED (worker crashed or was
-     * killed): the row becomes re-claimable, so a crash can never leave an
-     * account permanently unable to receive a code. Comfortably above the
-     * delivery job's own timeout.
+     * killed). It is NEVER re-transported — the provider may already have
+     * accepted that message — it is retired to the terminal, honest
+     * `delivery_unknown` state and the user requests a fresh challenge.
+     * Comfortably above the delivery job's own timeout.
      */
     public const ABANDONED_CLAIM_MINUTES = 10;
 
@@ -129,29 +164,100 @@ class PasswordResetService
 
     /**
      * Handle a reset request for a submitted identifier (email or phone).
-     * ALWAYS returns an opaque session token — a real one when an eligible
-     * account with a usable channel exists, a decoy otherwise — so the
-     * follow-up pages behave identically either way. Never throws.
+     *
+     * ALWAYS returns a usable opaque session token plus a SERVER-INTERNAL
+     * outcome — issued (a new challenge), preserved (this session's existing
+     * challenge is still valid and must not be clobbered) or decoy (nothing
+     * usable) — together with the non-reversible canonical-subject binding to
+     * store in the session. The outcome NEVER changes the public response:
+     * status, redirect, message, validation shape and timing are identical.
+     * Never throws.
+     *
+     * @return array{token:string, subject:string, outcome:string}
      */
-    public function request(string $identifier): string
+    public function request(string $identifier, ?string $currentToken = null, ?string $currentSubject = null): array
     {
         // ONE explicit fixed-minimum timing boundary around the WHOLE
         // account-dependent synchronous work (lookup, hashing, writes, queue
-        // publication) — identical for real and decoy outcomes.
-        return (string) $this->timebox->call(function () use ($identifier): string {
+        // publication, and the preserve decision) — identical for issued,
+        // preserved, decoy, contended and cache-outage outcomes. Nothing
+        // inside may block on a lock (see PUBLIC_LOCK_WAIT_SECONDS).
+        return (array) $this->timebox->call(function () use ($identifier, $currentToken, $currentSubject): array {
+            $subject = ResetIdentifier::limiterSubject($identifier);
+            $resolvedUserId = null;
+
             try {
                 [$user, $channel, $destination] = $this->resolveAccount($identifier);
+                $resolvedUserId = $user?->id;
 
                 if ($user !== null && $channel !== null && $destination !== null) {
-                    return $this->issueChallenge($user, $channel, $destination);
+                    return [
+                        'token' => $this->issueChallenge($user, $channel, $destination),
+                        'subject' => $subject,
+                        'outcome' => self::OUTCOME_ISSUED,
+                    ];
                 }
             } catch (\Throwable $e) {
                 $this->safeLog('request', 'request_error', null, $e);
             }
 
+            // Issuance did not happen (contended lock, cache outage,
+            // ineligible or nonexistent account). NEVER clobber a still-valid
+            // challenge belonging to THIS session and THIS canonical account:
+            // the OTP already on its way must stay verifiable.
+            if ($this->currentChallengeStillUsable($currentToken, $currentSubject, $subject, $resolvedUserId)) {
+                return [
+                    'token' => (string) $currentToken,
+                    'subject' => $subject,
+                    'outcome' => self::OUTCOME_PRESERVED,
+                ];
+            }
+
             // Decoy token: structurally identical, matches no challenge row.
-            return bin2hex(random_bytes(32));
+            return [
+                'token' => bin2hex(random_bytes(32)),
+                'subject' => $subject,
+                'outcome' => self::OUTCOME_DECOY,
+            ];
         }, self::REQUEST_TIMEBOX_MICROSECONDS);
+    }
+
+    /**
+     * May the session keep the challenge token it already holds?
+     *
+     * ONLY when every server-side condition holds: the session was started
+     * for the SAME canonical account identity (constant-time comparison of
+     * the non-reversible subject binding), the token maps to a real
+     * challenge, that challenge is unconsumed and unexpired, and — when the
+     * current identifier resolved to an account — it belongs to that same
+     * account. A changed identifier can therefore never inherit the previous
+     * account's challenge, and no user-supplied id or token is trusted: the
+     * token is a server-generated secret that only this session holds.
+     */
+    private function currentChallengeStillUsable(?string $currentToken, ?string $currentSubject, string $subject, ?int $resolvedUserId): bool
+    {
+        if (! is_string($currentToken) || $currentToken === ''
+            || ! is_string($currentSubject) || $currentSubject === ''
+            || ! hash_equals($subject, $currentSubject)) {
+            return false;
+        }
+
+        try {
+            $challenge = PasswordResetChallenge::where('token', $currentToken)
+                ->whereNull('consumed_at')
+                ->where('expires_at', '>', now())
+                ->first(['id', 'user_id']);
+
+            if ($challenge === null) {
+                return false;
+            }
+
+            return $resolvedUserId === null || (int) $challenge->user_id === (int) $resolvedUserId;
+        } catch (\Throwable $e) {
+            $this->safeLog('request', 'preserve_check_failed', null, $e);
+
+            return false;
+        }
     }
 
     /**
@@ -373,6 +479,19 @@ class PasswordResetService
                 // Hierarchy level 2 → 3.
                 User::whereKey($user->id)->lockForUpdate()->first();
 
+                // An ABANDONED claim being superseded is terminalized
+                // HONESTLY: the crashed worker may or may not have reached the
+                // provider, so the row becomes `delivery_unknown` rather than
+                // pretending it was sent (or that it never went out). It is
+                // never transported again.
+                PasswordResetChallenge::where('user_id', $user->id)
+                    ->whereNull('consumed_at')
+                    ->where('send_status', PasswordResetChallenge::SEND_STATUS_SENDING)
+                    ->update([
+                        'send_status' => PasswordResetChallenge::SEND_STATUS_DELIVERY_UNKNOWN,
+                        'delivery_claim_token' => null,
+                    ]);
+
                 // Only one live challenge per account (the
                 // password_reset_one_active partial unique index is the
                 // database-level authority for the same rule).
@@ -430,12 +549,25 @@ class PasswordResetService
      * unserialized. Release happens in `finally`; Laravel's lock owner token
      * makes the release owner-safe (a worker can never release another
      * holder's lock), and the TTL is the backstop for a crashed holder.
+     *
+     * $waitSeconds <= 0 (the DEFAULT, used by the public request path) means
+     * ONE immediate, NON-BLOCKING attempt: a contended public request is
+     * EXCLUDED rather than queued, so no caller can measure lock-wait time.
+     * Only queue workers pass a bounded blocking wait.
      */
-    private function withUserLock(int $userId, callable $callback, mixed $onUnavailable = null): mixed
+    private function withUserLock(int $userId, callable $callback, mixed $onUnavailable = null, int $waitSeconds = self::PUBLIC_LOCK_WAIT_SECONDS): mixed
     {
         try {
             $lock = Cache::lock(self::userLockKey($userId), self::LOCK_TTL_SECONDS);
-            $lock->block(self::LOCK_WAIT_SECONDS);
+
+            if ($waitSeconds <= 0) {
+                // NON-BLOCKING: one immediate attempt (public request path).
+                if (! $lock->get()) {
+                    return $onUnavailable;
+                }
+            } else {
+                $lock->block($waitSeconds);
+            }
         } catch (LockTimeoutException) {
             return $onUnavailable;
         } catch (\Throwable) {

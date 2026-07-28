@@ -283,6 +283,22 @@ jobs:
         # into a hard failure instead of silent green.
         run: php artisan test --testsuite=Feature --filter='PasswordReset' --fail-on-skipped
 
+      - name: Password reset Redis lock coordination
+        # PRODUCTION lock backend, not a stand-in: PasswordResetConcurrencyPgTest
+        # overrides the cache store to `file`, which proves the PostgreSQL
+        # interleavings but says nothing about Redis. This step runs the
+        # dedicated class against PostgreSQL + the REAL Redis service and
+        # proves, cross-process: lock acquisition/exclusion, the non-blocking
+        # public resend, session preservation under contention, stale-transport
+        # prevention, owner-safe release, bounded lease recovery, at most one
+        # transport per challenge, no duplicate active challenge, and that no
+        # lock key or owner value reaches the logs. --fail-on-skipped makes an
+        # unreachable Redis (which the class skips on) a hard CI failure
+        # instead of silent green.
+        env:
+          CACHE_STORE: redis
+        run: php artisan test --testsuite=Feature --filter='PasswordResetRedisLockTest' --fail-on-skipped
+
   # ── Job 3 ──────────────────────────────────────────────────────────────────
   code-style:
     name: Code Style

@@ -14,6 +14,7 @@ use App\Services\Auth\PasswordResetService;
 use App\Services\Auth\ResetIdentifier;
 use App\Services\Email\EmailVerificationService;
 use App\Services\Sms\SmsService;
+use Illuminate\Contracts\Cache\Lock;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Request;
@@ -597,9 +598,10 @@ class PasswordResetTest extends TestCase
         $svc->shouldReceive('persistChallenge')->once()
             ->andThrow(new \RuntimeException('insert failed'));
 
-        $token = $svc->request(self::EMAIL); // never throws — decoy comes back
+        $outcome = $svc->request(self::EMAIL); // never throws — decoy comes back
 
-        $this->assertIsString($token);
+        $this->assertSame(PasswordResetService::OUTCOME_DECOY, $outcome['outcome']);
+        $this->assertIsString($outcome['token']);
         Queue::assertNothingPushed();
         $this->assertSame(0, PasswordResetChallenge::count(), 'rollback left no challenge row');
     }
@@ -738,9 +740,11 @@ class PasswordResetTest extends TestCase
         $this->assertTrue($held->get());
 
         try {
-            $token = app(PasswordResetService::class)->request(self::EMAIL);
+            $outcome = app(PasswordResetService::class)->request(self::EMAIL);
+            $token = $outcome['token'];
             // Public behavior is unchanged (a decoy token + generic message),
             // and no replacement challenge was created.
+            $this->assertSame(PasswordResetService::OUTCOME_DECOY, $outcome['outcome']);
             $this->assertIsString($token);
             $this->assertSame($before, PasswordResetChallenge::count());
             $this->assertSame(0, PasswordResetChallenge::where('token', $token)->count());
@@ -814,23 +818,78 @@ class PasswordResetTest extends TestCase
         $this->assertSame(1, PasswordResetChallenge::whereNull('consumed_at')->count());
     }
 
-    public function test_abandoned_claim_from_a_crashed_worker_is_recoverable(): void
+    public function test_provider_acceptance_then_lost_finalization_never_retransports_the_same_otp(): void
     {
+        Log::spy();
         Mail::fake();
         $this->user();
         $challenge = $this->issueWithoutDelivery();
 
-        // A crashed worker left a `sending` row owned by a token nobody holds.
+        // Attempt 1: the provider ACCEPTS the message …
+        $this->deliveryJob($challenge)->handle(app(SmsService::class));
+        Mail::assertSentCount(1);
+
+        // … but the worker dies before the row is finalized, leaving exactly
+        // what a crash leaves behind: a `sending` row owned by a token nobody
+        // holds any more.
+        $staleToken = bin2hex(random_bytes(32));
+        $challenge->forceFill([
+            'send_status' => PasswordResetChallenge::SEND_STATUS_SENDING,
+            'delivery_claim_token' => $staleToken,
+            'delivery_claimed_at' => now()->subMinutes(PasswordResetService::ABANDONED_CLAIM_MINUTES + 1),
+        ])->save();
+
+        // The same queue job runs again (retry / another worker). Because the
+        // provider may already have delivered that OTP and no transport
+        // offers an idempotency contract, it must NEVER be sent again.
+        $this->deliveryJob($challenge)->handle(app(SmsService::class));
+
+        Mail::assertSentCount(1); // still exactly ONE transport call in total
+        $fresh = $challenge->fresh();
+        // Honest terminal state: not `sent` (we cannot claim delivery) and
+        // not `failed` (we cannot claim non-delivery).
+        $this->assertSame(PasswordResetChallenge::SEND_STATUS_DELIVERY_UNKNOWN, $fresh->send_status);
+        $this->assertNull($fresh->delivery_claim_token, 'stale owner token retired');
+
+        // A third run changes nothing (monotonic, never transport-eligible).
+        $this->deliveryJob($challenge)->handle(app(SmsService::class));
+        Mail::assertSentCount(1);
+        $this->assertSame(PasswordResetChallenge::SEND_STATUS_DELIVERY_UNKNOWN, $challenge->fresh()->send_status);
+
+        // The account is NOT stuck: a fresh challenge issues immediately, and
+        // the ambiguous row can never overwrite it.
+        Queue::fake();
+        $replacement = $this->issueWithoutDelivery();
+        $this->assertNotSame($challenge->id, $replacement->id);
+        $this->deliveryJob($challenge)->handle(app(SmsService::class));
+        $this->assertSame(PasswordResetChallenge::SEND_STATUS_QUEUED, $replacement->fresh()->send_status);
+        $this->assertSame(1, PasswordResetChallenge::whereNull('consumed_at')->count());
+
+        // No claim token or raw transport text in the logs.
+        Log::shouldNotHaveReceived('warning', [\Mockery::pattern('/'.$staleToken.'/')]);
+    }
+
+    public function test_superseding_an_abandoned_claim_records_the_ambiguous_terminal_state(): void
+    {
+        Mail::fake();
+        $this->user();
+        $challenge = $this->issueWithoutDelivery();
         $challenge->forceFill([
             'send_status' => PasswordResetChallenge::SEND_STATUS_SENDING,
             'delivery_claim_token' => bin2hex(random_bytes(32)),
             'delivery_claimed_at' => now()->subMinutes(PasswordResetService::ABANDONED_CLAIM_MINUTES + 1),
         ])->save();
 
-        $this->deliveryJob($challenge)->handle(app(SmsService::class));
+        // A new request supersedes it — and terminalizes it honestly rather
+        // than leaving a permanently "sending" row.
+        Queue::fake();
+        app(PasswordResetService::class)->request(self::EMAIL);
 
-        Mail::assertSentCount(1);
-        $this->assertSame(PasswordResetChallenge::SEND_STATUS_SENT, $challenge->fresh()->send_status);
+        $old = $challenge->fresh();
+        $this->assertNotNull($old->consumed_at);
+        $this->assertSame(PasswordResetChallenge::SEND_STATUS_DELIVERY_UNKNOWN, $old->send_status);
+        $this->assertNull($old->delivery_claim_token);
+        $this->assertSame(1, PasswordResetChallenge::whereNull('consumed_at')->count());
     }
 
     public function test_a_fresh_claim_held_by_another_worker_is_not_stolen(): void
@@ -886,6 +945,202 @@ class PasswordResetTest extends TestCase
             'code_hash' => bcrypt('333333'),
             'expires_at' => now()->addMinutes(10),
         ]);
+    }
+
+    // ── Non-blocking public issuance + one timing boundary (4.2) ────────────
+
+    private function holdUserLock(User $user, int $seconds = 30): Lock
+    {
+        $lock = Cache::lock(PasswordResetService::userLockKey($user->id), $seconds);
+        $this->assertTrue($lock->get(), 'test could not take the coordination lock');
+
+        return $lock;
+    }
+
+    public function test_public_issuance_never_blocks_and_uses_one_timing_boundary(): void
+    {
+        Mail::fake();
+        $user = $this->user();
+
+        // 1) existing account, no contention
+        $this->requestReset(self::EMAIL)->assertStatus(302);
+        // 2) nonexistent account
+        $this->requestReset('nobody-here@example.com')->assertStatus(302);
+
+        // 3) existing account whose per-user coordination lock is HELD (an
+        //    in-flight delivery): the public path must give up IMMEDIATELY
+        //    rather than waiting the worker's bounded wait.
+        $lock = $this->holdUserLock($user);
+        try {
+            $started = microtime(true);
+            $this->requestReset(self::EMAIL)->assertStatus(302);
+            $elapsed = microtime(true) - $started;
+        } finally {
+            $lock->release();
+        }
+
+        // 4) cache backend failure
+        Cache::shouldReceive('lock')->andThrow(new \RuntimeException('cache down'));
+        $this->requestReset(self::EMAIL)->assertStatus(302);
+
+        // PRIMARY evidence (spy, not wall clock): every outcome went through
+        // the SAME fixed-minimum boundary.
+        $this->assertSame(
+            array_fill(0, 4, PasswordResetService::REQUEST_TIMEBOX_MICROSECONDS),
+            $this->timebox->calls,
+        );
+        $this->assertSame(0, PasswordResetService::PUBLIC_LOCK_WAIT_SECONDS, 'public path must not wait on the lock');
+        // SECONDARY evidence only: the contended request did not spend the
+        // worker's bounded wait (3s) inside the request.
+        $this->assertLessThan(
+            PasswordResetService::LOCK_WAIT_SECONDS,
+            $elapsed,
+            'contended public request must not block for the worker wait',
+        );
+    }
+
+    // ── A contended resend never strands a valid reset session (4.3) ────────
+
+    /** Start a real flow over HTTP; returns the OTP and the session token. */
+    private function startFlowOverHttp(string $identifier = self::EMAIL): array
+    {
+        $code = $this->issueAndCaptureCode($identifier);
+
+        return [$code, (string) session(PasswordResetService::SESSION_TOKEN_KEY)];
+    }
+
+    public function test_contended_resend_preserves_the_valid_session_token_and_otp(): void
+    {
+        $user = $this->user();
+        [$code, $token] = $this->startFlowOverHttp();
+
+        // An in-flight delivery holds the coordination lock; the user hits
+        // "resend" for the SAME account.
+        $lock = $this->holdUserLock($user);
+        try {
+            $resend = $this->requestReset(self::EMAIL);
+            // Public response is byte-identical to every other outcome.
+            $resend->assertStatus(302);
+            $this->assertSame(route('password.verify'), $resend->headers->get('Location'));
+            $resend->assertSessionHas('status', PasswordResetController::GENERIC_REQUEST_MESSAGE);
+        } finally {
+            $lock->release();
+        }
+
+        // The session still carries the ORIGINAL challenge …
+        $this->assertSame($token, session(PasswordResetService::SESSION_TOKEN_KEY));
+        // … and the OTP already on its way still verifies.
+        $this->post(route('password.verify.submit'), ['code' => $code])
+            ->assertRedirect(route('password.reset'));
+    }
+
+    public function test_equivalent_identifier_forms_also_preserve_the_session(): void
+    {
+        $user = $this->user();
+        [$code, $token] = $this->startFlowOverHttp();
+
+        $lock = $this->holdUserLock($user);
+        try {
+            foreach (['  '.strtoupper(self::EMAIL).'  ', 'Reset-Target@Example.com'] as $form) {
+                $this->requestReset($form)->assertStatus(302);
+                $this->assertSame($token, session(PasswordResetService::SESSION_TOKEN_KEY), $form);
+            }
+        } finally {
+            $lock->release();
+        }
+
+        $this->post(route('password.verify.submit'), ['code' => $code])
+            ->assertRedirect(route('password.reset'));
+    }
+
+    public function test_equivalent_phone_forms_also_preserve_the_session(): void
+    {
+        SiteSetting::set('sms_enabled', 'true');
+        SiteSetting::set('sms_provider', 'kavenegar');
+        SmsService::storeApiKey('secret-api-key');
+        $user = $this->user();
+
+        Queue::fake(); // no inline SMS transport
+        $this->requestReset(self::PHONE)->assertStatus(302);
+        $token = (string) session(PasswordResetService::SESSION_TOKEN_KEY);
+        $this->assertSame(1, PasswordResetChallenge::whereNull('consumed_at')->count());
+
+        // Reset the request-rate window (3/15min per canonical subject) so the
+        // resend forms below exercise PRESERVATION, not throttling.
+        Cache::flush();
+
+        $lock = $this->holdUserLock($user);
+        try {
+            foreach (['+989121234567', '00989121234567', ' 0912 123 4567 '] as $form) {
+                $this->requestReset($form)->assertStatus(302);
+                $this->assertSame($token, session(PasswordResetService::SESSION_TOKEN_KEY), $form);
+            }
+        } finally {
+            $lock->release();
+        }
+    }
+
+    public function test_a_different_identifier_never_inherits_the_previous_challenge(): void
+    {
+        $user = $this->user();
+        [, $token] = $this->startFlowOverHttp();
+
+        User::factory()->create([
+            'email' => 'someone-else@example.com',
+            'normalized_phone' => '+989350000001',
+            'password' => bcrypt('Other-Pass-1'),
+        ]);
+
+        // Lock held → the other account cannot be issued either, but the
+        // previous account's token must NOT be preserved for this identity.
+        $lock = $this->holdUserLock($user);
+        try {
+            $this->requestReset('someone-else@example.com')->assertStatus(302);
+        } finally {
+            $lock->release();
+        }
+
+        // The previous account's challenge is NEVER inherited by the new
+        // identity. (The other account has its own per-user lock, so its own
+        // issuance may legitimately succeed — what matters is that whatever
+        // the session now holds does not belong to the first account.)
+        $current = (string) session(PasswordResetService::SESSION_TOKEN_KEY);
+        $this->assertNotSame($token, $current);
+        $inherited = PasswordResetChallenge::where('token', $current)->first();
+        if ($inherited !== null) {
+            $this->assertNotSame((int) $user->id, (int) $inherited->user_id, 'never the first account\'s challenge');
+        }
+        // And the first account's original challenge is untouched.
+        $this->assertSame(1, PasswordResetChallenge::where('token', $token)->whereNull('consumed_at')->count());
+    }
+
+    public function test_expired_or_consumed_session_challenges_fall_back_to_a_decoy(): void
+    {
+        $user = $this->user();
+
+        foreach (['expired', 'consumed', 'unknown'] as $case) {
+            $this->flushSession();
+            Cache::flush(); // fresh request-rate window per case
+            [, $token] = $this->startFlowOverHttp();
+            $challenge = PasswordResetChallenge::where('token', $token)->firstOrFail();
+
+            match ($case) {
+                'expired' => $challenge->forceFill(['expires_at' => now()->subMinute()])->save(),
+                'consumed' => $challenge->forceFill(['consumed_at' => now()])->save(),
+                'unknown' => session()->put(PasswordResetService::SESSION_TOKEN_KEY, bin2hex(random_bytes(32))),
+            };
+
+            $lock = $this->holdUserLock($user);
+            try {
+                $this->requestReset(self::EMAIL)->assertStatus(302);
+            } finally {
+                $lock->release();
+            }
+
+            $now = (string) session(PasswordResetService::SESSION_TOKEN_KEY);
+            $this->assertNotSame($token, $now, $case);
+            $this->assertSame(0, PasswordResetChallenge::where('token', $now)->whereNull('consumed_at')->count(), $case);
+        }
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────

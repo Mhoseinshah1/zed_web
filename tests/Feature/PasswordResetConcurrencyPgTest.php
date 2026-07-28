@@ -21,6 +21,19 @@ use Tests\TestCase;
  * two parallel submissions must end with exactly ONE password change, one
  * consumed authorization, and no double remember-token/credential rotation.
  *
+ * ══ WHAT THIS CLASS DOES AND DOES NOT PROVE ═══════════════════════════════
+ *
+ * PROVES: the PostgreSQL side of the coordination — row-lock ordering,
+ * conditional/monotonic updates, the password_reset_one_active invariant, and
+ * the cross-flow interleavings, driven deterministically by file barriers.
+ *
+ * DOES NOT PROVE: the behavior of the production cache lock. These tests
+ * override the cache store to `file` (the suite default `array` store lives
+ * in ONE process's memory, so a fork could never observe another's lock), and
+ * a file lock is a DIFFERENT implementation from Redis — different
+ * acquisition, lease and release semantics. Redis lock coordination is proven
+ * separately, against the real service, by PasswordResetRedisLockTest.
+ *
  * No RefreshDatabase: forked children open FRESH connections, so fixtures
  * must be COMMITTED. Cleanup is explicit in tearDown. Children report through
  * per-child files and terminate with SIGKILL (a plain exit() would run
@@ -41,11 +54,11 @@ class PasswordResetConcurrencyPgTest extends TestCase
             $this->markTestSkipped('pcntl is required to run real parallel submissions.');
         }
 
-        // The per-user coordination lock must be REAL across processes. The
-        // suite's default `array` store lives in one process's memory, so a
-        // fork would never observe another's lock; the FILE store is a shared
-        // backend (same reason the scheduler uses SCHEDULER_LOCK_STORE=file)
-        // and stands in faithfully for production Redis.
+        // The per-user coordination lock must be REAL across processes, so
+        // these deterministic interleavings use the shared FILE store rather
+        // than the per-process `array` default. This is a STAND-IN, not
+        // evidence about production: Redis is a different lock
+        // implementation, and PasswordResetRedisLockTest proves it directly.
         config(['cache.default' => 'file']);
         Cache::store('file')->clear();
 
@@ -236,20 +249,40 @@ class PasswordResetConcurrencyPgTest extends TestCase
     {
         $user = $this->makeUser();
 
-        // Two parallel request() calls through the REAL service (user-row
-        // lock serializes; supersede + create run atomically per caller).
+        // Two parallel request() calls through the REAL service. The public
+        // path takes the per-user lock NON-BLOCKING (PUBLIC_LOCK_WAIT_SECONDS
+        // = 0), so issuance is NOT fully serialized: a caller that loses the
+        // lock does not queue behind the winner, it returns generically
+        // without issuing. Whichever callers DO issue run supersede + create
+        // atomically under the user-row lock.
         $results = $this->race(2, function () use ($user): string {
-            $token = app(PasswordResetService::class)->request((string) $user->email);
+            $outcome = app(PasswordResetService::class)->request((string) $user->email);
 
-            return is_string($token) && $token !== '' ? 'issued' : 'failed';
+            return (string) $outcome['outcome'];
         });
 
-        $this->assertSame(['issued', 'issued'], array_values($results));
+        $issued = count(array_filter(
+            $results,
+            static fn (string $outcome): bool => $outcome === PasswordResetService::OUTCOME_ISSUED,
+        ));
+
+        // At least one caller issues — contention must never leave the account
+        // with no challenge at all — and a loser reports a NON-issued outcome
+        // rather than blocking (whether both win depends on the interleaving:
+        // a caller that finishes before the other starts is uncontended).
+        $this->assertGreaterThanOrEqual(1, $issued, 'outcomes: '.implode(',', $results));
+        foreach ($results as $outcome) {
+            $this->assertContains($outcome, [
+                PasswordResetService::OUTCOME_ISSUED,
+                PasswordResetService::OUTCOME_DECOY,
+            ], 'outcomes: '.implode(',', $results));
+        }
+
         // Exactly ONE active challenge survives — the database-level partial
         // unique index (password_reset_one_active) guarantees it can never
-        // be more.
+        // be more — and only the issuing callers created a row.
         $this->assertSame(1, PasswordResetChallenge::where('user_id', $user->id)->whereNull('consumed_at')->count());
-        $this->assertSame(2, PasswordResetChallenge::where('user_id', $user->id)->count());
+        $this->assertSame($issued, PasswordResetChallenge::where('user_id', $user->id)->count());
     }
 
     public function test_database_invariant_rejects_a_second_active_challenge_outside_the_service(): void
@@ -374,7 +407,7 @@ class PasswordResetConcurrencyPgTest extends TestCase
                 });
                 $issued = app(PasswordResetService::class)->request((string) $user->email);
 
-                return $issued !== '' ? 'issued' : 'failed';
+                return $issued['outcome'] === PasswordResetService::OUTCOME_ISSUED ? 'issued' : 'failed';
             }
 
             $this->await($dir, 'issuance_locked');
@@ -442,7 +475,7 @@ class PasswordResetConcurrencyPgTest extends TestCase
         $this->assertSame(1, PasswordResetChallenge::where('user_id', $user->id)->whereNull('consumed_at')->count());
     }
 
-    public function test_an_in_flight_claim_serializes_a_concurrent_replacement_issuance(): void
+    public function test_an_in_flight_claim_excludes_a_concurrent_replacement_issuance(): void
     {
         $user = $this->makeUser();
         $old = PasswordResetChallenge::create([
@@ -470,17 +503,19 @@ class PasswordResetConcurrencyPgTest extends TestCase
             }
 
             $this->await($dir, 'transport_started');
-            $token = app(PasswordResetService::class)->request((string) $user->email);
+            $outcome = app(PasswordResetService::class)->request((string) $user->email);
             $this->signal($dir, 'issuance_attempted');
 
-            return PasswordResetChallenge::where('token', $token)->exists() ? 'replaced' : 'refused';
+            return PasswordResetChallenge::where('token', $outcome['token'])->exists() ? 'replaced' : 'refused';
         });
 
         exec('rm -rf '.escapeshellarg($dir));
 
         // The in-flight attempt completed exactly once, and the concurrent
-        // replacement could NOT become authoritative mid-flight — it failed
-        // closed behind the coordination lock (public response unchanged).
+        // replacement could NOT become authoritative mid-flight. It is
+        // EXCLUDED, not serialized: the public path does not queue behind the
+        // lock holder, it returns a decoy immediately (public response
+        // unchanged) and creates no row.
         $this->assertSame(PasswordResetChallenge::SEND_STATUS_SENT, $results[1], 'children: '.implode(',', $results));
         $this->assertSame('refused', $results[2], 'children: '.implode(',', $results));
         $this->assertSame(1, PasswordResetChallenge::where('user_id', $user->id)->count());
