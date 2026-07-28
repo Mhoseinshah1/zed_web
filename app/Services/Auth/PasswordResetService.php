@@ -458,6 +458,13 @@ class PasswordResetService
      * one active challenge survives, with the partial unique index
      * (password_reset_one_active) as the database-level authority. A rolled
      * back issuance publishes NO delivery job.
+     *
+     * The cache lock coordinates the NORMAL case, but it is not proof: a
+     * Redis restart, failover, eviction, connection reset or lost lease can
+     * make the key vanish while a worker is still inside its transport call.
+     * Holding the lock therefore does NOT make an existing `sending` row safe
+     * to supersede — the DURABLE DATABASE CLAIM (`delivery_claimed_at` +
+     * `delivery_claim_token`) is the authority. See supersedeActiveChallenges().
      */
     private function issueChallenge(User $user, string $channel, string $destination): string
     {
@@ -466,47 +473,43 @@ class PasswordResetService
 
         // HIERARCHY level 1: the per-user CACHE lock is held across the whole
         // issuance transaction. An in-flight delivery worker holds the SAME
-        // lock across its transport attempt, so a replacement challenge can
-        // never become authoritative while an older code is mid-flight — and
-        // an older worker can never start a transport after this replacement
-        // commits. Serialization is mandatory: if the lock is unavailable
-        // (contention or a cache outage) issuance FAILS CLOSED and the caller
-        // returns the ordinary decoy token + generic message.
-        $challenge = $this->withUserLock($user->id, function () use ($user, $channel, $code, $token): PasswordResetChallenge {
+        // lock across its transport attempt, so in the normal case a
+        // replacement challenge cannot become authoritative while an older
+        // code is mid-flight. Serialization is mandatory: if the lock is
+        // unavailable (contention or a cache outage) issuance FAILS CLOSED and
+        // the caller returns the ordinary decoy token + generic message.
+        $challenge = $this->withUserLock($user->id, function () use ($user, $channel, $code, $token): ?PasswordResetChallenge {
             $this->raceBarrier('issue.lock_acquired');
 
-            return DB::transaction(function () use ($user, $channel, $code, $token): PasswordResetChallenge {
+            return DB::transaction(function () use ($user, $channel, $code, $token): ?PasswordResetChallenge {
                 // Hierarchy level 2 → 3.
                 User::whereKey($user->id)->lockForUpdate()->first();
 
-                // An ABANDONED claim being superseded is terminalized
-                // HONESTLY: the crashed worker may or may not have reached the
-                // provider, so the row becomes `delivery_unknown` rather than
-                // pretending it was sent (or that it never went out). It is
-                // never transported again.
-                PasswordResetChallenge::where('user_id', $user->id)
-                    ->whereNull('consumed_at')
-                    ->where('send_status', PasswordResetChallenge::SEND_STATUS_SENDING)
-                    ->update([
-                        'send_status' => PasswordResetChallenge::SEND_STATUS_DELIVERY_UNKNOWN,
-                        'delivery_claim_token' => null,
-                    ]);
-
-                // Only one live challenge per account (the
-                // password_reset_one_active partial unique index is the
-                // database-level authority for the same rule).
-                PasswordResetChallenge::where('user_id', $user->id)
-                    ->whereNull('consumed_at')
-                    ->update(['consumed_at' => now()]);
+                // A FRESH delivery claim blocks issuance entirely — nothing is
+                // mutated and the transaction returns empty-handed.
+                if (! $this->supersedeActiveChallenges($user->id)) {
+                    return null;
+                }
 
                 return $this->persistChallenge($user, $channel, $code, $token);
             });
-        });
+        }, false);
 
-        if (! $challenge instanceof PasswordResetChallenge) {
+        if ($challenge === false) {
             $this->safeLog('issue', 'coordination_unavailable', $token, null);
 
             throw new \RuntimeException('password reset issuance could not be serialized');
+        }
+
+        if (! $challenge instanceof PasswordResetChallenge) {
+            // A delivery attempt claimed within the abandonment window may be
+            // talking to the provider RIGHT NOW. Superseding it would invalidate
+            // a code that is already on its way, so issuance fails closed; the
+            // caller preserves this session's still-valid challenge (or returns
+            // a decoy) behind the same generic response and Timebox.
+            $this->safeLog('issue', 'delivery_claim_in_flight', $token, null);
+
+            throw new \RuntimeException('password reset issuance is blocked by an in-flight delivery claim');
         }
 
         // Publication strictly AFTER the commit. Honest delivery state: a
@@ -532,9 +535,90 @@ class PasswordResetService
     }
 
     /**
+     * Retire every ACTIVE challenge so a replacement may be created.
+     * Returns TRUE when the account is clear, FALSE when issuance must fail
+     * closed. Callers MUST run this inside the issuance transaction, after
+     * the `users` row lock (hierarchy level 2 → 3).
+     *
+     * A row in `sending` splits into two cases, decided ONLY by durable
+     * database state — never by cache-lock presence, which can disappear
+     * under a Redis restart while the worker keeps transporting:
+     *
+     *  FRESH claim (claimed within ABANDONED_CLAIM_MINUTES)
+     *      A worker may be inside the provider call right now. The row is not
+     *      terminalized, not consumed and not replaced: superseding it would
+     *      kill a code that is already on its way. Issuance fails closed.
+     *
+     *  ABANDONED claim (claimed at or before the threshold)
+     *      Retired to the terminal, honest `delivery_unknown` state with an
+     *      EXACT-IDENTITY conditional update — same challenge, still
+     *      `sending`, same claim token, still past the threshold. If that
+     *      update does not affect exactly one row, a concurrent worker moved
+     *      the claim underneath us and we fail closed rather than overwrite
+     *      newer state. `delivery_unknown` asserts neither delivery nor
+     *      non-delivery, and the row is never transported again.
+     */
+    private function supersedeActiveChallenges(int $userId): bool
+    {
+        $threshold = now()->subMinutes(self::ABANDONED_CLAIM_MINUTES);
+
+        $active = PasswordResetChallenge::where('user_id', $userId)
+            ->whereNull('consumed_at')
+            ->lockForUpdate()
+            ->get(['id', 'send_status', 'delivery_claim_token', 'delivery_claimed_at', 'updated_at']);
+
+        // Seam between the READ and the conditional terminalization, so a test
+        // can move a claim underneath this decision deterministically.
+        $this->raceBarrier('issue.claims_read');
+
+        foreach ($active as $row) {
+            if ($row->send_status !== PasswordResetChallenge::SEND_STATUS_SENDING) {
+                continue;
+            }
+
+            // `claim()` always stamps delivery_claimed_at alongside `sending`;
+            // updated_at is the conservative fallback for any legacy row, so a
+            // missing timestamp can never make a claim look abandoned.
+            $claimedAt = $row->delivery_claimed_at ?? $row->updated_at;
+            if ($claimedAt === null || $claimedAt->greaterThan($threshold)) {
+                return false;
+            }
+
+            $terminalized = PasswordResetChallenge::whereKey($row->id)
+                ->where('send_status', PasswordResetChallenge::SEND_STATUS_SENDING)
+                ->where('delivery_claimed_at', '<=', $threshold)
+                ->when(
+                    $row->delivery_claim_token === null,
+                    fn ($query) => $query->whereNull('delivery_claim_token'),
+                    fn ($query) => $query->where('delivery_claim_token', $row->delivery_claim_token),
+                )
+                ->update([
+                    'send_status' => PasswordResetChallenge::SEND_STATUS_DELIVERY_UNKNOWN,
+                    'delivery_claim_token' => null,
+                ]);
+
+            if ($terminalized !== 1) {
+                return false;
+            }
+        }
+
+        // Only one live challenge per account (the password_reset_one_active
+        // partial unique index is the database-level authority for the same
+        // rule). Reached only once every `sending` row was safely retired.
+        PasswordResetChallenge::where('user_id', $userId)
+            ->whereNull('consumed_at')
+            ->update(['consumed_at' => now()]);
+
+        return true;
+    }
+
+    /**
      * The per-user coordination lock key — shared with
      * SendPasswordResetOtpJob so replacement issuance and an in-flight
-     * delivery attempt can never overlap. Level 1 of the lock hierarchy.
+     * delivery attempt do not overlap in the NORMAL case. Level 1 of the lock
+     * hierarchy, and coordination only: the key can vanish (Redis restart,
+     * eviction, lost lease) while a worker is still transporting, so holding
+     * it is never on its own a licence to supersede a `sending` row.
      */
     public static function userLockKey(int $userId): string
     {
