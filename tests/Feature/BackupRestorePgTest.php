@@ -1147,6 +1147,395 @@ class BackupRestorePgTest extends TestCase
         }
     }
 
+    // ── Truncated-prefix bypass + large COPY rows (follow-up 4.1.1 / 4.1.2) ─
+
+    public function test_leading_padding_cannot_hide_security_relevant_tokens(): void
+    {
+        $target = $this->createTargetDatabase();
+        $policy = app(DumpScriptPolicy::class);
+        $pad = str_repeat(' ', 5_000); // past the old 4 KiB retained window
+
+        $cases = [
+            'commit' => [$pad."COMMIT;\n", 'transaction_control'],
+            'rollback' => [$pad."ROLLBACK;\n", 'transaction_control'],
+            'start_transaction' => [$pad."START TRANSACTION;\n", 'transaction_control'],
+            'copy_query_form' => [$pad."COPY (SELECT * FROM stdin) TO stdout;\n", 'copy_form_unsupported'],
+            'copy_program' => [$pad."COPY t FROM PROGRAM 'id';\n", 'copy_form_unsupported'],
+            'copy_server_file' => [$pad."COPY t FROM '/etc/passwd';\n", 'copy_form_unsupported'],
+        ];
+
+        foreach ($cases as $label => [$sql, $reason]) {
+            $file = $this->tmp.'/pad_'.$label.'.sql';
+            file_put_contents($file, "CREATE TABLE a (i int);\n".$sql);
+            try {
+                $policy->assertSafe($file);
+                $this->fail("padded {$label} must be refused");
+            } catch (RestoreFailure $e) {
+                $this->assertSame($reason, $e->reason(), $label);
+            }
+        }
+
+        // …and end to end: a padded query-form COPY hiding a shell command is
+        // refused before psql, creates no marker, and leaves the target empty.
+        $marker = $this->tmp.'/PAD_PWNED';
+        $archive = $this->archiveWithDump(
+            "CREATE TABLE stdin (id int);\n"
+            .$pad."COPY (SELECT * FROM stdin) TO stdout;\n"
+            .'\! touch '.escapeshellarg($marker)."\n\\.\n",
+            'padbypass',
+        );
+
+        try {
+            $this->asLeastPrivilegeRole(fn () => app(DatabaseRestoreService::class)->restore($archive, $target));
+            $this->fail('a padded bypass must be refused');
+        } catch (RestoreFailure $e) {
+            $this->assertSame(RestoreFailure::CATEGORY_CONTENT, $e->category());
+        }
+
+        $this->assertFileDoesNotExist($marker);
+        $this->assertSame(0, $this->objectCount($target));
+    }
+
+    public function test_a_wide_copy_header_beyond_the_old_window_still_validates(): void
+    {
+        $columns = implode(', ', array_map(static fn (int $i): string => 'c'.$i, range(1, 1_200)));
+        $this->assertGreaterThan(4_096, strlen($columns), 'the header must exceed the old retained window');
+
+        $file = $this->tmp.'/wide_header.sql';
+        file_put_contents($file, 'COPY public.t ('.$columns.") FROM stdin;\n1\n\\.\n");
+
+        app(DumpScriptPolicy::class)->assertSafe($file);
+        $this->addToAssertionCount(1);
+    }
+
+    public function test_copy_data_streams_without_a_line_limit_and_terminates_exactly(): void
+    {
+        $policy = app(DumpScriptPolicy::class);
+
+        // A legitimate row larger than one megabyte — previously rejected as
+        // `dump_line_too_long`, because the physical-line ceiling was applied
+        // inside COPY data as well.
+        $row = str_repeat('x', 2_097_152);
+        $big = $this->tmp.'/big_copy_row.sql';
+        file_put_contents($big, "COPY public.t (c) FROM stdin;\n".$row."\n\\.\n");
+        $policy->assertSafe($big);
+        $this->addToAssertionCount(1);
+
+        // `\.x` is DATA, not a terminator.
+        $dotx = $this->tmp.'/dot_x.sql';
+        file_put_contents($dotx, "COPY public.t (c) FROM stdin;\n\\.x\nmore\n\\.\nCREATE TABLE a (i int);\n");
+        $policy->assertSafe($dotx);
+        $this->addToAssertionCount(1);
+
+        // Terminator directly after a row that straddles the 64 KiB read chunk.
+        $boundary = $this->tmp.'/copy_boundary.sql';
+        file_put_contents($boundary, "COPY public.t (c) FROM stdin;\n".str_repeat('y', 65_530)."\n\\.\nCREATE TABLE a (i int);\n");
+        $policy->assertSafe($boundary);
+        $this->addToAssertionCount(1);
+
+        // An unterminated COPY block is still refused.
+        $unterminated = $this->tmp.'/copy_unterminated.sql';
+        file_put_contents($unterminated, "COPY public.t (c) FROM stdin;\nrow1\nrow2\n");
+        try {
+            $policy->assertSafe($unterminated);
+            $this->fail('an unterminated COPY block must be refused');
+        } catch (RestoreFailure $e) {
+            $this->assertSame('dump_unterminated_copy', $e->reason());
+        }
+
+        // Oversized NON-COPY SQL is still refused.
+        $oversized = $this->tmp.'/oversized_sql.sql';
+        file_put_contents($oversized, 'SELECT '.str_repeat('a', 5_000_000).";\n");
+        try {
+            $policy->assertSafe($oversized);
+            $this->fail('an oversized non-COPY line must be refused');
+        } catch (RestoreFailure $e) {
+            $this->assertSame('dump_line_too_long', $e->reason());
+        }
+    }
+
+    public function test_a_large_copy_row_survives_a_real_postgresql_round_trip(): void
+    {
+        $target = $this->createTargetDatabase();
+
+        // Build the archive by hand so the row size is under our control, and
+        // restore it through the real command into a real database.
+        $blob = str_repeat('z', 1_500_000);
+        $archive = $this->archiveWithDump(
+            "CREATE TABLE big_rows (id integer, payload text);\n"
+            ."CREATE TABLE migrations (id integer, migration text, batch integer);\n"
+            ."CREATE TABLE users (id integer);\n"
+            ."CREATE TABLE site_settings (id integer);\n"
+            ."INSERT INTO migrations (id, migration, batch) VALUES (1, 'x', 1);\n"
+            ."COPY public.big_rows (id, payload) FROM stdin;\n"
+            ."1\t".$blob."\n\\.\n",
+            'bigrow',
+        );
+
+        $this->assertSame(0, $this->restoreCommand($archive, $target), Artisan::output());
+
+        $db = $this->target($target);
+        $this->assertSame(1, (int) $db->scalar('select count(*) from big_rows'));
+        $this->assertSame(
+            strlen($blob),
+            (int) $db->scalar('select length(payload) from big_rows where id = 1'),
+            'the multi-megabyte COPY row must survive intact',
+        );
+    }
+
+    // ── Authoritative role validation (follow-up 4.1.3) ────────────────────
+
+    public function test_role_changing_sql_is_refused_by_the_dump_policy(): void
+    {
+        $policy = app(DumpScriptPolicy::class);
+
+        foreach ([
+            'set_role' => 'SET ROLE postgres;',
+            'reset_role' => 'RESET ROLE;',
+            'set_session_auth' => 'SET SESSION AUTHORIZATION postgres;',
+            'reset_session_auth' => 'RESET SESSION AUTHORIZATION;',
+            'set_local_role' => 'SET LOCAL ROLE postgres;',
+            'padded_set_role' => str_repeat(' ', 5_000).'SET ROLE postgres;',
+        ] as $label => $sql) {
+            $file = $this->tmp.'/rolechange_'.$label.'.sql';
+            file_put_contents($file, "CREATE TABLE a (i int);\n".$sql."\n");
+            try {
+                $policy->assertSafe($file);
+                $this->fail("{$label} must be refused");
+            } catch (RestoreFailure $e) {
+                $this->assertSame('role_change', $e->reason(), $label);
+            }
+        }
+    }
+
+    public function test_a_set_capable_membership_is_refused_even_when_not_inherited(): void
+    {
+        $this->configureDatabaseOnlyBackup(false);
+        $this->seedMarkers();
+        $archive = $this->createBackup();
+        $target = $this->createTargetDatabase();
+
+        // NOINHERIT: the role holds no dangerous privilege right now, but it
+        // can SET ROLE to one. `pg_has_role(…, 'member')` catches that; the
+        // weaker 'usage' check would not.
+        $role = 'zp_restore_setcap';
+        DB::statement("drop role if exists {$role}");
+        DB::statement("create role {$role} login password 'zp-setcap-pass' nosuperuser nocreatedb nocreaterole noinherit");
+        DB::statement("grant pg_read_server_files to {$role}");
+        DB::statement('grant all on database "'.$target.'" to '.$role);
+
+        $connection = (string) config('database.default');
+        $original = (array) config('database.connections.'.$connection);
+        Config::set('database.connections.'.$connection.'.username', $role);
+        Config::set('database.connections.'.$connection.'.password', 'zp-setcap-pass');
+        DB::purge('zp_restore_target');
+
+        try {
+            app(DatabaseRestoreService::class)->restore($archive, $target);
+            $this->fail('a SET-capable dangerous membership must be refused');
+        } catch (RestoreFailure $e) {
+            $this->assertSame(RestoreFailure::CATEGORY_TARGET, $e->category());
+            $this->assertSame('role_read_server_files', $e->reason());
+            $this->assertStringNotContainsString($role, $e->publicMessage(), 'the role name must never leak');
+        } finally {
+            Config::set('database.connections.'.$connection, $original);
+            DB::purge('zp_restore_target');
+            DB::purge($connection);
+            DB::statement("revoke pg_read_server_files from {$role}");
+            DB::statement('revoke all on database "'.$target.'" from '.$role);
+            DB::statement("drop role if exists {$role}");
+        }
+
+        $this->assertSame(0, $this->objectCount($target), 'nothing may be restored');
+    }
+
+    public function test_the_role_guard_runs_inside_the_psql_session_that_executes_the_dump(): void
+    {
+        // The guard travels as a `-c` argument on the SAME psql invocation as
+        // `-f`, so the checked identity cannot differ from the executing one.
+        $reflection = new \ReflectionClass(DatabaseRestoreService::class);
+        $guard = (string) $reflection->getConstant('ROLE_GUARD_SQL');
+
+        $this->assertStringContainsString('is_superuser', $guard);
+        $this->assertStringContainsString('session_user', $guard);
+        $this->assertStringContainsString('current_user', $guard);
+        $this->assertStringContainsString("'member'", $guard, 'must use the SET-capable check');
+        foreach (['pg_execute_server_program', 'pg_read_server_files', 'pg_write_server_files'] as $role) {
+            $this->assertStringContainsString($role, $guard);
+        }
+        $this->assertStringContainsString('RAISE EXCEPTION', $guard);
+    }
+
+    // ── Content-identity pinning (follow-up 4.1.4) ─────────────────────────
+
+    public function test_a_same_inode_same_size_rewrite_during_staging_is_detected(): void
+    {
+        $this->configureDatabaseOnlyBackup(false);
+        $this->seedMarkers();
+        $benign = $this->createBackup();
+        $target = $this->createTargetDatabase();
+
+        // Same file, same length, different bytes — device, inode and size all
+        // still match, so only a content digest can catch this.
+        $size = filesize($benign);
+        $service = new class(app(DumpScriptPolicy::class)) extends DatabaseRestoreService
+        {
+            public string $path = '';
+
+            public int $size = 0;
+
+            protected function afterCopySource(): void
+            {
+                if ($this->path !== '') {
+                    // Rewrite AFTER the bytes were copied: same inode, identical
+                    // length, different content. dev/ino/size all still match.
+                    $handle = fopen($this->path, 'r+b');
+                    fwrite($handle, str_repeat('Z', $this->size));
+                    fclose($handle);
+                }
+            }
+        };
+        $service->path = $benign;
+        $service->size = (int) $size;
+
+        try {
+            $this->asLeastPrivilegeRole(fn () => $service->restore($benign, $target));
+            $this->fail('a same-inode same-size rewrite must be detected');
+        } catch (RestoreFailure $e) {
+            $this->assertSame(RestoreFailure::CATEGORY_STAGING, $e->category());
+            $this->assertSame('source_content_changed', $e->reason());
+            $this->assertStringNotContainsString($this->tmp, $e->publicMessage());
+        }
+
+        $this->assertSame(0, $this->objectCount($target), 'nothing may be restored');
+    }
+
+    public function test_a_symlinked_archive_path_is_refused(): void
+    {
+        $this->configureDatabaseOnlyBackup(false);
+        $this->seedMarkers();
+        $real = $this->createBackup();
+
+        $link = $this->tmp.'/linked.tar.gz';
+        symlink($real, $link);
+        $target = $this->createTargetDatabase();
+
+        try {
+            $this->asLeastPrivilegeRole(fn () => app(DatabaseRestoreService::class)->restore($link, $target));
+            $this->fail('a symlinked archive path must be refused');
+        } catch (RestoreFailure $e) {
+            $this->assertSame('path_is_symlink', $e->reason());
+        }
+
+        $this->assertSame(0, $this->objectCount($target));
+    }
+
+    // ── Dedicated restore credentials (follow-up 4.1.6) ────────────────────
+
+    public function test_partial_dedicated_restore_credentials_fail_closed(): void
+    {
+        $this->configureDatabaseOnlyBackup(false);
+        $this->seedMarkers();
+        $archive = $this->createBackup();
+        $target = $this->createTargetDatabase();
+
+        foreach ([
+            ['zp_only_user', null],
+            [null, 'zp-only-pass'],
+        ] as [$user, $password]) {
+            Config::set('database.backup_restore.username', $user);
+            Config::set('database.backup_restore.password', $password);
+
+            try {
+                app(DatabaseRestoreService::class)->restore($archive, $target);
+                $this->fail('partial dedicated credentials must fail closed');
+            } catch (RestoreFailure $e) {
+                $this->assertSame(RestoreFailure::CATEGORY_ENVIRONMENT, $e->category());
+                $this->assertSame('restore_credentials_incomplete', $e->reason());
+            }
+        }
+
+        Config::set('database.backup_restore.username', null);
+        Config::set('database.backup_restore.password', null);
+        $this->assertSame(0, $this->objectCount($target), 'nothing may be restored');
+    }
+
+    public function test_the_dedicated_credential_path_restores_end_to_end(): void
+    {
+        $this->configureDatabaseOnlyBackup(false);
+        $markers = $this->seedMarkers();
+        $archive = $this->createBackup();
+
+        $this->ensureLeastPrivilegeRole();
+        $target = $this->createTargetDatabase();
+
+        // The operator-facing path: dedicated identity from configuration,
+        // NOT a mutated application connection. Host/port/database inherit.
+        Config::set('database.backup_restore.username', self::LP_ROLE);
+        Config::set('database.backup_restore.password', self::LP_PASSWORD);
+
+        try {
+            $exit = Artisan::call('zedproxy:backup-restore', [
+                'archive' => $archive,
+                '--target-database' => $target,
+            ]);
+            $this->assertSame(0, $exit, Artisan::output());
+        } finally {
+            Config::set('database.backup_restore.username', null);
+            Config::set('database.backup_restore.password', null);
+        }
+
+        $this->assertSame(
+            $this->marker.'@example.com',
+            $this->target($target)->table('users')->where('id', $markers['user']->id)->value('email'),
+        );
+
+        // The application role is still a superuser — proof the restore really
+        // used the dedicated identity rather than falling back.
+        $this->assertTrue((bool) DB::scalar("select current_setting('is_superuser') = 'on'"));
+    }
+
+    public function test_the_dedicated_credentials_are_readable_from_the_cached_config(): void
+    {
+        // config:cache serialises config/database.php; the keys must survive.
+        $exported = require base_path('config/database.php');
+
+        $this->assertArrayHasKey('backup_restore', $exported);
+        $this->assertArrayHasKey('username', $exported['backup_restore']);
+        $this->assertArrayHasKey('password', $exported['backup_restore']);
+    }
+
+    // ── Remaining catalog objects (follow-up 4.1.5) ────────────────────────
+
+    public function test_publications_and_text_search_objects_make_a_target_non_empty(): void
+    {
+        $this->configureDatabaseOnlyBackup(false);
+        $this->seedMarkers();
+        $archive = $this->createBackup();
+
+        $objects = [
+            'publication' => ['create publication zp_pub for all tables', "select count(*) from pg_publication where pubname='zp_pub'"],
+            'ts_config' => ['create text search configuration zp_tsc (parser = default)', "select count(*) from pg_ts_config where cfgname='zp_tsc'"],
+            'conversion' => ["create conversion zp_conv for 'LATIN1' to 'UTF8' from iso8859_1_to_utf8", "select count(*) from pg_conversion where conname='zp_conv'"],
+        ];
+
+        foreach ($objects as $label => [$create, $probe]) {
+            $target = $this->createTargetDatabase();
+            $this->target($target)->statement($create);
+
+            try {
+                $this->asLeastPrivilegeRole(fn () => app(DatabaseRestoreService::class)->restore($archive, $target));
+                $this->fail("a target holding a {$label} must be refused");
+            } catch (RestoreFailure $e) {
+                $this->assertSame(RestoreFailure::CATEGORY_TARGET, $e->category(), $label);
+                $this->assertStringStartsWith('target_not_empty', $e->reason(), $label);
+            }
+
+            $this->assertSame(1, (int) $this->target($target)->scalar($probe), $label.' must be untouched');
+            $this->dropTargetDatabase();
+        }
+    }
+
     // ── Immutable archive staging (follow-up 4.2) ──────────────────────────
 
     /**

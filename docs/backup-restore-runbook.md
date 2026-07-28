@@ -81,14 +81,35 @@ lowercase letters, digits and underscores, not starting with a digit, at most
 
 The command refuses: the live application database, `postgres`, `template0`,
 `template1`, malformed names, and any database that already contains **any**
-user-created object — tables, partitioned tables, views, materialized views,
-sequences, foreign tables, routines, standalone composite types, domains,
-enums, ranges and multiranges, collations, non-baseline extensions, or a custom
-schema. The documented baseline is a freshly created database (which scores
+user-created object in the **documented catalog policy**: tables, partitioned
+tables, views, materialized views, sequences, foreign tables, routines,
+standalone composite types, domains, enums, ranges and multiranges,
+collations, non-baseline extensions, publications, text-search configurations,
+dictionaries, parsers and templates, conversions, operators, operator classes
+and families, foreign-data wrappers, foreign servers, or a custom schema. The documented baseline is a freshly created database (which scores
 zero) plus PostgreSQL's own required objects and `plpgsql`. Emptiness is
 re-checked immediately before the restore starts.
 
 It also refuses to run as an over-privileged role (see step 0).
+
+## 2b. Configure the dedicated restore identity
+
+The restore refuses to run as a superuser or as a member of
+`pg_execute_server_program`, `pg_read_server_files` or
+`pg_write_server_files` — checked **inside the same psql session** that runs
+the dump, so the identity verified is provably the one executing. Point the
+command at the unprivileged role from step 2:
+
+```bash
+ZP_BACKUP_RESTORE_DB_USERNAME=zedproxy_restore
+ZP_BACKUP_RESTORE_DB_PASSWORD=…
+```
+
+Host, port and database are inherited from the application connection; only
+the identity changes. **Both** variables must be set — setting one alone fails
+closed rather than silently falling back to the application role. If neither is
+set the application connection is used, and the role check still refuses a
+privileged one.
 
 ## 3. Supply the archive password without putting it in shell history
 
