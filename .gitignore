@@ -28,3 +28,11 @@ Thumbs.db
 
 # Backups
 storage/app/backups/*.dump
+
+# Redis persistence artifacts. A locally started redis-server (used by the
+# real-Redis test suite) writes these into the working directory; they are
+# machine state, never project files.
+dump.rdb
+*.rdb
+appendonly*.aof
+appendonlydir/

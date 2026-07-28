@@ -43,14 +43,24 @@ use Throwable;
  *      expired, superseded, already-sent/failed or freshly-claimed row cannot
  *      be claimed;
  *   3. COMMIT, then talk to the transport — never inside a transaction, but
- *      still inside the cache lock, so a replacement issuance cannot become
- *      authoritative mid-flight;
+ *      still inside the cache lock, so in the normal case a replacement
+ *      issuance cannot become authoritative mid-flight (and if the lock is
+ *      lost, the durable claim below still protects this attempt);
  *   4. finalize `sent`/`failed` with a TOKEN-MATCHED conditional update, so a
  *      stale worker can never overwrite a newer attempt's state;
  *   5. release the lock in `finally` (owner-safe; the lease is the backstop).
  *
  * Either issuance wins (this worker finds the row consumed and sends nothing)
- * or this worker wins (issuance waits for the bounded attempt to finish).
+ * or this worker wins (issuance refuses to supersede the fresh claim).
+ *
+ * THE CACHE LOCK IS COORDINATION, NOT PROOF. A Redis restart, failover,
+ * eviction, connection reset or lost lease can make the key disappear while
+ * this worker is still inside the provider call — another process could then
+ * hold "the" lock at the same time. The DURABLE authority is the database
+ * claim: `send_status = sending` plus `delivery_claimed_at` and
+ * `delivery_claim_token`. Issuance refuses to supersede a claim younger than
+ * PasswordResetService::ABANDONED_CLAIM_MINUTES even when no lock exists, so
+ * a code already on its way is never invalidated mid-flight.
  *
  * AT-MOST-ONE-ATTEMPT (fail-safe): entering `sending` means the transport
  * outcome may become AMBIGUOUS — a worker can die after the provider accepted
@@ -266,12 +276,18 @@ class SendPasswordResetOtpJob implements ShouldBeEncrypted, ShouldQueue
         }
 
         try {
+            $this->beforeFinalize($status);
+
             PasswordResetChallenge::whereKey($this->challengeId)
                 ->where('send_status', PasswordResetChallenge::SEND_STATUS_SENDING)
                 ->where('delivery_claim_token', $this->claimToken)
                 ->update(['send_status' => $status, 'delivery_claim_token' => null]);
         } catch (Throwable $e) {
-            // The abandoned-claim window recovers an unfinalized row.
+            // The transport already happened; only the bookkeeping was lost.
+            // The row stays `sending` with its ORIGINAL owner token and claim
+            // timestamp, so it is never re-transported and never superseded
+            // while fresh — the abandoned-claim window is what eventually
+            // retires it to `delivery_unknown`.
             $this->safeLog('finalize_failed', $e);
         }
     }
@@ -288,6 +304,14 @@ class SendPasswordResetOtpJob implements ShouldBeEncrypted, ShouldQueue
     protected function beforeClaim(): void {}
 
     protected function beforeTransport(): void {}
+
+    /**
+     * Seam at the REAL failure boundary between a completed transport and its
+     * database bookkeeping: tests make this throw to reproduce "the provider
+     * accepted the message but the `sent` update never landed" without
+     * rewriting an already-finalized row.
+     */
+    protected function beforeFinalize(string $status): void {}
 
     /** Positive-listed log: stage, safe reason code, exception class only. */
     private function safeLog(string $reason, Throwable $e): void

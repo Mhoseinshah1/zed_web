@@ -403,6 +403,134 @@ class PasswordResetRedisLockTest extends TestCase
         $this->assertSame(1, PasswordResetChallenge::where('user_id', $user->id)->whereNull('consumed_at')->count());
     }
 
+    // ── Redis lock LOSS while a delivery claim is in flight ─────────────────
+
+    public function test_losing_the_redis_lock_mid_transport_never_lets_issuance_supersede_a_fresh_claim(): void
+    {
+        $user = $this->makeUser();
+        Mail::fake();
+        $challenge = $this->issueChallengeFor($user);
+        $key = PasswordResetService::userLockKey($user->id);
+        $dir = sys_get_temp_dir().'/zp-redis-lockloss-'.uniqid();
+        mkdir($dir);
+
+        $results = $this->race(2, function (int $i) use ($dir, $key, $challenge, $user): string {
+            if ($i === 1) {
+                // The worker holds the REAL Redis lock, has COMMITTED its
+                // claim, and parks inside the transport seam.
+                RedisBarrierDeliveryJob::$onBeforeTransport = function () use ($dir): void {
+                    file_put_contents($dir.'/claimed', '1');
+                    $this->await($dir, 'issuance_attempted');
+                };
+                (new RedisBarrierDeliveryJob($challenge->id, 'email', (string) $user->email, '654321', $user->id))
+                    ->handle(app(SmsService::class));
+
+                return (string) PasswordResetChallenge::whereKey($challenge->id)->value('send_status');
+            }
+
+            $this->await($dir, 'claimed');
+
+            // SIMULATED REDIS RESTART / EVICTION / LOST LEASE: the
+            // coordination key simply disappears while the worker keeps
+            // transporting, so issuance now acquires "the" lock unopposed.
+            Cache::store('redis')->lock($key, 30)->forceRelease();
+            $free = Cache::store('redis')->lock($key, 1)->get() ? 'free' : 'held';
+            Cache::store('redis')->lock($key, 1)->forceRelease();
+
+            $outcome = app(PasswordResetService::class)->request((string) $user->email);
+            file_put_contents($dir.'/issuance_attempted', '1');
+
+            return $free.':'.$outcome['outcome'];
+        });
+
+        exec('rm -rf '.escapeshellarg($dir));
+
+        // The lock really was gone — and issuance STILL refused, because the
+        // durable database claim, not lock ownership, is the authority.
+        $this->assertStringStartsWith('free:', $results[2], 'children: '.implode(',', $results));
+        $this->assertSame('free:'.PasswordResetService::OUTCOME_DECOY, $results[2], 'children: '.implode(',', $results));
+        $this->assertSame(1, PasswordResetChallenge::where('user_id', $user->id)->count(), 'no replacement created');
+
+        // The worker resumed, transported at most once, and its token-matched
+        // finalization produced the authoritative terminal result.
+        $this->assertSame(PasswordResetChallenge::SEND_STATUS_SENT, $results[1], 'children: '.implode(',', $results));
+        $survivor = PasswordResetChallenge::findOrFail($challenge->id);
+        $this->assertNull($survivor->consumed_at);
+        $this->assertNull($survivor->delivery_claim_token);
+    }
+
+    public function test_lock_loss_plus_a_failed_finalization_still_protects_the_in_flight_code(): void
+    {
+        $user = $this->makeUser();
+        Mail::fake();
+        $challenge = $this->issueChallengeFor($user);
+        $key = PasswordResetService::userLockKey($user->id);
+        $dir = sys_get_temp_dir().'/zp-redis-finalfail-'.uniqid();
+        mkdir($dir);
+
+        $results = $this->race(2, function (int $i) use ($dir, $key, $challenge, $user): string {
+            if ($i === 1) {
+                // Transport SUCCEEDS, then the `sent` update fails before it
+                // can commit — the real boundary, not a rewritten row.
+                RedisBarrierDeliveryJob::$onBeforeTransport = function () use ($dir): void {
+                    file_put_contents($dir.'/transported', '1');
+                };
+                RedisBarrierDeliveryJob::$onBeforeFinalize = function (string $status): void {
+                    if ($status === PasswordResetChallenge::SEND_STATUS_SENT) {
+                        throw new \RuntimeException('bookkeeping connection lost');
+                    }
+                };
+                (new RedisBarrierDeliveryJob($challenge->id, 'email', (string) $user->email, '654321', $user->id))
+                    ->handle(app(SmsService::class));
+
+                // The lock also disappears (restart / eviction), and the job
+                // is retried: it must transport NOTHING.
+                Cache::store('redis')->lock($key, 30)->forceRelease();
+                RedisBarrierDeliveryJob::$onBeforeTransport = function () use ($dir): void {
+                    file_put_contents($dir.'/transported-again', '1');
+                };
+                RedisBarrierDeliveryJob::$onBeforeFinalize = null;
+                (new RedisBarrierDeliveryJob($challenge->id, 'email', (string) $user->email, '654321', $user->id))
+                    ->handle(app(SmsService::class));
+
+                file_put_contents($dir.'/worker_done', '1');
+
+                return (string) PasswordResetChallenge::whereKey($challenge->id)->value('send_status');
+            }
+
+            $this->await($dir, 'worker_done');
+
+            return (string) app(PasswordResetService::class)->request((string) $user->email)['outcome'];
+        });
+
+        $transports = count(glob($dir.'/transported*') ?: []);
+        exec('rm -rf '.escapeshellarg($dir));
+
+        // One transport only, the claim survives owned and fresh, and
+        // issuance is refused while it is still within the window.
+        $this->assertSame(1, $transports, 'exactly one transport call');
+        $this->assertSame(PasswordResetChallenge::SEND_STATUS_SENDING, $results[1], 'children: '.implode(',', $results));
+        $this->assertSame(PasswordResetService::OUTCOME_DECOY, $results[2], 'children: '.implode(',', $results));
+        $this->assertSame(1, PasswordResetChallenge::where('user_id', $user->id)->count());
+
+        $stuck = PasswordResetChallenge::findOrFail($challenge->id);
+        $this->assertNotNull($stuck->delivery_claim_token, 'the owner token survives a lost finalization');
+
+        // Past the abandonment threshold the claim is retired HONESTLY and a
+        // fresh challenge with a new code finally becomes available.
+        PasswordResetChallenge::whereKey($challenge->id)->update([
+            'delivery_claimed_at' => now()->subMinutes(PasswordResetService::ABANDONED_CLAIM_MINUTES + 1),
+        ]);
+        $outcome = app(PasswordResetService::class)->request((string) $user->email);
+
+        $this->assertSame(PasswordResetService::OUTCOME_ISSUED, $outcome['outcome']);
+        $retired = PasswordResetChallenge::findOrFail($challenge->id);
+        $this->assertSame(PasswordResetChallenge::SEND_STATUS_DELIVERY_UNKNOWN, $retired->send_status);
+        $this->assertNull($retired->delivery_claim_token);
+        $this->assertNotNull($retired->consumed_at);
+        $this->assertSame(1, PasswordResetChallenge::where('user_id', $user->id)->whereNull('consumed_at')->count());
+    }
+
     public function test_no_lock_key_or_owner_value_reaches_the_logs(): void
     {
         $user = $this->makeUser();
@@ -438,6 +566,15 @@ class RedisBarrierDeliveryJob extends SendPasswordResetOtpJob
     public static ?\Closure $onBeforeClaim = null;
 
     public static ?\Closure $onBeforeTransport = null;
+
+    public static ?\Closure $onBeforeFinalize = null;
+
+    protected function beforeFinalize(string $status): void
+    {
+        if (self::$onBeforeFinalize !== null) {
+            (self::$onBeforeFinalize)($status);
+        }
+    }
 
     protected function beforeClaim(): void
     {
