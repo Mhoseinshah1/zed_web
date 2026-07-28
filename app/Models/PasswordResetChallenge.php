@@ -42,13 +42,13 @@ class PasswordResetChallenge extends Model
         'send_status',
         'authorized_at',
         'authorization_expires_at',
-        'auth_session_hash',
+        'authorization_proof_hash',
         'password_fingerprint',
         'consumed_at',
     ];
 
     /** Secrets/bindings never leave the database via serialization. */
-    protected $hidden = ['token', 'code_hash', 'auth_session_hash', 'password_fingerprint'];
+    protected $hidden = ['token', 'code_hash', 'authorization_proof_hash', 'password_fingerprint'];
 
     protected $casts = [
         'expires_at' => 'datetime',

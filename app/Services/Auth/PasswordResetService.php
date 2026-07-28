@@ -7,11 +7,11 @@ use App\Models\PasswordResetChallenge;
 use App\Models\User;
 use App\Services\Email\EmailVerificationService;
 use App\Services\Sms\SmsService;
-use App\Support\PhoneNumber;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
+use Illuminate\Support\Timebox;
 
 /**
  * Self-service OTP password reset — the complete server-side state machine.
@@ -26,10 +26,12 @@ use Illuminate\Support\Str;
  * reset OTPs can never verify contact information.
  *
  * STATE MACHINE per challenge:
- *   issued(code_hash, expires 10m, ≤5 attempts)
- *     → authorized (OTP verified: bound to the guest session id hash, the
- *       account's current password-hash fingerprint, and a 10m authorization
- *       expiry)
+ *   issued(code_hash, expires 10m, ≤5 attempts) — created atomically under a
+ *       lock on the user row; a partial unique index enforces at most one
+ *       ACTIVE challenge per account at the database level
+ *     → authorized (OTP verified under a challenge row lock: bound to the
+ *       sha256 of a session-held one-time authorization proof, the account's
+ *       current password-hash fingerprint, and a 10m authorization expiry)
  *     → consumed exactly once by the atomic finalize() transaction, which
  *       locks the user + challenge rows, revalidates every binding, updates
  *       the password, rotates remember_token (revoking remember-me), and
@@ -60,9 +62,20 @@ class PasswordResetService
      */
     private const DUMMY_HASH = '$2y$12$8xfL8iYD4SU4qLh8sP7OAOYv9Yy7sVYIfO9gzVvIIylwHjQdjwMyi';
 
+    /**
+     * Fixed-MINIMUM duration of the synchronous request stage (µs). Every
+     * syntactically valid request — real, decoy, ineligible, delivery-broken
+     *  — runs inside the same Timebox, so the response cannot return faster
+     * for one account state than another. This is fixed-minimum timing
+     * equalization, NOT formal constant-time execution: an unusually slow
+     * real path can still exceed the minimum.
+     */
+    public const REQUEST_TIMEBOX_MICROSECONDS = 1_000_000;
+
     public function __construct(
         private readonly EmailVerificationService $email,
         private readonly SmsService $sms,
+        private readonly Timebox $timebox,
     ) {}
 
     /**
@@ -73,18 +86,23 @@ class PasswordResetService
      */
     public function request(string $identifier): string
     {
-        try {
-            [$user, $channel, $destination] = $this->resolveAccount($identifier);
+        // ONE explicit fixed-minimum timing boundary around the WHOLE
+        // account-dependent synchronous work (lookup, hashing, writes, queue
+        // publication) — identical for real and decoy outcomes.
+        return (string) $this->timebox->call(function () use ($identifier): string {
+            try {
+                [$user, $channel, $destination] = $this->resolveAccount($identifier);
 
-            if ($user !== null && $channel !== null && $destination !== null) {
-                return $this->issueChallenge($user, $channel, $destination);
+                if ($user !== null && $channel !== null && $destination !== null) {
+                    return $this->issueChallenge($user, $channel, $destination);
+                }
+            } catch (\Throwable $e) {
+                $this->safeLog('request', 'request_error', null, $e);
             }
-        } catch (\Throwable $e) {
-            $this->safeLog('request', 'request_error', null, $e);
-        }
 
-        // Decoy token: structurally identical, matches no challenge row.
-        return bin2hex(random_bytes(32));
+            // Decoy token: structurally identical, matches no challenge row.
+            return bin2hex(random_bytes(32));
+        }, self::REQUEST_TIMEBOX_MICROSECONDS);
     }
 
     /**
@@ -99,41 +117,50 @@ class PasswordResetService
     public function verifyCode(?string $token, string $code): ?string
     {
         try {
-            $challenge = is_string($token) && $token !== ''
-                ? PasswordResetChallenge::where('token', $token)->first()
-                : null;
+            // ONE locked transaction owns eligibility, expiry, the attempt
+            // budget, the increment, hash verification and authorization
+            // creation: concurrent submissions serialize on the row lock, so
+            // the 5-submitted-attempts cap cannot be exceeded and only ONE
+            // correct concurrent submission can mint the authorization — an
+            // already-authorized, consumed, expired or superseded challenge
+            // is never authorized again.
+            return DB::transaction(function () use ($token, $code): ?string {
+                $challenge = is_string($token) && $token !== ''
+                    ? PasswordResetChallenge::where('token', $token)->lockForUpdate()->first()
+                    : null;
 
-            if ($challenge === null
-                || $challenge->consumed_at !== null
-                || $challenge->authorized_at !== null
-                || $challenge->expires_at->isPast()
-                || $challenge->attempts >= self::MAX_ATTEMPTS) {
-                Hash::check($code, self::DUMMY_HASH); // uniform timing
+                if ($challenge === null
+                    || $challenge->consumed_at !== null
+                    || $challenge->authorized_at !== null
+                    || $challenge->expires_at->isPast()
+                    || $challenge->attempts >= self::MAX_ATTEMPTS) {
+                    Hash::check($code, self::DUMMY_HASH); // uniform timing
 
-                return null;
-            }
+                    return null;
+                }
 
-            $challenge->increment('attempts');
+                $challenge->forceFill(['attempts' => $challenge->attempts + 1])->save();
 
-            if (! Hash::check($code, $challenge->code_hash)) {
-                return null;
-            }
+                if (! Hash::check($code, $challenge->code_hash)) {
+                    return null;
+                }
 
-            $user = $challenge->user;
-            if ($user === null) {
-                return null;
-            }
+                $user = $challenge->user;
+                if ($user === null) {
+                    return null;
+                }
 
-            $proof = bin2hex(random_bytes(32));
+                $proof = bin2hex(random_bytes(32));
 
-            $challenge->forceFill([
-                'authorized_at' => now(),
-                'authorization_expires_at' => now()->addMinutes(self::AUTHORIZATION_TTL_MINUTES),
-                'auth_session_hash' => hash('sha256', $proof),
-                'password_fingerprint' => hash('sha256', (string) $user->password),
-            ])->save();
+                $challenge->forceFill([
+                    'authorized_at' => now(),
+                    'authorization_expires_at' => now()->addMinutes(self::AUTHORIZATION_TTL_MINUTES),
+                    'authorization_proof_hash' => hash('sha256', $proof),
+                    'password_fingerprint' => hash('sha256', (string) $user->password),
+                ])->save();
 
-            return $proof;
+                return $proof;
+            });
         } catch (\Throwable $e) {
             $this->safeLog('verify', 'verify_error', $token, $e);
 
@@ -164,7 +191,7 @@ class PasswordResetService
                     || $challenge->consumed_at !== null
                     || $challenge->authorization_expires_at === null
                     || $challenge->authorization_expires_at->isPast()
-                    || ! hash_equals((string) $challenge->auth_session_hash, hash('sha256', $proof))) {
+                    || ! hash_equals((string) $challenge->authorization_proof_hash, hash('sha256', $proof))) {
                     return false;
                 }
 
@@ -181,6 +208,12 @@ class PasswordResetService
                 $user->forceFill([
                     'password' => Hash::make($newPassword),
                     'remember_token' => Str::random(60),
+                    // Advance the monotonic credential version EXACTLY once,
+                    // inside this same locked transaction: every session
+                    // stamped with the previous version dies on its next
+                    // request, and unstamped pre-deployment sessions fail
+                    // closed (no longer on the initial version).
+                    'auth_version' => ((int) ($user->auth_version ?? User::INITIAL_AUTH_VERSION)) + 1,
                 ])->save();
 
                 $challenge->forceFill(['consumed_at' => now()])->save();
@@ -211,43 +244,77 @@ class PasswordResetService
      */
     private function resolveAccount(string $identifier): array
     {
-        $identifier = trim($identifier);
-        if ($identifier === '' || mb_strlen($identifier) > 255) {
-            return [null, null, null];
-        }
+        // EXACTLY the same canonicalization boundary the rate limiter uses
+        // (ResetIdentifier) — equivalent representations of one account can
+        // never diverge between lookup identity and limiter identity.
+        $canonical = ResetIdentifier::canonicalize($identifier);
 
-        if (str_contains($identifier, '@')) {
-            $email = strtolower($identifier);
-            $user = User::whereRaw('lower(email) = ?', [$email])->first();
+        if ($canonical['type'] === 'email') {
+            $user = User::whereRaw('lower(email) = ?', [$canonical['canonical']])->first();
 
             return ($user !== null && $this->email->isMailConfigured())
                 ? [$user, PasswordResetChallenge::CHANNEL_EMAIL, (string) $user->email]
                 : [null, null, null];
         }
 
-        $normalized = PhoneNumber::normalize($identifier);
-        if ($normalized === null) {
-            return [null, null, null];
-        }
-        $user = User::where('normalized_phone', $normalized)->first();
+        if ($canonical['type'] === 'phone') {
+            $user = User::where('normalized_phone', $canonical['canonical'])->first();
 
-        return ($user !== null && $this->sms->isConfigured())
-            ? [$user, PasswordResetChallenge::CHANNEL_SMS, $normalized]
-            : [null, null, null];
+            return ($user !== null && $this->sms->isConfigured())
+                ? [$user, PasswordResetChallenge::CHANNEL_SMS, $canonical['canonical']]
+                : [null, null, null];
+        }
+
+        return [null, null, null];
     }
 
-    /** Issue a fresh challenge (superseding actives) and queue delivery. */
+    /**
+     * Issue a fresh challenge atomically and queue delivery AFTER commit.
+     * The transaction serializes on the authoritative USER row, supersedes
+     * the previous active challenge and creates the replacement — so exactly
+     * one active challenge survives, with the partial unique index
+     * (password_reset_one_active) as the database-level authority. A rolled
+     * back issuance publishes NO delivery job.
+     */
     private function issueChallenge(User $user, string $channel, string $destination): string
     {
-        // Only one live challenge per account.
-        PasswordResetChallenge::where('user_id', $user->id)
-            ->whereNull('consumed_at')
-            ->update(['consumed_at' => now()]);
-
         $code = (string) random_int(100000, 999999);
         $token = bin2hex(random_bytes(32));
 
-        $challenge = PasswordResetChallenge::create([
+        $challenge = DB::transaction(function () use ($user, $channel, $code, $token): PasswordResetChallenge {
+            User::whereKey($user->id)->lockForUpdate()->first();
+
+            // Only one live challenge per account.
+            PasswordResetChallenge::where('user_id', $user->id)
+                ->whereNull('consumed_at')
+                ->update(['consumed_at' => now()]);
+
+            return $this->persistChallenge($user, $channel, $code, $token);
+        });
+
+        // Publication strictly AFTER the commit. Honest delivery state: a
+        // publication failure is recorded as dispatch_failed (no transport
+        // attempt ever happened) and the public response stays generic. The
+        // `queued` stamp is conditional so an inline (sync-queue) job's own
+        // sent/failed result is never overwritten.
+        try {
+            SendPasswordResetOtpJob::dispatch($challenge->id, $channel, $destination, $code);
+            PasswordResetChallenge::whereKey($challenge->id)
+                ->where('send_status', PasswordResetChallenge::SEND_STATUS_PENDING)
+                ->update(['send_status' => PasswordResetChallenge::SEND_STATUS_QUEUED]);
+        } catch (\Throwable $e) {
+            PasswordResetChallenge::whereKey($challenge->id)
+                ->update(['send_status' => PasswordResetChallenge::SEND_STATUS_DISPATCH_FAILED]);
+            $this->safeLog('dispatch', 'publication_failed', $token, $e);
+        }
+
+        return $token;
+    }
+
+    /** Seam: create the challenge row inside the issuance transaction. */
+    protected function persistChallenge(User $user, string $channel, string $code, string $token): PasswordResetChallenge
+    {
+        return PasswordResetChallenge::create([
             'user_id' => $user->id,
             'channel' => $channel,
             'token' => $token,
@@ -256,21 +323,6 @@ class PasswordResetService
             'attempts' => 0,
             'send_status' => PasswordResetChallenge::SEND_STATUS_PENDING,
         ]);
-
-        // Honest delivery state: queue publication failure is recorded as
-        // dispatch_failed (no transport attempt ever happened) and the
-        // public response stays generic. `queued` is stamped BEFORE the
-        // dispatch call because a sync queue executes the job inline — the
-        // job's own sent/failed result must not be overwritten afterwards.
-        $challenge->update(['send_status' => PasswordResetChallenge::SEND_STATUS_QUEUED]);
-        try {
-            SendPasswordResetOtpJob::dispatch($challenge->id, $channel, $destination, $code);
-        } catch (\Throwable $e) {
-            $challenge->update(['send_status' => PasswordResetChallenge::SEND_STATUS_DISPATCH_FAILED]);
-            $this->safeLog('dispatch', 'publication_failed', $token, $e);
-        }
-
-        return $token;
     }
 
     /**

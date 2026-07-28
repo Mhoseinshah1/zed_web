@@ -2,8 +2,11 @@
 
 namespace App\Providers;
 
+use App\Http\Middleware\EnsureSessionAuthVersion;
+use App\Models\User;
 use App\Services\AdminMfa\AdminMfaSession;
 use App\Services\Auth\PasswordResetService;
+use App\Services\Auth\ResetIdentifier;
 use App\Services\Email\EmailTransportSettingsService;
 use App\Services\Queue\FailedJobAlerter;
 use App\Services\Seo\SeoManager;
@@ -95,6 +98,12 @@ class AppServiceProvider extends ServiceProvider
                 // Older guard API: store the raw hash (middleware accepts both).
             }
             $request->session()->put('password_hash_web', $hash);
+            // Authoritative monotonic credential version (see
+            // EnsureSessionAuthVersion) — stamped on the same event.
+            $request->session()->put(
+                EnsureSessionAuthVersion::SESSION_KEY,
+                (int) ($event->user->auth_version ?? User::INITIAL_AUTH_VERSION),
+            );
         });
 
         // Lightweight rate limit for the public health probes — enough for
@@ -152,16 +161,21 @@ class AppServiceProvider extends ServiceProvider
             ];
         };
         // Password reset: independent two-bucket limiters per stage. The
-        // SUBJECT is never a raw identifier — the submitted email/phone (for
-        // the request stage) or the opaque session challenge token (for the
-        // verify/submit stages) is reduced to a non-reversible APP_KEY-keyed
-        // HMAC fingerprint before it becomes a cache key.
+        // SUBJECT is never a raw identifier. The REQUEST stage reduces the
+        // submitted email/phone through the SAME canonicalization boundary
+        // the account lookup uses (ResetIdentifier) and HMACs the canonical
+        // account identity — equivalent representations (case, whitespace,
+        // 0912…/+98912…/0098912…) share ONE bucket, so cycling formats
+        // cannot exceed the account-level limit. The verify/submit stages
+        // key on the opaque session challenge token, HMAC'd the same way.
         $passwordResetLimits = function (Request $request, string $prefix, int $decayMinutes, int $maxAttempts): array {
             $ip = (string) $request->ip();
-            $raw = (string) ($request->input('identifier')
-                ?? ($request->hasSession() ? $request->session()->get(PasswordResetService::SESSION_TOKEN_KEY) : null)
-                ?? 'ip:'.$ip);
-            $subject = hash_hmac('sha256', $raw, (string) config('app.key'));
+            if ($request->has('identifier')) {
+                $subject = ResetIdentifier::limiterSubject((string) $request->input('identifier'));
+            } else {
+                $raw = (string) (($request->hasSession() ? $request->session()->get(PasswordResetService::SESSION_TOKEN_KEY) : null) ?? 'ip:'.$ip);
+                $subject = hash_hmac('sha256', $raw, (string) config('app.key'));
+            }
 
             return [
                 Limit::perMinutes($decayMinutes, $maxAttempts)->by($prefix.':s:'.$subject),

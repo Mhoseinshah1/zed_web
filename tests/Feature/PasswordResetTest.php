@@ -3,12 +3,17 @@
 namespace Tests\Feature;
 
 use App\Http\Controllers\Auth\PasswordResetController;
+use App\Http\Middleware\EnsureSessionAuthVersion;
+use App\Jobs\SendPasswordResetOtpJob;
 use App\Mail\PasswordResetOtpMail;
 use App\Models\EmailVerificationCode;
 use App\Models\PasswordResetChallenge;
 use App\Models\User;
 use App\Services\Auth\PasswordResetService;
+use App\Services\Auth\ResetIdentifier;
 use App\Services\Email\EmailVerificationService;
+use App\Services\Sms\SmsService;
+use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
@@ -18,6 +23,7 @@ use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\RateLimiter;
+use Illuminate\Support\Timebox;
 use Illuminate\Testing\TestResponse;
 use Tests\TestCase;
 
@@ -44,11 +50,31 @@ class PasswordResetTest extends TestCase
 
     private const NEW_PASSWORD = 'Brand-New-Pass-1';
 
+    /** Recording Timebox fake: no real sleep, captures configured minimums. */
+    public object $timebox;
+
     protected function setUp(): void
     {
         parent::setUp();
         Cache::flush();
         RateLimiter::clear('pwrr'); // buckets are per-test anyway (array cache)
+
+        // Swap the real Timebox for a recording fake so the suite does not
+        // sleep the fixed minimum on every request; the timing-evidence test
+        // asserts the SAME boundary + minimum is invoked for every outcome.
+        $this->timebox = new class extends Timebox
+        {
+            /** @var list<int> */
+            public array $calls = [];
+
+            public function call(callable $callback, int $microseconds)
+            {
+                $this->calls[] = $microseconds;
+
+                return $callback($this);
+            }
+        };
+        $this->app->instance(Timebox::class, $this->timebox);
     }
 
     private function user(array $attributes = []): User
@@ -400,6 +426,221 @@ class PasswordResetTest extends TestCase
             ->assertOk()
             ->assertHeader('X-Robots-Tag', 'noindex, nofollow, noarchive')
             ->assertHeader('Cache-Control', 'must-revalidate, no-cache, no-store, private');
+    }
+
+    // ── Monotonic authentication versioning (4.1) ────────────────────────────
+
+    public function test_unstamped_session_fails_closed_after_version_advances(): void
+    {
+        $user = $this->user();
+        $this->resetPasswordFor($user); // auth_version: 1 → 2
+
+        // Pre-deployment session (no stamps at all) whose FIRST request
+        // happens AFTER the reset: fail closed — the old adoption bypass is
+        // gone.
+        $this->actingAs($user->refresh());
+        session()->forget(['password_hash_web', EnsureSessionAuthVersion::SESSION_KEY]);
+        $this->get(route('dashboard.index'))->assertRedirect(route('login'));
+        $this->assertGuest();
+    }
+
+    public function test_stamped_old_version_session_is_rejected_after_reset(): void
+    {
+        $user = $this->user()->refresh(); // pull the DB-default auth_version
+        $this->assertSame(User::INITIAL_AUTH_VERSION, (int) $user->auth_version);
+
+        $this->resetPasswordFor($user);
+        $this->assertSame(User::INITIAL_AUTH_VERSION + 1, (int) $user->refresh()->auth_version);
+
+        // A session from another device stamped with the OLD version dies —
+        // even when its (legacy-layer) password stamp is somehow current.
+        $this->actingAs($user)
+            ->withSession([EnsureSessionAuthVersion::SESSION_KEY => User::INITIAL_AUTH_VERSION])
+            ->get(route('dashboard.index'))
+            ->assertRedirect(route('login'));
+        $this->assertGuest();
+    }
+
+    public function test_fresh_login_after_reset_stamps_the_new_version_and_succeeds(): void
+    {
+        $user = $this->user();
+        $this->resetPasswordFor($user);
+
+        $this->post('/login', ['username' => $user->username, 'password' => self::NEW_PASSWORD])
+            ->assertRedirect();
+        $this->assertAuthenticatedAs($user->fresh());
+        $this->assertSame(
+            User::INITIAL_AUTH_VERSION + 1,
+            (int) session(EnsureSessionAuthVersion::SESSION_KEY),
+        );
+        $this->get(route('dashboard.index'))->assertOk();
+    }
+
+    public function test_login_paths_stamp_the_authentication_version(): void
+    {
+        // Normal login.
+        $user = $this->user()->refresh(); // pull the DB-default auth_version
+        $this->post('/login', ['username' => $user->username, 'password' => self::OLD_PASSWORD])->assertRedirect();
+        $this->assertSame((int) $user->auth_version, (int) session(EnsureSessionAuthVersion::SESSION_KEY));
+
+        // Registration auto-login.
+        $this->post('/logout');
+        $this->flushSession();
+        $this->post('/register', [
+            'name' => 'Stamp Test', 'username' => 'stampuser1',
+            'email' => 'stamp-user@example.com', 'phone' => '09359998877',
+            'password' => 'Register-Pass-1', 'password_confirmation' => 'Register-Pass-1',
+        ]);
+        $this->assertAuthenticated();
+        $this->assertSame(User::INITIAL_AUTH_VERSION, (int) session(EnsureSessionAuthVersion::SESSION_KEY));
+    }
+
+    public function test_old_remember_token_fails_after_reset(): void
+    {
+        $user = $this->user();
+        $user->forceFill(['remember_token' => str_repeat('R', 60)])->save();
+        $oldToken = $user->remember_token;
+
+        $this->resetPasswordFor($user);
+        $this->assertNotSame($oldToken, $user->refresh()->remember_token);
+
+        // A remember-me cookie carrying the OLD rotated-away token must not
+        // authenticate.
+        $recaller = auth()->guard('web')->getRecallerName();
+        $this->flushSession();
+        $this->disableCookieEncryption()
+            ->withUnencryptedCookie($recaller, $user->id.'|'.$oldToken.'|'.$user->password)
+            ->get(route('dashboard.index'))
+            ->assertRedirect(route('login'));
+        $this->assertGuest();
+    }
+
+    // ── Canonical identifiers for lookup + rate limiting (4.2) ───────────────
+
+    public function test_equivalent_identifier_forms_share_one_limiter_bucket(): void
+    {
+        $emailForms = ['  User@Example.COM  ', 'user@example.com', 'USER@EXAMPLE.COM'];
+        $subjects = array_map(fn ($f) => ResetIdentifier::limiterSubject($f), $emailForms);
+        $this->assertCount(1, array_unique($subjects), 'equivalent email forms → one bucket');
+
+        $phoneForms = ['09121234567', '+989121234567', '00989121234567', '989121234567', ' 0912 123 4567 '];
+        $subjects = array_map(fn ($f) => ResetIdentifier::limiterSubject($f), $phoneForms);
+        $this->assertCount(1, array_unique($subjects), 'equivalent phone forms → one bucket');
+
+        // Distinct canonical accounts keep independent buckets.
+        $this->assertNotSame(
+            ResetIdentifier::limiterSubject('a@example.com'),
+            ResetIdentifier::limiterSubject('b@example.com'),
+        );
+        // Raw values never appear in the subject.
+        foreach (array_merge($emailForms, $phoneForms) as $form) {
+            $this->assertStringNotContainsString('example', ResetIdentifier::limiterSubject($form));
+            $this->assertStringNotContainsString('0912', ResetIdentifier::limiterSubject($form));
+        }
+    }
+
+    public function test_cycling_identifier_representations_cannot_exceed_the_account_limit(): void
+    {
+        Mail::fake();
+        $this->user();
+
+        // 3 allowed requests, each using a DIFFERENT representation of the
+        // same email — then the fourth form is throttled anyway.
+        $this->requestReset(self::EMAIL)->assertStatus(302);
+        $this->requestReset('  '.strtoupper(self::EMAIL).'  ')->assertStatus(302);
+        $this->requestReset('Reset-Target@Example.com')->assertStatus(302);
+        $this->requestReset('RESET-TARGET@example.COM')->assertStatus(429);
+    }
+
+    public function test_service_lookup_and_limiter_share_the_same_canonicalizer(): void
+    {
+        Mail::fake();
+        $user = $this->user();
+
+        // A decorated equivalent form still resolves the SAME account.
+        $this->requestReset('  '.strtoupper(self::EMAIL).'  ')->assertStatus(302);
+        $this->assertSame(1, PasswordResetChallenge::where('user_id', $user->id)->count());
+    }
+
+    // ── Atomic issuance + DB invariant + delivery ordering (4.3) ─────────────
+
+    public function test_database_invariant_rejects_a_second_active_challenge(): void
+    {
+        $user = $this->user();
+        $this->issueAndCaptureCode(); // one ACTIVE challenge exists
+
+        $this->expectException(QueryException::class);
+        DB::transaction(function () use ($user): void {
+            PasswordResetChallenge::create([
+                'user_id' => $user->id,
+                'channel' => PasswordResetChallenge::CHANNEL_EMAIL,
+                'token' => bin2hex(random_bytes(32)),
+                'code_hash' => bcrypt('999999'),
+                'expires_at' => now()->addMinutes(10),
+            ]);
+        });
+    }
+
+    public function test_rolled_back_issuance_publishes_no_delivery_job(): void
+    {
+        Queue::fake();
+        $user = $this->user();
+
+        $svc = \Mockery::mock(
+            PasswordResetService::class,
+            [app(EmailVerificationService::class), app(SmsService::class), $this->timebox],
+        )->makePartial()->shouldAllowMockingProtectedMethods();
+        $svc->shouldReceive('persistChallenge')->once()
+            ->andThrow(new \RuntimeException('insert failed'));
+
+        $token = $svc->request(self::EMAIL); // never throws — decoy comes back
+
+        $this->assertIsString($token);
+        Queue::assertNothingPushed();
+        $this->assertSame(0, PasswordResetChallenge::count(), 'rollback left no challenge row');
+    }
+
+    public function test_delivery_job_for_a_superseded_challenge_sends_nothing(): void
+    {
+        Mail::fake();
+        $user = $this->user();
+
+        $challenge = PasswordResetChallenge::create([
+            'user_id' => $user->id,
+            'channel' => PasswordResetChallenge::CHANNEL_EMAIL,
+            'token' => bin2hex(random_bytes(32)),
+            'code_hash' => bcrypt('123456'),
+            'expires_at' => now()->addMinutes(10),
+            'consumed_at' => now(), // superseded before the worker got to it
+            'send_status' => PasswordResetChallenge::SEND_STATUS_QUEUED,
+        ]);
+
+        (new SendPasswordResetOtpJob($challenge->id, 'email', self::EMAIL, '123456'))
+            ->handle(app(SmsService::class));
+
+        Mail::assertNothingSent();
+        $this->assertSame(PasswordResetChallenge::SEND_STATUS_QUEUED, $challenge->fresh()->send_status);
+    }
+
+    // ── Fixed-minimum request timing boundary (4.4) ──────────────────────────
+
+    public function test_every_request_outcome_runs_inside_the_same_timing_boundary(): void
+    {
+        Mail::fake();
+        $this->user();
+
+        $this->requestReset(self::EMAIL);                       // real issuance
+        $this->requestReset('nobody-here@example.com');         // decoy
+        $this->requestReset('not-an-identifier');               // invalid form
+        Queue::partialMock()->shouldReceive('connection')
+            ->andThrow(new \RuntimeException('redis down'));
+        $this->requestReset(self::EMAIL);                       // publication failure
+
+        // The SAME boundary with the SAME fixed minimum wrapped all four.
+        $this->assertSame(
+            array_fill(0, 4, PasswordResetService::REQUEST_TIMEBOX_MICROSECONDS),
+            $this->timebox->calls,
+        );
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────
