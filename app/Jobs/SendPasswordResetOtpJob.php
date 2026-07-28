@@ -52,16 +52,24 @@ use Throwable;
  * Either issuance wins (this worker finds the row consumed and sends nothing)
  * or this worker wins (issuance waits for the bounded attempt to finish).
  *
- * RECOVERY: a crashed worker leaves a `sending` row whose claim ages out
- * after PasswordResetService::ABANDONED_CLAIM_MINUTES, making it re-claimable
- * — an account can never be permanently stuck. The cache lease expires
- * independently.
+ * AT-MOST-ONE-ATTEMPT (fail-safe): entering `sending` means the transport
+ * outcome may become AMBIGUOUS — a worker can die after the provider accepted
+ * the message but before the row was finalized. No supported transport (SMTP,
+ * Kavenegar, SMS.ir, FarazSMS, …) offers a verified idempotency contract, so
+ * a challenge that ever reached `sending` is NEVER transported again. An
+ * abandoned claim is retired to the terminal, honest `delivery_unknown` state
+ * — it is not claimed as delivered and not claimed as undelivered — and the
+ * user simply requests a NEW challenge with a NEW code.
+ *
+ * RECOVERY: the account is never stuck. The cache lease expires
+ * independently of the row, the abandoned row is terminalized (or simply
+ * superseded by the next issuance), and a fresh challenge can always be
+ * issued.
  *
  * RETRY POLICY (documented): queue retries exist ONLY to recover from claim
- * contention (lock wait / row-lock timeout), never to repeat a completed
- * transport attempt. Once an attempt finalizes as `sent` OR `failed`, the row
- * is no longer claimable, so a retry sends nothing and the user simply
- * requests a fresh code. One challenge ⇒ at most one transport call.
+ * contention (lock wait / row-lock timeout) BEFORE any transport began. Once
+ * a challenge leaves the claimable states, a retry sends nothing.
+ * One challenge ⇒ at most one transport call.
  */
 class SendPasswordResetOtpJob implements ShouldBeEncrypted, ShouldQueue
 {
@@ -134,8 +142,13 @@ class SendPasswordResetOtpJob implements ShouldBeEncrypted, ShouldQueue
             }
 
             // Not claimable: consumed by a replacement issuance, expired,
-            // superseded, or already delivered/attempted. Send NOTHING.
+            // superseded, or already attempted. Send NOTHING — and if a
+            // crashed worker left an ABANDONED claim, terminalize it as
+            // ambiguous so the record is honest and the account is free to
+            // request a fresh challenge.
             if (! $claimed) {
+                $this->terminalizeAbandonedClaim();
+
                 return;
             }
 
@@ -187,17 +200,13 @@ class SendPasswordResetOtpJob implements ShouldBeEncrypted, ShouldQueue
             return PasswordResetChallenge::whereKey($this->challengeId)
                 ->whereNull('consumed_at')          // not superseded/consumed
                 ->where('expires_at', '>', now())   // still usable on arrival
-                ->where(function ($q) {
-                    // Fresh (pending/queued) OR an ABANDONED `sending` claim
-                    // from a crashed worker — never an already finalized row.
-                    $q->whereIn('send_status', [
-                        PasswordResetChallenge::SEND_STATUS_PENDING,
-                        PasswordResetChallenge::SEND_STATUS_QUEUED,
-                    ])->orWhere(function ($q) {
-                        $q->where('send_status', PasswordResetChallenge::SEND_STATUS_SENDING)
-                            ->where('delivery_claimed_at', '<=', now()->subMinutes(PasswordResetService::ABANDONED_CLAIM_MINUTES));
-                    });
-                })
+                // AT-MOST-ONE-ATTEMPT: only a never-attempted challenge is
+                // claimable. A row that already entered `sending` — even one
+                // abandoned by a crashed worker — is NEVER re-transported:
+                // the provider may already have accepted that message and no
+                // supported transport offers an idempotency contract, so a
+                // retry could deliver the same OTP twice.
+                ->whereIn('send_status', PasswordResetChallenge::CLAIMABLE_STATUSES)
                 ->update([
                     'send_status' => PasswordResetChallenge::SEND_STATUS_SENDING,
                     'delivery_claim_token' => $token,
@@ -212,6 +221,37 @@ class SendPasswordResetOtpJob implements ShouldBeEncrypted, ShouldQueue
         }
 
         return false;
+    }
+
+    /**
+     * Conditionally retire an ABANDONED `sending` claim to the terminal
+     * ambiguous state. Owner-safe and monotonic: the update matches the exact
+     * stale token and the age threshold, so it can never touch a live claim,
+     * a newer attempt, a consumed row, or an already-terminal row — and it
+     * never asserts the message was (or was not) delivered.
+     */
+    private function terminalizeAbandonedClaim(): void
+    {
+        try {
+            $stale = PasswordResetChallenge::whereKey($this->challengeId)
+                ->where('send_status', PasswordResetChallenge::SEND_STATUS_SENDING)
+                ->where('delivery_claimed_at', '<=', now()->subMinutes(PasswordResetService::ABANDONED_CLAIM_MINUTES))
+                ->first(['id', 'delivery_claim_token']);
+
+            if ($stale === null) {
+                return;
+            }
+
+            PasswordResetChallenge::whereKey($this->challengeId)
+                ->where('send_status', PasswordResetChallenge::SEND_STATUS_SENDING)
+                ->where('delivery_claim_token', $stale->delivery_claim_token)
+                ->update([
+                    'send_status' => PasswordResetChallenge::SEND_STATUS_DELIVERY_UNKNOWN,
+                    'delivery_claim_token' => null,
+                ]);
+        } catch (Throwable $e) {
+            $this->safeLog('abandoned_cleanup_failed', $e);
+        }
     }
 
     /**

@@ -17,9 +17,15 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  * ACTIVE-CHALLENGE DEFINITION (unchanged by the claim states): a challenge
  * is ACTIVE while `consumed_at IS NULL` — exactly what the
  * `password_reset_one_active` partial unique index enforces. A `sending`
- * (claimed) challenge is still active and still visible to that invariant. No destination address/number is
- * persisted — delivery happens at issuance time and only the safe channel
- * name plus an honest delivery state remain.
+ * (claimed) challenge is still active and still visible to that invariant.
+ *
+ * DELIVERY STATES are MONOTONIC — pending → queued → sending → one of
+ * {sent, failed, delivery_unknown} — and never move backwards into a
+ * transport-eligible state. `sending` is claimable ONLY by the worker that
+ * stamped it; once it leaves `sending`, no further transport is possible for
+ * that challenge. No destination address/number is persisted — delivery
+ * happens at issuance time and only the safe channel name plus an honest
+ * delivery state remain.
  */
 class PasswordResetChallenge extends Model
 {
@@ -40,6 +46,22 @@ class PasswordResetChallenge extends Model
     public const SEND_STATUS_FAILED = 'failed';
 
     public const SEND_STATUS_DISPATCH_FAILED = 'dispatch_failed';
+
+    /**
+     * TERMINAL and AMBIGUOUS: a worker claimed this challenge, may or may not
+     * have reached the provider, and never finalized (crash / kill). Whether
+     * the OTP was delivered is UNKNOWABLE without a provider idempotency
+     * contract, so the code is NEVER transported again — the user requests a
+     * fresh challenge. This state is never claimed as "delivered" and never
+     * returns to a transport-eligible state.
+     */
+    public const SEND_STATUS_DELIVERY_UNKNOWN = 'delivery_unknown';
+
+    /** Statuses from which a transport attempt may still be claimed. */
+    public const CLAIMABLE_STATUSES = [
+        self::SEND_STATUS_PENDING,
+        self::SEND_STATUS_QUEUED,
+    ];
 
     protected $fillable = [
         'user_id',
