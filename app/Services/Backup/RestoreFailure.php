@@ -44,6 +44,16 @@ class RestoreFailure extends \RuntimeException
     /** The restored schema failed its post-restore structural checks. */
     public const CATEGORY_VERIFICATION = 'verification';
 
+    /**
+     * SECURITY BOUNDARY: plaintext temporaries could not be VERIFIED as
+     * removed. Distinct from every other category because the database work
+     * may already have committed — see cleanup().
+     */
+    public const CATEGORY_CLEANUP = 'cleanup';
+
+    /** An unexpected internal error, sanitized at the boundary. */
+    public const CATEGORY_INTERNAL = 'internal';
+
     private function __construct(
         private readonly string $category,
         string $publicMessage,
@@ -101,6 +111,32 @@ class RestoreFailure extends \RuntimeException
     public static function verification(string $publicMessage, string $reason = ''): self
     {
         return new self(self::CATEGORY_VERIFICATION, $publicMessage, $reason);
+    }
+
+    /**
+     * Plaintext residue could not be verified as gone. $restored records
+     * whether the database transaction had already committed, because that
+     * changes what the operator must be told.
+     */
+    public static function cleanup(string $reason, bool $restored): self
+    {
+        return new self(
+            self::CATEGORY_CLEANUP,
+            $restored
+                ? 'بازیابی احتمالاً کامل شده، اما حذف فایل‌های موقت حساس تأیید نشد. پیش از هر اقدام دیگری وضعیت پایگاه‌دادهٔ مقصد و فایل‌های موقت سرور را دستی بررسی کنید و بازیابی را کورکورانه تکرار نکنید.'
+                : 'حذف فایل‌های موقت حساس تأیید نشد. فایل‌های موقت سرور را دستی بررسی کنید.',
+            $reason,
+        );
+    }
+
+    /** Any unexpected Throwable, reduced to a safe operator sentence. */
+    public static function internal(string $reason = 'unexpected_error'): self
+    {
+        return new self(
+            self::CATEGORY_INTERNAL,
+            'بازیابی به دلیل خطای داخلی انجام نشد.',
+            $reason,
+        );
     }
 
     public function category(): string

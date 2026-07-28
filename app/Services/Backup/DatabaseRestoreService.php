@@ -4,6 +4,7 @@ namespace App\Services\Backup;
 
 use Illuminate\Support\Facades\Config;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Process;
 
 /**
@@ -75,6 +76,11 @@ class DatabaseRestoreService
 
     private const RESTORE_TIMEOUT = 1800;
 
+    /** Distinctive prefix so cleanup can never walk an unrelated directory. */
+    private const WORK_PREFIX = 'zp-restore-';
+
+    public function __construct(private readonly DumpScriptPolicy $dumpPolicy) {}
+
     /**
      * Restore $archivePath into the already-existing, empty $targetDatabase.
      *
@@ -90,6 +96,7 @@ class DatabaseRestoreService
         $encrypted = str_ends_with($archive, '.enc');
 
         $work = $this->makeWorkDirectory();
+        $restored = false;
 
         try {
             $tarball = $encrypted
@@ -99,16 +106,55 @@ class DatabaseRestoreService
             $this->assertArchiveIsSafe($tarball);
             $dump = $this->extractDump($tarball, $work);
 
-            $this->runPsql($source, $target, $dump);
+            // Content validation BEFORE psql exists as a process: psql honours
+            // backslash meta-commands from its input file, so `\!` in a dump
+            // is remote code execution and a bare COMMIT dissolves the outer
+            // transaction. Nothing dangerous may reach the client.
+            $this->dumpPolicy->assertSafe($dump);
 
-            return [
+            // Re-check emptiness immediately before the restore. Validation and
+            // decryption take time; this narrows the window in which somebody
+            // could have populated the target since the first check.
+            $this->assertTargetIsEmpty($target, 'target_not_empty_recheck');
+
+            $this->beforeRestore();
+            $this->runPsql($source, $target, $dump);
+            $restored = true;
+
+            $result = [
                 'database' => $target,
                 'archive' => basename($archive),
                 'encrypted' => $encrypted,
             ] + $this->verifyRestoredSchema($target);
-        } finally {
-            $this->shred($work);
+
+            // Cleanup is part of the success contract, not an afterthought:
+            // an unverified plaintext leftover must never be reported as a
+            // clean run.
+            $this->cleanup($work, $restored);
+
+            return $result;
+        } catch (RestoreFailure $e) {
+            $this->cleanup($work, $restored, $e);
+
+            throw $e;
+        } catch (\Throwable $e) {
+            // Unexpected failures (process launch, timeout, driver errors)
+            // never leak their message or trace. The internal failure is built
+            // FIRST and handed to cleanup as the primary diagnosis, so a
+            // cleanup problem is logged without masking the real cause.
+            $internal = RestoreFailure::internal('unexpected_'.$this->safeClass($e));
+            $this->cleanup($work, $restored, $internal);
+
+            throw $internal;
         }
+    }
+
+    /** Exception class basename reduced to a safe machine token. */
+    private function safeClass(\Throwable $e): string
+    {
+        $name = strtolower((string) preg_replace('/[^A-Za-z]/', '', class_basename($e)));
+
+        return $name === '' ? 'throwable' : substr($name, 0, 40);
     }
 
     // ── Environment ────────────────────────────────────────────────────────
@@ -161,12 +207,25 @@ class DatabaseRestoreService
         }
 
         $this->bindTargetConnection($target, $source);
+        $this->assertTargetIsEmpty($target, 'target_not_empty');
 
+        return $target;
+    }
+
+    /**
+     * The target must hold NO user-created object of ANY kind — not merely no
+     * tables. Counting only tables and views would happily restore on top of
+     * an existing sequence, materialized view, function, type or custom
+     * schema, silently mixing two datasets.
+     *
+     * Everything PostgreSQL itself requires is excluded: the system catalogs,
+     * `information_schema`, any `pg_*` schema (TOAST/temp included), and the
+     * default empty `public` schema itself.
+     */
+    private function assertTargetIsEmpty(string $target, string $reason): void
+    {
         try {
-            $tables = (int) DB::connection(self::TARGET_CONNECTION)
-                ->scalar($this->userTableCountSql());
-        } catch (RestoreFailure $e) {
-            throw $e;
+            $objects = (int) DB::connection(self::TARGET_CONNECTION)->scalar($this->userObjectCountSql());
         } catch (\Throwable) {
             // Connection/permission detail may name hosts and users — dropped.
             throw RestoreFailure::target(
@@ -175,22 +234,43 @@ class DatabaseRestoreService
             );
         }
 
-        if ($tables !== 0) {
+        if ($objects !== 0) {
             throw RestoreFailure::target(
                 'پایگاه‌داده مقصد خالی نیست. بازیابی فقط روی یک پایگاه‌داده کاملاً خالی انجام می‌شود.',
-                'target_not_empty',
+                $reason,
             );
         }
-
-        return $target;
     }
 
-    /** Counts USER-created relations in `public` (system catalogs excluded). */
-    private function userTableCountSql(): string
+    /**
+     * Tables, partitioned tables, views, materialized views, sequences and
+     * foreign tables; routines; user-defined domains, enums and ranges; and
+     * any non-system schema beyond `public`.
+     */
+    private function userObjectCountSql(): string
     {
-        return "select count(*) from information_schema.tables
-                where table_schema = 'public'
-                  and table_type in ('BASE TABLE', 'VIEW')";
+        return "select count(*) from (
+                    select 1 from pg_class c
+                      join pg_namespace n on n.oid = c.relnamespace
+                     where n.nspname not in ('pg_catalog', 'information_schema')
+                       and n.nspname !~ '^pg_'
+                       and c.relkind in ('r', 'p', 'v', 'm', 'S', 'f')
+                    union all
+                    select 1 from pg_proc p
+                      join pg_namespace n on n.oid = p.pronamespace
+                     where n.nspname not in ('pg_catalog', 'information_schema')
+                       and n.nspname !~ '^pg_'
+                    union all
+                    select 1 from pg_type t
+                      join pg_namespace n on n.oid = t.typnamespace
+                     where n.nspname not in ('pg_catalog', 'information_schema')
+                       and n.nspname !~ '^pg_'
+                       and t.typtype in ('d', 'e', 'r')
+                    union all
+                    select 1 from pg_namespace n
+                     where n.nspname not in ('pg_catalog', 'information_schema', 'public')
+                       and n.nspname !~ '^pg_'
+                ) as user_objects";
     }
 
     /**
@@ -264,7 +344,7 @@ class DatabaseRestoreService
     /** Private, owner-only work directory under the system temp root. */
     private function makeWorkDirectory(): string
     {
-        $dir = rtrim(sys_get_temp_dir(), '/').'/zp-restore-'.bin2hex(random_bytes(12));
+        $dir = rtrim(sys_get_temp_dir(), '/').'/'.self::WORK_PREFIX.bin2hex(random_bytes(12));
 
         if (! mkdir($dir, 0700, false) || ! is_dir($dir)) {
             throw RestoreFailure::staging('ساخت پوشهٔ موقت بازیابی ممکن نشد.', 'mkdir_failed');
@@ -438,6 +518,7 @@ class DatabaseRestoreService
                 '-d', $target,
                 '-v', 'ON_ERROR_STOP=1',
                 '--single-transaction',
+                '--no-password',
                 '--quiet',
                 '--no-psqlrc',
                 '-f', $dump,
@@ -463,7 +544,7 @@ class DatabaseRestoreService
         $connection = DB::connection(self::TARGET_CONNECTION);
 
         try {
-            $tables = (int) $connection->scalar($this->userTableCountSql());
+            $tables = (int) $connection->scalar($this->userObjectCountSql());
 
             $present = $connection->select(
                 "select table_name from information_schema.tables
@@ -509,26 +590,112 @@ class DatabaseRestoreService
     // ── Cleanup ────────────────────────────────────────────────────────────
 
     /**
-     * Remove the decrypted archive, the extracted SQL and the work directory
-     * on EVERY path. Runs in a `finally`, so a thrown failure still leaves no
-     * plaintext residue.
+     * CHECKED removal of every plaintext temporary. Deliberately not
+     * best-effort: an encrypted archive whose decrypted copy is still on disk
+     * is a confidentiality failure, so an unverified leftover fails the run
+     * instead of being swallowed.
+     *
+     * This is deletion (unlink), NOT overwriting — it is not "secure
+     * shredding" and is not described as such. On a journalling or
+     * copy-on-write filesystem the bytes may survive until reused.
+     *
+     * $restored says whether the database transaction already committed,
+     * because that changes what the operator must be told: when it did, the
+     * restore may well have succeeded and blindly rerunning it is the wrong
+     * move. An already-failing run keeps ITS failure ($primary) — the caller's
+     * diagnosis is more actionable — and the cleanup problem is logged.
      */
-    private function shred(string $work): void
+    private function cleanup(string $work, bool $restored, ?RestoreFailure $primary = null): void
     {
-        if (! is_dir($work) || ! str_contains(basename($work), 'zp-restore-')) {
+        $reason = $this->removeWorkDirectory($work);
+
+        if ($reason === null) {
             return;
         }
 
-        foreach ((array) @scandir($work) as $entry) {
-            if ($entry === '.' || $entry === '..' || $entry === false) {
+        $this->safeLog('cleanup', $reason);
+
+        if ($primary === null) {
+            throw RestoreFailure::cleanup($reason, $restored);
+        }
+    }
+
+    /**
+     * Delete every staged file and the directory itself, VERIFYING each one.
+     * Returns null on success, or a safe reason code for the first failure.
+     */
+    private function removeWorkDirectory(string $work): ?string
+    {
+        // Refuse to walk anything that is not one of our own work directories.
+        if (! str_starts_with(basename($work), self::WORK_PREFIX)) {
+            return 'work_directory_unexpected';
+        }
+        if (! is_dir($work)) {
+            return null; // never created, or already gone
+        }
+
+        $entries = @scandir($work);
+        if ($entries === false) {
+            return 'work_directory_unreadable';
+        }
+
+        foreach ($entries as $entry) {
+            if ($entry === '.' || $entry === '..') {
                 continue;
             }
+
             $path = $work.'/'.$entry;
-            if (is_file($path) || is_link($path)) {
-                @unlink($path);
+
+            if (is_dir($path) && ! is_link($path)) {
+                return 'unexpected_directory_entry';
+            }
+
+            try {
+                $this->unlinkFile($path);
+            } catch (\Throwable) {
+                // A seam/filesystem error is itself a cleanup failure — it must
+                // never escape and replace the caller's diagnosis.
+                return 'unlink_error';
+            }
+            clearstatcache(true, $path);
+
+            if (file_exists($path)) {
+                // Name the artifact class, never the path.
+                return str_ends_with($entry, '.sql') ? 'dump_not_removed' : 'archive_not_removed';
             }
         }
 
-        @rmdir($work);
+        try {
+            $this->removeDirectory($work);
+        } catch (\Throwable) {
+            return 'rmdir_error';
+        }
+        clearstatcache(true, $work);
+
+        return is_dir($work) ? 'work_directory_not_removed' : null;
+    }
+
+    /** Seam: tests throw here to prove unexpected failures are sanitized. */
+    protected function beforeRestore(): void {}
+
+    /** Filesystem seams: overridden in tests to force verified-cleanup failures. */
+    protected function unlinkFile(string $path): void
+    {
+        @unlink($path);
+    }
+
+    protected function removeDirectory(string $path): void
+    {
+        @rmdir($path);
+    }
+
+    /** Positive-listed log: stage + safe machine reason only. */
+    private function safeLog(string $stage, string $reason): void
+    {
+        try {
+            Log::warning('[backup-restore] '.$stage, ['stage' => $stage, 'reason' => $reason]);
+        } catch (\Throwable) {
+            // Logging must never change the restore outcome.
+        }
     }
 }
