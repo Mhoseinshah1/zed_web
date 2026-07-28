@@ -8,6 +8,7 @@ use App\Jobs\SendPasswordResetOtpJob;
 use App\Mail\PasswordResetOtpMail;
 use App\Models\EmailVerificationCode;
 use App\Models\PasswordResetChallenge;
+use App\Models\SiteSetting;
 use App\Models\User;
 use App\Services\Auth\PasswordResetService;
 use App\Services\Auth\ResetIdentifier;
@@ -75,6 +76,9 @@ class PasswordResetTest extends TestCase
             }
         };
         $this->app->instance(Timebox::class, $this->timebox);
+
+        BarrierDeliveryJob::$onBeforeClaim = null;
+        BarrierDeliveryJob::$onBeforeTransport = null;
     }
 
     private function user(array $attributes = []): User
@@ -643,6 +647,247 @@ class PasswordResetTest extends TestCase
         );
     }
 
+    // ── Coordinated delivery claim: no stale OTP transport (4.2) ─────────────
+
+    /** Issue a challenge WITHOUT inline delivery (queue faked). */
+    private function issueWithoutDelivery(): PasswordResetChallenge
+    {
+        Queue::fake();
+        app(PasswordResetService::class)->request(self::EMAIL);
+
+        return PasswordResetChallenge::whereNull('consumed_at')->latest('id')->firstOrFail();
+    }
+
+    private function deliveryJob(PasswordResetChallenge $challenge, string $channel = 'email', string $code = '123456'): BarrierDeliveryJob
+    {
+        return new BarrierDeliveryJob(
+            $challenge->id,
+            $channel,
+            $channel === 'sms' ? '+989121234567' : self::EMAIL,
+            $code,
+            (int) $challenge->user_id,
+        );
+    }
+
+    public function test_replacement_issuance_before_the_claim_stops_the_stale_transport(): void
+    {
+        Mail::fake();
+        $user = $this->user();
+        $old = $this->issueWithoutDelivery();
+
+        // The old worker is paused BEFORE it can claim; a replacement
+        // issuance wins the coordination boundary and consumes the old
+        // challenge. The resumed worker must transport NOTHING.
+        BarrierDeliveryJob::$onBeforeClaim = function (): void {
+            Queue::fake();
+            app(PasswordResetService::class)->request(self::EMAIL);
+        };
+
+        $this->deliveryJob($old)->handle(app(SmsService::class));
+
+        Mail::assertNothingSent();
+        $this->assertNotNull($old->fresh()->consumed_at, 'old challenge was superseded');
+        // The stale worker never touched the newer authoritative row.
+        $new = PasswordResetChallenge::whereNull('consumed_at')->firstOrFail();
+        $this->assertNotSame($old->id, $new->id);
+        $this->assertNotSame(PasswordResetChallenge::SEND_STATUS_SENT, $new->send_status);
+        $this->assertNotSame(PasswordResetChallenge::SEND_STATUS_FAILED, $new->send_status);
+    }
+
+    public function test_transport_runs_under_the_per_user_lock_and_outside_any_transaction(): void
+    {
+        Mail::fake();
+        $user = $this->user();
+        $challenge = $this->issueWithoutDelivery();
+
+        // RefreshDatabase wraps each test in its own transaction, so the
+        // evidence is that the job opens NO ADDITIONAL transaction level
+        // around the transport (its claim transaction is already committed).
+        $baseline = DB::transactionLevel();
+        $observed = [];
+        BarrierDeliveryJob::$onBeforeTransport = function () use (&$observed, $user): void {
+            // No SQL transaction may wrap the network call…
+            $observed['transaction_level'] = DB::transactionLevel();
+            // …and the per-user coordination lock IS held, so a replacement
+            // issuance cannot become authoritative mid-flight.
+            $probe = Cache::lock(PasswordResetService::userLockKey($user->id), 1);
+            $observed['lock_free'] = $probe->get();
+            if ($observed['lock_free']) {
+                $probe->release();
+            }
+        };
+
+        $this->deliveryJob($challenge)->handle(app(SmsService::class));
+
+        $this->assertSame($baseline, $observed['transaction_level'], 'transport must not open a DB transaction');
+        $this->assertFalse($observed['lock_free'], 'per-user lock must be held across the transport');
+        Mail::assertSentCount(1);
+        $this->assertSame(PasswordResetChallenge::SEND_STATUS_SENT, $challenge->fresh()->send_status);
+    }
+
+    public function test_issuance_fails_closed_while_a_delivery_claim_holds_the_lock(): void
+    {
+        Mail::fake();
+        $user = $this->user();
+        $this->issueWithoutDelivery();
+        $before = PasswordResetChallenge::count();
+
+        // Simulate an in-flight delivery attempt holding the coordination
+        // lock: a replacement issuance must NOT slip past it.
+        $held = Cache::lock(PasswordResetService::userLockKey($user->id), 30);
+        $this->assertTrue($held->get());
+
+        try {
+            $token = app(PasswordResetService::class)->request(self::EMAIL);
+            // Public behavior is unchanged (a decoy token + generic message),
+            // and no replacement challenge was created.
+            $this->assertIsString($token);
+            $this->assertSame($before, PasswordResetChallenge::count());
+            $this->assertSame(0, PasswordResetChallenge::where('token', $token)->count());
+        } finally {
+            $held->release();
+        }
+    }
+
+    public function test_email_and_sms_transports_run_at_most_once_per_challenge(): void
+    {
+        Mail::fake();
+        $this->user();
+        $challenge = $this->issueWithoutDelivery();
+
+        // Two runs of the SAME job (a queue retry after a successful attempt):
+        // the finalized row is no longer claimable, so nothing is re-sent.
+        $this->deliveryJob($challenge)->handle(app(SmsService::class));
+        $this->deliveryJob($challenge)->handle(app(SmsService::class));
+
+        Mail::assertSentCount(1);
+        $this->assertSame(PasswordResetChallenge::SEND_STATUS_SENT, $challenge->fresh()->send_status);
+
+        // Same guarantee on the SMS channel (the email challenge is retired
+        // first — the single-active invariant forbids two active rows).
+        $challenge->forceFill(['consumed_at' => now()])->save();
+        SiteSetting::set('sms_enabled', 'true');
+        $sms = \Mockery::mock(SmsService::class)->makePartial();
+        $sms->shouldReceive('sendOtp')->once()->andReturnTrue();
+        $smsChallenge = PasswordResetChallenge::create([
+            'user_id' => $challenge->user_id,
+            'channel' => PasswordResetChallenge::CHANNEL_SMS,
+            'token' => bin2hex(random_bytes(32)),
+            'code_hash' => bcrypt('222222'),
+            'expires_at' => now()->addMinutes(10),
+            'send_status' => PasswordResetChallenge::SEND_STATUS_QUEUED,
+        ]);
+        $this->deliveryJob($smsChallenge, 'sms', '222222')->handle($sms);
+        $this->deliveryJob($smsChallenge, 'sms', '222222')->handle($sms);
+        $this->assertSame(PasswordResetChallenge::SEND_STATUS_SENT, $smsChallenge->fresh()->send_status);
+    }
+
+    public function test_failed_transport_finalizes_the_claim_and_never_blocks_future_issuance(): void
+    {
+        $this->user();
+        $challenge = $this->issueWithoutDelivery();
+        $challenge->forceFill(['channel' => PasswordResetChallenge::CHANNEL_SMS])->save();
+
+        // A transport that THROWS (credentials in the message — they must not
+        // reach any log): the job handles any Throwable identically on both
+        // channels.
+        $sms = \Mockery::mock(SmsService::class)->makePartial();
+        $sms->shouldReceive('sendOtp')->once()
+            ->andThrow(new \RuntimeException('smtp://user:pw@mail.example:587 refused'));
+
+        $this->deliveryJob($challenge, 'sms', '222222')->handle($sms);
+
+        $fresh = $challenge->fresh();
+        $this->assertSame(PasswordResetChallenge::SEND_STATUS_FAILED, $fresh->send_status);
+        $this->assertNull($fresh->delivery_claim_token, 'claim released on failure');
+
+        // A retry after a FAILED attempt does not re-send (documented policy:
+        // one transport attempt per challenge) …
+        $sms->shouldNotReceive('sendOtp');
+        $this->deliveryJob($challenge, 'sms', '222222')->handle($sms);
+        $this->assertSame(PasswordResetChallenge::SEND_STATUS_FAILED, $challenge->fresh()->send_status);
+
+        // … and a brand-new issuance still works immediately.
+        Queue::fake();
+        Mail::fake();
+        app(PasswordResetService::class)->request(self::EMAIL);
+        $this->assertSame(1, PasswordResetChallenge::whereNull('consumed_at')->count());
+    }
+
+    public function test_abandoned_claim_from_a_crashed_worker_is_recoverable(): void
+    {
+        Mail::fake();
+        $this->user();
+        $challenge = $this->issueWithoutDelivery();
+
+        // A crashed worker left a `sending` row owned by a token nobody holds.
+        $challenge->forceFill([
+            'send_status' => PasswordResetChallenge::SEND_STATUS_SENDING,
+            'delivery_claim_token' => bin2hex(random_bytes(32)),
+            'delivery_claimed_at' => now()->subMinutes(PasswordResetService::ABANDONED_CLAIM_MINUTES + 1),
+        ])->save();
+
+        $this->deliveryJob($challenge)->handle(app(SmsService::class));
+
+        Mail::assertSentCount(1);
+        $this->assertSame(PasswordResetChallenge::SEND_STATUS_SENT, $challenge->fresh()->send_status);
+    }
+
+    public function test_a_fresh_claim_held_by_another_worker_is_not_stolen(): void
+    {
+        Mail::fake();
+        $this->user();
+        $challenge = $this->issueWithoutDelivery();
+
+        // Another worker claimed it moments ago — still within the lease.
+        $challenge->forceFill([
+            'send_status' => PasswordResetChallenge::SEND_STATUS_SENDING,
+            'delivery_claim_token' => bin2hex(random_bytes(32)),
+            'delivery_claimed_at' => now(),
+        ])->save();
+
+        $this->deliveryJob($challenge)->handle(app(SmsService::class));
+
+        Mail::assertNothingSent();
+        $this->assertSame(PasswordResetChallenge::SEND_STATUS_SENDING, $challenge->fresh()->send_status);
+    }
+
+    public function test_expired_challenge_is_never_transported(): void
+    {
+        Mail::fake();
+        $this->user();
+        $challenge = $this->issueWithoutDelivery();
+        $challenge->forceFill(['expires_at' => now()->subMinute()])->save();
+
+        $this->deliveryJob($challenge)->handle(app(SmsService::class));
+
+        Mail::assertNothingSent();
+    }
+
+    public function test_claim_states_keep_the_single_active_invariant_intact(): void
+    {
+        Mail::fake();
+        $user = $this->user();
+        $challenge = $this->issueWithoutDelivery();
+
+        // A CLAIMED (`sending`) challenge is still ACTIVE: the partial unique
+        // index must still refuse a second unconsumed row for this account.
+        $challenge->forceFill([
+            'send_status' => PasswordResetChallenge::SEND_STATUS_SENDING,
+            'delivery_claim_token' => bin2hex(random_bytes(32)),
+            'delivery_claimed_at' => now(),
+        ])->save();
+
+        $this->expectException(QueryException::class);
+        PasswordResetChallenge::create([
+            'user_id' => $user->id,
+            'channel' => PasswordResetChallenge::CHANNEL_EMAIL,
+            'token' => bin2hex(random_bytes(32)),
+            'code_hash' => bcrypt('333333'),
+            'expires_at' => now()->addMinutes(10),
+        ]);
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────────────
 
     /** Complete a full reset for $user via HTTP (email channel). */
@@ -661,5 +906,31 @@ class PasswordResetTest extends TestCase
     private function latestCodeFor(): string
     {
         return $this->issueAndCaptureCode();
+    }
+}
+
+/**
+ * The real delivery job plus its two deterministic-concurrency seams, so a
+ * test can interleave a replacement issuance at an exact point without any
+ * timing sleep.
+ */
+class BarrierDeliveryJob extends SendPasswordResetOtpJob
+{
+    public static ?\Closure $onBeforeClaim = null;
+
+    public static ?\Closure $onBeforeTransport = null;
+
+    protected function beforeClaim(): void
+    {
+        if (self::$onBeforeClaim !== null) {
+            (self::$onBeforeClaim)();
+        }
+    }
+
+    protected function beforeTransport(): void
+    {
+        if (self::$onBeforeTransport !== null) {
+            (self::$onBeforeTransport)();
+        }
     }
 }

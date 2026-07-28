@@ -37,6 +37,12 @@ return new class extends Migration
             $table->string('authorization_proof_hash', 64)->nullable();
             $table->string('password_fingerprint', 64)->nullable();
             $table->timestamp('consumed_at')->nullable();
+            // Delivery CLAIM (mirrors the email-OTP delivery-claim design):
+            // a worker owns its transport attempt through an opaque token, so
+            // a stale worker can never finalize a newer attempt's state. The
+            // claim timestamp bounds abandoned `sending` rows for recovery.
+            $table->string('delivery_claim_token', 64)->nullable();
+            $table->timestamp('delivery_claimed_at')->nullable();
             $table->timestamps();
 
             $table->index(['user_id', 'consumed_at']);

@@ -43,15 +43,20 @@ return Application::configure(basePath: dirname(__DIR__))
             'telegram/webhook',
         ]);
 
-        // Password-hash-bound sessions for the whole web surface: the session
-        // stamps the user's current password hash (lazily for sessions that
-        // predate this middleware — they stay valid until the first
-        // credential change) and every later request re-verifies it, so a
-        // password reset immediately revokes EVERY other authenticated
-        // session and remember-me login on every device. The Redis session
-        // driver cannot enumerate sessions per user; the password hash acts
-        // as the account's monotonic credential version instead. The Filament
-        // panel already runs its own AuthenticateSession.
+        // SESSION REVOCATION (two layers, in order):
+        //  1. AuthenticateSession — the framework's password-hash binding.
+        //     SECONDARY layer: it also revokes sessions for legacy password
+        //     writers that do not advance auth_version.
+        //  2. EnsureSessionAuthVersion — the AUTHORITATIVE monotonic
+        //     credential version (users.auth_version). A password reset
+        //     advances it inside its locked transaction, so every other
+        //     authenticated session and remember-me login dies on its next
+        //     request. Unstamped pre-deployment sessions are adopted only
+        //     while the account is still on the initial version.
+        // The Redis session driver cannot enumerate sessions per user, which
+        // is why a stamped version — not enumeration — is the mechanism. The
+        // Filament panel runs its own AuthenticateSession plus (below) the
+        // same version check.
         $middleware->web(append: [
             AuthenticateSession::class,
             // Authoritative monotonic session-revocation check (auth_version):

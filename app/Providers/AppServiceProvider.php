@@ -78,14 +78,17 @@ class AppServiceProvider extends ServiceProvider
             }
         });
 
-        // Password-hash-bound sessions (AuthenticateSession in the web group):
-        // stamp the CURRENT credential hash into the session on every
-        // successful login — normal, registration auto-login, and remember-me
-        // — so a fresh login is immediately bound, and a login that replaces
-        // a previous user's stamp in the same session never trips a false
-        // logout. Sessions predating this middleware carry no stamp and are
-        // adopted lazily by the middleware itself (documented compatibility:
-        // they stay valid until the first credential change).
+        // Stamp BOTH session credential bindings on every successful login —
+        // normal, registration auto-login, remember-me and the Filament panel
+        // all fire this event:
+        //  • auth_version — the AUTHORITATIVE monotonic credential version
+        //    checked by EnsureSessionAuthVersion;
+        //  • the password hash — the secondary AuthenticateSession layer.
+        // Stamping at login means a fresh session is immediately bound and a
+        // login that replaces a previous user's stamp never trips a false
+        // logout. Sessions predating this feature carry no stamp and are
+        // adopted lazily (only while the account is still on the initial
+        // version) — see EnsureSessionAuthVersion.
         Event::listen(Login::class, function ($event): void {
             $request = request();
             if (! $request->hasSession()) {

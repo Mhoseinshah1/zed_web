@@ -11,7 +11,13 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  * phone number, and contact-verification codes can never appear here.
  *
  * Only the bcrypt hash of the code is stored; the plaintext OTP never
- * touches the database or the logs. No destination address/number is
+ * touches the database or the logs. The delivery claim token is never
+ * serialized either.
+ *
+ * ACTIVE-CHALLENGE DEFINITION (unchanged by the claim states): a challenge
+ * is ACTIVE while `consumed_at IS NULL` — exactly what the
+ * `password_reset_one_active` partial unique index enforces. A `sending`
+ * (claimed) challenge is still active and still visible to that invariant. No destination address/number is
  * persisted — delivery happens at issuance time and only the safe channel
  * name plus an honest delivery state remain.
  */
@@ -25,6 +31,9 @@ class PasswordResetChallenge extends Model
     public const SEND_STATUS_PENDING = 'pending';
 
     public const SEND_STATUS_QUEUED = 'queued';
+
+    /** A worker holds a token-owned claim and is talking to the transport. */
+    public const SEND_STATUS_SENDING = 'sending';
 
     public const SEND_STATUS_SENT = 'sent';
 
@@ -45,16 +54,18 @@ class PasswordResetChallenge extends Model
         'authorization_proof_hash',
         'password_fingerprint',
         'consumed_at',
+        'delivery_claimed_at',
     ];
 
     /** Secrets/bindings never leave the database via serialization. */
-    protected $hidden = ['token', 'code_hash', 'authorization_proof_hash', 'password_fingerprint'];
+    protected $hidden = ['token', 'code_hash', 'authorization_proof_hash', 'password_fingerprint', 'delivery_claim_token'];
 
     protected $casts = [
         'expires_at' => 'datetime',
         'authorized_at' => 'datetime',
         'authorization_expires_at' => 'datetime',
         'consumed_at' => 'datetime',
+        'delivery_claimed_at' => 'datetime',
         'attempts' => 'integer',
     ];
 
