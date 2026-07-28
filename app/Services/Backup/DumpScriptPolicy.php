@@ -380,11 +380,25 @@ class DumpScriptPolicy
 
             // ── Ordinary SQL context ──────────────────────────────────────
 
+            // PostgreSQL's lexer replaces a comment with WHITESPACE, so a
+            // comment separates tokens rather than joining them. The
+            // accumulator has to do the same, or the statement-initial checks
+            // below are trivially bypassable — verified against 16.13:
+            //
+            //     SET/**/ROLE postgres;      -- really switches role
+            //     START--x\nTRANSACTION;     -- really opens a transaction
+            //
+            // Dropping the comment without a separator produced `SETROLE` /
+            // `STARTTRANSACTION`, which matched neither guard, and both
+            // statements were accepted and executed.
             if ($char === '-' && $next === '-') {
+                $this->appendToStatement(' ');
+
                 return; // line comment: nothing else on this line is code
             }
 
             if ($char === '/' && $next === '*') {
+                $this->appendToStatement(' ');
                 $this->blockCommentDepth = 1;
                 $i += 2;
 

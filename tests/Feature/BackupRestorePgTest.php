@@ -15,6 +15,7 @@ use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Config;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Symfony\Component\Process\Process;
 use Tests\TestCase;
 
 /**
@@ -1306,6 +1307,87 @@ class BackupRestorePgTest extends TestCase
                 $this->assertSame('role_change', $e->reason(), $label);
             }
         }
+    }
+
+    /**
+     * PostgreSQL's lexer turns a comment into WHITESPACE, so a comment placed
+     * between two keywords separates them rather than joining them. The
+     * accumulator used to drop comments outright, which glued the keywords
+     * together (`SETROLE`, `STARTTRANSACTION`) so neither statement-initial
+     * guard matched — and both statements were accepted and then executed.
+     */
+    public function test_comments_cannot_split_a_dangerous_keyword_pair(): void
+    {
+        $policy = app(DumpScriptPolicy::class);
+
+        $cases = [
+            'block_set_role' => ['SET/**/ROLE postgres;', 'role_change'],
+            'line_set_role' => ["SET--c\nROLE postgres;", 'role_change'],
+            'block_local_role' => ['SET/**/LOCAL/**/ROLE postgres;', 'role_change'],
+            'block_session_auth' => ['SET/**/SESSION/**/AUTHORIZATION postgres;', 'role_change'],
+            'line_reset_role' => ["RESET--c\nROLE;", 'role_change'],
+            'block_start_transaction' => ['START/**/TRANSACTION;', 'transaction_control'],
+            'line_start_transaction' => ["START--c\nTRANSACTION;", 'transaction_control'],
+            'block_prepare_transaction' => ["PREPARE/**/TRANSACTION 'x';", 'transaction_control'],
+            'nested_block_set_role' => ['SET/* /*n*/ */ROLE postgres;', 'role_change'],
+        ];
+
+        foreach ($cases as $label => [$sql, $reason]) {
+            $file = $this->tmp.'/commentsplit_'.$label.'.sql';
+            file_put_contents($file, "CREATE TABLE a (i int);\n".$sql."\n");
+            try {
+                $policy->assertSafe($file);
+                $this->fail("{$label} must be refused");
+            } catch (RestoreFailure $e) {
+                $this->assertSame($reason, $e->reason(), $label);
+            }
+        }
+
+        // Not a theoretical parse difference: PostgreSQL really executes both
+        // of these, so accepting them was a genuine escape from the outer
+        // transaction and from the least-privilege role.
+        foreach (['SET/**/ROLE NONE;', "START--c\nTRANSACTION;"] as $sql) {
+            $this->assertSame(
+                0,
+                $this->runSqlDirectly($sql),
+                'PostgreSQL must actually accept this, or the test proves nothing',
+            );
+        }
+
+        // The separator must not break legitimate dumps: comments really do
+        // appear between tokens in pg_dump output.
+        $benign = $this->tmp.'/commentsplit_benign.sql';
+        file_put_contents(
+            $benign,
+            "CREATE/**/TABLE benign (id int);\nCOPY/**/benign (id) FROM stdin;\n1\n\\.\n"
+            ."SELECT--c\n1;\n",
+        );
+        $policy->assertSafe($benign);
+        $this->assertTrue(true, 'comment-separated legitimate SQL still validates');
+    }
+
+    /** Run one statement through psql as the app role; returns the exit code. */
+    private function runSqlDirectly(string $sql): int
+    {
+        $connection = (string) config('database.default');
+        $file = $this->tmp.'/direct_'.bin2hex(random_bytes(4)).'.sql';
+        file_put_contents($file, $sql."\n");
+
+        $process = new Process([
+            'psql',
+            '-h', (string) config("database.connections.{$connection}.host"),
+            '-p', (string) config("database.connections.{$connection}.port"),
+            '-U', (string) config("database.connections.{$connection}.username"),
+            '-d', (string) config("database.connections.{$connection}.database"),
+            '-v', 'ON_ERROR_STOP=1',
+            '--no-psqlrc',
+            '--no-password',
+            '-q',
+            '-f', $file,
+        ], null, ['PGPASSWORD' => (string) config("database.connections.{$connection}.password")]);
+        $process->run();
+
+        return (int) $process->getExitCode();
     }
 
     public function test_a_set_capable_membership_is_refused_even_when_not_inherited(): void
