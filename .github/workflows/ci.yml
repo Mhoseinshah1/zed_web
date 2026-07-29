@@ -27,6 +27,13 @@ on:
   pull_request:
     branches:
       - main
+      # Stacked pull requests target their predecessor, not main. Without these
+      # the `pull_request` trigger silently does not fire for them, so a stacked
+      # PR shows no checks at all and cannot be verified before merge.
+      - 'refactor/**'
+      - 'harden/**'
+      - 'perf/**'
+      - 'test/**'
   workflow_dispatch:
 
 # Cancel superseded runs on the same ref so pushes don't pile up.
