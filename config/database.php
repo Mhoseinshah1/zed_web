@@ -30,6 +30,24 @@ return [
     |
     */
 
+    /*
+    |--------------------------------------------------------------------------
+    | Dedicated backup-restore identity
+    |--------------------------------------------------------------------------
+    |
+    | zedproxy:backup-restore refuses to run as a privileged role. Set BOTH of
+    | these to the least-privilege PostgreSQL login that owns the scratch
+    | database; host, port and database are inherited from the application
+    | connection. Setting only one fails closed — the application credentials
+    | are never silently substituted.
+    |
+    */
+
+    'backup_restore' => [
+        'username' => env('ZP_BACKUP_RESTORE_DB_USERNAME'),
+        'password' => env('ZP_BACKUP_RESTORE_DB_PASSWORD'),
+    ],
+
     'connections' => [
 
         'sqlite' => [

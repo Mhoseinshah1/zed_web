@@ -33,11 +33,24 @@ touching production.
 > starts. That is a strong backstop, **not** a licence to restore archives of
 > unknown origin.
 >
-> Encryption proves only that the bytes were unreadable in transit — it says
-> nothing about **who produced them**. An attacker who can hand you an archive
-> can hand you an encrypted one. Restore only archives you can trace to your
-> own backup system and storage, and treat an archive from anywhere else as
-> untrusted input.
+> Encryption proves only that the bytes were unreadable in transit — it proves
+> **confidentiality, not authenticity**. It says nothing about who produced the
+> archive, and an attacker who can hand you one can hand you an encrypted one.
+> Restore only archives you can trace to **project-controlled backup storage**,
+> and treat anything else as untrusted input.
+>
+> **What the parser does and does not do.** It blocks the known psql
+> client-command paths (`\!`, `\connect`, `\i`, `\o`, `\copy`, …), refuses
+> every COPY form except the exact table-form `COPY … FROM stdin` that pg_dump
+> emits, and refuses script-level transaction control that would break
+> atomicity. It does **not** turn arbitrary hostile SQL into safe SQL — a dump
+> is still a program that runs against your database.
+>
+> **Least privilege is the containment layer.** The command refuses to restore
+> as a superuser or as a member of `pg_execute_server_program`,
+> `pg_read_server_files` or `pg_write_server_files`, because those roles can
+> reach the filesystem or run programs through ordinary SQL. Create the scratch
+> database owned by an unprivileged role and restore as that role.
 
 Backups live under the configured backup storage path. Work on a **copy**, so
 the original artifact stays untouched:
@@ -57,7 +70,9 @@ The target **must already exist and be completely empty**. Create it owned by
 the application role:
 
 ```bash
-sudo -u postgres createdb -O zedproxy zedproxy_restore_check
+# An UNPRIVILEGED owner — not a superuser (the restore refuses one).
+sudo -u postgres createuser --no-superuser --no-createdb --no-createrole zedproxy_restore
+sudo -u postgres createdb -O zedproxy_restore zedproxy_restore_check
 ```
 
 Name rules (enforced, not escaped — a non-conforming name is rejected):
@@ -66,9 +81,35 @@ lowercase letters, digits and underscores, not starting with a digit, at most
 
 The command refuses: the live application database, `postgres`, `template0`,
 `template1`, malformed names, and any database that already contains **any**
-user-created object — tables, partitioned tables, views, materialized views,
-sequences, foreign tables, routines, user-defined types/domains, or a custom
-schema. Emptiness is re-checked immediately before the restore starts.
+user-created object in the **documented catalog policy**: tables, partitioned
+tables, views, materialized views, sequences, foreign tables, routines,
+standalone composite types, domains, enums, ranges and multiranges,
+collations, non-baseline extensions, publications, text-search configurations,
+dictionaries, parsers and templates, conversions, operators, operator classes
+and families, foreign-data wrappers, foreign servers, or a custom schema. The documented baseline is a freshly created database (which scores
+zero) plus PostgreSQL's own required objects and `plpgsql`. Emptiness is
+re-checked immediately before the restore starts.
+
+It also refuses to run as an over-privileged role (see step 0).
+
+## 2b. Configure the dedicated restore identity
+
+The restore refuses to run as a superuser or as a member of
+`pg_execute_server_program`, `pg_read_server_files` or
+`pg_write_server_files` — checked **inside the same psql session** that runs
+the dump, so the identity verified is provably the one executing. Point the
+command at the unprivileged role from step 2:
+
+```bash
+ZP_BACKUP_RESTORE_DB_USERNAME=zedproxy_restore
+ZP_BACKUP_RESTORE_DB_PASSWORD=…
+```
+
+Host, port and database are inherited from the application connection; only
+the identity changes. **Both** variables must be set — setting one alone fails
+closed rather than silently falling back to the application role. If neither is
+set the application connection is used, and the role check still refuses a
+privileged one.
 
 ## 3. Supply the archive password without putting it in shell history
 

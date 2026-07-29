@@ -69,14 +69,44 @@ class DumpScriptPolicy
     /** `\restrict` / `\unrestrict` argument shape, as generated. */
     private const RESTRICT_LINE = '/^\\\\(restrict|unrestrict)[ \t]+[A-Za-z0-9]{1,128}[ \t]*$/';
 
+    /**
+     * The ONLY accepted COPY form: table-form, FROM stdin, optional column
+     * list, optional schema qualification, bare or quoted identifiers.
+     */
+    private const COPY_FROM_STDIN =
+        '/^COPY[ ]+(?:"(?:[^"]|"")+"|[A-Za-z_][A-Za-z0-9_$]*)(?:[ ]*\.[ ]*(?:"(?:[^"]|"")+"|[A-Za-z_][A-Za-z0-9_$]*))?'
+        .'(?:[ ]*\([^()]*\))?[ ]+FROM[ ]+stdin[ ]*;?$/i';
+
     /** Statement-initial keywords that would break the outer transaction. */
     private const TRANSACTION_CONTROL = '/^(begin|commit|rollback|abort|end|start\s+transaction|prepare\s+transaction|savepoint)\b/i';
 
-    /** Hard ceiling on one logical line, so a pathological file cannot blow up memory. */
-    private const MAX_LINE_BYTES = 4_194_304;
+    /**
+     * Statement-initial role switches. The restore refuses a dangerous role
+     * before it starts, so a dump must not be able to BECOME one afterwards.
+     */
+    private const ROLE_CHANGE = '/^(set\s+role|reset\s+role|set\s+session\s+authorization|reset\s+session\s+authorization|set\s+local\s+role)\b/i';
+
+    /** Default hard ceiling on ONE physical line (bytes). */
+    public const DEFAULT_MAX_LINE_BYTES = 1_048_576;
+
+    /** Default hard ceiling on one semicolon-free STATEMENT (bytes). */
+    public const DEFAULT_MAX_STATEMENT_BYTES = 4_194_304;
+
+    /** Bytes requested per read. Physical lines are reassembled across chunks. */
+    private const READ_CHUNK_BYTES = 65_536;
+
+    public function __construct(
+        private readonly int $maxLineBytes = self::DEFAULT_MAX_LINE_BYTES,
+        private readonly int $maxStatementBytes = self::DEFAULT_MAX_STATEMENT_BYTES,
+    ) {}
 
     // Lexer state, carried across lines.
     private bool $inCopy = false;
+
+    /** Constant-size COPY terminator state (never more than two bytes). */
+    private string $copyCandidate = '';
+
+    private bool $copyLineViable = true;
 
     private bool $inSingle = false;
 
@@ -89,6 +119,8 @@ class DumpScriptPolicy
     private ?string $dollarTag = null;
 
     private string $statement = '';
+
+    private int $statementBytes = 0;
 
     /**
      * Validate the dump at $path, or throw. Streams the file, so a multi-GB
@@ -106,26 +138,49 @@ class DumpScriptPolicy
         $this->reset();
 
         try {
-            while (($line = fgets($handle)) !== false) {
-                if (strlen($line) > self::MAX_LINE_BYTES) {
-                    throw RestoreFailure::content('ساختار نسخهٔ پایگاه‌داده نامعتبر است.', 'dump_line_too_long');
-                }
+            // Outside COPY data, physical lines are reassembled under a hard
+            // ceiling. INSIDE COPY data nothing is buffered at all: a constant
+            // two-byte state machine looks for a line that is exactly `\.`, so
+            // a legitimate multi-megabyte row streams through without tripping
+            // the line limit (which previously rejected real backups).
+            $buffer = '';
 
-                $line = rtrim($line, "\r\n");
+            while (($chunk = fread($handle, self::READ_CHUNK_BYTES)) !== false && $chunk !== '') {
+                $length = strlen($chunk);
+                $offset = 0;
 
-                if ($this->inCopy) {
-                    // Inside COPY data EVERYTHING is data until a line that is
-                    // exactly `\.` — including text that looks like SQL or a
-                    // meta-command.
-                    if ($line === '\\.') {
-                        $this->inCopy = false;
-                        $this->statement = '';
+                while ($offset < $length) {
+                    if ($this->inCopy) {
+                        $offset = $this->scanCopyData($chunk, $offset, $length);
+
+                        continue;
                     }
 
-                    continue;
-                }
+                    $newline = strpos($chunk, "\n", $offset);
 
-                $this->scanLine($line);
+                    if ($newline === false) {
+                        $buffer .= substr($chunk, $offset);
+                        $this->assertLineWithinLimit($buffer);
+                        $offset = $length;
+
+                        continue;
+                    }
+
+                    $buffer .= substr($chunk, $offset, $newline - $offset);
+                    $this->assertLineWithinLimit($buffer);
+                    $this->scanLine(rtrim($buffer, "\r"));
+                    $buffer = '';
+                    $offset = $newline + 1;
+                }
+            }
+
+            // Distinguish a clean EOF from a stream failure.
+            if (! feof($handle)) {
+                throw RestoreFailure::content('نسخهٔ پایگاه‌داده قابل بررسی نیست.', 'dump_read_failed');
+            }
+
+            if ($buffer !== '') {
+                $this->scanLine(rtrim($buffer, "\r"));
             }
         } finally {
             fclose($handle);
@@ -142,15 +197,105 @@ class DumpScriptPolicy
         }
     }
 
+    private function assertLineWithinLimit(string $buffer): void
+    {
+        if (strlen($buffer) > $this->maxLineBytes) {
+            throw RestoreFailure::content('ساختار نسخهٔ پایگاه‌داده نامعتبر است.', 'dump_line_too_long');
+        }
+    }
+
+    /**
+     * Stream COPY data with CONSTANT state. Only two bytes are ever held: the
+     * candidate `\.` at the start of the current physical line. Anything else
+     * on the line makes it data, so `\.x` stays data and a row of any size is
+     * fine. Returns the offset just past the terminator's newline, or the end
+     * of the chunk.
+     */
+    private function scanCopyData(string $chunk, int $offset, int $length): int
+    {
+        while ($offset < $length) {
+            $char = $chunk[$offset];
+
+            if ($char === "\n") {
+                $terminator = $this->copyCandidate === '\\.';
+                $this->copyCandidate = '';
+                $this->copyLineViable = true;
+                $offset++;
+
+                if ($terminator) {
+                    $this->inCopy = false;
+                    $this->resetStatement();
+
+                    return $offset;
+                }
+
+                continue;
+            }
+
+            if ($this->copyLineViable) {
+                if ($char === "\r" && $this->copyCandidate === '\\.') {
+                    $offset++; // tolerate CRLF on the terminator line
+
+                    continue;
+                }
+
+                $candidate = $this->copyCandidate.$char;
+                if ($candidate === '\\' || $candidate === '\\.') {
+                    $this->copyCandidate = $candidate;
+                } else {
+                    $this->copyLineViable = false;
+                    $this->copyCandidate = '';
+                }
+            }
+
+            $offset++;
+        }
+
+        return $offset;
+    }
+
+    /**
+     * Accumulate the statement's significant bytes and refuse one that runs
+     * past the configured ceiling without a semicolon. Security classification
+     * therefore always sees the complete grammar, never a truncated prefix.
+     */
+    private function appendToStatement(string $char): void
+    {
+        $this->statementBytes += strlen($char);
+
+        if ($this->statementBytes > $this->maxStatementBytes) {
+            throw RestoreFailure::content(
+                'ساختار نسخهٔ پایگاه‌داده نامعتبر است.',
+                'dump_statement_too_long',
+            );
+        }
+
+        // The WHOLE statement is retained, bounded by the ceiling above.
+        // Retaining only a prefix was a bypass: padding a statement with more
+        // leading whitespace than the window pushed `COMMIT`, `ROLLBACK`,
+        // `START TRANSACTION`, query-form COPY, `COPY … FROM PROGRAM` and
+        // server-file COPY out of view, and every one of them was accepted.
+        $this->statement .= $char;
+    }
+
+    private function resetStatement(): void
+    {
+        $this->statement = '';
+        $this->statementBytes = 0;
+    }
+
     private function reset(): void
     {
         $this->inCopy = false;
+        $this->copyCandidate = '';
+        $this->copyLineViable = true;
         $this->inSingle = false;
         $this->singleEscapes = false;
         $this->inDouble = false;
         $this->blockCommentDepth = 0;
         $this->dollarTag = null;
         $this->statement = '';
+        $this->statementBytes = 0;
     }
 
     /** Lex one line, carrying quote/comment state across line boundaries. */
@@ -214,14 +359,20 @@ class DumpScriptPolicy
             }
 
             if ($this->inDouble) {
+                // Quoted IDENTIFIER text is kept (unlike string literals, whose
+                // contents are data): real dumps quote reserved words, e.g.
+                // `COPY public."order" (…) FROM stdin;`, and the COPY grammar
+                // below has to see the whole name.
                 if ($char === '"') {
                     if ($next === '"') {
+                        $this->appendToStatement('""');
                         $i += 2;
 
                         continue;
                     }
                     $this->inDouble = false;
                 }
+                $this->appendToStatement($char);
                 $i++;
 
                 continue;
@@ -229,11 +380,25 @@ class DumpScriptPolicy
 
             // ── Ordinary SQL context ──────────────────────────────────────
 
+            // PostgreSQL's lexer replaces a comment with WHITESPACE, so a
+            // comment separates tokens rather than joining them. The
+            // accumulator has to do the same, or the statement-initial checks
+            // below are trivially bypassable — verified against 16.13:
+            //
+            //     SET/**/ROLE postgres;      -- really switches role
+            //     START--x\nTRANSACTION;     -- really opens a transaction
+            //
+            // Dropping the comment without a separator produced `SETROLE` /
+            // `STARTTRANSACTION`, which matched neither guard, and both
+            // statements were accepted and executed.
             if ($char === '-' && $next === '-') {
+                $this->appendToStatement(' ');
+
                 return; // line comment: nothing else on this line is code
             }
 
             if ($char === '/' && $next === '*') {
+                $this->appendToStatement(' ');
                 $this->blockCommentDepth = 1;
                 $i += 2;
 
@@ -253,7 +418,7 @@ class DumpScriptPolicy
                 // E'…' (or e'…') is the escape-string form.
                 $prev = $i > 0 ? $line[$i - 1] : '';
                 $this->singleEscapes = ($prev === 'E' || $prev === 'e');
-                $this->statement .= "'";
+                $this->appendToStatement("'");
                 $i++;
 
                 continue;
@@ -261,7 +426,7 @@ class DumpScriptPolicy
 
             if ($char === '"') {
                 $this->inDouble = true;
-                $this->statement .= '"';
+                $this->appendToStatement('"');
                 $i++;
 
                 continue;
@@ -283,20 +448,22 @@ class DumpScriptPolicy
                 if ($this->statementStartsCopyFromStdin($this->statement)) {
                     // Data starts on the NEXT line.
                     $this->inCopy = true;
+                    $this->copyCandidate = '';
+                    $this->copyLineViable = true;
                 }
 
-                $this->statement = '';
+                $this->resetStatement();
                 $i++;
 
                 continue;
             }
 
-            $this->statement .= $char;
+            $this->appendToStatement($char);
             $i++;
         }
 
         // Statements can span lines; keep them separated by whitespace.
-        $this->statement .= ' ';
+        $this->appendToStatement(' ');
     }
 
     /** `$tag$` / `$$` opener at $i, or null when this `$` is not one. */
@@ -359,10 +526,63 @@ class DumpScriptPolicy
                 'transaction_control',
             );
         }
+
+        if (preg_match(self::ROLE_CHANGE, $normalized) === 1) {
+            throw RestoreFailure::content(
+                'نسخهٔ پایگاه‌داده نقش نشست را تغییر می‌دهد و پذیرفته نمی‌شود.',
+                'role_change',
+            );
+        }
     }
 
+    /**
+     * Decide whether a statement is the EXACT table-form `COPY … FROM stdin`
+     * that pg_dump emits, and therefore whether the following lines are COPY
+     * DATA rather than SQL.
+     *
+     * Getting this wrong is a remote-code-execution bug, not a parsing nit.
+     * The previous broad match ("starts with COPY and contains FROM stdin")
+     * was bypassable — verified end to end against PostgreSQL 16.13:
+     *
+     *     CREATE TABLE stdin (id int);
+     *     COPY (SELECT * FROM stdin) TO stdout;
+     *     \! touch /tmp/pwned
+     *     \.
+     *
+     * That is QUERY-form COPY writing TO stdout, so psql never reads COPY
+     * data — it executes the following `\!` as a client meta-command. The
+     * parser, however, believed it was inside a data block and waved the
+     * `\!` through as data. The marker file was created.
+     *
+     * So this is now an exact allowlisted grammar:
+     *
+     *     COPY <table>[.<table>] [ ( <columns> ) ] FROM stdin ;
+     *
+     * with identifiers either bare or double-quoted. ANY other COPY form is
+     * refused outright — query form, every `TO` form, `FROM PROGRAM`,
+     * `TO PROGRAM`, a server-side filename, `WITH (…)` variants, or anything
+     * malformed — because none of them are emitted by a supported pg_dump and
+     * each either reads/writes server files or leaves psql in a state the
+     * parser would model incorrectly.
+     *
+     * @return bool true when the FOLLOWING lines are COPY data
+     */
     private function statementStartsCopyFromStdin(string $statement): bool
     {
-        return preg_match('/^\s*COPY\b.*\bFROM\s+stdin\b/is', $statement) === 1;
+        $normalized = trim(preg_replace('/\s+/', ' ', $statement) ?? '');
+
+        if (preg_match('/^COPY\b/i', $normalized) !== 1) {
+            return false;
+        }
+
+        if (preg_match(self::COPY_FROM_STDIN, $normalized) === 1) {
+            return true;
+        }
+
+        // It calls itself COPY but is not the one form we accept.
+        throw RestoreFailure::content(
+            'نسخهٔ پایگاه‌داده حاوی دستور COPY پشتیبانی‌نشده است.',
+            'copy_form_unsupported',
+        );
     }
 }

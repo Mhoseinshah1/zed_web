@@ -41,7 +41,7 @@ use Illuminate\Support\Facades\Process;
  *   6. restore with psql `ON_ERROR_STOP=1 --single-transaction`, so a SQL
  *      error leaves no partially restored schema;
  *   7. run structural checks;
- *   8. shred the work directory on EVERY success and failure path.
+ *   8. delete the work directory, VERIFIED, on every success and failure.
  *
  * Compatible with archives the current backup already produces: plain-SQL
  * `pg_dump` output (so `psql`, not `pg_restore`), `tar.gz`, and
@@ -76,6 +76,34 @@ class DatabaseRestoreService
 
     private const RESTORE_TIMEOUT = 1800;
 
+    /**
+     * Refuses the session outright when it is, or can become, dangerous.
+     * `pg_has_role(…, 'member')` is deliberately stronger than 'usage': it is
+     * true for a role the session can reach via SET ROLE even when the
+     * membership is NOINHERIT, so a "safe-looking" current_user whose
+     * session_user can regain privileges is still refused. Both session_user
+     * and current_user are checked.
+     */
+    private const ROLE_GUARD_SQL = <<<'SQL'
+        DO $zp_restore_guard$
+        BEGIN
+            IF current_setting('is_superuser') = 'on'
+               OR EXISTS (
+                   SELECT 1
+                     FROM unnest(ARRAY['pg_execute_server_program',
+                                       'pg_read_server_files',
+                                       'pg_write_server_files']) AS dangerous(name)
+                    WHERE to_regrole(dangerous.name) IS NOT NULL
+                      AND (pg_has_role(session_user, to_regrole(dangerous.name), 'member')
+                           OR pg_has_role(current_user, to_regrole(dangerous.name), 'member'))
+               )
+            THEN
+                RAISE EXCEPTION 'zp_restore_role_denied';
+            END IF;
+        END
+        $zp_restore_guard$;
+        SQL;
+
     /** Distinctive prefix so cleanup can never walk an unrelated directory. */
     private const WORK_PREFIX = 'zp-restore-';
 
@@ -99,9 +127,17 @@ class DatabaseRestoreService
         $restored = false;
 
         try {
+            // IMMUTABLE SNAPSHOT FIRST. The operator-supplied path is opened
+            // exactly once and streamed into the private work directory; every
+            // later step (listing, decryption, validation, extraction) reads
+            // ONLY the staged copy. Previously a plain archive was reopened by
+            // both `tar -tvzf` and `tar -xzf`, so a writable path could be
+            // swapped between inspection and extraction.
+            $staged = $this->stageSource($archive, $work);
+
             $tarball = $encrypted
-                ? $this->decrypt($archive, $work, $this->requirePassword($password))
-                : $archive;
+                ? $this->decrypt($staged, $work, $this->requirePassword($password))
+                : $staged;
 
             $this->assertArchiveIsSafe($tarball);
             $dump = $this->extractDump($tarball, $work);
@@ -116,6 +152,12 @@ class DatabaseRestoreService
             // decryption take time; this narrows the window in which somebody
             // could have populated the target since the first check.
             $this->assertTargetIsEmpty($target, 'target_not_empty_recheck');
+
+            // Containment layer: the validator blocks known psql client-command
+            // and transaction-escape paths, but it is NOT a SQL sandbox. A
+            // restore role that can reach the filesystem or run programs turns
+            // any residual SQL-level trick into host access, so refuse one.
+            $this->assertRestoreRoleIsSafe();
 
             $this->beforeRestore();
             $this->runPsql($source, $target, $dump);
@@ -172,7 +214,42 @@ class DatabaseRestoreService
             );
         }
 
-        return $cfg;
+        return $this->applyRestoreCredentials($cfg);
+    }
+
+    /**
+     * Overlay the DEDICATED restore credentials when they are configured.
+     *
+     * Host, port and database come from the verified application connection;
+     * only the identity changes. Both halves must be present — a half-set pair
+     * fails closed rather than silently falling back to the application role,
+     * which is exactly the confusion this exists to prevent. The password is
+     * read from configuration and travels via PGPASSWORD, never argv.
+     *
+     * When neither is set the application connection is used as before; the
+     * role preflight still refuses a dangerous identity, so this cannot become
+     * an accidental superuser restore.
+     *
+     * @param  array<string,mixed>  $cfg
+     * @return array<string,mixed>
+     */
+    private function applyRestoreCredentials(array $cfg): array
+    {
+        $username = trim((string) config('database.backup_restore.username', ''));
+        $password = (string) config('database.backup_restore.password', '');
+
+        if ($username === '' && $password === '') {
+            return $cfg;
+        }
+
+        if ($username === '' || $password === '') {
+            throw RestoreFailure::environment(
+                'تنظیمات نقش اختصاصی بازیابی ناقص است. نام کاربری و رمز عبور باید با هم تنظیم شوند.',
+                'restore_credentials_incomplete',
+            );
+        }
+
+        return array_merge($cfg, ['username' => $username, 'password' => $password]);
     }
 
     // ── Target database ────────────────────────────────────────────────────
@@ -261,11 +338,65 @@ class DatabaseRestoreService
                      where n.nspname not in ('pg_catalog', 'information_schema')
                        and n.nspname !~ '^pg_'
                     union all
+                    -- Standalone types: domains, enums, ranges, multiranges AND
+                    -- composites. A table's implicit row type is excluded by
+                    -- typrelid, so it is not double-counted with pg_class.
                     select 1 from pg_type t
                       join pg_namespace n on n.oid = t.typnamespace
                      where n.nspname not in ('pg_catalog', 'information_schema')
                        and n.nspname !~ '^pg_'
-                       and t.typtype in ('d', 'e', 'r')
+                       and t.typtype in ('d', 'e', 'r', 'm', 'c')
+                       and (t.typtype <> 'c' or t.typrelid = 0
+                            or exists (select 1 from pg_class rc
+                                        where rc.oid = t.typrelid and rc.relkind = 'c'))
+                       and not exists (select 1 from pg_class ac
+                                        where ac.oid = t.typrelid and ac.relkind <> 'c')
+                    union all
+                    select 1 from pg_collation col
+                      join pg_namespace n on n.oid = col.collnamespace
+                     where n.nspname not in ('pg_catalog', 'information_schema')
+                       and n.nspname !~ '^pg_'
+                    union all
+                    select 1 from pg_extension e
+                     where e.extname not in ('plpgsql')
+                    union all
+                    select 1 from pg_publication
+                    union all
+                    select 1 from pg_ts_config t
+                      join pg_namespace n on n.oid = t.cfgnamespace
+                     where n.nspname not in ('pg_catalog', 'information_schema') and n.nspname !~ '^pg_'
+                    union all
+                    select 1 from pg_ts_dict d
+                      join pg_namespace n on n.oid = d.dictnamespace
+                     where n.nspname not in ('pg_catalog', 'information_schema') and n.nspname !~ '^pg_'
+                    union all
+                    select 1 from pg_ts_parser p2
+                      join pg_namespace n on n.oid = p2.prsnamespace
+                     where n.nspname not in ('pg_catalog', 'information_schema') and n.nspname !~ '^pg_'
+                    union all
+                    select 1 from pg_ts_template tt
+                      join pg_namespace n on n.oid = tt.tmplnamespace
+                     where n.nspname not in ('pg_catalog', 'information_schema') and n.nspname !~ '^pg_'
+                    union all
+                    select 1 from pg_conversion cv
+                      join pg_namespace n on n.oid = cv.connamespace
+                     where n.nspname not in ('pg_catalog', 'information_schema') and n.nspname !~ '^pg_'
+                    union all
+                    select 1 from pg_operator op
+                      join pg_namespace n on n.oid = op.oprnamespace
+                     where n.nspname not in ('pg_catalog', 'information_schema') and n.nspname !~ '^pg_'
+                    union all
+                    select 1 from pg_opclass oc
+                      join pg_namespace n on n.oid = oc.opcnamespace
+                     where n.nspname not in ('pg_catalog', 'information_schema') and n.nspname !~ '^pg_'
+                    union all
+                    select 1 from pg_opfamily of2
+                      join pg_namespace n on n.oid = of2.opfnamespace
+                     where n.nspname not in ('pg_catalog', 'information_schema') and n.nspname !~ '^pg_'
+                    union all
+                    select 1 from pg_foreign_data_wrapper
+                    union all
+                    select 1 from pg_foreign_server
                     union all
                     select 1 from pg_namespace n
                      where n.nspname not in ('pg_catalog', 'information_schema', 'public')
@@ -353,6 +484,111 @@ class DatabaseRestoreService
 
         return $dir;
     }
+
+    /**
+     * Copy the source into the work directory through ONE open handle.
+     *
+     * Holding the descriptor across the whole copy is what makes this
+     * immutable: a replacement at the path cannot affect an already-open
+     * inode. The post-copy `fstat` on that SAME handle then catches a source
+     * that was truncated or appended to while we were reading it.
+     */
+    private function stageSource(string $archive, string $work): string
+    {
+        $in = @fopen($archive, 'rb');
+        if ($in === false) {
+            throw RestoreFailure::archive('فایل بکاپ قابل خواندن نیست.', 'source_open_failed');
+        }
+
+        $staged = $work.'/source.bin';
+        $out = @fopen($staged, 'wb');
+        if ($out === false) {
+            fclose($in);
+
+            throw RestoreFailure::staging('ساخت نسخهٔ موقت فایل بکاپ ممکن نشد.', 'stage_create_failed');
+        }
+        @chmod($staged, 0600);
+
+        try {
+            // Identity is pinned on the DESCRIPTOR, not the path: this is the
+            // inode we will actually read, whatever the path points at later.
+            $before = fstat($in);
+            if ($before === false) {
+                throw RestoreFailure::staging('بررسی فایل بکاپ ممکن نشد.', 'stage_stat_failed');
+            }
+            if (($before['mode'] & 0170000) !== 0100000) {
+                throw RestoreFailure::archive('فایل بکاپ باید یک فایل معمولی باشد.', 'source_not_regular');
+            }
+
+            $this->afterOpenSource();
+
+            $copied = stream_copy_to_stream($in, $out);
+            if ($copied === false || fflush($out) === false) {
+                throw RestoreFailure::staging('کپی فایل بکاپ ناقص ماند.', 'stage_copy_failed');
+            }
+            if ($copied <= 0) {
+                throw RestoreFailure::staging('فایل بکاپ خالی است.', 'stage_empty');
+            }
+
+            $this->afterCopySource();
+
+            $after = fstat($in);
+            if ($after === false) {
+                throw RestoreFailure::staging('بررسی فایل بکاپ ممکن نشد.', 'stage_stat_failed');
+            }
+            if ($before['ino'] !== $after['ino'] || $before['dev'] !== $after['dev']) {
+                throw RestoreFailure::staging('فایل بکاپ حین خواندن تغییر کرد.', 'source_identity_changed');
+            }
+            if ($before['size'] !== $after['size'] || $copied !== $after['size']) {
+                throw RestoreFailure::staging('فایل بکاپ حین خواندن تغییر کرد.', 'source_size_changed');
+            }
+
+            // Device/inode/size are NOT enough: a same-inode, same-length
+            // rewrite passes all three. Re-read the pinned descriptor and
+            // compare a cryptographic digest with the staged copy, so the
+            // bytes we accepted are provably the bytes we will inspect and
+            // extract.
+            if (rewind($in) === false) {
+                throw RestoreFailure::staging('بررسی فایل بکاپ ممکن نشد.', 'stage_rewind_failed');
+            }
+            $sourceDigest = $this->streamDigest($in);
+            $stagedDigest = @hash_file('sha256', $staged);
+
+            if ($sourceDigest === null || $stagedDigest === false) {
+                throw RestoreFailure::staging('بررسی فایل بکاپ ممکن نشد.', 'stage_digest_failed');
+            }
+            if (! hash_equals($sourceDigest, $stagedDigest)) {
+                throw RestoreFailure::staging('فایل بکاپ حین خواندن تغییر کرد.', 'source_content_changed');
+            }
+        } finally {
+            fclose($in);
+            fclose($out);
+        }
+
+        return $staged;
+    }
+
+    /** Streaming SHA-256 of an open handle, from its current position. */
+    private function streamDigest($handle): ?string
+    {
+        $context = hash_init('sha256');
+
+        while (! feof($handle)) {
+            $chunk = fread($handle, 262_144);
+            if ($chunk === false) {
+                return null;
+            }
+            hash_update($context, $chunk);
+        }
+
+        return hash_final($context);
+    }
+
+    /** Seam: tests replace the source path here to prove staging is immutable. */
+    protected function afterOpenSource(): void {}
+
+    /** Seam: tests mutate the pinned source here, after the bytes were copied. */
+    protected function afterCopySource(): void {}
 
     private function decrypt(string $archive, string $work, string $password): string
     {
@@ -519,6 +755,13 @@ class DatabaseRestoreService
                 '-v', 'ON_ERROR_STOP=1',
                 '--single-transaction',
                 '--no-password',
+                // AUTHORITATIVE role guard. psql executes -c before -f in the
+                // SAME session, inside the same single transaction, so the
+                // identity checked here is provably the identity that runs the
+                // dump — unlike a separate preflight connection, which could
+                // differ. A dangerous role raises and aborts before any dump
+                // statement executes.
+                '-c', self::ROLE_GUARD_SQL,
                 '--quiet',
                 '--no-psqlrc',
                 '-f', $dump,
@@ -596,7 +839,7 @@ class DatabaseRestoreService
      * instead of being swallowed.
      *
      * This is deletion (unlink), NOT overwriting — it is not "secure
-     * shredding" and is not described as such. On a journalling or
+     * erasure" and is not described as such. On a journalling or
      * copy-on-write filesystem the bytes may survive until reused.
      *
      * $restored says whether the database transaction already committed,
@@ -673,6 +916,53 @@ class DatabaseRestoreService
         clearstatcache(true, $work);
 
         return is_dir($work) ? 'work_directory_not_removed' : null;
+    }
+
+    /**
+     * Refuse to restore as a role that can escape the database.
+     *
+     * Superusers, and members of pg_execute_server_program /
+     * pg_read_server_files / pg_write_server_files, can run programs or touch
+     * server files through ordinary SQL — no psql meta-command required. The
+     * check runs against the TARGET connection, uses catalog functions rather
+     * than parsing command output, and never reports which role or membership
+     * tripped it.
+     */
+    private function assertRestoreRoleIsSafe(): void
+    {
+        try {
+            $row = DB::connection(self::TARGET_CONNECTION)->selectOne(
+                "select current_setting('is_superuser') = 'on' as is_super,
+                        coalesce(pg_has_role(session_user, to_regrole('pg_execute_server_program'), 'member'), false)
+                          or coalesce(pg_has_role(current_user, to_regrole('pg_execute_server_program'), 'member'), false) as can_program,
+                        coalesce(pg_has_role(session_user, to_regrole('pg_read_server_files'), 'member'), false)
+                          or coalesce(pg_has_role(current_user, to_regrole('pg_read_server_files'), 'member'), false) as can_read_files,
+                        coalesce(pg_has_role(session_user, to_regrole('pg_write_server_files'), 'member'), false)
+                          or coalesce(pg_has_role(current_user, to_regrole('pg_write_server_files'), 'member'), false) as can_write_files",
+            );
+        } catch (\Throwable) {
+            throw RestoreFailure::target(
+                'بررسی سطح دسترسی نقش پایگاه‌داده ممکن نشد.',
+                'role_check_failed',
+            );
+        }
+
+        $dangerous = [
+            'role_superuser' => (bool) ($row->is_super ?? false),
+            'role_server_program' => (bool) ($row->can_program ?? false),
+            'role_read_server_files' => (bool) ($row->can_read_files ?? false),
+            'role_write_server_files' => (bool) ($row->can_write_files ?? false),
+        ];
+
+        foreach ($dangerous as $reason => $held) {
+            if ($held) {
+                // The reason code names the PRIVILEGE CLASS, never the role.
+                throw RestoreFailure::target(
+                    'نقش پایگاه‌دادهٔ پیکربندی‌شده سطح دسترسی بیش از حد دارد. بازیابی باید با یک نقش کم‌دسترسی انجام شود.',
+                    $reason,
+                );
+            }
+        }
     }
 
     /** Seam: tests throw here to prove unexpected failures are sanitized. */
