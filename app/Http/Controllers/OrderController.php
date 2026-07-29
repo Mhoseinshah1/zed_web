@@ -17,14 +17,14 @@ class OrderController extends Controller
 
     public function show(Order $order)
     {
-        abort_if($order->user_id !== auth()->id(), 403);
+        $this->authorize('viewOwned', $order);
 
         return view('dashboard.orders.show', compact('order'));
     }
 
     public function applyDiscount(Request $request, Order $order, DiscountService $discountService)
     {
-        abort_if($order->user_id !== auth()->id(), 403);
+        $this->authorize('updateOwned', $order);
 
         if ($order->payment_status === Order::PAYMENT_PAID) {
             return back()->withErrors(['discount_code' => 'این سفارش قبلاً پرداخت شده است.']);
@@ -47,7 +47,7 @@ class OrderController extends Controller
 
     public function removeDiscount(Order $order, DiscountService $discountService)
     {
-        abort_if($order->user_id !== auth()->id(), 403);
+        $this->authorize('updateOwned', $order);
 
         if ($order->payment_status === Order::PAYMENT_PAID) {
             return back()->withErrors(['discount_code' => 'این سفارش قبلاً پرداخت شده است.']);

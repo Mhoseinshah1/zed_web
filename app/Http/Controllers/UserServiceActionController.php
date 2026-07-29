@@ -16,9 +16,14 @@ class UserServiceActionController extends Controller
 {
     // ── Ownership guard ───────────────────────────────────────────────────────
 
+    /**
+     * Every action on this controller mutates the remote panel or the local
+     * service (sync, revoke, reset traffic, disable, enable), so they all take
+     * the MUTATION ability — none of them is a read.
+     */
     private function authorizeService(UserService $service): void
     {
-        abort_if($service->user_id !== auth()->id(), 403);
+        $this->authorize('updateOwned', $service);
     }
 
     // ── Panel resolver ────────────────────────────────────────────────────────

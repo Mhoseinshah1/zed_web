@@ -33,7 +33,7 @@ class NowPaymentsController extends Controller
      */
     public function create(Request $request, Order $order)
     {
-        abort_if($order->user_id !== auth()->id(), 403);
+        $this->authorize('updateOwned', $order);
         abort_if($order->payment_status === Order::PAYMENT_PAID, 302, route('dashboard.orders.show', $order));
 
         $request->validate([
@@ -261,7 +261,7 @@ class NowPaymentsController extends Controller
      */
     public function show(Order $order)
     {
-        abort_if($order->user_id !== auth()->id(), 403);
+        $this->authorize('viewOwned', $order);
 
         if ($order->payment_status === Order::PAYMENT_PAID) {
             return redirect()->route('dashboard.orders.show', $order)
@@ -285,7 +285,7 @@ class NowPaymentsController extends Controller
      */
     public function checkStatus(Request $request, Order $order)
     {
-        abort_if($order->user_id !== auth()->id(), 403);
+        $this->authorize('updateOwned', $order);
         abort_if($order->payment_status === Order::PAYMENT_PAID, 403);
 
         $tx = PaymentTransaction::where('order_id', $order->id)
