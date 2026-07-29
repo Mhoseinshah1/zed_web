@@ -79,12 +79,15 @@ class ThemeSettingsService
     /** @return array<string,mixed> all settings, primed once per request */
     protected static function memo(): array
     {
+        // Sourced from the shared, lifecycle-scoped settings reader rather than
+        // a second `pluck()` of its own. Two benefits: one whole-table read per
+        // lifecycle instead of two, and no separate process-static copy that a
+        // long-running queue worker could serve stale after a theme change.
         if (self::$memo === null) {
-            self::$memo = SiteSetting::query()->pluck('value', 'key')->all();
-            // Cast like SiteSetting::get so callers see consistent types.
-            foreach (self::$memo as $k => $v) {
-                self::$memo[$k] = self::cast($v);
-            }
+            self::$memo = array_map(
+                static fn (mixed $value): mixed => self::cast($value),
+                SiteSetting::repository()->all(),
+            );
         }
 
         return self::$memo;
