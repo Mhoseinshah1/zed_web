@@ -287,6 +287,19 @@ jobs:
         # misconfiguration into a hard failure instead of silent green.
         run: php artisan test --testsuite=Feature --filter='BackupRestorePgTest' --fail-on-skipped
 
+      - name: CentralPay settlement concurrency (PostgreSQL)
+        # 20 forked processes, each on its own connection, settle the SAME
+        # wallet top-up and the SAME order payment at once. The assertions are
+        # exact: one credit, one balance movement, one notification, one paid
+        # transition — a duplicate here is a real financial defect, not a flake.
+        # Also pins the two database constraints that are the last line under a
+        # race: UNIQUE(wallet_transactions.payment_transaction_id) and the
+        # partial UNIQUE(user_services.order_id). Multi-process, so it is
+        # deliberately NOT in the SQLite job. --fail-on-skipped turns a missing
+        # pcntl extension or driver misconfiguration into a hard failure instead
+        # of silent green.
+        run: php artisan test --testsuite=Feature --filter='CentralPaySafetyPgTest' --fail-on-skipped
+
       - name: Password reset flow and concurrency (PostgreSQL)
         # The complete reset security suite against real PostgreSQL + Redis:
         # non-enumeration, canonical rate-limit identity, hash-only OTP rules,
