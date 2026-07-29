@@ -3,6 +3,7 @@
 namespace App\Services\Sms\Providers;
 
 use App\Services\Sms\AbstractSmsProvider;
+use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Http;
 
 /**
@@ -11,7 +12,9 @@ use Illuminate\Support\Facades\Http;
  * Uses the REST send endpoint with a bearer API key. When a pattern code is
  * configured the pattern endpoint is used for OTP delivery.
  *
- * TODO: confirm exact endpoint/field names against the live FarazSMS account.
+ * Response contract: the ippanel v1 API answers `{"status":"OK"|"ERROR",
+ * "code":<int>,"data":{...}}` — a rejection arrives as `status: "ERROR"` over
+ * HTTP 200. Only that envelope is inspected.
  */
 class FarazSmsProvider extends AbstractSmsProvider
 {
@@ -28,11 +31,36 @@ class FarazSmsProvider extends AbstractSmsProvider
             'recipient' => [$this->toLocal($normalizedPhone)],
         ]));
 
-        if (! $response->successful()) {
-            throw new \RuntimeException('FarazSMS HTTP '.$response->status());
-        }
+        $this->assertAccepted($response, 'FarazSMS');
 
         return true;
+    }
+
+    /**
+     * ippanel v1 answers `{"status":"OK"|"ERROR","code":<int>,"data":{...}}`;
+     * a rejection arrives as `status: "ERROR"` over HTTP 200.
+     *
+     * Only an exact string is judged. A non-string status belongs to a
+     * different API generation than the endpoint this adapter targets, so it
+     * cannot prove acceptance and is UNVERIFIED rather than assumed sent.
+     */
+    protected function acceptance(Response $response): array
+    {
+        $status = $response->json('status');
+
+        if ($status === null) {
+            return [self::UNVERIFIED, 'no_status'];
+        }
+
+        if (! is_string($status)) {
+            return [self::UNVERIFIED, $this->safeStatusToken($status)];
+        }
+
+        if (strtoupper($status) === 'OK') {
+            return [self::ACCEPTED, 'OK'];
+        }
+
+        return [self::REJECTED, $this->safeStatusToken($status)];
     }
 
     public function sendOtp(string $normalizedPhone, string $code): bool
@@ -48,9 +76,7 @@ class FarazSmsProvider extends AbstractSmsProvider
                 'variable' => ['code' => $code],
             ]);
 
-            if (! $response->successful()) {
-                throw new \RuntimeException('FarazSMS pattern HTTP '.$response->status());
-            }
+            $this->assertAccepted($response, 'FarazSMS pattern');
 
             return true;
         }

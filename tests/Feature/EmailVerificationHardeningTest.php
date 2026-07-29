@@ -27,6 +27,7 @@ use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Validation\ValidationException;
 use Livewire\Livewire;
+use PHPUnit\Framework\Exception;
 use Symfony\Component\Mailer\Bridge\Postmark\Transport\PostmarkTransportFactory;
 use Tests\TestCase;
 
@@ -166,6 +167,7 @@ class EmailVerificationHardeningTest extends TestCase
             $migration->up();
             $this->fail('migration must abort on case-insensitive duplicates');
         } catch (\RuntimeException $e) {
+            $this->assertNotInstanceOf(Exception::class, $e, 'a PHPUnit failure must never be mistaken for the expected exception');
             $this->assertStringContainsString('No data was modified', $e->getMessage());
         }
 
@@ -2223,6 +2225,7 @@ class EmailVerificationHardeningTest extends TestCase
             (new SendEmailOtpJob($record->id, $user->id, (string) $user->email, '123456', 10))->handle();
             $this->fail('without a queue context, contention must SURFACE — a silent return would fake success');
         } catch (\RuntimeException $e) {
+            $this->assertNotInstanceOf(Exception::class, $e, 'a PHPUnit failure must never be mistaken for the expected exception');
             // Static, secret-free message; a real worker (with a queue
             // context) releases for retry instead of throwing.
             $this->assertStringContainsString('lock_contention', $e->getMessage());
