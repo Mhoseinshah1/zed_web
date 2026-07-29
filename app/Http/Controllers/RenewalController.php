@@ -22,7 +22,7 @@ class RenewalController extends Controller
 
     public function show(UserService $service): View|RedirectResponse
     {
-        abort_if($service->user_id !== auth()->id(), 403);
+        $this->authorize('viewOwned', $service);
 
         if (! SiteSetting::get('renewal_enabled', true)) {
             return redirect()
@@ -52,7 +52,7 @@ class RenewalController extends Controller
 
     public function submit(Request $request, UserService $service): RedirectResponse
     {
-        abort_if($service->user_id !== auth()->id(), 403);
+        $this->authorize('updateOwned', $service);
 
         if (! SiteSetting::get('renewal_enabled', true)) {
             return redirect()

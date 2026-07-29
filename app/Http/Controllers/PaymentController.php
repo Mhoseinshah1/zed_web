@@ -16,7 +16,7 @@ class PaymentController extends Controller
 
     public function show(Order $order)
     {
-        abort_if($order->user_id !== auth()->id(), 403);
+        $this->authorize('viewOwned', $order);
         abort_if(in_array($order->status, [Order::STATUS_COMPLETED, Order::STATUS_CANCELLED]), 404);
         abort_if($order->payment_status === Order::PAYMENT_PAID, 302, route('dashboard.orders.show', $order));
 
@@ -32,7 +32,7 @@ class PaymentController extends Controller
 
     public function submit(Request $request, Order $order)
     {
-        abort_if($order->user_id !== auth()->id(), 403);
+        $this->authorize('updateOwned', $order);
         abort_if(in_array($order->status, [Order::STATUS_COMPLETED, Order::STATUS_CANCELLED]), 403);
         abort_if($order->payment_status === Order::PAYMENT_PAID, 403);
 

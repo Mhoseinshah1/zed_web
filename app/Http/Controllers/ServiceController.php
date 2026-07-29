@@ -27,7 +27,7 @@ class ServiceController extends Controller
 
     public function show(UserService $service)
     {
-        abort_if($service->user_id !== auth()->id(), 403);
+        $this->authorize('viewOwned', $service);
 
         $panel = $service->marzbanPanel();
         $syncWarning = null;
@@ -84,7 +84,7 @@ class ServiceController extends Controller
      */
     public function refresh(UserService $service): RedirectResponse
     {
-        abort_if($service->user_id !== auth()->id(), 403);
+        $this->authorize('updateOwned', $service);
 
         $cooldown = (int) SiteSetting::get('marzban_manual_refresh_cooldown_seconds', 60);
 

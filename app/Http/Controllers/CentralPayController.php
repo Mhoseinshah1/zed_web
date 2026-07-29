@@ -24,7 +24,7 @@ class CentralPayController extends Controller
      */
     public function initiate(Request $request, Order $order)
     {
-        abort_if($order->user_id !== auth()->id(), 403);
+        $this->authorize('updateOwned', $order);
         abort_if($order->payment_status === Order::PAYMENT_PAID, 403);
 
         $request->validate([

@@ -22,7 +22,7 @@ class ServiceAddonController extends Controller
 
     public function showTraffic(UserService $service): View|RedirectResponse
     {
-        abort_if($service->user_id !== auth()->id(), 403);
+        $this->authorize('viewOwned', $service);
 
         if (! $this->addonService->trafficEnabled()) {
             return $this->back($service, 'خرید حجم اضافه در حال حاضر غیرفعال است.');
@@ -46,7 +46,7 @@ class ServiceAddonController extends Controller
 
     public function submitTraffic(Request $request, UserService $service): RedirectResponse
     {
-        abort_if($service->user_id !== auth()->id(), 403);
+        $this->authorize('updateOwned', $service);
 
         $minGb = $this->addonService->minGb();
         $maxGb = $this->addonService->maxGb();
@@ -84,7 +84,7 @@ class ServiceAddonController extends Controller
 
     public function showTime(UserService $service): View|RedirectResponse
     {
-        abort_if($service->user_id !== auth()->id(), 403);
+        $this->authorize('viewOwned', $service);
 
         if (! $this->addonService->timeEnabled()) {
             return $this->back($service, 'خرید زمان اضافه در حال حاضر غیرفعال است.');
@@ -108,7 +108,7 @@ class ServiceAddonController extends Controller
 
     public function submitTime(Request $request, UserService $service): RedirectResponse
     {
-        abort_if($service->user_id !== auth()->id(), 403);
+        $this->authorize('updateOwned', $service);
 
         $minDays = $this->addonService->minDays();
         $maxDays = $this->addonService->maxDays();

@@ -75,7 +75,7 @@ class SupportTicketController extends Controller
 
     public function show(SupportTicket $ticket): View
     {
-        abort_if($ticket->user_id !== auth()->id(), 403);
+        $this->authorize('viewOwned', $ticket);
 
         // Owner is viewing — clear their unread flag and load only public messages.
         $this->tickets->markReadByUser($ticket);
@@ -87,7 +87,7 @@ class SupportTicketController extends Controller
 
     public function reply(Request $request, SupportTicket $ticket): RedirectResponse
     {
-        abort_if($ticket->user_id !== auth()->id(), 403);
+        $this->authorize('updateOwned', $ticket);
 
         $validated = $request->validate([
             'body' => ['required', 'string', 'max:5000'],
@@ -108,7 +108,7 @@ class SupportTicketController extends Controller
 
     public function close(SupportTicket $ticket): RedirectResponse
     {
-        abort_if($ticket->user_id !== auth()->id(), 403);
+        $this->authorize('updateOwned', $ticket);
 
         $this->tickets->close($ticket);
 

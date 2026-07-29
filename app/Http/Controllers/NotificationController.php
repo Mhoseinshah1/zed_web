@@ -23,7 +23,7 @@ class NotificationController extends Controller
 
     public function markRead(Notification $notification): RedirectResponse
     {
-        abort_if($notification->user_id !== auth()->id(), 403);
+        $this->authorize('updateOwned', $notification);
 
         $notification->markRead();
 
