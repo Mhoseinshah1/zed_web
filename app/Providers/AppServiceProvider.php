@@ -3,6 +3,7 @@
 namespace App\Providers;
 
 use App\Http\Middleware\EnsureSessionAuthVersion;
+use App\Models\SiteSetting;
 use App\Models\User;
 use App\Services\AdminMfa\AdminMfaSession;
 use App\Services\Auth\PasswordResetService;
@@ -10,6 +11,7 @@ use App\Services\Auth\ResetIdentifier;
 use App\Services\Email\EmailTransportSettingsService;
 use App\Services\Queue\FailedJobAlerter;
 use App\Services\Seo\SeoManager;
+use App\Services\Settings\SettingsRepository;
 use Illuminate\Auth\Events\Login;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Http\Request;
@@ -30,6 +32,12 @@ class AppServiceProvider extends ServiceProvider
         // One SeoManager per request: controllers enrich it and <x-seo-head>
         // renders the resolved SeoData exactly once.
         $this->app->scoped(SeoManager::class);
+
+        // One settings reader per application lifecycle. SCOPED, never a
+        // static: a static memo lives as long as the PHP process, so a queue
+        // worker would serve every job from the settings it happened to read
+        // first — for hours, across administrator changes it never sees.
+        $this->app->scoped(SettingsRepository::class);
 
         // ONE resolver instance per process: it memoizes the last-applied
         // managed-SMTP configuration version, so a long-running queue worker
@@ -59,7 +67,22 @@ class AppServiceProvider extends ServiceProvider
         if (! $this->buildingConfigCache()) {
             app(EmailTransportSettingsService::class)->apply();
         }
+        // Two things happen on every job boundary, and the ORDER matters: the
+        // settings reader is dropped FIRST so the SMTP re-apply below reads
+        // current values rather than the previous job's.
+        //
+        // `Illuminate\Queue\Worker` calls forgetScopedInstances() only from its
+        // daemon() loop (verified in Laravel 12.62.0 — Worker.php:191 via the
+        // $resetScope closure at QueueServiceProvider.php:261), so
+        // `queue:work --once`, the `sync` connection and any custom runner
+        // would otherwise keep one instance across jobs. This hook makes the
+        // reset explicit and runtime-independent.
+        //
+        // APPENDED to the existing listener, not replacing it — displacing the
+        // SMTP re-apply would silently stop workers picking up admin-managed
+        // mail configuration.
         Queue::before(function () {
+            SiteSetting::flush();
             app(EmailTransportSettingsService::class)->apply();
         });
 

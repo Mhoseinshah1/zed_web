@@ -148,9 +148,9 @@ class EmailVerificationService
         // the guarantee unconditional (deleted rows, pre-migration DBs) —
         // insertOrIgnore is race-safe under the unique `key` index and never
         // overwrites live values.
-        SiteSetting::query()->insertOrIgnore([
-            ['key' => 'email_verification_enabled', 'value' => 'false', 'created_at' => now(), 'updated_at' => now()],
-            ['key' => 'email_verification_required_on_register', 'value' => 'false', 'created_at' => now(), 'updated_at' => now()],
+        SiteSetting::insertMissing([
+            ['key' => 'email_verification_enabled', 'value' => 'false'],
+            ['key' => 'email_verification_required_on_register', 'value' => 'false'],
         ]);
 
         // One row per statement, in the WRITER'S order (enabled → required —
