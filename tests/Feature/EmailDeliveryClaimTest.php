@@ -15,6 +15,7 @@ use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Mail;
 use Mockery;
+use PHPUnit\Framework\Exception;
 use Tests\TestCase;
 
 /**
@@ -108,6 +109,7 @@ class EmailDeliveryClaimTest extends TestCase
             $job->handle();
             $this->fail('sync lock contention must surface as a failure');
         } catch (\RuntimeException $e) {
+            $this->assertNotInstanceOf(Exception::class, $e);
             $this->assertStringContainsString('lock_contention', $e->getMessage());
         } finally {
             $lock->release();
@@ -263,6 +265,7 @@ class EmailDeliveryClaimTest extends TestCase
             $this->job($record, $user)->handle();
             $this->fail('the sanitized transport failure must surface');
         } catch (\RuntimeException $e) {
+            $this->assertNotInstanceOf(Exception::class, $e, 'a PHPUnit failure must never be mistaken for the expected exception');
             $this->assertStringStartsWith('delivery failed:', $e->getMessage());
         }
 

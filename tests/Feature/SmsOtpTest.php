@@ -90,7 +90,7 @@ class SmsOtpTest extends TestCase
 
     public function test_otp_code_is_six_digits_and_hashed(): void
     {
-        Http::fake();
+        Http::fake(['*' => Http::response(['return' => ['status' => 200, 'message' => 'ok']], 200)]);
         $this->configureSms();
         $user = User::factory()->unverifiedPhone()->create();
 
@@ -106,7 +106,10 @@ class SmsOtpTest extends TestCase
 
     public function test_otp_send_status_recorded_when_sms_configured(): void
     {
-        Http::fake(); // any 200 response → provider returns true
+        // A REAL Kavenegar acceptance envelope. A bare Http::fake() returns an
+        // empty body, which the adapter now correctly refuses: an empty 200
+        // proves nothing about delivery.
+        Http::fake(['*' => Http::response(['return' => ['status' => 200, 'message' => 'ok']], 200)]);
         $this->configureSms();
         $user = User::factory()->unverifiedPhone()->create();
 
@@ -233,7 +236,7 @@ class SmsOtpTest extends TestCase
 
     public function test_send_otp_route_is_rate_limited_per_phone(): void
     {
-        Http::fake();
+        Http::fake(['*' => Http::response(['return' => ['status' => 200, 'message' => 'ok']], 200)]);
         $this->configureSms();
         SiteSetting::set('phone_verification_enabled', 'true');
         SiteSetting::set('otp_resend_cooldown_seconds', 60);
@@ -298,7 +301,7 @@ class SmsOtpTest extends TestCase
 
     public function test_registration_redirects_to_verification_when_required(): void
     {
-        Http::fake();
+        Http::fake(['*' => Http::response(['return' => ['status' => 200, 'message' => 'ok']], 200)]);
         $this->configureSms();
         SiteSetting::set('phone_verification_enabled', 'true');
         SiteSetting::set('phone_verification_required_on_register', 'true');
@@ -324,7 +327,7 @@ class SmsOtpTest extends TestCase
 
     public function test_test_sms_succeeds_with_faked_http(): void
     {
-        Http::fake(['*' => Http::response('ok', 200)]);
+        Http::fake(['*' => Http::response(['return' => ['status' => 200, 'message' => 'ok']], 200)]);
         $this->configureSms();
 
         $ok = app(SmsService::class)->sendTest('+989120001122', 'تست');

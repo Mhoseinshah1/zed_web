@@ -11,6 +11,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Mail;
 use Mockery;
+use PHPUnit\Framework\Exception as PhpUnitException;
 use RuntimeException;
 use Tests\TestCase;
 
@@ -95,6 +96,12 @@ class EmailFailureFinalizePgTest extends TestCase
             (new SendEmailOtpJob($record->id, $user->id, (string) $user->email, '123456', 10))->handle();
             $this->fail('the sanitized transport failure must propagate');
         } catch (RuntimeException $e) {
+            // AssertionFailedError IS a RuntimeException, so without this the
+            // fail() above would be captured and RETURNED as if it were the
+            // subject's exception — the caller would then assert against our
+            // own failure text.
+            $this->assertNotInstanceOf(PhpUnitException::class, $e, 'a PHPUnit failure must never be returned as the expected exception');
+
             return $e;
         }
     }

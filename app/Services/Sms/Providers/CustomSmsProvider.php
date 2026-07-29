@@ -3,6 +3,7 @@
 namespace App\Services\Sms\Providers;
 
 use App\Services\Sms\AbstractSmsProvider;
+use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Http;
 
 /**
@@ -14,6 +15,13 @@ use Illuminate\Support\Facades\Http;
  * The body template may be JSON or a query string. If it parses as JSON it is
  * sent as a JSON body; otherwise it is sent as form parameters (POST) or query
  * parameters (GET).
+ *
+ * Response contract: NONE — the panel is whatever the admin pointed this at, so
+ * there is no envelope to inspect and only the HTTP status can be judged. The
+ * body-level acceptance check the other adapters perform is therefore not
+ * available here, and a panel answering HTTP 200 with an error in the body will
+ * still be recorded as sent. That limit is inherent to a generic adapter, not
+ * an oversight.
  */
 class CustomSmsProvider extends AbstractSmsProvider
 {
@@ -49,11 +57,26 @@ class CustomSmsProvider extends AbstractSmsProvider
                 : $request->asForm()->post($url, $this->parseToArray($rendered));
         }
 
-        if (! $response->successful()) {
-            throw new \RuntimeException('Custom SMS HTTP '.$response->status());
-        }
+        // No body inspection: see the class docblock — the response shape is
+        // unknown by construction.
+        $this->assertAccepted($response, 'Custom SMS');
 
         return true;
+    }
+
+    /**
+     * HTTP status only, by construction.
+     *
+     * The admin points this adapter at an arbitrary panel, so there is no
+     * response contract to inspect — applying another provider's schema here
+     * would be a guess about somebody else's API. A panel answering HTTP 200
+     * with an error in the body is therefore still recorded as sent. That limit
+     * is inherent to a generic adapter, and it is the reason the built-in
+     * adapters fail closed while this one cannot.
+     */
+    protected function acceptance(Response $response): array
+    {
+        return [self::ACCEPTED, 'http_only'];
     }
 
     public function sendOtp(string $normalizedPhone, string $code): bool

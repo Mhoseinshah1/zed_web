@@ -13,6 +13,7 @@ use App\Support\RetriesDeadlocks;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
+use Tests\Support\CapturesThrowables;
 use Tests\TestCase;
 
 /**
@@ -23,6 +24,7 @@ use Tests\TestCase;
  */
 class DiscountConcurrencyTest extends TestCase
 {
+    use CapturesThrowables;
     use RefreshDatabase;
 
     private int $seq = 0;
@@ -97,6 +99,7 @@ class DiscountConcurrencyTest extends TestCase
                 $this->svc()->applyToOrder($u, $o, 'SAVE');
                 $ok++;
             } catch (\RuntimeException $e) {
+                $this->assertNotInstanceOf(\PHPUnit\Framework\Exception::class, $e, 'a PHPUnit failure must never be mistaken for the expected exception');
                 $rejected++;
                 $this->assertStringContainsString('ظرفیت', $e->getMessage());
             }
@@ -203,12 +206,11 @@ class DiscountConcurrencyTest extends TestCase
 
         $this->svc()->applyToOrder($u, $o, 'GOOD');
 
-        try {
-            $this->svc()->applyToOrder($u, $o->fresh(), 'NOPE'); // invalid code
-            $this->fail('expected rejection');
-        } catch (\RuntimeException $e) {
-            // expected
-        }
+        $this->captureException(
+            \RuntimeException::class,
+            fn () => $this->svc()->applyToOrder($u, $o->fresh(), 'NOPE'), // invalid code
+            'an invalid replacement code must be rejected',
+        );
 
         $o->refresh();
         $this->assertSame('GOOD', $o->discount_code);

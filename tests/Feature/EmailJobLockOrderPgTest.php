@@ -9,6 +9,7 @@ use App\Models\User;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Mail;
+use PHPUnit\Framework\Exception;
 use Tests\TestCase;
 
 /**
@@ -79,7 +80,8 @@ class EmailJobLockOrderPgTest extends TestCase
         try {
             (new SendEmailOtpJob($record->id, $user->id, (string) $user->email, '123456', 10))->handle();
             $this->fail('without a queue context, contention must surface');
-        } catch (\RuntimeException) {
+        } catch (\RuntimeException $e) {
+            $this->assertNotInstanceOf(Exception::class, $e, 'a PHPUnit failure must never be mistaken for the expected exception');
             // A real worker would be released for a delayed retry instead.
         }
         $elapsed = microtime(true) - $started;
