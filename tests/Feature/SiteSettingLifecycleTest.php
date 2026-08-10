@@ -384,7 +384,7 @@ class SiteSettingLifecycleTest extends TestCase
 
     public function test_raw_write_detector_follows_fluent_multiline_chains_but_allows_reads(): void
     {
-        foreach (['update', 'insert', 'insertOrIgnore', 'insertGetId', 'upsert', 'updateOrInsert', 'delete', 'truncate'] as $mutation) {
+        foreach (['update', 'updateFrom', 'insert', 'insertOrIgnore', 'insertGetId', 'insertUsing', 'insertOrIgnoreUsing', 'upsert', 'updateOrInsert', 'delete', 'forceDelete', 'truncate', 'increment', 'incrementEach', 'decrement', 'decrementEach', 'touch'] as $mutation) {
             $code = "<?php SiteSetting::query()\n ->where('key', 'x')\n ->{$mutation}([]);";
             $this->assertNotEmpty($this->rawSiteSettingMutations($code), "missed {$mutation}");
 
@@ -438,7 +438,10 @@ class SiteSettingLifecycleTest extends TestCase
     private function rawSiteSettingMutations(string $source): array
     {
         $tokens = token_get_all($source);
-        $mutations = ['update', 'insert', 'insertOrIgnore', 'insertGetId', 'upsert', 'updateOrInsert', 'delete', 'truncate'];
+        // Laravel 12.62: Query\Builder's write API plus Eloquent\Builder's
+        // forceDelete/touch wrappers. Each bypasses per-model saved/deleted
+        // events (unlike updateOrCreate/firstOrCreate/model increment).
+        $mutations = ['update', 'updateFrom', 'insert', 'insertOrIgnore', 'insertGetId', 'insertUsing', 'insertOrIgnoreUsing', 'upsert', 'updateOrInsert', 'delete', 'forceDelete', 'truncate', 'increment', 'incrementEach', 'decrement', 'decrementEach', 'touch'];
         $found = [];
 
         for ($i = 0; $i < count($tokens); $i++) {

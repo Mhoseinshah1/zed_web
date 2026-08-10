@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\User;
 use App\Services\Auth\LoginThrottleSettings;
 use App\Services\Email\EmailVerificationService;
+use App\Services\Email\RegistrationEmailPolicy;
 use App\Services\Phone\PhoneVerificationService;
 use App\Services\Referrals\ReferralService;
 use App\Services\Referrals\ReferralSettings;
@@ -176,7 +177,7 @@ class AuthController extends Controller
         // and reused unchanged for every post-commit flow decision.
         $emailVerification = app(EmailVerificationService::class);
         $phoneRequired = app(PhoneVerificationService::class)->isRequiredOnRegister();
-        $emailRequiredForThisRegistration = false;
+        $emailPolicyForThisRegistration = new RegistrationEmailPolicy(false, false);
 
         // ONE transaction for the whole registration write set: the user row
         // and its referral attachment commit together or not at all — no
@@ -184,8 +185,8 @@ class AuthController extends Controller
         // OTP dispatch, login) run strictly AFTER the commit, so a rollback
         // produces no notification and no queued email.
         try {
-            $user = DB::transaction(function () use ($validated, $normalized, $referralCode, $emailVerification, &$emailRequiredForThisRegistration) {
-                $emailRequiredForThisRegistration = $emailVerification->captureRequiredPolicyForRegistration();
+            $user = DB::transaction(function () use ($validated, $normalized, $referralCode, $emailVerification, &$emailPolicyForThisRegistration) {
+                $emailPolicyForThisRegistration = $emailVerification->capturePolicyForRegistration();
 
                 $user = User::create([
                     'name' => $validated['name'],
@@ -200,7 +201,7 @@ class AuthController extends Controller
                 // user row: registered under enforced verification or not —
                 // never rewritten by later policy/proof changes.
                 $user->forceFill([
-                    'email_verification_required_at_registration' => $emailRequiredForThisRegistration,
+                    'email_verification_required_at_registration' => $emailPolicyForThisRegistration->required,
                 ])->save();
 
                 // Attach the referrer from ?ref= / session / cookie (mode-aware, safe).
@@ -249,13 +250,12 @@ class AuthController extends Controller
         // EmailVerificationController::verify).
         // All flow decisions reuse the SAME captured policy values resolved
         // before the transaction — never re-evaluated mid-request.
-        if ($emailRequiredForThisRegistration
-            || ($emailVerification->isEnabled() && ! $phoneRequired)) {
+        if ($emailPolicyForThisRegistration->shouldRequestOtp($phoneRequired)) {
             if ($emailVerification->isMailConfigured()) {
                 $result = $emailVerification->requestCode($user, [
                     'ip' => $request->ip(),
                     'user_agent' => substr((string) $request->userAgent(), 0, 255),
-                ]);
+                ], $emailPolicyForThisRegistration);
 
                 return redirect()
                     ->route('verification.notice')
