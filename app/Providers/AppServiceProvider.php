@@ -3,12 +3,10 @@
 namespace App\Providers;
 
 use App\Http\Middleware\EnsureSessionAuthVersion;
-use App\Models\SiteSetting;
 use App\Models\User;
 use App\Services\AdminMfa\AdminMfaSession;
 use App\Services\Auth\PasswordResetService;
 use App\Services\Auth\ResetIdentifier;
-use App\Services\Email\EmailTransportSettingsService;
 use App\Services\Queue\FailedJobAlerter;
 use App\Services\Seo\SeoManager;
 use App\Services\Settings\SettingsRepository;
@@ -81,10 +79,7 @@ class AppServiceProvider extends ServiceProvider
         // APPENDED to the existing listener, not replacing it — displacing the
         // SMTP re-apply would silently stop workers picking up admin-managed
         // mail configuration.
-        Queue::before(function () {
-            SiteSetting::flush();
-            app(EmailTransportSettingsService::class)->apply();
-        });
+        Queue::before(fn () => app(\App\Services\Settings\PrepareSettingsForQueueJob::class)->handle());
 
         // TERMINAL queue-job failures (retries exhausted / explicitly failed):
         // alert admins on Telegram. Registration stays minimal — classification,

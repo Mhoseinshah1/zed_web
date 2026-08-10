@@ -44,12 +44,25 @@ class SettingsRepository
     /** @var array<string,string|null>|null */
     private ?array $values = null;
 
+    private ?int $memoTransactionLevel = null;
+
     /** Load the whole table once for this lifecycle. */
     private function values(): array
     {
-        return $this->values ??= DB::table('site_settings')
-            ->pluck('value', 'key')
-            ->all();
+        $level = DB::connection()->transactionLevel();
+
+        // A commit or rollback (including a savepoint boundary) changes the
+        // level. A map loaded on the other side of that boundary is unsafe.
+        if ($this->values !== null && $this->memoTransactionLevel !== $level) {
+            $this->flush();
+        }
+
+        if ($this->values === null) {
+            $this->values = DB::table('site_settings')->pluck('value', 'key')->all();
+            $this->memoTransactionLevel = $level;
+        }
+
+        return $this->values;
     }
 
     /** True when the key exists as a row (a NULL value still counts). */
@@ -109,6 +122,7 @@ class SettingsRepository
     public function flush(): void
     {
         $this->values = null;
+        $this->memoTransactionLevel = null;
     }
 
     /**
@@ -131,5 +145,21 @@ class SettingsRepository
 
         $name = $key instanceof Model ? (string) $key->getAttribute('key') : $key;
         unset($this->values[$name]);
+    }
+
+    /**
+     * Reconcile bypass/locked reads with this lifecycle's reader.
+     *
+     * The memo records its transaction nesting level. If that transaction or
+     * savepoint later commits or rolls back, values() sees the level change and
+     * discards the map before serving another value.
+     *
+     * @param array<string,string|null> $values
+     */
+    public function reconcile(array $values): void
+    {
+        foreach ($values as $key => $value) {
+            $this->remember($key, $value);
+        }
     }
 }

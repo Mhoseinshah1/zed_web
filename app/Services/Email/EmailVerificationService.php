@@ -166,6 +166,12 @@ class EmailVerificationService
                 $key => SiteSetting::query()->where('key', $key)->sharedLock()->value('value'),
             ]);
 
+        // insertMissing() refreshed the scoped memo before these locks were
+        // acquired. An admin commit in between can therefore make the locked
+        // values newer than that memo. Reconcile before any health/policy
+        // helper is allowed to consult the scoped reader.
+        SiteSetting::repository()->reconcile($flags->all());
+
         return $this->settingIsTrue($flags->get('email_verification_enabled'))
             && $this->settingIsTrue($flags->get('email_verification_required_on_register'))
             && $this->isMailConfigured()

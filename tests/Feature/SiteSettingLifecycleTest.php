@@ -5,6 +5,9 @@ namespace Tests\Feature;
 use App\Models\SiteSetting;
 use App\Models\User;
 use App\Services\Settings\SettingsRepository;
+use App\Services\Settings\SettingsLifecycle;
+use App\Services\Email\EmailTransportSettingsService;
+use Illuminate\Contracts\Queue\Job;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -219,6 +222,54 @@ class SiteSettingLifecycleTest extends TestCase
         );
     }
 
+    public function test_a_committed_transaction_write_is_visible_to_the_same_lifecycle(): void
+    {
+        SiteSetting::set('transaction_probe', 'before');
+        $this->assertSame('before', SiteSetting::get('transaction_probe'));
+
+        DB::transaction(fn () => SiteSetting::set('transaction_probe', 'committed'));
+
+        $this->assertSame('committed', SiteSetting::get('transaction_probe'));
+    }
+
+    public function test_a_rolled_back_transaction_write_never_poison_the_lifecycle_memo(): void
+    {
+        SiteSetting::set('transaction_probe', 'before');
+        $this->assertSame('before', SiteSetting::get('transaction_probe'));
+
+        try {
+            DB::transaction(function () {
+                SiteSetting::set('transaction_probe', 'rolled-back');
+                $this->assertSame('rolled-back', SiteSetting::get('transaction_probe'));
+                throw new \RuntimeException('rollback');
+            });
+        } catch (\RuntimeException $exception) {
+            $this->assertSame('rollback', $exception->getMessage());
+        }
+
+        $this->assertSame('before', SiteSetting::get('transaction_probe'));
+    }
+
+    public function test_a_nested_savepoint_rollback_does_not_leak_into_the_memo(): void
+    {
+        SiteSetting::set('transaction_probe', 'before');
+
+        DB::transaction(function () {
+            SiteSetting::set('transaction_probe', 'outer');
+            try {
+                DB::transaction(function () {
+                    SiteSetting::set('transaction_probe', 'inner');
+                    $this->assertSame('inner', SiteSetting::get('transaction_probe'));
+                    throw new \RuntimeException('savepoint rollback');
+                });
+            } catch (\RuntimeException) {
+                $this->assertSame('outer', SiteSetting::get('transaction_probe'));
+            }
+        });
+
+        $this->assertSame('outer', SiteSetting::get('transaction_probe'));
+    }
+
     /**
      * No PRODUCTION code may write `site_settings` outside the approved,
      * invalidation-aware methods.
@@ -244,7 +295,6 @@ class SiteSettingLifecycleTest extends TestCase
             realpath(app_path('Services/Settings/SettingsRepository.php')),
         ];
 
-        $writes = ['upsert(', 'insert(', 'insertOrIgnore(', 'insertGetId(', 'update(', 'updateOrInsert(', 'delete(', 'truncate('];
         $offenders = [];
 
         foreach ($this->productionPhpFiles() as $file) {
@@ -252,14 +302,8 @@ class SiteSettingLifecycleTest extends TestCase
                 continue;
             }
 
-            $code = $this->strippedSource($file);
-
-            foreach ($writes as $write) {
-                foreach (['SiteSetting::query()->', "DB::table('site_settings')->", 'DB::table("site_settings")->'] as $prefix) {
-                    if (str_contains($code, $prefix.$write)) {
-                        $offenders[] = str_replace(base_path().'/', '', $file).' → '.$prefix.$write;
-                    }
-                }
+            foreach ($this->rawSiteSettingMutations(file_get_contents($file)) as $write) {
+                $offenders[] = str_replace(base_path().'/', '', $file).' → '.$write;
             }
         }
 
@@ -269,6 +313,39 @@ class SiteSettingLifecycleTest extends TestCase
             "raw writes to site_settings bypass reader invalidation; use set(), upsertValue() or insertMissing():\n  "
             .implode("\n  ", $offenders),
         );
+    }
+
+    public function test_raw_write_detector_follows_fluent_multiline_chains_but_allows_reads(): void
+    {
+        foreach (['update', 'insert', 'insertOrIgnore', 'insertGetId', 'upsert', 'updateOrInsert', 'delete', 'truncate'] as $mutation) {
+            $code = "<?php SiteSetting::query()\n ->where('key', 'x')\n ->{$mutation}([]);";
+            $this->assertNotEmpty($this->rawSiteSettingMutations($code), "missed {$mutation}");
+
+            $code = "<?php DB::table(\n 'site_settings'\n)->where('key', 'x')\n->{$mutation}([]);";
+            $this->assertNotEmpty($this->rawSiteSettingMutations($code), "missed DB {$mutation}");
+        }
+
+        foreach ([
+            "SiteSetting::query()->where('key', 'x')->sharedLock()->value('value');",
+            "DB::table('site_settings')->where('key', 'x')->first();",
+            "DB::table('site_settings')->pluck('value');",
+        ] as $read) {
+            $this->assertSame([], $this->rawSiteSettingMutations("<?php {$read}"));
+        }
+    }
+
+    /** @return list<string> */
+    private function rawSiteSettingMutations(string $source): array
+    {
+        $code = implode('', array_map(
+            fn ($token) => is_array($token) && in_array($token[0], [T_COMMENT, T_DOC_COMMENT], true) ? '' : (is_array($token) ? $token[1] : $token),
+            token_get_all($source),
+        ));
+        $roots = '(?:SiteSetting\s*::\s*query\s*\(\s*\)|DB\s*::\s*table\s*\(\s*[\'\"]site_settings[\'\"]\s*\))';
+        $mutations = 'update|insert|insertOrIgnore|insertGetId|upsert|updateOrInsert|delete|truncate';
+        preg_match_all('/'.$roots.'(?:(?!;).)*?->\s*('.$mutations.')\s*\(/s', $code, $matches);
+
+        return $matches[1];
     }
 
     /** @return list<string> */
@@ -307,30 +384,14 @@ class SiteSettingLifecycleTest extends TestCase
      */
     public function test_the_settings_reset_runs_before_the_smtp_reapply(): void
     {
-        $order = [];
+        $lifecycle = \Mockery::mock(SettingsLifecycle::class);
+        $transport = \Mockery::mock(EmailTransportSettingsService::class);
+        $lifecycle->shouldReceive('reset')->once()->ordered();
+        $transport->shouldReceive('apply')->once()->ordered();
+        app()->instance(SettingsLifecycle::class, $lifecycle);
+        app()->instance(EmailTransportSettingsService::class, $transport);
 
-        // Rebuild the boundary with instrumented collaborators, preserving the
-        // production ordering under test.
-        $listener = function () use (&$order) {
-            $order[] = 'settings-reset';
-            $order[] = 'smtp-reapply';
-        };
-        $listener();
-
-        $this->assertSame(['settings-reset', 'smtp-reapply'], $order);
-
-        // …and assert the real provider registers them in that order by
-        // reading the registered closure's source.
-        $source = file_get_contents(app_path('Providers/AppServiceProvider.php'));
-        $hook = substr($source, strpos($source, 'Queue::before('));
-        $hook = substr($hook, 0, strpos($hook, '});'));
-
-        $resetAt = strpos($hook, 'SiteSetting::flush()');
-        $smtpAt = strpos($hook, 'EmailTransportSettingsService::class');
-
-        $this->assertNotFalse($resetAt, 'the queue boundary must reset the settings reader');
-        $this->assertNotFalse($smtpAt, 'the queue boundary must still re-apply SMTP configuration');
-        $this->assertLessThan($smtpAt, $resetAt, 'the settings reset must run BEFORE the SMTP re-apply');
+        event(new JobProcessing('sync', \Mockery::mock(Job::class)));
     }
 
     public function test_one_web_request_reads_the_settings_table_once(): void
@@ -367,19 +428,4 @@ class SiteSettingLifecycleTest extends TestCase
         DB::disableQueryLog();
     }
 
-    /**
-     * The existing SMTP hook must survive. If a later change replaces rather
-     * than appends the queue lifecycle listener, workers silently stop
-     * receiving admin-managed SMTP configuration.
-     */
-    public function test_the_smtp_queue_hook_is_not_displaced_by_the_settings_reset(): void
-    {
-        $before = app('events')->getListeners(JobProcessing::class);
-
-        $this->assertGreaterThanOrEqual(
-            2,
-            count($before),
-            'both the SMTP re-apply and the settings reset must be registered on JobProcessing',
-        );
-    }
 }
