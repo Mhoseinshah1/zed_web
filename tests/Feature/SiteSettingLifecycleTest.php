@@ -411,6 +411,27 @@ class SiteSettingLifecycleTest extends TestCase
         $this->assertSame([], $this->rawSiteSettingMutations(
             "<?php DB::table('site_settings')->where(function (\$q) { \$q->where(function (\$nested) { \$nested->where('key', 'x'); }); })->first();",
         ));
+
+        foreach ([
+            "SiteSetting::where('key', 'x')->update(['value' => 'y']);",
+            "SiteSetting::where('key', 'x')->delete();",
+            "SiteSetting::whereIn('key', ['x'])->update(['value' => 'y']);",
+            "SiteSetting::orderBy('key')\n ->where('key', 'x')\n ->update(['value' => 'y']);",
+            "SiteSetting::where(function (\$q) { \$q->where('key', 'x'); })->update(['value' => 'y']);",
+            "SiteSetting::where(function (\$q) { \$q->where(function (\$nested) { \$nested->where('key', 'x'); }); })->delete();",
+        ] as $write) {
+            $this->assertNotEmpty($this->rawSiteSettingMutations("<?php {$write}"));
+        }
+
+        foreach ([
+            "SiteSetting::where('key', 'x')->first();",
+            "SiteSetting::where('key', 'x')->exists();",
+            "SiteSetting::where('key', 'x')->pluck('value');",
+            'SiteSetting::query()->get();',
+            "SiteSetting::where(function (\$q) { \$q->where(function (\$nested) { \$nested->where('key', 'x'); }); })->first();",
+        ] as $read) {
+            $this->assertSame([], $this->rawSiteSettingMutations("<?php {$read}"));
+        }
     }
 
     /** @return list<string> */
@@ -461,12 +482,34 @@ class SiteSettingLifecycleTest extends TestCase
         }
 
         $texts = array_column($parts, 1);
-        if (array_slice($texts, 0, 5) === ['SiteSetting', '::', 'query', '(', ')']) {
-            return $parts[4][0];
+        // Eloquent forwards static calls such as SiteSetting::where() and
+        // SiteSetting::orderBy() to a builder just as query() does. Balance the
+        // entry call rather than assuming query() has an empty argument list;
+        // its arguments may themselves contain nested closures and semicolons.
+        if (count($texts) >= 4 && $texts[0] === 'SiteSetting' && $texts[1] === '::'
+            && is_array($tokens[$parts[2][0]]) && $tokens[$parts[2][0]][0] === T_STRING
+            && $texts[3] === '(') {
+            return $this->closingParenthesis($tokens, $parts[3][0]);
         }
         if (count($texts) >= 6 && array_slice($texts, 0, 4) === ['DB', '::', 'table', '(']
             && trim($texts[4], "'\"") === 'site_settings' && $texts[5] === ')') {
             return $parts[5][0];
+        }
+
+        return null;
+    }
+
+    /** @param array<int,array|string> $tokens */
+    private function closingParenthesis(array $tokens, int $opening): ?int
+    {
+        $depth = 0;
+        for ($i = $opening; $i < count($tokens); $i++) {
+            $text = is_array($tokens[$i]) ? $tokens[$i][1] : $tokens[$i];
+            if ($text === '(') {
+                $depth++;
+            } elseif ($text === ')' && --$depth === 0) {
+                return $i;
+            }
         }
 
         return null;
