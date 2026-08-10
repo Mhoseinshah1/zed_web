@@ -14,6 +14,9 @@ use App\Services\Settings\PrepareSettingsForQueueJob;
 use App\Services\Settings\SettingsRepository;
 use Illuminate\Auth\Events\Login;
 use Illuminate\Cache\RateLimiting\Limit;
+use Illuminate\Database\Events\TransactionBeginning;
+use Illuminate\Database\Events\TransactionCommitted;
+use Illuminate\Database\Events\TransactionRolledBack;
 use Illuminate\Http\Request;
 use Illuminate\Queue\Events\JobFailed;
 use Illuminate\Support\Facades\Auth;
@@ -50,6 +53,16 @@ class AppServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
+        // A numeric transaction level is not an identity: after transaction A
+        // ends, transaction B can immediately reuse the same level. Flush on
+        // every real boundary (including savepoints) so neither committed nor
+        // rolled-back transaction-local values can cross that boundary.
+        Event::listen([
+            TransactionBeginning::class,
+            TransactionCommitted::class,
+            TransactionRolledBack::class,
+        ], fn () => app(SettingsRepository::class)->flush());
+
         // Admin-managed SMTP: apply the EFFECTIVE mail configuration for this
         // process (panel override → dedicated managed_smtp mailer; disabled →
         // untouched .env config; enabled-but-invalid → fail closed). Runs at
