@@ -44,11 +44,24 @@ class SettingsRepository
     /** @var array<string,string|null>|null */
     private ?array $values = null;
 
+    /** Transaction depth at which the current map was loaded or mutated. */
+    private ?int $memoTransactionLevel = null;
+
     /** Load the whole table once for this lifecycle. */
     private function values(): array
     {
+        // Transaction events are the primary identity/boundary mechanism. This
+        // depth check is a necessary exceptional-path backstop: Laravel lowers
+        // its transaction counter when PDO::commit() throws, but dispatches
+        // neither TransactionCommitted nor TransactionRolledBack in that path.
+        if ($this->values !== null
+            && $this->memoTransactionLevel !== DB::connection()->transactionLevel()) {
+            $this->flush();
+        }
+
         if ($this->values === null) {
             $this->values = DB::table('site_settings')->pluck('value', 'key')->all();
+            $this->memoTransactionLevel = DB::connection()->transactionLevel();
         }
 
         return $this->values;
@@ -111,6 +124,7 @@ class SettingsRepository
     public function flush(): void
     {
         $this->values = null;
+        $this->memoTransactionLevel = null;
     }
 
     /**
@@ -121,6 +135,7 @@ class SettingsRepository
     {
         if ($this->values !== null) {
             $this->values[$key] = $value;
+            $this->memoTransactionLevel = DB::connection()->transactionLevel();
         }
     }
 
@@ -133,6 +148,7 @@ class SettingsRepository
 
         $name = $key instanceof Model ? (string) $key->getAttribute('key') : $key;
         unset($this->values[$name]);
+        $this->memoTransactionLevel = DB::connection()->transactionLevel();
     }
 
     /**
