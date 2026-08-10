@@ -7,6 +7,7 @@ use App\Models\User;
 use App\Services\AdminMfa\AdminMfaSession;
 use App\Services\Auth\PasswordResetService;
 use App\Services\Auth\ResetIdentifier;
+use App\Services\Email\EmailTransportSettingsService;
 use App\Services\Queue\FailedJobAlerter;
 use App\Services\Seo\SeoManager;
 use App\Services\Settings\SettingsRepository;
