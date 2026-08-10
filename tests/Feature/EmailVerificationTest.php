@@ -5,6 +5,7 @@ namespace Tests\Feature;
 use App\Filament\Pages\EmailSettingsPage;
 use App\Filament\Resources\UserResource\Pages\EditUser;
 use App\Jobs\SendEmailOtpJob;
+use App\Mail\EmailOtpMail;
 use App\Models\EmailVerificationCode;
 use App\Models\PhoneVerificationCode;
 use App\Models\Plan;
@@ -108,8 +109,16 @@ class EmailVerificationTest extends TestCase
 
         $user = User::where('email', 'captured-enabled@example.com')->firstOrFail();
         $this->assertTrue((bool) $user->email_verification_required_at_registration);
-        $this->assertSame(1, EmailVerificationCode::where('user_id', $user->id)->count());
+        $code = EmailVerificationCode::where('user_id', $user->id)->sole();
+        $this->assertSame(EmailVerificationCode::SEND_STATUS_SENT, $code->send_status);
+        Mail::assertSent(EmailOtpMail::class, 1);
         $this->assertFalse(app(EmailVerificationService::class)->isEnabled(), 'a later independent read sees the admin change');
+
+        $this->assertSame(
+            'error',
+            app(EmailVerificationService::class)->requestCode($user)['status'],
+            'an ordinary resend has no captured-registration exemption',
+        );
     }
 
     public function test_registration_uses_captured_disabled_policy_after_commit_enables_it(): void

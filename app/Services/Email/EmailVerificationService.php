@@ -469,6 +469,7 @@ class EmailVerificationService
                 $code,
                 $this->ttlMinutes(),
                 $outcome['superseded_id'] ?? null,
+                $registrationPolicy?->required === true,
             );
         } catch (Throwable $e) {
             // NEVER pretend the code was sent when the dispatch failed — but

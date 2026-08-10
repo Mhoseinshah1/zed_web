@@ -92,4 +92,52 @@ class SettingsCommitFailureTest extends TestCase
         $this->assertSame(0, DB::transactionLevel());
         $this->assertSame('committed', SiteSetting::get('commit_failure_probe'));
     }
+
+    public function test_a_write_before_the_first_post_failure_read_cannot_relabel_stale_memo_state(): void
+    {
+        SiteSetting::set('failed_generation_probe', 'OLD');
+        $this->assertSame('OLD', SiteSetting::get('failed_generation_probe'));
+
+        /** @var CommitFailingSqlitePdo $pdo */
+        $pdo = DB::connection()->getPdo();
+        $pdo->failNextCommit = true;
+
+        try {
+            DB::transaction(function () {
+                SiteSetting::set('failed_generation_probe', 'FAILED_TX_VALUE');
+                $this->assertSame('FAILED_TX_VALUE', SiteSetting::get('failed_generation_probe'));
+            });
+        } catch (PDOException) {
+        }
+
+        // No repository read occurs between the failed commit and this write.
+        SiteSetting::set('other_key', 'NEW_VALUE');
+
+        $this->assertSame('OLD', SiteSetting::get('failed_generation_probe'));
+        $this->assertSame('NEW_VALUE', SiteSetting::get('other_key'));
+    }
+
+    public function test_a_delete_before_the_first_post_failure_read_cannot_relabel_stale_memo_state(): void
+    {
+        SiteSetting::set('failed_generation_probe', 'OLD');
+        SiteSetting::set('delete_after_failure', 'present');
+        $this->assertSame('OLD', SiteSetting::get('failed_generation_probe'));
+
+        /** @var CommitFailingSqlitePdo $pdo */
+        $pdo = DB::connection()->getPdo();
+        $pdo->failNextCommit = true;
+
+        try {
+            DB::transaction(function () {
+                SiteSetting::set('failed_generation_probe', 'FAILED_TX_VALUE');
+                $this->assertSame('FAILED_TX_VALUE', SiteSetting::get('failed_generation_probe'));
+            });
+        } catch (PDOException) {
+        }
+
+        SiteSetting::where('key', 'delete_after_failure')->firstOrFail()->delete();
+
+        $this->assertSame('OLD', SiteSetting::get('failed_generation_probe'));
+        $this->assertNull(SiteSetting::get('delete_after_failure'));
+    }
 }

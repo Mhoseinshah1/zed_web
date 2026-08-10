@@ -123,6 +123,10 @@ class SendEmailOtpJob implements ShouldBeEncrypted, ShouldQueue
         // an async ZERO-transport exhaustion (all safety checks live in
         // EmailVerificationService::restoreSupersededCode, under locks).
         private readonly ?int $supersededCodeId = null,
+        // Narrow authorization for the initial OTP of a registration stamped
+        // required under the locked policy snapshot. Encrypted with the rest
+        // of the payload and stable across retries; ordinary resends are false.
+        private readonly bool $registrationPolicyAuthorized = false,
     ) {
         // Dispatch only after the surrounding DB transaction commits.
         $this->afterCommit = true;
@@ -326,7 +330,7 @@ class SendEmailOtpJob implements ShouldBeEncrypted, ShouldQueue
             $service = app(EmailVerificationService::class);
 
             $obsolete = $record->used_at !== null
-                || ! $service->isEnabled()
+                || (! $this->registrationPolicyAuthorized && ! $service->isEnabled())
                 || ! $service->isMailConfigured()
                 || now()->diffInSeconds($record->expires_at, false) < self::MIN_DELIVERY_MARGIN_SECONDS
                 || strcasecmp($record->email, $this->email) !== 0
