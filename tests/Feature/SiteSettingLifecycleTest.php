@@ -4,15 +4,13 @@ namespace Tests\Feature;
 
 use App\Models\SiteSetting;
 use App\Models\User;
-use App\Services\Settings\SettingsRepository;
-use App\Services\Settings\SettingsLifecycle;
 use App\Services\Email\EmailTransportSettingsService;
-use Illuminate\Contracts\Queue\Job;
+use App\Services\Settings\SettingsLifecycle;
+use App\Services\Settings\SettingsRepository;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Foundation\Testing\RefreshDatabase;
-use Illuminate\Queue\Events\JobProcessing;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Queue;
@@ -391,7 +389,7 @@ class SiteSettingLifecycleTest extends TestCase
         app()->instance(SettingsLifecycle::class, $lifecycle);
         app()->instance(EmailTransportSettingsService::class, $transport);
 
-        event(new JobProcessing('sync', \Mockery::mock(Job::class)));
+        Queue::connection('sync')->push(new RecordsSettingJob('queue_boundary_probe'));
     }
 
     public function test_one_web_request_reads_the_settings_table_once(): void
@@ -427,5 +425,4 @@ class SiteSettingLifecycleTest extends TestCase
         $this->assertLessThanOrEqual(2, $queries, "one request queried site_settings {$queries} times");
         DB::disableQueryLog();
     }
-
 }

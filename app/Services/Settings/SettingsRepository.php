@@ -154,7 +154,7 @@ class SettingsRepository
      * savepoint later commits or rolls back, values() sees the level change and
      * discards the map before serving another value.
      *
-     * @param array<string,string|null> $values
+     * @param  array<string,string|null>  $values
      */
     public function reconcile(array $values): void
     {
