@@ -4,15 +4,17 @@ namespace Tests\Feature;
 
 use App\Models\SiteSetting;
 use App\Models\User;
+use App\Services\Email\EmailTransportSettingsService;
+use App\Services\Settings\SettingsLifecycle;
 use App\Services\Settings\SettingsRepository;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Foundation\Testing\RefreshDatabase;
-use Illuminate\Queue\Events\JobProcessing;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Queue;
+use PHPUnit\Framework\Attributes\DataProvider;
 use Tests\TestCase;
 
 /**
@@ -219,6 +221,122 @@ class SiteSettingLifecycleTest extends TestCase
         );
     }
 
+    public function test_a_committed_transaction_write_is_visible_to_the_same_lifecycle(): void
+    {
+        SiteSetting::set('transaction_probe', 'before');
+        $this->assertSame('before', SiteSetting::get('transaction_probe'));
+
+        DB::transaction(fn () => SiteSetting::set('transaction_probe', 'committed'));
+
+        $this->assertSame('committed', SiteSetting::get('transaction_probe'));
+    }
+
+    public function test_a_rolled_back_transaction_write_never_poison_the_lifecycle_memo(): void
+    {
+        SiteSetting::set('transaction_probe', 'before');
+        $this->assertSame('before', SiteSetting::get('transaction_probe'));
+
+        try {
+            DB::transaction(function () {
+                SiteSetting::set('transaction_probe', 'rolled-back');
+                $this->assertSame('rolled-back', SiteSetting::get('transaction_probe'));
+                throw new \RuntimeException('rollback');
+            });
+        } catch (\RuntimeException $exception) {
+            $this->assertSame('rollback', $exception->getMessage());
+        }
+
+        $this->assertSame('before', SiteSetting::get('transaction_probe'));
+    }
+
+    public function test_a_nested_savepoint_rollback_does_not_leak_into_the_memo(): void
+    {
+        SiteSetting::set('transaction_probe', 'before');
+
+        DB::transaction(function () {
+            SiteSetting::set('transaction_probe', 'outer');
+            try {
+                DB::transaction(function () {
+                    SiteSetting::set('transaction_probe', 'inner');
+                    $this->assertSame('inner', SiteSetting::get('transaction_probe'));
+                    throw new \RuntimeException('savepoint rollback');
+                });
+            } catch (\RuntimeException) {
+                $this->assertSame('outer', SiteSetting::get('transaction_probe'));
+            }
+        });
+
+        $this->assertSame('outer', SiteSetting::get('transaction_probe'));
+    }
+
+    public function test_rollback_then_transaction_at_the_same_level_cannot_reuse_the_memo(): void
+    {
+        SiteSetting::set('transaction_generation_probe', 'committed');
+
+        try {
+            DB::transaction(function () {
+                SiteSetting::set('transaction_generation_probe', 'transaction-a');
+                $this->assertSame('transaction-a', SiteSetting::get('transaction_generation_probe'));
+                throw new \RuntimeException('rollback a');
+            });
+        } catch (\RuntimeException) {
+        }
+
+        DB::transaction(function () {
+            $this->assertSame('committed', SiteSetting::get('transaction_generation_probe'));
+            SiteSetting::set('transaction_generation_probe', 'transaction-b');
+        });
+
+        $this->assertSame('transaction-b', SiteSetting::get('transaction_generation_probe'));
+    }
+
+    public function test_reused_nested_savepoint_level_cannot_reuse_rolled_back_values(): void
+    {
+        SiteSetting::set('savepoint_generation_probe', 'outer');
+
+        DB::transaction(function () {
+            try {
+                DB::transaction(function () {
+                    SiteSetting::set('savepoint_generation_probe', 'first nested');
+                    $this->assertSame('first nested', SiteSetting::get('savepoint_generation_probe'));
+                    throw new \RuntimeException('rollback savepoint');
+                });
+            } catch (\RuntimeException) {
+            }
+
+            DB::transaction(function () {
+                $this->assertSame('outer', SiteSetting::get('savepoint_generation_probe'));
+            });
+        });
+    }
+
+    #[DataProvider('rolledBackPreloadedMemoWrites')]
+    public function test_a_write_without_an_in_transaction_read_cannot_poison_a_preloaded_memo(string $write): void
+    {
+        SiteSetting::set('preloaded_rollback_probe', 'committed');
+        $this->assertSame('committed', SiteSetting::get('preloaded_rollback_probe'));
+
+        try {
+            DB::transaction(function () use ($write) {
+                match ($write) {
+                    'set' => SiteSetting::set('preloaded_rollback_probe', 'rolled back'),
+                    'delete' => SiteSetting::query()->where('key', 'preloaded_rollback_probe')->firstOrFail()->delete(),
+                    'upsert' => SiteSetting::upsertValue('preloaded_rollback_probe', 'rolled back'),
+                };
+                throw new \RuntimeException('rollback without read');
+            });
+        } catch (\RuntimeException) {
+        }
+
+        $this->assertSame('committed', SiteSetting::get('preloaded_rollback_probe'));
+    }
+
+    /** @return array<string,array{string}> */
+    public static function rolledBackPreloadedMemoWrites(): array
+    {
+        return ['set' => ['set'], 'delete' => ['delete'], 'upsert' => ['upsert']];
+    }
+
     /**
      * No PRODUCTION code may write `site_settings` outside the approved,
      * invalidation-aware methods.
@@ -244,7 +362,6 @@ class SiteSettingLifecycleTest extends TestCase
             realpath(app_path('Services/Settings/SettingsRepository.php')),
         ];
 
-        $writes = ['upsert(', 'insert(', 'insertOrIgnore(', 'insertGetId(', 'update(', 'updateOrInsert(', 'delete(', 'truncate('];
         $offenders = [];
 
         foreach ($this->productionPhpFiles() as $file) {
@@ -252,14 +369,8 @@ class SiteSettingLifecycleTest extends TestCase
                 continue;
             }
 
-            $code = $this->strippedSource($file);
-
-            foreach ($writes as $write) {
-                foreach (['SiteSetting::query()->', "DB::table('site_settings')->", 'DB::table("site_settings")->'] as $prefix) {
-                    if (str_contains($code, $prefix.$write)) {
-                        $offenders[] = str_replace(base_path().'/', '', $file).' → '.$prefix.$write;
-                    }
-                }
+            foreach ($this->rawSiteSettingMutations(file_get_contents($file)) as $write) {
+                $offenders[] = str_replace(base_path().'/', '', $file).' → '.$write;
             }
         }
 
@@ -269,6 +380,154 @@ class SiteSettingLifecycleTest extends TestCase
             "raw writes to site_settings bypass reader invalidation; use set(), upsertValue() or insertMissing():\n  "
             .implode("\n  ", $offenders),
         );
+    }
+
+    public function test_raw_write_detector_follows_fluent_multiline_chains_but_allows_reads(): void
+    {
+        foreach (['update', 'updateFrom', 'insert', 'insertOrIgnore', 'insertGetId', 'insertUsing', 'insertOrIgnoreUsing', 'upsert', 'updateOrInsert', 'delete', 'forceDelete', 'truncate', 'increment', 'incrementEach', 'decrement', 'decrementEach', 'touch'] as $mutation) {
+            $code = "<?php SiteSetting::query()\n ->where('key', 'x')\n ->{$mutation}([]);";
+            $this->assertNotEmpty($this->rawSiteSettingMutations($code), "missed {$mutation}");
+
+            $code = "<?php DB::table(\n 'site_settings'\n)->where('key', 'x')\n->{$mutation}([]);";
+            $this->assertNotEmpty($this->rawSiteSettingMutations($code), "missed DB {$mutation}");
+        }
+
+        foreach ([
+            "SiteSetting::query()->where('key', 'x')->sharedLock()->value('value');",
+            "DB::table('site_settings')->where('key', 'x')->first();",
+            "DB::table('site_settings')->pluck('value');",
+        ] as $read) {
+            $this->assertSame([], $this->rawSiteSettingMutations("<?php {$read}"));
+        }
+
+        foreach ([
+            "SiteSetting::query()->where(function (\$q) { \$q->where('key', 'x'); })->update(['value' => 'y']);",
+            "DB::table('site_settings')->where(function (\$q) { \$q->where('key', 'x'); })->delete();",
+            "SiteSetting::query()->where(function (\$q) { \$q->where(function (\$nested) { \$nested->where('key', 'x'); }); })->upsert([]);",
+        ] as $write) {
+            $this->assertNotEmpty($this->rawSiteSettingMutations("<?php {$write}"));
+        }
+
+        $this->assertSame([], $this->rawSiteSettingMutations(
+            "<?php DB::table('site_settings')->where(function (\$q) { \$q->where(function (\$nested) { \$nested->where('key', 'x'); }); })->first();",
+        ));
+
+        foreach ([
+            "SiteSetting::where('key', 'x')->update(['value' => 'y']);",
+            "SiteSetting::where('key', 'x')->delete();",
+            "SiteSetting::whereIn('key', ['x'])->update(['value' => 'y']);",
+            "SiteSetting::orderBy('key')\n ->where('key', 'x')\n ->update(['value' => 'y']);",
+            "SiteSetting::where(function (\$q) { \$q->where('key', 'x'); })->update(['value' => 'y']);",
+            "SiteSetting::where(function (\$q) { \$q->where(function (\$nested) { \$nested->where('key', 'x'); }); })->delete();",
+        ] as $write) {
+            $this->assertNotEmpty($this->rawSiteSettingMutations("<?php {$write}"));
+        }
+
+        foreach ([
+            "SiteSetting::where('key', 'x')->first();",
+            "SiteSetting::where('key', 'x')->exists();",
+            "SiteSetting::where('key', 'x')->pluck('value');",
+            'SiteSetting::query()->get();',
+            "SiteSetting::where(function (\$q) { \$q->where(function (\$nested) { \$nested->where('key', 'x'); }); })->first();",
+        ] as $read) {
+            $this->assertSame([], $this->rawSiteSettingMutations("<?php {$read}"));
+        }
+    }
+
+    /** @return list<string> */
+    private function rawSiteSettingMutations(string $source): array
+    {
+        $tokens = token_get_all($source);
+        // Laravel 12.62: Query\Builder's write API plus Eloquent\Builder's
+        // forceDelete/touch wrappers. Each bypasses per-model saved/deleted
+        // events (unlike updateOrCreate/firstOrCreate/model increment).
+        $mutations = ['update', 'updateFrom', 'insert', 'insertOrIgnore', 'insertGetId', 'insertUsing', 'insertOrIgnoreUsing', 'upsert', 'updateOrInsert', 'delete', 'forceDelete', 'truncate', 'increment', 'incrementEach', 'decrement', 'decrementEach', 'touch'];
+        $found = [];
+
+        for ($i = 0; $i < count($tokens); $i++) {
+            $rootEnd = $this->siteSettingsChainRootEnd($tokens, $i);
+            if ($rootEnd === null) {
+                continue;
+            }
+
+            $depth = ['(' => 0, '[' => 0, '{' => 0];
+            for ($j = $rootEnd + 1; $j < count($tokens); $j++) {
+                $token = $tokens[$j];
+                $text = is_array($token) ? $token[1] : $token;
+                if ($text === ';' && max($depth) === 0) {
+                    break;
+                }
+                if (isset($depth[$text])) {
+                    $depth[$text]++;
+                } elseif (isset([')' => true, ']' => true, '}' => true][$text])) {
+                    $depth[[')' => '(', ']' => '[', '}' => '{'][$text]]--;
+                } elseif (is_array($token) && $token[0] === T_OBJECT_OPERATOR && max($depth) === 0) {
+                    $method = $this->nextMeaningfulToken($tokens, $j + 1);
+                    if ($method !== null && is_array($tokens[$method]) && in_array($tokens[$method][1], $mutations, true)) {
+                        $found[] = $tokens[$method][1];
+                    }
+                }
+            }
+        }
+
+        return $found;
+    }
+
+    /** @param array<int,array|string> $tokens */
+    private function siteSettingsChainRootEnd(array $tokens, int $start): ?int
+    {
+        $parts = [];
+        for ($i = $start; $i < count($tokens) && count($parts) < 6; $i++) {
+            if (is_array($tokens[$i]) && in_array($tokens[$i][0], [T_WHITESPACE, T_COMMENT, T_DOC_COMMENT], true)) {
+                continue;
+            }
+            $parts[] = [$i, is_array($tokens[$i]) ? $tokens[$i][1] : $tokens[$i]];
+        }
+
+        $texts = array_column($parts, 1);
+        // Eloquent forwards static calls such as SiteSetting::where() and
+        // SiteSetting::orderBy() to a builder just as query() does. Balance the
+        // entry call rather than assuming query() has an empty argument list;
+        // its arguments may themselves contain nested closures and semicolons.
+        if (count($texts) >= 4 && $texts[0] === 'SiteSetting' && $texts[1] === '::'
+            && is_array($tokens[$parts[2][0]]) && $tokens[$parts[2][0]][0] === T_STRING
+            && $texts[3] === '(') {
+            return $this->closingParenthesis($tokens, $parts[3][0]);
+        }
+        if (count($texts) >= 6 && array_slice($texts, 0, 4) === ['DB', '::', 'table', '(']
+            && trim($texts[4], "'\"") === 'site_settings' && $texts[5] === ')') {
+            return $parts[5][0];
+        }
+
+        return null;
+    }
+
+    /** @param array<int,array|string> $tokens */
+    private function closingParenthesis(array $tokens, int $opening): ?int
+    {
+        $depth = 0;
+        for ($i = $opening; $i < count($tokens); $i++) {
+            $text = is_array($tokens[$i]) ? $tokens[$i][1] : $tokens[$i];
+            if ($text === '(') {
+                $depth++;
+            } elseif ($text === ')' && --$depth === 0) {
+                return $i;
+            }
+        }
+
+        return null;
+    }
+
+    /** @param array<int,array|string> $tokens */
+    private function nextMeaningfulToken(array $tokens, int $start): ?int
+    {
+        for ($i = $start; $i < count($tokens); $i++) {
+            if (! is_array($tokens[$i]) || ! in_array($tokens[$i][0], [T_WHITESPACE, T_COMMENT, T_DOC_COMMENT], true)) {
+                return $i;
+            }
+        }
+
+        return null;
     }
 
     /** @return list<string> */
@@ -307,30 +566,14 @@ class SiteSettingLifecycleTest extends TestCase
      */
     public function test_the_settings_reset_runs_before_the_smtp_reapply(): void
     {
-        $order = [];
+        $lifecycle = \Mockery::mock(SettingsLifecycle::class);
+        $transport = \Mockery::mock(EmailTransportSettingsService::class);
+        $lifecycle->shouldReceive('reset')->once()->ordered();
+        $transport->shouldReceive('apply')->once()->ordered();
+        app()->instance(SettingsLifecycle::class, $lifecycle);
+        app()->instance(EmailTransportSettingsService::class, $transport);
 
-        // Rebuild the boundary with instrumented collaborators, preserving the
-        // production ordering under test.
-        $listener = function () use (&$order) {
-            $order[] = 'settings-reset';
-            $order[] = 'smtp-reapply';
-        };
-        $listener();
-
-        $this->assertSame(['settings-reset', 'smtp-reapply'], $order);
-
-        // …and assert the real provider registers them in that order by
-        // reading the registered closure's source.
-        $source = file_get_contents(app_path('Providers/AppServiceProvider.php'));
-        $hook = substr($source, strpos($source, 'Queue::before('));
-        $hook = substr($hook, 0, strpos($hook, '});'));
-
-        $resetAt = strpos($hook, 'SiteSetting::flush()');
-        $smtpAt = strpos($hook, 'EmailTransportSettingsService::class');
-
-        $this->assertNotFalse($resetAt, 'the queue boundary must reset the settings reader');
-        $this->assertNotFalse($smtpAt, 'the queue boundary must still re-apply SMTP configuration');
-        $this->assertLessThan($smtpAt, $resetAt, 'the settings reset must run BEFORE the SMTP re-apply');
+        Queue::connection('sync')->push(new RecordsSettingJob('queue_boundary_probe'));
     }
 
     public function test_one_web_request_reads_the_settings_table_once(): void
@@ -365,21 +608,5 @@ class SiteSettingLifecycleTest extends TestCase
         $this->assertSame(1, $fullTableReads, 'one request must read the whole settings table exactly once');
         $this->assertLessThanOrEqual(2, $queries, "one request queried site_settings {$queries} times");
         DB::disableQueryLog();
-    }
-
-    /**
-     * The existing SMTP hook must survive. If a later change replaces rather
-     * than appends the queue lifecycle listener, workers silently stop
-     * receiving admin-managed SMTP configuration.
-     */
-    public function test_the_smtp_queue_hook_is_not_displaced_by_the_settings_reset(): void
-    {
-        $before = app('events')->getListeners(JobProcessing::class);
-
-        $this->assertGreaterThanOrEqual(
-            2,
-            count($before),
-            'both the SMTP re-apply and the settings reset must be registered on JobProcessing',
-        );
     }
 }

@@ -44,12 +44,24 @@ class SettingsRepository
     /** @var array<string,string|null>|null */
     private ?array $values = null;
 
+    /** Transaction depth at which the current map was loaded or mutated. */
+    private ?int $memoTransactionLevel = null;
+
     /** Load the whole table once for this lifecycle. */
     private function values(): array
     {
-        return $this->values ??= DB::table('site_settings')
-            ->pluck('value', 'key')
-            ->all();
+        // Transaction events are the primary identity/boundary mechanism. This
+        // depth check is a necessary exceptional-path backstop: Laravel lowers
+        // its transaction counter when PDO::commit() throws, but dispatches
+        // neither TransactionCommitted nor TransactionRolledBack in that path.
+        $this->ensureMemoMatchesCurrentTransaction();
+
+        if ($this->values === null) {
+            $this->values = DB::table('site_settings')->pluck('value', 'key')->all();
+            $this->memoTransactionLevel = DB::connection()->transactionLevel();
+        }
+
+        return $this->values;
     }
 
     /** True when the key exists as a row (a NULL value still counts). */
@@ -109,6 +121,7 @@ class SettingsRepository
     public function flush(): void
     {
         $this->values = null;
+        $this->memoTransactionLevel = null;
     }
 
     /**
@@ -117,19 +130,52 @@ class SettingsRepository
      */
     public function remember(string $key, ?string $value): void
     {
+        $this->ensureMemoMatchesCurrentTransaction();
+
         if ($this->values !== null) {
             $this->values[$key] = $value;
+            $this->memoTransactionLevel = DB::connection()->transactionLevel();
         }
     }
 
     /** Model-event hook: any Eloquent write or delete invalidates. */
     public function forget(Model|string $key): void
     {
+        $this->ensureMemoMatchesCurrentTransaction();
+
         if ($this->values === null) {
             return;
         }
 
         $name = $key instanceof Model ? (string) $key->getAttribute('key') : $key;
         unset($this->values[$name]);
+        $this->memoTransactionLevel = DB::connection()->transactionLevel();
+    }
+
+    /**
+     * Reconcile bypass/locked reads with this lifecycle's reader.
+     *
+     * Transaction boundary listeners flush this map on begin, commit and
+     * rollback, including savepoints, so reconciled values cannot escape the
+     * transaction in which they were authoritative.
+     *
+     * @param  array<string,string|null>  $values
+     */
+    public function reconcile(array $values): void
+    {
+        $this->ensureMemoMatchesCurrentTransaction();
+
+        foreach ($values as $key => $value) {
+            $this->remember($key, $value);
+        }
+    }
+
+    /** Flush exceptional-commit state before either reading or patching it. */
+    private function ensureMemoMatchesCurrentTransaction(): void
+    {
+        if ($this->values !== null
+            && $this->memoTransactionLevel !== DB::connection()->transactionLevel()) {
+            $this->flush();
+        }
     }
 }

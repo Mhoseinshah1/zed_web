@@ -5,6 +5,7 @@ namespace Tests\Feature;
 use App\Filament\Pages\EmailSettingsPage;
 use App\Filament\Resources\UserResource\Pages\EditUser;
 use App\Jobs\SendEmailOtpJob;
+use App\Mail\EmailOtpMail;
 use App\Models\EmailVerificationCode;
 use App\Models\PhoneVerificationCode;
 use App\Models\Plan;
@@ -13,6 +14,7 @@ use App\Models\User;
 use App\Services\Email\EmailVerificationService;
 use App\Services\Sms\SmsService;
 use Illuminate\Auth\Events\Verified;
+use Illuminate\Database\Events\TransactionCommitted;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
@@ -89,6 +91,55 @@ class EmailVerificationTest extends TestCase
         $this->assertNotNull($user);
         $this->assertNull($user->email_verified_at, 'new users start unverified');
         $this->assertSame(1, EmailVerificationCode::where('user_id', $user->id)->count());
+    }
+
+    public function test_registration_uses_captured_enabled_policy_after_commit_disables_it(): void
+    {
+        Mail::fake();
+        $flipOnce = true;
+        Event::listen(TransactionCommitted::class, function () use (&$flipOnce) {
+            if ($flipOnce) {
+                $flipOnce = false;
+                SiteSetting::set('email_verification_enabled', 'false');
+            }
+        });
+
+        $this->post('/register', $this->registrationPayload(['email' => 'captured-enabled@example.com']))
+            ->assertRedirect(route('verification.notice'));
+
+        $user = User::where('email', 'captured-enabled@example.com')->firstOrFail();
+        $this->assertTrue((bool) $user->email_verification_required_at_registration);
+        $code = EmailVerificationCode::where('user_id', $user->id)->sole();
+        $this->assertSame(EmailVerificationCode::SEND_STATUS_SENT, $code->send_status);
+        Mail::assertSent(EmailOtpMail::class, 1);
+        $this->assertFalse(app(EmailVerificationService::class)->isEnabled(), 'a later independent read sees the admin change');
+
+        $this->assertSame(
+            'error',
+            app(EmailVerificationService::class)->requestCode($user)['status'],
+            'an ordinary resend has no captured-registration exemption',
+        );
+    }
+
+    public function test_registration_uses_captured_disabled_policy_after_commit_enables_it(): void
+    {
+        SiteSetting::set('email_verification_enabled', 'false');
+        Mail::fake();
+        $flipOnce = true;
+        Event::listen(TransactionCommitted::class, function () use (&$flipOnce) {
+            if ($flipOnce) {
+                $flipOnce = false;
+                SiteSetting::set('email_verification_enabled', 'true');
+            }
+        });
+
+        $this->post('/register', $this->registrationPayload(['email' => 'captured-disabled@example.com']))
+            ->assertRedirect(route('dashboard.index'));
+
+        $user = User::where('email', 'captured-disabled@example.com')->firstOrFail();
+        $this->assertFalse((bool) $user->email_verification_required_at_registration);
+        $this->assertSame(0, EmailVerificationCode::where('user_id', $user->id)->count());
+        $this->assertTrue(app(EmailVerificationService::class)->isEnabled(), 'a later independent read sees the admin change');
     }
 
     public function test_code_is_stored_hashed_never_plaintext(): void

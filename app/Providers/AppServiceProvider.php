@@ -3,7 +3,6 @@
 namespace App\Providers;
 
 use App\Http\Middleware\EnsureSessionAuthVersion;
-use App\Models\SiteSetting;
 use App\Models\User;
 use App\Services\AdminMfa\AdminMfaSession;
 use App\Services\Auth\PasswordResetService;
@@ -11,9 +10,13 @@ use App\Services\Auth\ResetIdentifier;
 use App\Services\Email\EmailTransportSettingsService;
 use App\Services\Queue\FailedJobAlerter;
 use App\Services\Seo\SeoManager;
+use App\Services\Settings\PrepareSettingsForQueueJob;
 use App\Services\Settings\SettingsRepository;
 use Illuminate\Auth\Events\Login;
 use Illuminate\Cache\RateLimiting\Limit;
+use Illuminate\Database\Events\TransactionBeginning;
+use Illuminate\Database\Events\TransactionCommitted;
+use Illuminate\Database\Events\TransactionRolledBack;
 use Illuminate\Http\Request;
 use Illuminate\Queue\Events\JobFailed;
 use Illuminate\Support\Facades\Auth;
@@ -50,6 +53,16 @@ class AppServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
+        // A numeric transaction level is not an identity: after transaction A
+        // ends, transaction B can immediately reuse the same level. Flush on
+        // every real boundary (including savepoints) so neither committed nor
+        // rolled-back transaction-local values can cross that boundary.
+        Event::listen([
+            TransactionBeginning::class,
+            TransactionCommitted::class,
+            TransactionRolledBack::class,
+        ], fn () => app(SettingsRepository::class)->flush());
+
         // Admin-managed SMTP: apply the EFFECTIVE mail configuration for this
         // process (panel override → dedicated managed_smtp mailer; disabled →
         // untouched .env config; enabled-but-invalid → fail closed). Runs at
@@ -81,10 +94,7 @@ class AppServiceProvider extends ServiceProvider
         // APPENDED to the existing listener, not replacing it — displacing the
         // SMTP re-apply would silently stop workers picking up admin-managed
         // mail configuration.
-        Queue::before(function () {
-            SiteSetting::flush();
-            app(EmailTransportSettingsService::class)->apply();
-        });
+        Queue::before(fn () => app(PrepareSettingsForQueueJob::class)->handle());
 
         // TERMINAL queue-job failures (retries exhausted / explicitly failed):
         // alert admins on Telegram. Registration stays minimal — classification,

@@ -143,6 +143,12 @@ class EmailVerificationService
      */
     public function captureRequiredPolicyForRegistration(): bool
     {
+        return $this->capturePolicyForRegistration()->required;
+    }
+
+    /** Capture the immutable policy used by one registration operation. */
+    public function capturePolicyForRegistration(): RegistrationEmailPolicy
+    {
         // A shared lock only serializes against rows that EXIST. The seed
         // migration guarantees the pair on deployed instances; this makes
         // the guarantee unconditional (deleted rows, pre-migration DBs) —
@@ -166,12 +172,21 @@ class EmailVerificationService
                 $key => SiteSetting::query()->where('key', $key)->sharedLock()->value('value'),
             ]);
 
-        return $this->settingIsTrue($flags->get('email_verification_enabled'))
+        // insertMissing() refreshed the scoped memo before these locks were
+        // acquired. An admin commit in between can therefore make the locked
+        // values newer than that memo. Reconcile before any health/policy
+        // helper is allowed to consult the scoped reader.
+        SiteSetting::repository()->reconcile($flags->all());
+
+        $enabled = $this->settingIsTrue($flags->get('email_verification_enabled'));
+        $required = $enabled
             && $this->settingIsTrue($flags->get('email_verification_required_on_register'))
             && $this->isMailConfigured()
             && $this->hasVerifiedMailTest()
             && $this->lockBackendLooksAvailable()
             && $this->transportLooksLive();
+
+        return new RegistrationEmailPolicy($enabled, $required);
     }
 
     // ── Delivery-pipeline health (delegated) ─────────────────────────────────
@@ -352,11 +367,11 @@ class EmailVerificationService
      *
      * @return array{status:string, message:string, email_sent?:bool}
      */
-    public function requestCode(User $user, array $meta = []): array
+    public function requestCode(User $user, array $meta = [], ?RegistrationEmailPolicy $registrationPolicy = null): array
     {
         // The administrator's disable switch is authoritative even for direct
         // POSTs to the resend endpoint — no records, no mail while disabled.
-        if (! $this->isEnabled()) {
+        if (! ($registrationPolicy?->enabled ?? $this->isEnabled())) {
             return ['status' => 'error', 'message' => 'تایید ایمیل در حال حاضر غیرفعال است.', 'email_sent' => false];
         }
 
@@ -454,6 +469,7 @@ class EmailVerificationService
                 $code,
                 $this->ttlMinutes(),
                 $outcome['superseded_id'] ?? null,
+                $registrationPolicy?->required === true,
             );
         } catch (Throwable $e) {
             // NEVER pretend the code was sent when the dispatch failed — but
