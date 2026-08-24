@@ -38,6 +38,12 @@ class TemplateManager
                 'preview' => 'modern',
                 'accent' => 'linear-gradient(135deg,#1e3a8a,#3b82f6 50%,#22d3ee)',
             ],
+            'premium' => [
+                'title' => 'قالب ZED Premium',
+                'description' => 'طراحی پریمیوم و مینیمال ZED؛ هیرو کنسولی، کارت‌های شیشه‌ای، تایپوگرافی قوی و تمرکز روی فروش.',
+                'preview' => 'premium',
+                'accent' => 'linear-gradient(135deg,#3f7cff,#14b8ff 58%,#59e1ff)',
+            ],
             'shop' => [
                 'title' => 'قالب فروشگاهی',
                 'description' => 'فروش‌محور · با گالری سرورها، نظرات و آمار زنده',
